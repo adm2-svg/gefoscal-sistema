@@ -104,6 +104,43 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
 .cabeca-secao { display:flex; justify-content:space-between; align-items:baseline;
                 gap:12px; margin-bottom:14px; }
 .cabeca-secao h3 { margin:0; }
+
+/* ---- Compras ---- */
+.status { display:inline-block; font-size:10px; padding:3px 9px; border-radius:20px;
+          letter-spacing:.5px; text-transform:uppercase; border:1px solid var(--line2); color:var(--dim2); }
+.status.aguardando { border-color:var(--rust); color:var(--rust); }
+.status.aprovada   { border-color:var(--ok-text, var(--rust)); color:var(--ok-text, var(--rust)); }
+.status.reprovada  { border-color:var(--warn-text); color:var(--warn-text); }
+.status.recebida   { opacity:.6; }
+.urgente { color:var(--warn-text); font-size:11px; }
+.cartao-sol { border:1px solid var(--line); border-radius:8px; background:var(--panel);
+              padding:13px 15px; margin-bottom:9px; }
+.cartao-sol .linha1 { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.cartao-sol .titulo { font-size:14px; flex:1; min-width:180px; }
+.cartao-sol .meta { color:var(--dim2); font-size:12px; margin-top:4px; }
+.cartao-sol .botoes { display:flex; gap:6px; }
+.ficha { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:14px 20px; }
+.ficha .item .rot { color:var(--dim2); font-size:10.5px; text-transform:uppercase; letter-spacing:.4px; }
+.ficha .item .val { font-size:13.5px; margin-top:3px; }
+.passo { display:flex; gap:10px; align-items:flex-start; padding:8px 0;
+         border-bottom:1px solid var(--line); font-size:13px; }
+.passo:last-child { border-bottom:none; }
+.passo .quando { color:var(--dim2); font-size:11.5px; flex:none; width:96px; }
+.modal-fundo { position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:50;
+               display:flex; align-items:flex-start; justify-content:center; padding:28px 16px; overflow:auto; }
+.modal { background:var(--panel); border:1px solid var(--line2); border-radius:10px;
+         width:100%; max-width:720px; padding:22px 24px; }
+.modal h3 { font-family:var(--serif); margin:0 0 14px; font-size:19px; }
+.modal textarea { min-height:110px; }
+
+@media print {
+  body * { visibility:hidden; }
+  #area-impressao, #area-impressao * { visibility:visible; }
+  #area-impressao { position:absolute; inset:0; padding:0; background:#fff; color:#000; }
+  #area-impressao .nao-imprime { display:none; }
+  .modal-fundo { position:static; background:none; padding:0; }
+  .modal { border:none; max-width:100%; padding:0; }
+}
 </style>
 </head>
 <body>
@@ -315,6 +352,7 @@ function podeEditar (chave) {
 const PAGINAS = {
   visao_geral: { nome: 'Visão geral', render: paginaVisaoGeral, sempre: true },
   expedicao:   { nome: 'Expedição', render: paginaExpedicao },
+  compras:     { nome: 'Compras e Recebimento', render: paginaCompras },
   financeiro:  { nome: 'Financeiro', render: paginaFinanceiro },
   estoque:     { nome: 'Estoque e Produção', render: paginaEstoque },
   ti:          { nome: 'Administração', render: paginaAdministracao }
@@ -823,6 +861,636 @@ async function subVisao (alvo, editavel) {
     if (!confirm('Apagar o painel desta pessoa?')) return
     await db.from('visao_geral_pessoa').delete().eq('pessoa_id', $('#v-pessoa').value)
     $('#v-html').value = ''; $('#v-recado').textContent = 'Painel apagado.'
+  }
+}
+
+// ---------------------------------------------------------------
+// Página: Compras e Recebimento  (módulo 'compras')
+// Modelada sobre as tabelas que já existem:
+//   solicitacao_compra · recebimento_mercadoria · fornecedor
+// ---------------------------------------------------------------
+const STATUS_COMPRA = {
+  RASCUNHO:         { rotulo: 'Rascunho',                  classe: '' },
+  AGUARDANDO_COORD: { rotulo: 'Aguardando coordenação',    classe: 'aguardando' },
+  APROVADA_COORD:   { rotulo: 'Aguardando aprovação',      classe: 'aguardando' },
+  DEVOLVIDA:        { rotulo: 'Devolvida ao solicitante',  classe: 'reprovada' },
+  APROVADA:         { rotulo: 'Aprovada',                  classe: 'aprovada' },
+  REPROVADA:        { rotulo: 'Reprovada',                 classe: 'reprovada' },
+  EM_COTACAO:       { rotulo: 'Em cotação',                classe: '' },
+  PEDIDO_EMITIDO:   { rotulo: 'Pedido emitido',            classe: '' },
+  RECEBIDA:         { rotulo: 'Recebida',                  classe: 'recebida' },
+  CANCELADA:        { rotulo: 'Cancelada',                 classe: 'recebida' }
+}
+const selo = s => {
+  const e = STATUS_COMPRA[s] || { rotulo: s || '—', classe: '' }
+  return `<span class="status ${e.classe}">${esc(e.rotulo)}</span>`
+}
+const URGENCIA = { URGENTE_4H: 'Urgente — 4h', NAO_URGENTE_5D: 'Normal — 5 dias' }
+
+// Quem faz o quê, pelo papel do usuário:
+//   qualquer um com acesso a compras  -> abre solicitação
+//   papel COMPRAS                     -> coordenação (1º nível, gestor_id)
+//   papel DIRETORIA                   -> aprovação final (2º nível, aprovador_id)
+//   papel ADMIN                       -> pode nos dois, para destravar o fluxo
+const podeCoordenar = () => PERFIL.papeis.some(p => ['COMPRAS', 'ADMIN'].includes(p))
+const podeAprovar   = () => PERFIL.papeis.some(p => ['DIRETORIA', 'ADMIN'].includes(p))
+
+let COMPRAS_CACHE = { fornecedores: [], setores: [], pessoas: [] }
+
+async function paginaCompras () {
+  if (!podeVer('compras')) { areaLivre().innerHTML =
+    `<div class="panel" style="padding:22px;"><p class="texto-dim">
+     Você não tem acesso a Compras.</p></div>`; return }
+
+  const editavel = podeEditar('compras')
+  $('#subtitulo-pagina').textContent = 'Solicitações, aprovação e recebimento'
+
+  const area = areaLivre()
+  const abas = [
+    { chave: 'solicitacoes', nome: 'Solicitações', mostrar: true },
+    { chave: 'coordenar',    nome: 'Coordenação',  mostrar: podeCoordenar() },
+    { chave: 'aprovar',      nome: 'Aprovação',    mostrar: podeAprovar() },
+    { chave: 'receber',      nome: 'Recebimento',  mostrar: true },
+    { chave: 'fornecedores', nome: 'Fornecedores', mostrar: true }
+  ].filter(a => a.mostrar)
+
+  area.innerHTML = `
+    <div class="subabas">
+      ${abas.map((a, i) => `<button data-sub="${a.chave}" class="${i === 0 ? 'ativo' : ''}">${a.nome}</button>`).join('')}
+    </div>
+    <div id="sub-compras"></div>`
+
+  area.querySelectorAll('.subabas button').forEach(b => {
+    b.onclick = () => {
+      area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
+      abrirCompras(b.dataset.sub, editavel)
+    }
+  })
+
+  // carrega uma vez o que as sub-abas usam
+  const [{ data: forn }, { data: setores }, { data: pessoas }] = await Promise.all([
+    db.from('fornecedor').select('id,nome,cnpj_cpf,contato,status').order('nome'),
+    db.from('setor').select('id,nome').order('nome'),
+    db.from('pessoa').select('id,nome').order('nome')
+  ])
+  COMPRAS_CACHE = { fornecedores: forn || [], setores: setores || [], pessoas: pessoas || [] }
+
+  abrirCompras('solicitacoes', editavel)
+}
+
+function abrirCompras (sub, editavel) {
+  const alvo = $('#sub-compras')
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  if (sub === 'solicitacoes') comprasSolicitacoes(alvo, editavel)
+  if (sub === 'coordenar') comprasDecidir(alvo, 'coordenacao')
+  if (sub === 'aprovar') comprasDecidir(alvo, 'aprovacao')
+  if (sub === 'receber') comprasReceber(alvo, editavel)
+  if (sub === 'fornecedores') comprasFornecedores(alvo, editavel)
+}
+
+const selSolicitacao = `
+  id, status, urgencia, tipo_solicitacao, justificativa, tem_risco, descricao_risco,
+  produto_servico, quantidade, unidade, especificacoes, finalidade, local_entrega,
+  valor_estimado, recorrencia, data_solicitacao,
+  parecer_coordenacao, coordenado_em, parecer_aprovacao, decidido_em,
+  solicitante:solicitante_id ( nome ),
+  gestor:gestor_id ( nome ),
+  aprovador:aprovador_id ( nome ),
+  setor:setor_id ( nome ),
+  fornecedor:fornecedor_id ( nome )`
+
+// ----- Compras › Solicitações -----
+async function comprasSolicitacoes (alvo, editavel) {
+  const { data, error } = await db.from('solicitacao_compra')
+    .select(selSolicitacao).order('data_solicitacao', { ascending: false }).limit(300)
+
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  alvo.innerHTML = `
+    ${editavel ? `<div class="acoes" style="margin:0 0 16px;">
+      <button class="btn" id="c-nova">Nova solicitação</button></div>` : ''}
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>Status</label>
+        <select id="c-f-status"><option value="">todos</option>
+          ${Object.entries(STATUS_COMPRA).map(([k, v]) =>
+            `<option value="${k}">${esc(v.rotulo)}</option>`).join('')}
+        </select></div>
+      <div class="campo"><label>Buscar</label>
+        <input id="c-f-texto" placeholder="produto, serviço ou finalidade"></div>
+    </div>
+    <div id="c-lista"></div>`
+
+  const desenhar = () => {
+    const st = $('#c-f-status').value
+    const txt = $('#c-f-texto').value.trim().toLowerCase()
+    const lista = (data || []).filter(s =>
+      (!st || s.status === st) &&
+      (!txt || `${s.produto_servico} ${s.finalidade ?? ''}`.toLowerCase().includes(txt)))
+
+    $('#c-lista').innerHTML = lista.map(s => `
+      <div class="cartao-sol">
+        <div class="linha1">
+          <span class="titulo">${esc(s.produto_servico)}</span>
+          ${s.urgencia === 'URGENTE_4H' ? '<span class="urgente">● urgente</span>' : ''}
+          ${selo(s.status)}
+          <div class="botoes">
+            <button class="btn-secundario mini" data-ficha="${s.id}">ficha</button>
+          </div>
+        </div>
+        <div class="meta">
+          ${esc(s.solicitante?.nome ?? 'sem solicitante')}
+          ${s.setor?.nome ? '· ' + esc(s.setor.nome) : ''}
+          · ${fmtQuando(s.data_solicitacao) ?? '—'}
+          ${s.quantidade ? `· ${esc(s.quantidade)} ${esc(s.unidade ?? '')}` : ''}
+          ${s.valor_estimado ? `· estimado R$ ${fmtNum(s.valor_estimado)}` : ''}
+        </div>
+      </div>`).join('') ||
+      `<p class="vazio">Nenhuma solicitação${(data || []).length ? ' com esse filtro' : ' registrada ainda'}.</p>`
+
+    $('#c-lista').querySelectorAll('[data-ficha]').forEach(b => {
+      b.onclick = () => abrirFicha(data.find(x => x.id === b.dataset.ficha), editavel)
+    })
+  }
+
+  $('#c-f-status').onchange = desenhar
+  $('#c-f-texto').oninput = desenhar
+  desenhar()
+
+  if (editavel) $('#c-nova').onclick = () => formSolicitacao()
+}
+
+// ----- Ficha da solicitação, com impressão em PDF -----
+function abrirFicha (s, editavel) {
+  if (!s) return
+  const item = (rot, val) => val
+    ? `<div class="item"><div class="rot">${esc(rot)}</div><div class="val">${esc(val)}</div></div>` : ''
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal" id="area-impressao">
+      <div class="cabeca-secao">
+        <h3>Solicitação de compra</h3>
+        <span>${selo(s.status)}</span>
+      </div>
+      <div class="ficha">
+        ${item('Produto ou serviço', s.produto_servico)}
+        ${item('Quantidade', s.quantidade ? `${s.quantidade} ${s.unidade ?? ''}` : null)}
+        ${item('Solicitante', s.solicitante?.nome)}
+        ${item('Setor', s.setor?.nome)}
+        ${item('Urgência', URGENCIA[s.urgencia] ?? s.urgencia)}
+        ${item('Tipo', s.tipo_solicitacao)}
+        ${item('Valor estimado', s.valor_estimado ? 'R$ ' + fmtNum(s.valor_estimado) : null)}
+        ${item('Fornecedor sugerido', s.fornecedor?.nome)}
+        ${item('Local de entrega', s.local_entrega)}
+        ${item('Recorrência', s.recorrencia)}
+        ${item('Data', fmtQuando(s.data_solicitacao))}
+      </div>
+      ${s.finalidade ? `<div class="secao" style="margin-top:18px;">
+        <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;">Finalidade</div>
+        <p style="margin:4px 0 0;font-size:13.5px;">${esc(s.finalidade)}</p></div>` : ''}
+      ${s.especificacoes ? `<div class="secao">
+        <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;">Especificações</div>
+        <p style="margin:4px 0 0;font-size:13.5px;">${esc(s.especificacoes)}</p></div>` : ''}
+      ${s.justificativa ? `<div class="secao">
+        <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;">Justificativa do solicitante</div>
+        <p style="margin:4px 0 0;font-size:13.5px;">${esc(s.justificativa)}</p></div>` : ''}
+      ${s.tem_risco ? `<div class="secao">
+        <div class="rot" style="font-size:10.5px;text-transform:uppercase;color:var(--warn-text);">Risco apontado</div>
+        <p style="margin:4px 0 0;font-size:13.5px;">${esc(s.descricao_risco || 'sim, sem descrição')}</p></div>` : ''}
+
+      <div class="secao" style="margin-top:18px;">
+        <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;">Andamento</div>
+        <div class="passo"><span class="quando">${fmtQuando(s.data_solicitacao) ?? '—'}</span>
+          <span>Solicitada por ${esc(s.solicitante?.nome ?? '—')}</span></div>
+        ${s.coordenado_em || s.parecer_coordenacao ? `<div class="passo">
+          <span class="quando">${fmtQuando(s.coordenado_em) ?? '—'}</span>
+          <span><b>Coordenação</b> — ${esc(s.gestor?.nome ?? 'sem nome')}<br>
+          ${esc(s.parecer_coordenacao ?? 'sem parecer registrado')}</span></div>` : ''}
+        ${s.decidido_em || s.parecer_aprovacao ? `<div class="passo">
+          <span class="quando">${fmtQuando(s.decidido_em) ?? '—'}</span>
+          <span><b>Aprovação</b> — ${esc(s.aprovador?.nome ?? 'sem nome')}<br>
+          ${esc(s.parecer_aprovacao ?? 'sem parecer registrado')}</span></div>` : ''}
+      </div>
+
+      <div class="acoes nao-imprime">
+        <button class="btn" id="f-imprimir">Salvar em PDF</button>
+        ${editavel ? `<button class="btn-secundario" id="f-editar">Editar</button>` : ''}
+        <button class="btn-secundario" id="f-fechar">Fechar</button>
+      </div>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  fundo.querySelector('#f-fechar').onclick = fechar
+  fundo.querySelector('#f-imprimir').onclick = () => window.print()
+  const bEditar = fundo.querySelector('#f-editar')
+  if (bEditar) bEditar.onclick = () => { fechar(); formSolicitacao(s) }
+}
+
+// ----- Formulário de solicitação -----
+function formSolicitacao (s = null) {
+  const opc = (lista, atual) => '<option value="">—</option>' +
+    lista.map(i => `<option value="${i.id}" ${i.id === atual ? 'selected' : ''}>${esc(i.nome)}</option>`).join('')
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal">
+      <h3>${s ? 'Editar solicitação' : 'Nova solicitação de compra'}</h3>
+      <div class="form-grade">
+        <div class="campo"><label>Produto ou serviço *</label>
+          <input id="s-produto" value="${esc(s?.produto_servico ?? '')}"></div>
+        <div class="campo"><label>Quantidade</label>
+          <input id="s-qtd" value="${esc(s?.quantidade ?? '')}"></div>
+        <div class="campo"><label>Unidade</label>
+          <input id="s-unid" value="${esc(s?.unidade ?? '')}" placeholder="un, kg, cx"></div>
+        <div class="campo"><label>Urgência</label>
+          <select id="s-urg">
+            <option value="NAO_URGENTE_5D" ${s?.urgencia === 'NAO_URGENTE_5D' ? 'selected' : ''}>Normal — 5 dias</option>
+            <option value="URGENTE_4H" ${s?.urgencia === 'URGENTE_4H' ? 'selected' : ''}>Urgente — 4 horas</option>
+          </select></div>
+        <div class="campo"><label>Tipo</label>
+          <input id="s-tipo" value="${esc(s?.tipo_solicitacao ?? '')}" placeholder="material, serviço..."></div>
+        <div class="campo"><label>Setor</label>
+          <select id="s-setor">${opc(COMPRAS_CACHE.setores, s?.setor_id)}</select></div>
+        <div class="campo"><label>Valor estimado (R$)</label>
+          <input id="s-valor" type="number" step="0.01" value="${s?.valor_estimado ?? ''}"></div>
+        <div class="campo"><label>Fornecedor sugerido</label>
+          <select id="s-forn">${opc(COMPRAS_CACHE.fornecedores, s?.fornecedor_id)}</select></div>
+        <div class="campo"><label>Local de entrega</label>
+          <input id="s-local" value="${esc(s?.local_entrega ?? '')}"></div>
+        <div class="campo"><label>Recorrência</label>
+          <input id="s-recor" value="${esc(s?.recorrencia ?? '')}" placeholder="única, mensal..."></div>
+      </div>
+
+      <div class="campo" style="margin-top:12px;"><label>Finalidade</label>
+        <textarea id="s-final" style="min-height:70px;">${esc(s?.finalidade ?? '')}</textarea></div>
+      <div class="campo" style="margin-top:10px;"><label>Especificações</label>
+        <textarea id="s-espec" style="min-height:70px;">${esc(s?.especificacoes ?? '')}</textarea></div>
+      <div class="campo" style="margin-top:10px;"><label>Justificativa</label>
+        <textarea id="s-just" style="min-height:70px;">${esc(s?.justificativa ?? '')}</textarea></div>
+
+      <label class="linha-modulo" style="margin-top:12px;">
+        <input type="checkbox" id="s-risco" ${s?.tem_risco ? 'checked' : ''}>
+        <span class="nome">Existe risco se esta compra não acontecer</span></label>
+      <div class="campo ${s?.tem_risco ? '' : 'oculto'}" id="s-linha-risco" style="margin-top:8px;">
+        <label>Qual o risco</label>
+        <textarea id="s-descrisco" style="min-height:60px;">${esc(s?.descricao_risco ?? '')}</textarea></div>
+
+      <div class="acoes">
+        <button class="btn" id="s-salvar">${s ? 'Salvar alterações' : 'Enviar solicitação'}</button>
+        <button class="btn-secundario" id="s-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="s-recado"></div>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#s-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const q = id => fundo.querySelector(id)
+  q('#s-risco').onchange = () => q('#s-linha-risco').classList.toggle('oculto', !q('#s-risco').checked)
+
+  const aviso = (t, alerta = false) => {
+    const el = q('#s-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = alerta ? 'var(--warn-text)' : 'var(--line2)'
+    el.style.color = alerta ? 'var(--warn-text)' : 'var(--dim)'
+  }
+
+  q('#s-salvar').onclick = async () => {
+    const produto = q('#s-produto').value.trim()
+    if (!produto) { aviso('Escreva o produto ou serviço.', true); return }
+
+    const btn = q('#s-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const corpo = {
+      produto_servico: produto,
+      quantidade: q('#s-qtd').value.trim() || null,
+      unidade: q('#s-unid').value.trim() || null,
+      urgencia: q('#s-urg').value,
+      tipo_solicitacao: q('#s-tipo').value.trim() || null,
+      setor_id: q('#s-setor').value || null,
+      valor_estimado: q('#s-valor').value ? Number(q('#s-valor').value) : null,
+      fornecedor_id: q('#s-forn').value || null,
+      local_entrega: q('#s-local').value.trim() || null,
+      recorrencia: q('#s-recor').value.trim() || null,
+      finalidade: q('#s-final').value.trim() || null,
+      especificacoes: q('#s-espec').value.trim() || null,
+      justificativa: q('#s-just').value.trim() || null,
+      tem_risco: q('#s-risco').checked,
+      descricao_risco: q('#s-risco').checked ? (q('#s-descrisco').value.trim() || null) : null
+    }
+    if (!s) {
+      corpo.solicitante_id = PERFIL.pessoaId
+      corpo.status = 'AGUARDANDO_COORD'
+    }
+
+    const { error } = s
+      ? await db.from('solicitacao_compra').update(corpo).eq('id', s.id)
+      : await db.from('solicitacao_compra').insert(corpo)
+
+    btn.disabled = false; btn.textContent = s ? 'Salvar alterações' : 'Enviar solicitação'
+    if (error) { aviso(error.message, true); return }
+    fechar()
+    abrirCompras('solicitacoes', true)
+  }
+}
+
+// ----- Compras › Coordenação e Aprovação -----
+// A mesma fila serve as duas etapas; muda o status filtrado e quem assina.
+const ETAPAS = {
+  coordenacao: {
+    titulo: 'Aguardando coordenação',
+    statusFila: 'AGUARDANDO_COORD',
+    permitido: podeCoordenar,
+    avancar: { status: 'APROVADA_COORD', rotulo: 'Encaminhar para aprovação' },
+    recusar: { status: 'DEVOLVIDA', rotulo: 'Devolver ao solicitante' },
+    campoParecer: 'parecer_coordenacao',
+    campoData: 'coordenado_em',
+    campoPessoa: 'gestor_id',
+    explica: 'Confira se o pedido está completo e faz sentido antes de subir para a diretoria.'
+  },
+  aprovacao: {
+    titulo: 'Aguardando aprovação da diretoria',
+    statusFila: 'APROVADA_COORD',
+    permitido: podeAprovar,
+    avancar: { status: 'APROVADA', rotulo: 'Aprovar' },
+    recusar: { status: 'REPROVADA', rotulo: 'Reprovar' },
+    campoParecer: 'parecer_aprovacao',
+    campoData: 'decidido_em',
+    campoPessoa: 'aprovador_id',
+    explica: 'Decisão final. O parecer fica registrado e sai na ficha em PDF.'
+  }
+}
+
+async function comprasDecidir (alvo, nomeEtapa) {
+  const etapa = ETAPAS[nomeEtapa]
+  if (!etapa.permitido()) {
+    alvo.innerHTML = `<div class="panel" style="padding:22px;"><p class="texto-dim">
+      Esta etapa é de quem tem o papel
+      ${nomeEtapa === 'coordenacao' ? '<b>Compras</b>' : '<b>Diretoria</b>'}.
+      Você consegue acompanhar as solicitações na primeira aba.</p></div>`
+    return
+  }
+
+  const { data, error } = await db.from('solicitacao_compra')
+    .select(selSolicitacao).eq('status', etapa.statusFila)
+    .order('urgencia').order('data_solicitacao')
+
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  alvo.innerHTML = `
+    <div class="cabeca-secao">
+      <h3 style="font-family:var(--serif);font-size:17px;">${etapa.titulo}</h3>
+      <span class="texto-dim2" style="font-size:12px;">${(data || []).length} pendente(s)</span>
+    </div>
+    <p class="aviso" style="margin-top:0;margin-bottom:14px;">${etapa.explica}</p>
+    <div id="c-fila"></div>`
+
+  $('#c-fila').innerHTML = (data || []).map(s => `
+    <div class="cartao-sol">
+      <div class="linha1">
+        <span class="titulo">${esc(s.produto_servico)}</span>
+        ${s.urgencia === 'URGENTE_4H' ? '<span class="urgente">● urgente</span>' : ''}
+        <div class="botoes">
+          <button class="btn-secundario mini" data-ficha="${s.id}">ficha</button>
+          <button class="btn mini" data-decidir="${s.id}">decidir</button>
+        </div>
+      </div>
+      <div class="meta">
+        ${esc(s.solicitante?.nome ?? '—')} ${s.setor?.nome ? '· ' + esc(s.setor.nome) : ''}
+        · ${fmtQuando(s.data_solicitacao) ?? '—'}
+        ${s.valor_estimado ? `· R$ ${fmtNum(s.valor_estimado)}` : ''}
+        ${s.tem_risco ? '· <span class="urgente">risco apontado</span>' : ''}
+        ${s.gestor?.nome ? `· coordenado por ${esc(s.gestor.nome)}` : ''}
+      </div>
+    </div>`).join('') || `<p class="vazio">Nada pendente nesta etapa.</p>`
+
+  $('#c-fila').querySelectorAll('[data-ficha]').forEach(b => {
+    b.onclick = () => abrirFicha(data.find(x => x.id === b.dataset.ficha), false)
+  })
+  $('#c-fila').querySelectorAll('[data-decidir]').forEach(b => {
+    b.onclick = () => telaDecisao(data.find(x => x.id === b.dataset.decidir), nomeEtapa)
+  })
+}
+
+// ----- Decisão, sempre com parecer escrito -----
+function telaDecisao (s, nomeEtapa) {
+  if (!s) return
+  const etapa = ETAPAS[nomeEtapa]
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal">
+      <h3>${nomeEtapa === 'coordenacao' ? 'Coordenação' : 'Aprovação'} da solicitação</h3>
+      <div class="ficha" style="margin-bottom:16px;">
+        <div class="item"><div class="rot">Produto ou serviço</div>
+          <div class="val">${esc(s.produto_servico)}</div></div>
+        <div class="item"><div class="rot">Solicitante</div>
+          <div class="val">${esc(s.solicitante?.nome ?? '—')}</div></div>
+        <div class="item"><div class="rot">Valor estimado</div>
+          <div class="val">${s.valor_estimado ? 'R$ ' + fmtNum(s.valor_estimado) : '—'}</div></div>
+        <div class="item"><div class="rot">Urgência</div>
+          <div class="val">${esc(URGENCIA[s.urgencia] ?? '—')}</div></div>
+      </div>
+
+      ${s.justificativa ? `<div class="secao">
+        <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;">Justificativa do solicitante</div>
+        <p style="margin:4px 0 0;font-size:13.5px;">${esc(s.justificativa)}</p></div>` : ''}
+
+      ${s.parecer_coordenacao ? `<div class="secao">
+        <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;">Parecer da coordenação</div>
+        <p style="margin:4px 0 0;font-size:13.5px;">${esc(s.parecer_coordenacao)}</p></div>` : ''}
+
+      <div class="campo"><label>Seu parecer *</label>
+        <textarea id="d-parecer" placeholder="Por que está ${nomeEtapa === 'coordenacao' ? 'encaminhando ou devolvendo' : 'aprovando ou reprovando'}"></textarea></div>
+
+      <div class="acoes">
+        <button class="btn" id="d-avancar">${etapa.avancar.rotulo}</button>
+        <button class="btn-secundario" id="d-recusar">${etapa.recusar.rotulo}</button>
+        <button class="btn-secundario" id="d-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="d-recado"></div>
+      <p class="aviso">${etapa.explica}</p>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#d-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const aviso = t => {
+    const el = q('#d-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  const decidir = async novoStatus => {
+    const parecer = q('#d-parecer').value.trim()
+    if (!parecer) { aviso('Escreva o parecer antes de decidir.'); return }
+
+    const corpo = { status: novoStatus }
+    corpo[etapa.campoParecer] = parecer
+    corpo[etapa.campoData] = new Date().toISOString()
+    corpo[etapa.campoPessoa] = PERFIL.pessoaId
+
+    const { error } = await db.from('solicitacao_compra').update(corpo).eq('id', s.id)
+    if (error) { aviso(error.message); return }
+    fechar()
+    abrirCompras(nomeEtapa === 'coordenacao' ? 'coordenar' : 'aprovar', true)
+  }
+
+  q('#d-avancar').onclick = () => decidir(etapa.avancar.status)
+  q('#d-recusar').onclick = () => decidir(etapa.recusar.status)
+}
+
+// ----- Compras › Recebimento -----
+async function comprasReceber (alvo, editavel) {
+  const [{ data: recs }, { data: aprovadas }] = await Promise.all([
+    db.from('recebimento_mercadoria').select(`
+      id, numero_nf, data_recebimento, observacoes,
+      recebido_por:recebido_por_id ( nome ),
+      fornecedor:fornecedor_id ( nome ),
+      setor:setor_id ( nome ),
+      solicitacao:solicitacao_id ( produto_servico )
+    `).order('data_recebimento', { ascending: false }).limit(200),
+    db.from('solicitacao_compra').select('id,produto_servico')
+      .in('status', ['APROVADA', 'PEDIDO_EMITIDO']).order('data_solicitacao')
+  ])
+
+  alvo.innerHTML = `
+    ${editavel ? `<div class="secao panel" style="padding:20px;">
+      <h3>Registrar recebimento</h3>
+      <div class="form-grade">
+        <div class="campo"><label>Solicitação</label>
+          <select id="r-sol"><option value="">— avulso —</option>
+            ${(aprovadas || []).map(a =>
+              `<option value="${a.id}">${esc(a.produto_servico)}</option>`).join('')}
+          </select></div>
+        <div class="campo"><label>Fornecedor</label>
+          <select id="r-forn"><option value="">—</option>
+            ${COMPRAS_CACHE.fornecedores.map(f =>
+              `<option value="${f.id}">${esc(f.nome)}</option>`).join('')}
+          </select></div>
+        <div class="campo"><label>Nota fiscal</label><input id="r-nf"></div>
+        <div class="campo"><label>Data</label>
+          <input type="date" id="r-data" value="${new Date().toISOString().slice(0, 10)}"></div>
+        <div class="campo"><label>Setor</label>
+          <select id="r-setor"><option value="">—</option>
+            ${COMPRAS_CACHE.setores.map(x =>
+              `<option value="${x.id}">${esc(x.nome)}</option>`).join('')}
+          </select></div>
+      </div>
+      <div class="campo" style="margin-top:12px;"><label>Observações</label>
+        <textarea id="r-obs" style="min-height:60px;"></textarea></div>
+      <div class="acoes"><button class="btn" id="r-salvar">Registrar</button></div>
+      <div class="recado oculto" id="r-recado"></div>
+    </div>` : ''}
+
+    <div class="cabeca-secao">
+      <h3 style="font-family:var(--serif);font-size:17px;">Recebimentos</h3>
+      <span class="texto-dim2" style="font-size:12px;">${(recs || []).length} registro(s)</span>
+    </div>
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>Data</th><th>Item</th><th>Fornecedor</th><th>NF</th><th>Setor</th><th>Recebido por</th>
+      </tr></thead><tbody>
+        ${(recs || []).map(r => `<tr>
+          <td>${fmtQuando(r.data_recebimento) ?? '—'}</td>
+          <td>${esc(r.solicitacao?.produto_servico ?? 'avulso')}</td>
+          <td>${esc(r.fornecedor?.nome ?? '—')}</td>
+          <td>${esc(r.numero_nf ?? '—')}</td>
+          <td>${esc(r.setor?.nome ?? '—')}</td>
+          <td class="texto-dim">${esc(r.recebido_por?.nome ?? '—')}</td>
+        </tr>`).join('') || `<tr><td colspan="6" class="vazio">Nenhum recebimento registrado.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+
+  if (!editavel) return
+
+  $('#r-salvar').onclick = async () => {
+    const aviso = (t, alerta = true) => {
+      const el = $('#r-recado'); el.textContent = t; el.classList.remove('oculto')
+      el.style.borderColor = alerta ? 'var(--warn-text)' : 'var(--line2)'
+      el.style.color = alerta ? 'var(--warn-text)' : 'var(--dim)'
+    }
+    const btn = $('#r-salvar'); btn.disabled = true; btn.textContent = 'Registrando...'
+
+    const solId = $('#r-sol').value || null
+    const { error } = await db.from('recebimento_mercadoria').insert({
+      solicitacao_id: solId,
+      fornecedor_id: $('#r-forn').value || null,
+      setor_id: $('#r-setor').value || null,
+      numero_nf: $('#r-nf').value.trim() || null,
+      data_recebimento: $('#r-data').value || new Date().toISOString(),
+      observacoes: $('#r-obs').value.trim() || null,
+      recebido_por_id: PERFIL.pessoaId
+    })
+
+    btn.disabled = false; btn.textContent = 'Registrar'
+    if (error) { aviso(error.message); return }
+
+    // recebeu contra uma solicitação: ela passa a RECEBIDA
+    if (solId) await db.from('solicitacao_compra')
+      .update({ status: 'RECEBIDA' }).eq('id', solId)
+
+    abrirCompras('receber', true)
+  }
+}
+
+// ----- Compras › Fornecedores -----
+async function comprasFornecedores (alvo, editavel) {
+  const { data, error } = await db.from('fornecedor')
+    .select('id,nome,cnpj_cpf,contato,status').order('nome')
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  alvo.innerHTML = `
+    ${editavel ? `<div class="secao panel" style="padding:20px;">
+      <h3>Novo fornecedor</h3>
+      <div class="form-grade">
+        <div class="campo"><label>Nome *</label><input id="fo-nome"></div>
+        <div class="campo"><label>CNPJ ou CPF</label><input id="fo-doc"></div>
+        <div class="campo"><label>Contato</label><input id="fo-contato" placeholder="telefone ou e-mail"></div>
+      </div>
+      <div class="acoes"><button class="btn" id="fo-salvar">Adicionar</button></div>
+      <div class="recado oculto" id="fo-recado"></div>
+    </div>` : ''}
+
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr><th>Nome</th><th>CNPJ / CPF</th><th>Contato</th><th>Situação</th></tr></thead>
+      <tbody>${(data || []).map(f => `<tr>
+        <td>${esc(f.nome)}</td>
+        <td class="texto-dim">${esc(f.cnpj_cpf ?? '—')}</td>
+        <td>${esc(f.contato ?? '—')}</td>
+        <td><span class="chip">${esc(f.status)}</span></td>
+      </tr>`).join('') || `<tr><td colspan="4" class="vazio">Nenhum fornecedor cadastrado.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+
+  if (!editavel) return
+
+  $('#fo-salvar').onclick = async () => {
+    const nome = $('#fo-nome').value.trim()
+    const el = $('#fo-recado')
+    if (!nome) {
+      el.textContent = 'Escreva o nome do fornecedor.'; el.classList.remove('oculto')
+      el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+      return
+    }
+    const { error } = await db.from('fornecedor').insert({
+      nome,
+      cnpj_cpf: $('#fo-doc').value.trim() || null,
+      contato: $('#fo-contato').value.trim() || null
+    })
+    if (error) {
+      el.textContent = error.message; el.classList.remove('oculto')
+      el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+      return
+    }
+    abrirCompras('fornecedores', true)
   }
 }
 
