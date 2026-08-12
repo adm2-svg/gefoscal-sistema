@@ -53,6 +53,18 @@ tbody tr:hover { background: var(--hover-bg); }
 .barra-skin { display:flex; gap:6px; }
 .barra-skin button { font-size:11px; padding:5px 9px; }
 
+/* ---- Marca ---- */
+.logo-login { display:block; height:64px; width:auto; margin:0 auto 14px; }
+.logo-nav { display:block; height:34px; width:auto; margin-bottom:14px; }
+.marca-pdf { display:none; }
+@media print {
+  .marca-pdf { display:flex !important; align-items:center; gap:12px;
+               border-bottom:2px solid #1c5632; padding-bottom:10px; margin-bottom:18px; }
+  .marca-pdf img { height:46px; width:auto; }
+  .marca-pdf span { font-family:var(--serif); font-size:15px; color:#1c5632;
+                    letter-spacing:.5px; margin-left:auto; }
+}
+
 /* ---- Administração e Visão geral ---- */
 .subabas { display:flex; gap:2px; margin-bottom:18px; border-bottom:1px solid var(--line2); }
 .subabas button { background:none; border:none; color:var(--dim); cursor:pointer;
@@ -113,6 +125,18 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
 .status.reprovada  { border-color:var(--warn-text); color:var(--warn-text); }
 .status.recebida   { opacity:.6; }
 .urgente { color:var(--warn-text); font-size:11px; }
+.progresso { display:flex; height:8px; border-radius:20px; overflow:hidden;
+             background:var(--hover-bg); margin:10px 0 8px; }
+.progresso span { display:block; height:100%; }
+.progresso .feito     { background:var(--rust); }
+.progresso .andamento { background:var(--rust); opacity:.38; }
+.progresso .parado    { background:var(--line2); }
+.legenda { display:flex; gap:16px; flex-wrap:wrap; font-size:12px; color:var(--dim); }
+.legenda i { display:inline-block; width:9px; height:9px; border-radius:50%;
+             margin-right:6px; vertical-align:baseline; font-style:normal; }
+.legenda .feito i     { background:var(--rust); }
+.legenda .andamento i { background:var(--rust); opacity:.38; }
+.legenda .parado i    { background:var(--line2); }
 .cartao-sol { border:1px solid var(--line); border-radius:8px; background:var(--panel);
               padding:13px 15px; margin-bottom:9px; }
 .cartao-sol .linha1 { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
@@ -135,9 +159,9 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
 
 @media print {
   body * { visibility:hidden; }
-  #area-impressao, #area-impressao * { visibility:visible; }
-  #area-impressao { position:absolute; inset:0; padding:0; background:#fff; color:#000; }
-  #area-impressao .nao-imprime { display:none; }
+  .area-impressao, .area-impressao * { visibility:visible; }
+  .area-impressao { position:absolute; inset:0; padding:0; background:#fff; color:#000; }
+  .area-impressao .nao-imprime { display:none; }
   .modal-fundo { position:static; background:none; padding:0; }
   .modal { border:none; max-width:100%; padding:0; }
 }
@@ -148,8 +172,8 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
 <!-- ================= LOGIN ================= -->
 <div id="tela-login" class="login-wrap">
   <div class="login panel" style="padding:26px;">
-    <h1 class="titulo-serif">Gefoscal</h1>
-    <p class="texto-dim" style="margin-top:0;font-size:13px;">Sistema interno</p>
+    <img class="logo-login" id="logo-login" alt="Grupo Gefoscal">
+    <p class="texto-dim" style="margin-top:0;font-size:13px;text-align:center;">Sistema interno</p>
 
     <div class="campo">
       <label>E-mail</label>
@@ -177,7 +201,7 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
 <!-- ================= APP ================= -->
 <div id="tela-app" class="app oculto">
   <nav class="nav">
-    <h1 class="titulo-serif">Gefoscal</h1>
+    <img class="logo-nav" id="logo-nav" alt="Grupo Gefoscal">
     <div class="sub" id="quem-sou"></div>
     <div id="menu"></div>
     <div class="linha-divisoria" style="margin:18px 0 12px;"></div>
@@ -220,6 +244,14 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { SUPABASE_URL, SUPABASE_KEY, SKIN_PADRAO } from './config.js'
 
+// Logo do Grupo Gefoscal embutido: não depende de arquivo externo nem de rede,
+// e por isso aparece também na impressão em PDF.
+const LOGO_COMPLETO = 'data:image/png;base64,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'
+const LOGO_MARCA = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAG8AAAAoCAYAAADwmKS0AAASjUlEQVR42u1be5hU9Xl+v+93zpkzl90FFMjC7mKIlgo+ctkVL22sNIk1PkqiZifRtLZWYAE11GiSNm2dnbRpSi7egguDWqJIxBk1qSaxiXlco9EK7iIa0JomNu4FQlTQ3Z3bOef3+/rHzCzDshBARDDu88yzf8w5Z8753u97v/e7HMJ7+E/SUBSHfm7lxBOUHfprX8ussMNbhvJ0z9ylv3lZBEwEc6w+H73XgduwYtIs2+YHaiNqas4zCDuMbMH0e55cNPeqvmfTrVDxDPT74B1lwHWvmnKmbUnGUjQ5XzQBEVgEJuyQFRj0Z4v6/DOv6n+hcvyx9pz8XgOuMwGL4tBdtzWea1vmYcWYnC8aTQQLABPBKvgSKMZk1+YfPLe6cQbFoSVx7NniPQOeCCidhpqXRPDsyqZPOQ4eJKLj8p4YIqgRh1sFT0zIpkbF+F5XqvFDlIRJJGC9T5vvwnNIGkxx6O7bGq5wQtQhIDcIRGNv4KoB1+EQqYInLweazp+7tOcVSYApeWyIGH6PRFwJuFWNn7dC/B9a4PqBmP0BBwBEUPmi6LBD0xxbHuxKNdVTEiad3v9570fe4QAOIAhABNmcarrBspAMjBhtADoIxxSBjrikCkXTrcEXtrT1bD8WIvCYBS9RJTAurG/4ZtTla/MFESlFFB0g+EKAAGAR6GiYVK4g//3WYDB/3vXbX0+noeJHsQqlYxW4ZBIGBGxa1bA6EuKF+aJoUyq6D/iZmABmgh+IlM8LoiG2skXzuKXp4lOX9uwa/q33wfv9+QvtIErCSAKMdggRZI9jynTWlaqPkKg1NRGOZ/MSCA5cKQoARYA2yIKQdRRN8KoBdMkaypmf+J7besayXw0crRR61AgWAYgIQkkYQQlAIojIbgfbDdzYOiYrXRNR8YGcmIMBruyxQTTMAPCIIPizIJCX3BCRCAwAaygvOhZR54ZChbVdqfpIuYw46sTdUVHXVEcTwMs2E5/XbeRRIX0j0fZcZ7n+oiSCTXd+YLwy9n3hEM8bypuA6dCfgQjc3Lb9fzalmj5ntDyiGGQEQgSVLZggFuH5gznc9fS3Gi4/8/N9BeDoolA6GqiSCPJ/a6a4b3n6rtqYiueKgpBNyOb1jwbywd+cvey3rwHAkzdOmBqLOumoy82DOdHEhybpBTBhm7jgo4sc+tjsK159c2PH5FvrouqaobxoIigRgAlBNEzWUM6s/dW4vivicejK/f7Bg1fp6nel6iNM6u6Yy5cMFcSHAQnB1Ljs5DzdFRj1V4p8l4nXuQ5Pz+YlAL0t1jBKEfuB7AAFc5sXbe/dfPOUOgnrn7shnpEviiEq0SRRKQcO5uWOOWN7F2MrZLRc/AeV88oebJ7+VkNYQd0Vc/mSoZwEAGzHIStkkTOQMzpkcwuJeUKEH7Utnj6UF/02gQMADgKRkEXjjVa1RJDZ1776pha6VmvxFENESuAYA2swJ7omwgs272q8qSJcqnPxHxR45YiTzd+YGA1FaV00zJ/KFsRnBimC+IH5muebh2IRVrm8BLZF4y3Fx+eKIkSHp/tBgHEssKWkEQC6Us32aUt6Hy16clvEJQWUQCICQFBDOaOjYbqma2XDt4ggmTj43QbwiIOXSJSosifdEJY6566aCF80mBOtDZQbIqU1fjJ7Ud+XAx262vfNdsch9gPRgRbDdPiMJQQyAMDqJAB4ZWy3EQFFnWhiKC+/cEOkyuoTVHI4NZQXXRNRn+9a1fCv8Qx0eztI3sXUw0c64pJJmM4V42OvvUHfjbp0yVDBBADYUkDBkyG25HoR0Nyrft1bKOKbtiKmQ7hXAUyF+vab/LScBACtWyGZDPjkBS8PamM+p7X4iktdmEoECqByBaNjYfWPXR0NiWQSJtMKpvc6eJWI63qoPlJnu3fXRPiTgznRIrAAmEiIWGtz46wFfVsymRIlTSzIymxBd7shUoIDl+gEIOwQM4NE9utMYMKJANAOIF6e6522pP/xYoBbwi4zZPfvEgAj4HzB6GiE27tTDV+MZ6Dve5ca2XSkIo4IpnPF9FiNNbCuNsLzhwoSQGAJYFybqOibFy3NH35gR89bFWNSEub5O5o+YpE84gdgXepo7e+eg9oIW7uypoOA/pCNr2oN0QIZpVFtQg5x0ZOXZy/qPbkcXVLp8mwYNy5mu5Enwg7PrFaf5ecRZohjEee84LrTFm+78d2YxvORirjNd0+M1toD99RG1PyqiAMEJAJipn84dWnPrhkzQMkkDCUhnQlYD/b2dOY9rI+EWVVHwX49Uozbsrj33/zALGMiUgw2ZkSbTUDGACIy5pk7JkyoAEcEycwAnbFs5wAb+TutpWCp3eqzDDIZA/ID0WFbfbN7deNiikN3HuFhLr/TEZdMwvx8+bQaP2uvr3H5E9m8CYigCIAY6FiEyPNl/ayFvQ9LAtwaHwZIzgFMMgnjONSeLZjXLQtcbUQRiACmkpdEoAbyRixFl228Y+opc9r6b/UCLFIMz7IAGQG+NgKAYi6cKSiFO6FMn+k01Owl/Y/nPdwaLtG2jOjOkDZgXwM2Y2VXqmHBvCQCOYIUyu90xG1ZMT0WHZu9py6qLhjMi67qQxrHJip48joc+wYRUObFii4oG6jcoD71yp5XtJblrk00HH0CTQRyLOLyGYYIJAJxHXYt7f0lALQs6bndC2gBAYFdAn+4BDAGwoyIBNwEAI9X2aM1DiMCcmLeVwZzZnMkRDwS/HIEwghMyKKOrpUNn6U4tHQemQh8R8BLp6GSSZiXlk+rKVoD90Zdnp8rGL+6RjMCODbYD+Trc/72lf/NZMCjruC1QyQBdo+rXZUtmO5YhJUITCRMCgC8QPpti8ixiU3ZuL4GxODS59bUjZE0VHNbz1qvaC4jIGuXwNblfK+jLpFhcwIA1ExqpioxIJk4eNblO7Ks+OpAS7FafVYDGGiQNrAtRd/pWj0pTvOOTATyOxFx8Tj0z5dPqymMza6riagLBnOijcCuojsTCREP5dE9GFLfFgFV0eXI5rEAwCnxF4eU8JeKvnkrZEPni7JeRP6s6Ms5gS/n+oG8EAszE2D8QHTY5UZTjMUpDr0lPd057er++z0PlwlkyLYrNZyIpQgK1AgAg9u69wAmnimpz9kLe57yA7kxHNpTfQ4bsUShhgiWw2rNxo5J88sbadbv6zK9nUKfDnfExePQz9xyYq3tFu6tCfP5I2dtAogiGMUw2pjzZi3qf+xAJtZSLrWe+PakPxrjWjWnLuzprv5+420farQs776IS2dm86YYCys7W9A/nD32zIsQz5juFKyWNvgbOhr+IuzQeiYaUwxMsTasQoO54HuzF/dfAilZpJq6y8al59dODJu8/bOww825Eeqz2inL1DykjYnPaet/ZDQVWgGs4piSACM5PNU/8pFXibiX7phWE3KL62Jhdf5gbo8cNywywiFSRR9rDxS4Co2JgM6+ZtsvK8BJGkoS4K4U7LlX/bq3wHJBrmAeq42okK+FRWjuhjefridAHt5WEiGnL+37sVc0FxuR121FoYInIuCGp5ZPixFhr7K+3AqjWZfvyBpN1wYGOUuRjNYAIAL7GoaIYkx8b1dH05+PVKEVRUsE2bKyaXr3HSdMoSQMHUK/lA8GnM4ErNE2qyo57pdrT6zN+kPpiEsX5EfkuApwjkWULZgdEaZ/AoDW1oMovstyvjIYpTg0JWFa2uBLAnzWwr6dBvrCXEF/TRvZQYTjYiHDexThaaiWq/o7s4XgIm2wI2SDCDLZiQ2OAYD29r0NGM+UgG9Z2vtkvmhuCoewl/qscjL2AjFKUZ1jy/rnVtb/ybwkgs4ErM5OWESQrlR9pDvV0CG2bCatf7Ep1bgMKAF6MLmSDoYOh0FIgNsBJMsT5mHg8sV7Iy6fP5Qzei/gAIFAoi7zYD5YfNqS/tThXvCp3jfZ2DFpGpF1/NwlPU+NtHKFyjZ2TJodca37Pd8AVnDGnCt/+9q+5nWVTbXffGdK6A1PPxlxuCW/D/qsqGHHJlUMzO8sUp+YuejVZ0r0PqnRtvjOsMsfyxUEigHbInie3JNjWXbWwr6dnQlY85II3hZ41TslXammehJpgaFtzUvL+UZAIEhXamodw18fc+m8bGH0fRIpt8CyeXkCz/V+tLke+h2aiw0v4O7XIcsvmDxxywfG10XdcTMX/OZlwZ6lyr7O2Xzn5NPJ0OMCcrQB7avrI1Lq4ni+2cWMm0RjpwGui4bVB/MFEwhKQ18imFiYVb5ons/7ZvEZS/ufGZkXDwq8ag98LjW5lZX6qmvTSbmiyRrBQ4bl5pa6vu5n3vrg8a4O1kQj/PHBUSKucjkmCAhaIH86e2Hfxnd6K0sSYMwA7Q/EQ1ksqpzTvaoxGQvTDYN5MUz7Tj8CGMXgqMsgAnIFgR/sHbGV7e0gkAENfHH2wt7U77vH0T2mTCs/uuXE0ES30G4x/b2lCOUXNKxIiDCYF48gGyFodEM8peCJBkbnaxHoWITVUFbf3Lyk79rWVqjMiJounYZq3QrBDFD7VshowFZeBsnMAG0d5RgBCIny9pmA2ttLrbbR2KRynUrOrfZwERAyYGwttcripTKm0sWhTAbc0NvghGLojITU6bmC2Td9Yng/VFe6QPtaTxSBsRTYsQn5ovmO75nrT79m2xv76pvudZEK3z614oQprqNXxkL88WzBSHk4qcoqyzBDORZBG8DXYvazoawdm9jz5VXX1S0nX75tZ4WKR8tVx8JfhT6fXz35DFL8KAyFfS0HtTO6H8YTABKLEA/lzGYJZHHL1f0bRluF3GOtrvLlxlTTR11GynFoai5vNEpeNdqNmTK90v5ow7WJi7757Jy2vu/u623UzakTTmelL9bG7LSE7z+lrfeV6rrryY6msTE2CwxRg2Js9zy9bu5V23qro23TnZNnSqA+3NzWs2LDqqaPOBbGzV7Qk6l2kK6Oxg/bDp0PEgtC/3XqlT2PDddbAmKCPLZmiltX0J+1HZ7u+fqph7b3fz+ZHDaaVIu4rpUNN9RGOTmQ2z99HgKIOhwiVfRkUBu6rmVJz+3VrDhcKlR4lQiyKdV0fcTCQ6wwNZszlbds9gXOfr1NBDrqMhc8+dF/butbPxK4dGuJZp9d2fgxIf0zAKfC0Pyi4NMESHt7CRgAiBhzHIi+TpBaMfikpdTtiQQYsrsnSZ6aC5F/Lj/YhUbLlRVQZswoXUcp+RRELoWhWKDN/d2rp0yrNNHLE3bUFfXNQtRhjExTih+YP7npCwAknd4NTrzc+3SPq/33waxsGK33+bZUV/klGGaqCYewetPtDanvLz+uhsrlDgBwogzcpjs/MP752xvvjYTwjUBLuOCJHOpqXdk7fUuB80WTV0a+lEzCZOIjgG4t/VMkVxsjD78xyJcK0T2Wwq7+VH0kmYTJvFg6x3dYC2SXCO4zoAdBOOXCSfUuaHdPUiBFCHaKgAQYEtDAKDcW+IG84PvyXQIZEowFgMfbS3s1L93aOAnAAkX4yMyFvReIpjYyZlHnmiljKqt/lUtl4uBT4i96FtPSoi9F2wID8AWHR0ETQQVapOiLiYXUoqnjIo9uunXyTCrfByeTMM901DfDt39qWfSZbMF4WsRjgoYgOKgPEIhIIAKEQ2TbNpMR+eKspX1bJLGPxnPJoAwST3HRBvCZCWOsjtfITASA8dNLxuIAZABfwOtqwrQcBl9uadueQwLUPLbblCWtEEmICMIiLkHsvQpv4QFinMsKawV4UMh7HgBee7Fk8IIlBCIKYPyyCX0ANGaU+45noBMJ8My2nk1am2sEhEiIbQJIRALgIO03yocIGhA9kNNFZjrdjvCPu1INlxFBrO5Vky8OOeqBMTGFbN6gLqacQyfq0qj7rZyBH+DZoq9vOm1J373pVihKjgJcpmweIx1Q/P26MNUYktj2XcHTysXvBCDMKBnV0YGllToeCnOH8no1GDOrItgAgEW6U4Nv2HpnU7rgmbOF8C8AcA7A52ytUJo0idAPhCZc2tLW7Q9fIlOiQbT3bd9U33A3Ef148+rGHxqjP20EX2m54tU3JbF3vk4mYUp5qP/2rtuathmjv0ygs+pqlCXm8HaPjQFsiyeOUVi3aWXjGdS9qrElFpWThrJSZOa3NYfSGnAcQAd4kwa8p2Z9YUf2QJXkplTTWSELJ4uRYCCQn561pK+/splFgGy+e2JU50PnNbf1PPDCmil/7HvBjOa2/gdGXqd7VWNL2KHPFIryQiEnmTOv6yswIKZcgHelmuaQCDcv7u0a2RCu1LZbVoyPFR13kUUy0wh1apmwrrmtO6AqwbKv+m9LAo43qelsy5JxngeowzwYEk0mZIOKvnj/D8vIUmTZdv/kAAAAAElFTkSuQmCC'
+const marcaPDF = () => `<div class="marca-pdf">
+  <img src="${LOGO_COMPLETO}" alt="Grupo Gefoscal">
+  <span>Grupo Gefoscal</span></div>`
+
 const db = createClient(SUPABASE_URL, SUPABASE_KEY)
 const $ = s => document.querySelector(s)
 const fmtNum = (n, d = 2) => (n ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: d, maximumFractionDigits: d })
@@ -233,6 +265,9 @@ window.trocarSkin = s => {
 }
 document.documentElement.setAttribute('data-skin',
   localStorage.getItem('gefoscal-skin') || SKIN_PADRAO)
+
+$('#logo-login').src = LOGO_COMPLETO
+$('#logo-nav').src = LOGO_COMPLETO
 
 // ---------------------------------------------------------------
 // Login
@@ -398,12 +433,6 @@ function kpi (rotulo, valor, nota = '') {
     <div class="valor">${valor}</div><div class="nota">${esc(nota)}</div></div>`
 }
 
-function semAcesso (modulo) {
-  $('#corpo').innerHTML = `<tr><td class="vazio">
-    Você não tem acesso ao módulo <b>${esc(modulo)}</b>.<br>
-    Peça a liberação ao administrador do sistema.</td></tr>`
-}
-
 // avisa quando a migração ainda não rodou, em vez de quebrar calado
 function faltaMigracao (erro) {
   return erro && /does not exist|schema cache/i.test(erro.message || '')
@@ -424,22 +453,49 @@ async function paginaVisaoGeral () {
     return
   }
 
+  // avisos não lidos primeiro
+  const { data: avisos } = await db.from('aviso')
+    .select('id,titulo,texto,criado_em').is('lido_em', null)
+    .eq('pessoa_id', PERFIL.pessoaId).order('criado_em', { ascending: false })
+
+  if (avisos?.length) {
+    const bloco = document.createElement('div')
+    bloco.className = 'panel'
+    bloco.style.cssText = 'padding:18px;margin-bottom:16px;'
+    bloco.innerHTML = `
+      <div class="cabeca-secao">
+        <h3 style="font-family:var(--serif);font-size:17px;">
+          ${avisos.length} aviso${avisos.length > 1 ? 's' : ''}</h3>
+        <button class="btn-secundario mini" id="av-limpar">marcar como lidos</button>
+      </div>
+      ${avisos.map(a => `<div class="passo">
+        <span class="quando">${fmtQuando(a.criado_em) ?? '—'}</span>
+        <span><b>${esc(a.titulo)}</b>${a.texto ? '<br>' + esc(a.texto) : ''}</span>
+      </div>`).join('')}`
+    area.appendChild(bloco)
+    bloco.querySelector('#av-limpar').onclick = async () => {
+      await db.from('aviso').update({ lido_em: new Date().toISOString() })
+        .in('id', avisos.map(a => a.id))
+      irPara('visao_geral')
+    }
+  }
+
   const { data, error } = await db.from('visao_geral_pessoa')
     .select('html_conteudo,atualizado_em').eq('pessoa_id', PERFIL.pessoaId).maybeSingle()
 
   if (faltaMigracao(error)) {
-    area.innerHTML = `<div class="panel" style="padding:22px;">
+    area.insertAdjacentHTML('beforeend', `<div class="panel" style="padding:22px;">
       <p class="texto-dim">A tabela <code>visao_geral_pessoa</code> ainda não existe no banco.
-      Rode a migração no SQL Editor do Supabase para ligar esta tela.</p></div>`
+      Rode a migração no SQL Editor do Supabase para ligar esta tela.</p></div>`)
     return
   }
 
   if (!data?.html_conteudo) {
-    area.innerHTML = `<div class="panel" style="padding:22px;">
+    area.insertAdjacentHTML('beforeend', `<div class="panel" style="padding:22px;">
       <h3 style="font-family:var(--serif);margin-top:0;">Olá, ${esc(PERFIL.nome.split(' ')[0])}</h3>
       <p class="texto-dim">Ainda não há um painel montado para você. Use o menu ao lado
       para abrir os módulos liberados${podeEditar(CHAVE_ADMIN)
-        ? ', ou monte um painel em Administração → Visão geral.' : '.'}</p></div>`
+        ? ', ou monte um painel em Administração → Visão geral.' : '.'}</p></div>`)
     return
   }
 
@@ -870,16 +926,15 @@ async function subVisao (alvo, editavel) {
 //   solicitacao_compra · recebimento_mercadoria · fornecedor
 // ---------------------------------------------------------------
 const STATUS_COMPRA = {
-  RASCUNHO:         { rotulo: 'Rascunho',                  classe: '' },
-  AGUARDANDO_COORD: { rotulo: 'Aguardando coordenação',    classe: 'aguardando' },
-  APROVADA_COORD:   { rotulo: 'Aguardando aprovação',      classe: 'aguardando' },
-  DEVOLVIDA:        { rotulo: 'Devolvida ao solicitante',  classe: 'reprovada' },
-  APROVADA:         { rotulo: 'Aprovada',                  classe: 'aprovada' },
-  REPROVADA:        { rotulo: 'Reprovada',                 classe: 'reprovada' },
-  EM_COTACAO:       { rotulo: 'Em cotação',                classe: '' },
-  PEDIDO_EMITIDO:   { rotulo: 'Pedido emitido',            classe: '' },
-  RECEBIDA:         { rotulo: 'Recebida',                  classe: 'recebida' },
-  CANCELADA:        { rotulo: 'Cancelada',                 classe: 'recebida' }
+  AGUARDANDO_COORD:     { rotulo: 'Aguardando coordenação', classe: 'aguardando' },
+  AGUARDANDO_COTACAO:   { rotulo: 'Em cotação',             classe: 'aguardando' },
+  AGUARDANDO_APROVACAO: { rotulo: 'Aguardando aprovação',   classe: 'aguardando' },
+  DEVOLVIDA:            { rotulo: 'Devolvida',              classe: 'reprovada' },
+  APROVADA:             { rotulo: 'Aprovada — a pagar',    classe: 'aprovada' },
+  PAGA:                 { rotulo: 'Paga',                  classe: 'aprovada' },
+  REPROVADA:            { rotulo: 'Reprovada',              classe: 'reprovada' },
+  RECEBIDA:             { rotulo: 'Recebida',               classe: 'recebida' },
+  CANCELADA:            { rotulo: 'Cancelada',              classe: 'recebida' }
 }
 const selo = s => {
   const e = STATUS_COMPRA[s] || { rotulo: s || '—', classe: '' }
@@ -887,15 +942,24 @@ const selo = s => {
 }
 const URGENCIA = { URGENTE_4H: 'Urgente — 4h', NAO_URGENTE_5D: 'Normal — 5 dias' }
 
-// Quem faz o quê, pelo papel do usuário:
-//   qualquer um com acesso a compras  -> abre solicitação
-//   papel COMPRAS                     -> coordenação (1º nível, gestor_id)
-//   papel DIRETORIA                   -> aprovação final (2º nível, aprovador_id)
-//   papel ADMIN                       -> pode nos dois, para destravar o fluxo
-const podeCoordenar = () => PERFIL.papeis.some(p => ['COMPRAS', 'ADMIN'].includes(p))
-const podeAprovar   = () => PERFIL.papeis.some(p => ['DIRETORIA', 'ADMIN'].includes(p))
+// Setor que exige passar pela coordenação antes de cotar.
+const SETOR_COM_COORDENACAO = 'Indústria'
 
-let COMPRAS_CACHE = { fornecedores: [], setores: [], pessoas: [] }
+// Quem faz o quê:
+//   ver e solicitar   -> qualquer um com acesso ao módulo compras
+//   coordenação       -> quem é gestor do setor da solicitação (setor.gestor_id)
+//   cotação           -> papel COMPRAS (o analista de compras)
+//   aprovação final   -> papel DIRETORIA
+//   ADMIN passa em todas, para destravar o fluxo
+const ehAdminSistema = () => PERFIL.papeis.includes('ADMIN')
+const podeCotar     = () => PERFIL.papeis.includes('COMPRAS') || ehAdminSistema()
+const podeAprovar   = () => PERFIL.papeis.includes('DIRETORIA') || ehAdminSistema()
+// baixa de pagamento: quem edita o módulo financeiro
+const podePagar     = () => podeEditar('financeiro') || ehAdminSistema()
+// coordenação depende do setor: só aparece para quem gerencia algum
+const podeCoordenar = () => COMPRAS_CACHE.meusSetores.length > 0 || ehAdminSistema()
+
+let COMPRAS_CACHE = { fornecedores: [], setores: [], pessoas: [], meusSetores: [] }
 
 async function paginaCompras () {
   if (!podeVer('compras')) { areaLivre().innerHTML =
@@ -903,13 +967,29 @@ async function paginaCompras () {
      Você não tem acesso a Compras.</p></div>`; return }
 
   const editavel = podeEditar('compras')
-  $('#subtitulo-pagina').textContent = 'Solicitações, aprovação e recebimento'
-
+  $('#subtitulo-pagina').textContent = 'Solicitações, coordenação, cotação e aprovação'
   const area = areaLivre()
+  area.innerHTML = `<p class="texto-dim2">carregando...</p>`
+
+  // carrega antes de montar as abas: quem coordena depende dos setores
+  const [{ data: forn }, { data: setores }, { data: pessoas }] = await Promise.all([
+    db.from('fornecedor').select('id,nome,cnpj_cpf,contato,status').order('nome'),
+    db.from('setor').select('id,nome,gestor_id').order('nome'),
+    db.from('pessoa').select('id,nome').order('nome')
+  ])
+  COMPRAS_CACHE = {
+    fornecedores: forn || [],
+    setores: setores || [],
+    pessoas: pessoas || [],
+    meusSetores: (setores || []).filter(s => s.gestor_id && s.gestor_id === PERFIL.pessoaId)
+  }
+
   const abas = [
     { chave: 'solicitacoes', nome: 'Solicitações', mostrar: true },
     { chave: 'coordenar',    nome: 'Coordenação',  mostrar: podeCoordenar() },
+    { chave: 'cotar',        nome: 'Cotação',      mostrar: podeCotar() },
     { chave: 'aprovar',      nome: 'Aprovação',    mostrar: podeAprovar() },
+    { chave: 'pagar',        nome: 'Pagamento',    mostrar: podePagar() },
     { chave: 'receber',      nome: 'Recebimento',  mostrar: true },
     { chave: 'fornecedores', nome: 'Fornecedores', mostrar: true }
   ].filter(a => a.mostrar)
@@ -927,14 +1007,6 @@ async function paginaCompras () {
     }
   })
 
-  // carrega uma vez o que as sub-abas usam
-  const [{ data: forn }, { data: setores }, { data: pessoas }] = await Promise.all([
-    db.from('fornecedor').select('id,nome,cnpj_cpf,contato,status').order('nome'),
-    db.from('setor').select('id,nome').order('nome'),
-    db.from('pessoa').select('id,nome').order('nome')
-  ])
-  COMPRAS_CACHE = { fornecedores: forn || [], setores: setores || [], pessoas: pessoas || [] }
-
   abrirCompras('solicitacoes', editavel)
 }
 
@@ -943,7 +1015,9 @@ function abrirCompras (sub, editavel) {
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
   if (sub === 'solicitacoes') comprasSolicitacoes(alvo, editavel)
   if (sub === 'coordenar') comprasDecidir(alvo, 'coordenacao')
+  if (sub === 'cotar') comprasCotar(alvo)
   if (sub === 'aprovar') comprasDecidir(alvo, 'aprovacao')
+  if (sub === 'pagar') comprasPagar(alvo)
   if (sub === 'receber') comprasReceber(alvo, editavel)
   if (sub === 'fornecedores') comprasFornecedores(alvo, editavel)
 }
@@ -951,10 +1025,13 @@ function abrirCompras (sub, editavel) {
 const selSolicitacao = `
   id, status, urgencia, tipo_solicitacao, justificativa, tem_risco, descricao_risco,
   produto_servico, quantidade, unidade, especificacoes, finalidade, local_entrega,
-  valor_estimado, recorrencia, data_solicitacao,
+  valor_estimado, recorrencia, data_solicitacao, setor_id,
   parecer_coordenacao, coordenado_em, parecer_aprovacao, decidido_em,
+  parecer_cotacao, cotado_em, forma_pagamento, condicao_pagamento,
+  parcelas, vencimento, dados_pagamento, orcamento_escolhido_id,
   solicitante:solicitante_id ( nome ),
   gestor:gestor_id ( nome ),
+  analista:analista_id ( nome ),
   aprovador:aprovador_id ( nome ),
   setor:setor_id ( nome ),
   fornecedor:fornecedor_id ( nome )`
@@ -969,6 +1046,7 @@ async function comprasSolicitacoes (alvo, editavel) {
   alvo.innerHTML = `
     ${editavel ? `<div class="acoes" style="margin:0 0 16px;">
       <button class="btn" id="c-nova">Nova solicitação</button></div>` : ''}
+    <div class="panel" id="c-resumo" style="padding:16px 18px;margin-bottom:16px;"></div>
     <div class="filtros" style="margin-bottom:14px;">
       <div class="campo"><label>Status</label>
         <select id="c-f-status"><option value="">todos</option>
@@ -980,6 +1058,39 @@ async function comprasSolicitacoes (alvo, editavel) {
     </div>
     <div id="c-lista"></div>`
 
+  // Concluída = recebida. Em andamento = ainda vai andar.
+  // Encerrada sem compra = reprovada, devolvida ou cancelada: saiu da fila,
+  // então não entra na conta do que "falta concluir".
+  const CONCLUIDAS = ['RECEBIDA']
+  const PARADAS = ['REPROVADA', 'CANCELADA', 'DEVOLVIDA']
+
+  const resumir = lista => {
+    const feito = lista.filter(s => CONCLUIDAS.includes(s.status)).length
+    const parado = lista.filter(s => PARADAS.includes(s.status)).length
+    const andamento = lista.length - feito - parado
+    const base = feito + andamento              // o que precisa chegar ao fim
+    const pct = base ? Math.round((feito / base) * 100) : 0
+
+    $('#c-resumo').innerHTML = `
+      <div class="cabeca-secao" style="margin-bottom:2px;">
+        <h3 style="font-family:var(--serif);font-size:17px;">
+          ${base ? pct + '% concluído' : 'Nenhuma solicitação em curso'}</h3>
+        <span class="texto-dim2" style="font-size:12px;">
+          ${andamento ? `faltam ${andamento} de ${base}` : base ? 'tudo recebido' : ''}</span>
+      </div>
+      ${lista.length ? `
+      <div class="progresso">
+        ${feito ? `<span class="feito" style="width:${(feito / lista.length) * 100}%"></span>` : ''}
+        ${andamento ? `<span class="andamento" style="width:${(andamento / lista.length) * 100}%"></span>` : ''}
+        ${parado ? `<span class="parado" style="width:${(parado / lista.length) * 100}%"></span>` : ''}
+      </div>
+      <div class="legenda">
+        <span class="feito"><i></i>${feito} recebida${feito === 1 ? '' : 's'}</span>
+        <span class="andamento"><i></i>${andamento} em andamento</span>
+        ${parado ? `<span class="parado"><i></i>${parado} encerrada${parado === 1 ? '' : 's'} sem compra</span>` : ''}
+      </div>` : ''}`
+  }
+
   const desenhar = () => {
     const st = $('#c-f-status').value
     const txt = $('#c-f-texto').value.trim().toLowerCase()
@@ -987,6 +1098,7 @@ async function comprasSolicitacoes (alvo, editavel) {
       (!st || s.status === st) &&
       (!txt || `${s.produto_servico} ${s.finalidade ?? ''}`.toLowerCase().includes(txt)))
 
+    resumir(lista)
     $('#c-lista').innerHTML = lista.map(s => `
       <div class="cartao-sol">
         <div class="linha1">
@@ -1028,7 +1140,8 @@ function abrirFicha (s, editavel) {
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
   fundo.innerHTML = `
-    <div class="modal" id="area-impressao">
+    <div class="modal area-impressao">
+      ${marcaPDF()}
       <div class="cabeca-secao">
         <h3>Solicitação de compra</h3>
         <span>${selo(s.status)}</span>
@@ -1194,8 +1307,12 @@ function formSolicitacao (s = null) {
     }
     if (!s) {
       corpo.solicitante_id = PERFIL.pessoaId
-      corpo.status = 'AGUARDANDO_COORD'
       corpo.data_solicitacao = new Date().toISOString()
+      // Indústria passa pela coordenação; os demais vão direto para o analista
+      const setorEscolhido = COMPRAS_CACHE.setores.find(x => x.id === corpo.setor_id)
+      corpo.status = setorEscolhido?.nome === SETOR_COM_COORDENACAO
+        ? 'AGUARDANDO_COORD'
+        : 'AGUARDANDO_COTACAO'
     }
 
     const { error } = s
@@ -1216,22 +1333,25 @@ const ETAPAS = {
     titulo: 'Aguardando coordenação',
     statusFila: 'AGUARDANDO_COORD',
     permitido: podeCoordenar,
-    avancar: { status: 'APROVADA_COORD', rotulo: 'Encaminhar para aprovação' },
+    avancar: { status: 'AGUARDANDO_COTACAO', rotulo: 'Justificar e enviar para cotação' },
     recusar: { status: 'DEVOLVIDA', rotulo: 'Devolver ao solicitante' },
     campoParecer: 'parecer_coordenacao',
     campoData: 'coordenado_em',
     campoPessoa: 'gestor_id',
-    explica: 'Confira se o pedido está completo e faz sentido antes de subir para a diretoria.'
+    rotuloParecer: 'Justificativa da compra',
+    explica: `Só solicitações de ${SETOR_COM_COORDENACAO} passam por aqui. ` +
+             'Justifique a necessidade e encaminhe para o analista cotar.'
   },
   aprovacao: {
     titulo: 'Aguardando aprovação da diretoria',
-    statusFila: 'APROVADA_COORD',
+    statusFila: 'AGUARDANDO_APROVACAO',
     permitido: podeAprovar,
     avancar: { status: 'APROVADA', rotulo: 'Aprovar' },
     recusar: { status: 'REPROVADA', rotulo: 'Reprovar' },
     campoParecer: 'parecer_aprovacao',
     campoData: 'decidido_em',
     campoPessoa: 'aprovador_id',
+    rotuloParecer: 'Parecer da aprovação',
     explica: 'Decisão final. O parecer fica registrado e sai na ficha em PDF.'
   }
 }
@@ -1240,22 +1360,31 @@ async function comprasDecidir (alvo, nomeEtapa) {
   const etapa = ETAPAS[nomeEtapa]
   if (!etapa.permitido()) {
     alvo.innerHTML = `<div class="panel" style="padding:22px;"><p class="texto-dim">
-      Esta etapa é de quem tem o papel
-      ${nomeEtapa === 'coordenacao' ? '<b>Compras</b>' : '<b>Diretoria</b>'}.
-      Você consegue acompanhar as solicitações na primeira aba.</p></div>`
+      ${nomeEtapa === 'coordenacao'
+        ? 'A coordenação é de quem gerencia um setor. Nenhum setor está sob sua gestão hoje.'
+        : 'A aprovação final é do papel <b>Diretoria</b>.'}
+      Você acompanha tudo na aba Solicitações.</p></div>`
     return
   }
 
-  const { data, error } = await db.from('solicitacao_compra')
+  let consulta = db.from('solicitacao_compra')
     .select(selSolicitacao).eq('status', etapa.statusFila)
-    .order('urgencia').order('data_solicitacao')
 
+  // coordenação só enxerga o que é do setor que a pessoa gerencia
+  if (nomeEtapa === 'coordenacao' && !ehAdminSistema()) {
+    consulta = consulta.in('setor_id', COMPRAS_CACHE.meusSetores.map(s => s.id))
+  }
+
+  const { data, error } = await consulta.order('urgencia').order('data_solicitacao')
   if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  const meus = nomeEtapa === 'coordenacao' && !ehAdminSistema()
+    ? ` · ${COMPRAS_CACHE.meusSetores.map(s => s.nome).join(', ')}` : ''
 
   alvo.innerHTML = `
     <div class="cabeca-secao">
       <h3 style="font-family:var(--serif);font-size:17px;">${etapa.titulo}</h3>
-      <span class="texto-dim2" style="font-size:12px;">${(data || []).length} pendente(s)</span>
+      <span class="texto-dim2" style="font-size:12px;">${(data || []).length} pendente(s)${esc(meus)}</span>
     </div>
     <p class="aviso" style="margin-top:0;margin-bottom:14px;">${etapa.explica}</p>
     <div id="c-fila"></div>`
@@ -1273,9 +1402,8 @@ async function comprasDecidir (alvo, nomeEtapa) {
       <div class="meta">
         ${esc(s.solicitante?.nome ?? '—')} ${s.setor?.nome ? '· ' + esc(s.setor.nome) : ''}
         · ${fmtQuando(s.data_solicitacao) ?? '—'}
-        ${s.valor_estimado ? `· R$ ${fmtNum(s.valor_estimado)}` : ''}
+        ${s.valor_estimado ? `· estimado R$ ${fmtNum(s.valor_estimado)}` : ''}
         ${s.tem_risco ? '· <span class="urgente">risco apontado</span>' : ''}
-        ${s.gestor?.nome ? `· coordenado por ${esc(s.gestor.nome)}` : ''}
       </div>
     </div>`).join('') || `<p class="vazio">Nada pendente nesta etapa.</p>`
 
@@ -1285,6 +1413,559 @@ async function comprasDecidir (alvo, nomeEtapa) {
   $('#c-fila').querySelectorAll('[data-decidir]').forEach(b => {
     b.onclick = () => telaDecisao(data.find(x => x.id === b.dataset.decidir), nomeEtapa)
   })
+}
+
+// ----- Compras › Cotação (analista de compras) -----
+async function comprasCotar (alvo) {
+  if (!podeCotar()) {
+    alvo.innerHTML = `<div class="panel" style="padding:22px;"><p class="texto-dim">
+      A cotação é do analista de compras (papel <b>Compras</b>).</p></div>`
+    return
+  }
+
+  const { data, error } = await db.from('solicitacao_compra')
+    .select(selSolicitacao).eq('status', 'AGUARDANDO_COTACAO')
+    .order('urgencia').order('data_solicitacao')
+
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  // quantos orçamentos cada uma já tem
+  const ids = (data || []).map(s => s.id)
+  let porSol = {}
+  if (ids.length) {
+    const { data: orcs } = await db.from('orcamento')
+      .select('solicitacao_id, valor, escolhido').in('solicitacao_id', ids)
+    ;(orcs || []).forEach(o => {
+      porSol[o.solicitacao_id] = porSol[o.solicitacao_id] || { n: 0, menor: null }
+      porSol[o.solicitacao_id].n++
+      const m = porSol[o.solicitacao_id].menor
+      if (m === null || Number(o.valor) < m) porSol[o.solicitacao_id].menor = Number(o.valor)
+    })
+  }
+
+  alvo.innerHTML = `
+    <div class="cabeca-secao">
+      <h3 style="font-family:var(--serif);font-size:17px;">Para cotar</h3>
+      <span class="texto-dim2" style="font-size:12px;">${(data || []).length} pendente(s)</span>
+    </div>
+    <p class="aviso" style="margin-top:0;margin-bottom:14px;">
+      Lance os orçamentos, escolha o melhor, preencha o pagamento e envie para a diretoria.</p>
+    <div id="c-cotar"></div>`
+
+  $('#c-cotar').innerHTML = (data || []).map(s => {
+    const r = porSol[s.id]
+    return `<div class="cartao-sol">
+      <div class="linha1">
+        <span class="titulo">${esc(s.produto_servico)}</span>
+        ${s.urgencia === 'URGENTE_4H' ? '<span class="urgente">● urgente</span>' : ''}
+        ${r ? `<span class="chip">${r.n} orçamento${r.n > 1 ? 's' : ''}</span>` : ''}
+        <div class="botoes">
+          <button class="btn-secundario mini" data-ficha="${s.id}">ficha</button>
+          <button class="btn mini" data-cotar="${s.id}">cotar</button>
+        </div>
+      </div>
+      <div class="meta">
+        ${esc(s.solicitante?.nome ?? '—')} ${s.setor?.nome ? '· ' + esc(s.setor.nome) : ''}
+        · ${fmtQuando(s.data_solicitacao) ?? '—'}
+        ${s.valor_estimado ? `· estimado R$ ${fmtNum(s.valor_estimado)}` : ''}
+        ${r?.menor != null ? `· menor cotação R$ ${fmtNum(r.menor)}` : ''}
+      </div>
+    </div>`
+  }).join('') || `<p class="vazio">Nada aguardando cotação.</p>`
+
+  $('#c-cotar').querySelectorAll('[data-ficha]').forEach(b => {
+    b.onclick = () => abrirFicha(data.find(x => x.id === b.dataset.ficha), false)
+  })
+  $('#c-cotar').querySelectorAll('[data-cotar]').forEach(b => {
+    b.onclick = () => telaCotacao(data.find(x => x.id === b.dataset.cotar))
+  })
+}
+
+// ----- Tela de cotação de uma solicitação -----
+async function telaCotacao (s) {
+  if (!s) return
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal"><p class="texto-dim2">carregando orçamentos...</p></div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const recarregar = async () => {
+    const { data: orcs } = await db.from('orcamento')
+      .select('id,valor,prazo_entrega,forma_pagamento,condicao_pagamento,link_proposta,observacoes,escolhido,fornecedor_avulso,fornecedor:fornecedor_id(nome)')
+      .eq('solicitacao_id', s.id).order('valor')
+    desenhar(orcs || [])
+  }
+
+  const desenhar = orcs => {
+    const menor = orcs.length ? Math.min(...orcs.map(o => Number(o.valor))) : null
+    const escolhido = orcs.find(o => o.escolhido)
+
+    fundo.innerHTML = `
+      <div class="modal" style="max-width:860px;">
+        <div class="cabeca-secao">
+          <h3>Cotação — ${esc(s.produto_servico)}</h3>
+          <span class="texto-dim2" style="font-size:12px;">
+            ${s.quantidade ? esc(s.quantidade) + ' ' + esc(s.unidade ?? '') : ''}
+            ${s.valor_estimado ? '· estimado R$ ' + fmtNum(s.valor_estimado) : ''}</span>
+        </div>
+
+        <div class="panel" style="padding:0;margin-bottom:16px;">
+          <table><thead><tr>
+            <th></th><th>Fornecedor</th><th class="num">Valor</th>
+            <th>Prazo</th><th>Pagamento</th><th></th>
+          </tr></thead><tbody>
+            ${orcs.map(o => `<tr>
+              <td><input type="radio" name="escolha" data-escolher="${o.id}" ${o.escolhido ? 'checked' : ''}></td>
+              <td>${esc(o.fornecedor?.nome || o.fornecedor_avulso || '—')}
+                ${o.link_proposta ? `<br><a class="anexo-link" href="${esc(o.link_proposta)}" target="_blank" rel="noopener">proposta</a>` : ''}</td>
+              <td class="num ${Number(o.valor) === menor ? 'badge-bom' : ''}">R$ ${fmtNum(o.valor)}</td>
+              <td>${esc(o.prazo_entrega ?? '—')}</td>
+              <td>${esc([o.forma_pagamento, o.condicao_pagamento].filter(Boolean).join(' · ') || '—')}</td>
+              <td style="text-align:right;">
+                <button class="btn-secundario mini" data-apagar="${o.id}">remover</button></td>
+            </tr>`).join('') || `<tr><td colspan="6" class="vazio">
+              Nenhum orçamento lançado. Adicione ao menos um abaixo.</td></tr>`}
+          </tbody></table>
+        </div>
+
+        <div class="secao">
+          <h3 style="font-size:15px;">Novo orçamento</h3>
+          <div class="form-grade">
+            <div class="campo"><label>Fornecedor</label>
+              <select id="o-forn"><option value="">— digitar abaixo —</option>
+                ${COMPRAS_CACHE.fornecedores.map(f =>
+                  `<option value="${f.id}">${esc(f.nome)}</option>`).join('')}</select></div>
+            <div class="campo"><label>ou nome do fornecedor</label><input id="o-avulso"></div>
+            <div class="campo"><label>Valor (R$) *</label><input id="o-valor" inputmode="decimal" placeholder="1.250,00"></div>
+            <div class="campo"><label>Prazo de entrega</label><input id="o-prazo" placeholder="5 dias úteis"></div>
+            <div class="campo"><label>Forma de pagamento</label><input id="o-forma" placeholder="boleto, PIX, cartão"></div>
+            <div class="campo"><label>Condição</label><input id="o-cond" placeholder="à vista, 30/60"></div>
+            <div class="campo"><label>Link da proposta</label><input id="o-link" placeholder="https://..."></div>
+          </div>
+          <div class="acoes"><button class="btn mini" id="o-add">Adicionar orçamento</button></div>
+        </div>
+
+        <div class="secao">
+          <h3 style="font-size:15px;">Pagamento e envio</h3>
+          <div class="form-grade">
+            <div class="campo"><label>Parcelas</label>
+              <input id="p-parcelas" type="number" min="1" value="${s.parcelas ?? 1}"></div>
+            <div class="campo"><label>Vencimento</label>
+              <input id="p-venc" type="date" value="${s.vencimento ?? ''}"></div>
+          </div>
+          <div class="campo" style="margin-top:10px;"><label>Dados de pagamento</label>
+            <textarea id="p-dados" style="min-height:64px;"
+              placeholder="PIX, dados bancários ou instruções">${esc(s.dados_pagamento ?? '')}</textarea></div>
+          <div class="campo" style="margin-top:10px;"><label>Por que este orçamento *</label>
+            <textarea id="p-parecer" style="min-height:64px;"
+              placeholder="Menor preço, prazo melhor, único fornecedor homologado...">${esc(s.parecer_cotacao ?? '')}</textarea></div>
+        </div>
+
+        <div class="acoes">
+          <button class="btn" id="c-enviar">Enviar para aprovação</button>
+          <button class="btn-secundario" id="c-pdf">PDF dos orçamentos</button>
+          <button class="btn-secundario" id="c-fechar">Fechar</button>
+        </div>
+        <div class="recado oculto" id="c-recado"></div>
+      </div>`
+
+    const q = id => fundo.querySelector(id)
+    const aviso = (t, alerta = true) => {
+      const el = q('#c-recado'); el.textContent = t; el.classList.remove('oculto')
+      el.style.borderColor = alerta ? 'var(--warn-text)' : 'var(--line2)'
+      el.style.color = alerta ? 'var(--warn-text)' : 'var(--dim)'
+    }
+
+    q('#c-fechar').onclick = fechar
+
+    // marcar o escolhido
+    fundo.querySelectorAll('[data-escolher]').forEach(r => {
+      r.onchange = async () => {
+        await db.from('orcamento').update({ escolhido: false }).eq('solicitacao_id', s.id)
+        await db.from('orcamento').update({ escolhido: true }).eq('id', r.dataset.escolher)
+        recarregar()
+      }
+    })
+
+    fundo.querySelectorAll('[data-apagar]').forEach(b => {
+      b.onclick = async () => {
+        await db.from('orcamento').delete().eq('id', b.dataset.apagar)
+        recarregar()
+      }
+    })
+
+    q('#o-add').onclick = async () => {
+      const valor = numeroBR(q('#o-valor').value)
+      if (valor === null) { aviso('Informe o valor do orçamento.'); return }
+      if (!q('#o-forn').value && !q('#o-avulso').value.trim()) {
+        aviso('Escolha um fornecedor cadastrado ou digite o nome.'); return }
+
+      const { error } = await db.from('orcamento').insert({
+        solicitacao_id: s.id,
+        fornecedor_id: q('#o-forn').value || null,
+        fornecedor_avulso: q('#o-avulso').value.trim() || null,
+        valor,
+        prazo_entrega: q('#o-prazo').value.trim() || null,
+        forma_pagamento: q('#o-forma').value.trim() || null,
+        condicao_pagamento: q('#o-cond').value.trim() || null,
+        link_proposta: q('#o-link').value.trim() || null,
+        criado_por_id: PERFIL.pessoaId
+      })
+      if (error) { aviso(error.message); return }
+      recarregar()
+    }
+
+    q('#c-pdf').onclick = () => pdfOrcamentos(s, orcs)
+
+    q('#c-enviar').onclick = async () => {
+      if (!orcs.length) { aviso('Lance ao menos um orçamento antes de enviar.'); return }
+      if (!escolhido) { aviso('Marque qual orçamento foi escolhido.'); return }
+      const parecer = q('#p-parecer').value.trim()
+      if (!parecer) { aviso('Escreva por que escolheu este orçamento.'); return }
+
+      const { error } = await db.from('solicitacao_compra').update({
+        status: 'AGUARDANDO_APROVACAO',
+        analista_id: PERFIL.pessoaId,
+        cotado_em: new Date().toISOString(),
+        parecer_cotacao: parecer,
+        orcamento_escolhido_id: escolhido.id,
+        forma_pagamento: escolhido.forma_pagamento ?? null,
+        condicao_pagamento: escolhido.condicao_pagamento ?? null,
+        parcelas: Number(q('#p-parcelas').value) || null,
+        vencimento: q('#p-venc').value || null,
+        dados_pagamento: q('#p-dados').value.trim() || null,
+        fornecedor_id: escolhido.fornecedor?.nome
+          ? COMPRAS_CACHE.fornecedores.find(f => f.nome === escolhido.fornecedor.nome)?.id ?? null
+          : null
+      }).eq('id', s.id)
+
+      if (error) { aviso(error.message); return }
+      fechar()
+      abrirCompras('cotar', true)
+    }
+  }
+
+  recarregar()
+}
+
+// converte "1.250,50" e "80.5" para número
+function numeroBR (raw) {
+  let b = String(raw ?? '').trim()
+  if (!b) return null
+  if (b.includes(',')) b = b.replace(/\./g, '').replace(',', '.')
+  else if (/^\d{1,3}(\.\d{3})+$/.test(b)) b = b.replace(/\./g, '')
+  const n = Number(b)
+  return Number.isNaN(n) ? null : n
+}
+
+// ----- PDF: quadro comparativo dos orçamentos -----
+function pdfOrcamentos (s, orcs) {
+  const menor = orcs.length ? Math.min(...orcs.map(o => Number(o.valor))) : null
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal area-impressao" style="max-width:860px;">
+      ${marcaPDF()}
+      <h3>Quadro comparativo de orçamentos</h3>
+      <div class="ficha" style="margin-bottom:18px;">
+        <div class="item"><div class="rot">Produto ou serviço</div>
+          <div class="val">${esc(s.produto_servico)}</div></div>
+        <div class="item"><div class="rot">Quantidade</div>
+          <div class="val">${esc(s.quantidade ?? '—')} ${esc(s.unidade ?? '')}</div></div>
+        <div class="item"><div class="rot">Solicitante</div>
+          <div class="val">${esc(s.solicitante?.nome ?? '—')}</div></div>
+        <div class="item"><div class="rot">Setor</div>
+          <div class="val">${esc(s.setor?.nome ?? '—')}</div></div>
+        <div class="item"><div class="rot">Valor estimado</div>
+          <div class="val">${s.valor_estimado ? 'R$ ' + fmtNum(s.valor_estimado) : '—'}</div></div>
+        <div class="item"><div class="rot">Cotado em</div>
+          <div class="val">${fmtQuando(new Date().toISOString())}</div></div>
+      </div>
+
+      <table><thead><tr>
+        <th>Fornecedor</th><th class="num">Valor</th><th>Prazo</th>
+        <th>Pagamento</th><th>Escolhido</th>
+      </tr></thead><tbody>
+        ${orcs.map(o => `<tr>
+          <td>${esc(o.fornecedor?.nome || o.fornecedor_avulso || '—')}</td>
+          <td class="num">R$ ${fmtNum(o.valor)}${Number(o.valor) === menor ? ' ◂ menor' : ''}</td>
+          <td>${esc(o.prazo_entrega ?? '—')}</td>
+          <td>${esc([o.forma_pagamento, o.condicao_pagamento].filter(Boolean).join(' · ') || '—')}</td>
+          <td>${o.escolhido ? 'sim' : ''}</td>
+        </tr>`).join('')}
+      </tbody></table>
+
+      <div class="secao" style="margin-top:18px;">
+        <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;">Levantado por</div>
+        <p style="margin:4px 0 0;font-size:13.5px;">${esc(PERFIL.nome)}</p>
+      </div>
+
+      <div class="acoes nao-imprime">
+        <button class="btn" id="pq-imprimir">Salvar em PDF</button>
+        <button class="btn-secundario" id="pq-fechar">Fechar</button>
+      </div>
+    </div>`
+  document.body.appendChild(fundo)
+  fundo.querySelector('#pq-fechar').onclick = () => fundo.remove()
+  fundo.querySelector('#pq-imprimir').onclick = () => window.print()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+}
+
+// ----- Compras › Pagamento (financeiro) -----
+async function comprasPagar (alvo) {
+  if (!podePagar()) {
+    alvo.innerHTML = `<div class="panel" style="padding:22px;"><p class="texto-dim">
+      A baixa de pagamento é de quem edita o módulo <b>Financeiro</b>.</p></div>`
+    return
+  }
+
+  const [{ data, error }, { data: contas }, { data: categorias }, { data: centros }] =
+    await Promise.all([
+      db.from('solicitacao_compra').select(selSolicitacao)
+        .in('status', ['APROVADA', 'PAGA'])
+        .order('status').order('vencimento', { nullsFirst: false }),
+      db.from('conta_financeira').select('id,nome').order('nome'),
+      db.from('categoria_financeira').select('id,nome,tipo').order('nome'),
+      db.from('centro_de_custo').select('id,nome').order('nome')
+    ])
+
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  const aPagar = (data || []).filter(s => s.status === 'APROVADA')
+  const pagas = (data || []).filter(s => s.status === 'PAGA')
+  const total = aPagar.reduce((t, s) => t + Number(s.valor_estimado || 0), 0)
+
+  alvo.innerHTML = `
+    <div class="cabeca-secao">
+      <h3 style="font-family:var(--serif);font-size:17px;">A pagar</h3>
+      <span class="texto-dim2" style="font-size:12px;">
+        ${aPagar.length} pendente(s)${total ? ' · aprox. R$ ' + fmtNum(total) : ''}</span>
+    </div>
+    <p class="aviso" style="margin-top:0;margin-bottom:14px;">
+      Imprima a ordem de pagamento, efetue e dê a baixa. O solicitante é avisado automaticamente.</p>
+    <div id="c-pagar"></div>
+
+    ${pagas.length ? `<div class="cabeca-secao" style="margin-top:26px;">
+      <h3 style="font-family:var(--serif);font-size:17px;">Pagas</h3>
+      <span class="texto-dim2" style="font-size:12px;">${pagas.length}</span></div>
+      <div id="c-pagas"></div>` : ''}`
+
+  const cartao = (s, feito) => `
+    <div class="cartao-sol">
+      <div class="linha1">
+        <span class="titulo">${esc(s.produto_servico)}</span>
+        ${s.urgencia === 'URGENTE_4H' && !feito ? '<span class="urgente">● urgente</span>' : ''}
+        ${feito ? selo('PAGA') : ''}
+        <div class="botoes">
+          <button class="btn-secundario mini" data-ordem="${s.id}">ordem</button>
+          ${feito ? '' : `<button class="btn mini" data-baixa="${s.id}">dar baixa</button>`}
+        </div>
+      </div>
+      <div class="meta">
+        solicitado por ${esc(s.solicitante?.nome ?? '—')}
+        ${s.setor?.nome ? '· ' + esc(s.setor.nome) : ''}
+        ${s.fornecedor?.nome ? '· ' + esc(s.fornecedor.nome) : ''}
+        ${feito
+          ? `· pago em ${fmtQuando(s.pago_em) ?? '—'} · R$ ${fmtNum(s.valor_pago)}`
+          : `${s.vencimento ? '· vence ' + fmtData(s.vencimento) : ''}
+             ${s.parcelas ? '· ' + s.parcelas + 'x' : ''}`}
+      </div>
+    </div>`
+
+  $('#c-pagar').innerHTML = aPagar.map(s => cartao(s, false)).join('') ||
+    `<p class="vazio">Nada aguardando pagamento.</p>`
+  if (pagas.length) $('#c-pagas').innerHTML = pagas.map(s => cartao(s, true)).join('')
+
+  alvo.querySelectorAll('[data-ordem]').forEach(b => {
+    b.onclick = () => ordemPagamento((data || []).find(x => x.id === b.dataset.ordem))
+  })
+  alvo.querySelectorAll('[data-baixa]').forEach(b => {
+    b.onclick = () => telaBaixa((data || []).find(x => x.id === b.dataset.baixa),
+                                contas || [], categorias || [], centros || [])
+  })
+}
+
+// ----- Ordem de pagamento, para imprimir -----
+async function ordemPagamento (s) {
+  if (!s) return
+  const { data: orcs } = await db.from('orcamento')
+    .select('valor,prazo_entrega,forma_pagamento,condicao_pagamento,escolhido,fornecedor_avulso,fornecedor:fornecedor_id(nome)')
+    .eq('solicitacao_id', s.id).eq('escolhido', true).maybeSingle()
+    .then(r => ({ data: r.data ? [r.data] : [] }))
+
+  const o = orcs[0]
+  const item = (rot, val) => val
+    ? `<div class="item"><div class="rot">${esc(rot)}</div><div class="val">${esc(val)}</div></div>` : ''
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal area-impressao">
+      ${marcaPDF()}
+      <div class="cabeca-secao">
+        <h3>Ordem de pagamento</h3>
+        <span class="texto-dim2" style="font-size:12px;">${fmtQuando(new Date().toISOString())}</span>
+      </div>
+      <div class="ficha">
+        ${item('Produto ou serviço', s.produto_servico)}
+        ${item('Quantidade', s.quantidade ? `${s.quantidade} ${s.unidade ?? ''}` : null)}
+        ${item('Solicitante', s.solicitante?.nome)}
+        ${item('Setor', s.setor?.nome)}
+        ${item('Fornecedor', o?.fornecedor?.nome || o?.fornecedor_avulso || s.fornecedor?.nome)}
+        ${item('Valor', o ? 'R$ ' + fmtNum(o.valor) : (s.valor_estimado ? 'R$ ' + fmtNum(s.valor_estimado) : null))}
+        ${item('Forma de pagamento', s.forma_pagamento || o?.forma_pagamento)}
+        ${item('Condição', s.condicao_pagamento || o?.condicao_pagamento)}
+        ${item('Parcelas', s.parcelas ? s.parcelas + 'x' : null)}
+        ${item('Vencimento', s.vencimento ? fmtData(s.vencimento) : null)}
+        ${item('Local de entrega', s.local_entrega)}
+      </div>
+
+      ${s.dados_pagamento ? `<div class="secao" style="margin-top:18px;">
+        <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;">Dados de pagamento</div>
+        <p style="margin:4px 0 0;font-size:13.5px;white-space:pre-wrap;">${esc(s.dados_pagamento)}</p></div>` : ''}
+
+      <div class="secao">
+        <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;">Autorizações</div>
+        ${s.parecer_coordenacao ? `<div class="passo"><span class="quando">${fmtQuando(s.coordenado_em) ?? '—'}</span>
+          <span><b>Coordenação</b> — ${esc(s.gestor?.nome ?? '—')}<br>${esc(s.parecer_coordenacao)}</span></div>` : ''}
+        ${s.parecer_cotacao ? `<div class="passo"><span class="quando">${fmtQuando(s.cotado_em) ?? '—'}</span>
+          <span><b>Cotação</b> — ${esc(s.analista?.nome ?? '—')}<br>${esc(s.parecer_cotacao)}</span></div>` : ''}
+        ${s.parecer_aprovacao ? `<div class="passo"><span class="quando">${fmtQuando(s.decidido_em) ?? '—'}</span>
+          <span><b>Aprovação</b> — ${esc(s.aprovador?.nome ?? '—')}<br>${esc(s.parecer_aprovacao)}</span></div>` : ''}
+      </div>
+
+      <div class="acoes nao-imprime">
+        <button class="btn" id="op-imprimir">Imprimir</button>
+        <button class="btn-secundario" id="op-fechar">Fechar</button>
+      </div>
+    </div>`
+
+  document.body.appendChild(fundo)
+  fundo.querySelector('#op-fechar').onclick = () => fundo.remove()
+  fundo.querySelector('#op-imprimir').onclick = () => window.print()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+}
+
+// ----- Baixa do pagamento -----
+function telaBaixa (s, contas, categorias, centros) {
+  if (!s) return
+  const despesas = categorias.filter(c => c.tipo !== 'ENTRADA')
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal">
+      <h3>Dar baixa no pagamento</h3>
+      <div class="ficha" style="margin-bottom:16px;">
+        <div class="item"><div class="rot">Item</div><div class="val">${esc(s.produto_servico)}</div></div>
+        <div class="item"><div class="rot">Solicitante</div>
+          <div class="val">${esc(s.solicitante?.nome ?? '—')}</div></div>
+        <div class="item"><div class="rot">Fornecedor</div>
+          <div class="val">${esc(s.fornecedor?.nome ?? '—')}</div></div>
+      </div>
+
+      <div class="form-grade">
+        <div class="campo"><label>Valor pago (R$) *</label>
+          <input id="b-valor" inputmode="decimal" value="${s.valor_estimado ?? ''}"></div>
+        <div class="campo"><label>Data do pagamento</label>
+          <input type="date" id="b-data" value="${new Date().toISOString().slice(0, 10)}"></div>
+        <div class="campo"><label>Conta</label>
+          <select id="b-conta"><option value="">—</option>
+            ${contas.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Categoria</label>
+          <select id="b-categoria"><option value="">—</option>
+            ${despesas.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Centro de custo</label>
+          <select id="b-centro"><option value="">—</option>
+            ${centros.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Comprovante (link)</label><input id="b-comp" placeholder="https://..."></div>
+      </div>
+
+      <label class="linha-modulo" style="margin-top:12px;">
+        <input type="checkbox" id="b-lancar" checked>
+        <span class="nome">Gerar lançamento no Financeiro</span></label>
+
+      <div class="acoes">
+        <button class="btn" id="b-confirmar">Confirmar baixa</button>
+        <button class="btn-secundario" id="b-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="b-recado"></div>
+      <p class="aviso">Ao confirmar, ${esc(s.solicitante?.nome ?? 'o solicitante')} recebe o aviso
+      de que a compra foi aprovada e paga.</p>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#b-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const aviso = t => {
+    const el = q('#b-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  q('#b-confirmar').onclick = async () => {
+    const valor = numeroBR(q('#b-valor').value)
+    if (valor === null) { aviso('Informe o valor pago.'); return }
+
+    const btn = q('#b-confirmar'); btn.disabled = true; btn.textContent = 'Registrando...'
+    let lancamentoId = null
+
+    if (q('#b-lancar').checked) {
+      const { data: lanc, error: eL } = await db.from('lancamento_financeiro').insert({
+        tipo: 'SAIDA',
+        descricao: `Compra: ${s.produto_servico}`,
+        valor,
+        data_lancamento: q('#b-data').value || new Date().toISOString().slice(0, 10),
+        conta_id: q('#b-conta').value || null,
+        categoria_id: q('#b-categoria').value || null,
+        centro_custo_id: q('#b-centro').value || null,
+        situacao: 'EFETIVADO',
+        observacao: `Solicitação de ${s.solicitante?.nome ?? '—'}`,
+        registrado_por: PERFIL.pessoaId
+      }).select('id').single()
+
+      if (eL) { aviso('Não deu para lançar no financeiro: ' + eL.message)
+        btn.disabled = false; btn.textContent = 'Confirmar baixa'; return }
+      lancamentoId = lanc.id
+    }
+
+    const { error } = await db.from('solicitacao_compra').update({
+      status: 'PAGA',
+      pago_por_id: PERFIL.pessoaId,
+      pago_em: new Date(q('#b-data').value || Date.now()).toISOString(),
+      valor_pago: valor,
+      comprovante_link: q('#b-comp').value.trim() || null,
+      lancamento_id: lancamentoId
+    }).eq('id', s.id)
+
+    if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Confirmar baixa'; return }
+
+    // avisa o solicitante
+    if (s.solicitante?.nome) {
+      const { data: p } = await db.from('pessoa').select('id')
+        .eq('nome', s.solicitante.nome).maybeSingle()
+      if (p) {
+        await db.from('aviso').insert({
+          pessoa_id: p.id,
+          titulo: 'Sua compra foi aprovada e paga',
+          texto: `${s.produto_servico} — pago em ${fmtData(q('#b-data').value)} `
+               + `no valor de R$ ${fmtNum(valor)}.`,
+          origem: 'compras',
+          registro_id: s.id
+        })
+        await db.from('solicitacao_compra')
+          .update({ avisado_em: new Date().toISOString() }).eq('id', s.id)
+      }
+    }
+
+    fechar()
+    abrirCompras('pagar', true)
+  }
 }
 
 // ----- Decisão, sempre com parecer escrito -----
@@ -1313,10 +1994,16 @@ function telaDecisao (s, nomeEtapa) {
         <p style="margin:4px 0 0;font-size:13.5px;">${esc(s.justificativa)}</p></div>` : ''}
 
       ${s.parecer_coordenacao ? `<div class="secao">
-        <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;">Parecer da coordenação</div>
+        <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;">Justificativa da coordenação</div>
         <p style="margin:4px 0 0;font-size:13.5px;">${esc(s.parecer_coordenacao)}</p></div>` : ''}
 
-      <div class="campo"><label>Seu parecer *</label>
+      ${s.parecer_cotacao ? `<div class="secao">
+        <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;">Cotação — ${esc(s.analista?.nome ?? '')}</div>
+        <p style="margin:4px 0 0;font-size:13.5px;">${esc(s.parecer_cotacao)}</p></div>` : ''}
+
+      <div id="d-orcamentos"></div>
+
+      <div class="campo"><label>${etapa.rotuloParecer} *</label>
         <textarea id="d-parecer" placeholder="Por que está ${nomeEtapa === 'coordenacao' ? 'encaminhando ou devolvendo' : 'aprovando ou reprovando'}"></textarea></div>
 
       <div class="acoes">
@@ -1356,6 +2043,37 @@ function telaDecisao (s, nomeEtapa) {
 
   q('#d-avancar').onclick = () => decidir(etapa.avancar.status)
   q('#d-recusar').onclick = () => decidir(etapa.recusar.status)
+
+  // na aprovação, mostra o quadro de orçamentos abaixo do parecer da cotação
+  if (nomeEtapa === 'aprovacao') {
+    db.from('orcamento')
+      .select('valor,prazo_entrega,forma_pagamento,condicao_pagamento,escolhido,fornecedor_avulso,fornecedor:fornecedor_id(nome)')
+      .eq('solicitacao_id', s.id).order('valor')
+      .then(({ data: orcs }) => {
+        if (!orcs?.length) return
+        const menor = Math.min(...orcs.map(o => Number(o.valor)))
+        q('#d-orcamentos').innerHTML = `
+          <div class="secao">
+            <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;">Orçamentos levantados</div>
+            <table style="margin-top:6px;"><thead><tr>
+              <th>Fornecedor</th><th class="num">Valor</th><th>Prazo</th><th>Pagamento</th><th></th>
+            </tr></thead><tbody>
+              ${orcs.map(o => `<tr>
+                <td>${esc(o.fornecedor?.nome || o.fornecedor_avulso || '—')}</td>
+                <td class="num ${Number(o.valor) === menor ? 'badge-bom' : ''}">R$ ${fmtNum(o.valor)}</td>
+                <td>${esc(o.prazo_entrega ?? '—')}</td>
+                <td>${esc([o.forma_pagamento, o.condicao_pagamento].filter(Boolean).join(' · ') || '—')}</td>
+                <td>${o.escolhido ? '<span class="status aprovada">escolhido</span>' : ''}</td>
+              </tr>`).join('')}
+            </tbody></table>
+            ${s.dados_pagamento || s.vencimento || s.parcelas ? `
+              <p class="aviso" style="margin-top:8px;">
+                ${s.parcelas ? s.parcelas + 'x · ' : ''}
+                ${s.vencimento ? 'vence ' + fmtData(s.vencimento) + ' · ' : ''}
+                ${esc(s.dados_pagamento ?? '')}</p>` : ''}
+          </div>`
+      })
+  }
 }
 
 // ----- Compras › Recebimento -----
@@ -1369,7 +2087,7 @@ async function comprasReceber (alvo, editavel) {
       solicitacao:solicitacao_id ( produto_servico )
     `).order('data_recebimento', { ascending: false }).limit(200),
     db.from('solicitacao_compra').select('id,produto_servico')
-      .in('status', ['APROVADA', 'PEDIDO_EMITIDO']).order('data_solicitacao')
+      .eq('status', 'APROVADA').order('data_solicitacao')
   ])
 
   alvo.innerHTML = `
@@ -1594,22 +2312,67 @@ async function paginaExpedicao () {
 // ---------------------------------------------------------------
 // Página: Financeiro
 // ---------------------------------------------------------------
-async function paginaFinanceiro () {
-  $('#subtitulo-pagina').textContent = 'Lançamentos, contas e resultado'
-  $('#cabecalho').innerHTML = `<tr>
-    <th>Data</th><th>Descrição</th><th>Categoria</th><th>Centro de custo</th>
-    <th>Conta</th><th>Situação</th><th class="num">Valor</th></tr>`
+let FIN_CACHE = { contas: [], categorias: [], centros: [] }
 
+async function paginaFinanceiro () {
+  if (!podeVer('financeiro')) { areaLivre().innerHTML =
+    `<div class="panel" style="padding:22px;"><p class="texto-dim">
+     Você não tem acesso ao Financeiro.</p></div>`; return }
+
+  const editavel = podeEditar('financeiro')
+  $('#subtitulo-pagina').textContent = 'Lançamentos, faturamento e contas'
+  const area = areaLivre()
+  area.innerHTML = `<p class="texto-dim2">carregando...</p>`
+
+  const [{ data: contas }, { data: categorias }, { data: centros }] = await Promise.all([
+    db.from('conta_financeira').select('id,nome,instituicao,tipo,saldo_ini,status').order('nome'),
+    db.from('categoria_financeira').select('id,nome,tipo,status').order('nome'),
+    db.from('centro_de_custo').select('id,nome').order('nome')
+  ])
+  FIN_CACHE = { contas: contas || [], categorias: categorias || [], centros: centros || [] }
+
+  const abas = [
+    { chave: 'lancamentos', nome: 'Lançamentos' },
+    { chave: 'faturar',     nome: 'Faturamento de NF' },
+    { chave: 'contas',      nome: 'Contas' },
+    { chave: 'cadastros',   nome: 'Categorias e centros' }
+  ]
+
+  area.innerHTML = `
+    <div class="subabas">
+      ${abas.map((a, i) => `<button data-sub="${a.chave}" class="${i === 0 ? 'ativo' : ''}">${a.nome}</button>`).join('')}
+    </div>
+    <div id="sub-fin"></div>`
+
+  area.querySelectorAll('.subabas button').forEach(b => {
+    b.onclick = () => {
+      area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
+      abrirFin(b.dataset.sub, editavel)
+    }
+  })
+  abrirFin('lancamentos', editavel)
+}
+
+function abrirFin (sub, editavel) {
+  const alvo = $('#sub-fin')
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  if (sub === 'lancamentos') finLancamentos(alvo, editavel)
+  if (sub === 'faturar') finFaturar(alvo, editavel)
+  if (sub === 'contas') finContas(alvo, editavel)
+  if (sub === 'cadastros') finCadastros(alvo, editavel)
+}
+
+// ----- Financeiro › Lançamentos -----
+async function finLancamentos (alvo, editavel) {
   const { data, error } = await db.from('lancamento_financeiro').select(`
-    data_lancamento, descricao, tipo, valor, situacao,
+    id, data_lancamento, descricao, tipo, valor, situacao, observacao,
     categoria:categoria_id ( nome, tipo ),
     centro:centro_custo_id ( nome ),
     conta:conta_id ( nome )
-  `).order('data_lancamento', { ascending: false }).limit(300)
+  `).order('data_lancamento', { ascending: false }).limit(400)
 
-  if (error) { semAcesso('Financeiro'); return }
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
 
-  const { data: contas } = await db.from('saldo_conta').select('*')
   const receitas = (data || []).filter(l => l.tipo === 'ENTRADA').reduce((s, l) => s + Number(l.valor), 0)
   const despesas = (data || []).filter(l => l.tipo === 'SAIDA').reduce((s, l) => s + Number(l.valor), 0)
   const pendentes = (data || []).filter(l => l.situacao === 'PENDENTE').length
@@ -1617,26 +2380,413 @@ async function paginaFinanceiro () {
   $('#kpis').innerHTML =
     kpi('Receitas', 'R$ ' + fmtNum(receitas)) +
     kpi('Despesas', 'R$ ' + fmtNum(despesas)) +
-    kpi('Resultado', 'R$ ' + fmtNum(receitas - despesas)) +
-    kpi('Pendentes', pendentes, 'a efetivar') +
-    kpi('Saldo em contas', 'R$ ' + fmtNum((contas || []).reduce((s, c) => s + Number(c.saldo), 0)))
+    kpi('Resultado', 'R$ ' + fmtNum(receitas - despesas),
+        receitas - despesas >= 0 ? 'positivo' : 'negativo') +
+    kpi('Pendentes', pendentes, 'a efetivar')
 
-  if (!data?.length) {
-    $('#corpo').innerHTML = `<tr><td colspan="7" class="vazio">
-      Nenhum lançamento ainda. As categorias e centros de custo da empresa já estão cadastrados.</td></tr>`
-    return
+  alvo.innerHTML = `
+    ${editavel ? `<div class="acoes" style="margin:0 0 16px;">
+      <button class="btn" id="l-nova-entrada">Registrar recebimento</button>
+      <button class="btn-secundario" id="l-nova-saida">Registrar gasto</button>
+    </div>` : ''}
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>Tipo</label>
+        <select id="l-f-tipo"><option value="">todos</option>
+          <option value="ENTRADA">recebimentos</option>
+          <option value="SAIDA">gastos</option></select></div>
+      <div class="campo"><label>Situação</label>
+        <select id="l-f-sit"><option value="">todas</option>
+          <option value="EFETIVADO">efetivados</option>
+          <option value="PENDENTE">pendentes</option></select></div>
+      <div class="campo"><label>Buscar</label><input id="l-f-txt" placeholder="descrição"></div>
+    </div>
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>Data</th><th>Descrição</th><th>Categoria</th><th>Centro</th>
+        <th>Conta</th><th>Situação</th><th class="num">Valor</th>
+      </tr></thead><tbody id="l-corpo"></tbody></table>
+    </div></div>`
+
+  const desenhar = () => {
+    const t = $('#l-f-tipo').value, si = $('#l-f-sit').value
+    const q = $('#l-f-txt').value.trim().toLowerCase()
+    const lista = (data || []).filter(l =>
+      (!t || l.tipo === t) && (!si || l.situacao === si) &&
+      (!q || (l.descricao || '').toLowerCase().includes(q)))
+
+    $('#l-corpo').innerHTML = lista.map(l => `<tr>
+      <td>${fmtData(l.data_lancamento)}</td>
+      <td>${esc(l.descricao)}</td>
+      <td><span class="chip">${esc(l.categoria?.nome ?? '—')}</span></td>
+      <td>${esc(l.centro?.nome ?? '—')}</td>
+      <td>${esc(l.conta?.nome ?? '—')}</td>
+      <td class="${l.situacao === 'EFETIVADO' ? 'badge-bom' : 'badge-alerta'}">${esc(l.situacao)}</td>
+      <td class="num ${l.tipo === 'ENTRADA' ? 'badge-bom' : ''}">
+        ${l.tipo === 'SAIDA' ? '−' : '+'} ${fmtNum(l.valor)}</td>
+    </tr>`).join('') || `<tr><td colspan="7" class="vazio">
+      ${(data || []).length ? 'Nenhum lançamento com esse filtro.'
+        : 'Nenhum lançamento ainda. Use os botões acima para registrar o primeiro.'}</td></tr>`
+
+    $('#rodape').textContent = `${lista.length} lançamento(s)`
   }
 
-  $('#corpo').innerHTML = data.map(l => `<tr>
-    <td>${fmtData(l.data_lancamento)}</td>
-    <td>${esc(l.descricao)}</td>
-    <td><span class="chip">${esc(l.categoria?.nome ?? '—')}</span></td>
-    <td>${esc(l.centro?.nome ?? '—')}</td>
-    <td>${esc(l.conta?.nome ?? '—')}</td>
-    <td class="${l.situacao === 'EFETIVADO' ? 'badge-bom' : 'badge-alerta'}">${esc(l.situacao)}</td>
-    <td class="num ${l.tipo === 'ENTRADA' ? 'badge-bom' : ''}">
-      ${l.tipo === 'SAIDA' ? '−' : '+'} ${fmtNum(l.valor)}</td>
-  </tr>`).join('')
+  ;['#l-f-tipo', '#l-f-sit'].forEach(i => $(i).onchange = desenhar)
+  $('#l-f-txt').oninput = desenhar
+  desenhar()
+
+  if (!editavel) return
+  $('#l-nova-entrada').onclick = () => formLancamento('ENTRADA')
+  $('#l-nova-saida').onclick = () => formLancamento('SAIDA')
+}
+
+// ----- Formulário de lançamento -----
+function formLancamento (tipo, preencher = {}) {
+  const ehEntrada = tipo === 'ENTRADA'
+  const cats = FIN_CACHE.categorias.filter(c =>
+    ehEntrada ? c.tipo === 'RECEITA' : c.tipo === 'DESPESA')
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal">
+      <h3>${ehEntrada ? 'Registrar recebimento' : 'Registrar gasto'}</h3>
+      <div class="form-grade">
+        <div class="campo" style="grid-column:1/-1;"><label>Descrição *</label>
+          <input id="n-desc" value="${esc(preencher.descricao ?? '')}"></div>
+        <div class="campo"><label>Valor (R$) *</label>
+          <input id="n-valor" inputmode="decimal" value="${preencher.valor ?? ''}" placeholder="1.250,00"></div>
+        <div class="campo"><label>Data *</label>
+          <input type="date" id="n-data" value="${preencher.data ?? new Date().toISOString().slice(0, 10)}"></div>
+        <div class="campo"><label>Categoria</label>
+          <select id="n-cat"><option value="">—</option>
+            ${cats.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Conta</label>
+          <select id="n-conta"><option value="">—</option>
+            ${FIN_CACHE.contas.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Centro de custo</label>
+          <select id="n-centro"><option value="">—</option>
+            ${FIN_CACHE.centros.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Situação</label>
+          <select id="n-sit">
+            <option value="EFETIVADO">efetivado</option>
+            <option value="PENDENTE">pendente</option></select></div>
+      </div>
+      <div class="campo" style="margin-top:12px;"><label>Observação</label>
+        <textarea id="n-obs" style="min-height:60px;">${esc(preencher.observacao ?? '')}</textarea></div>
+      <div class="acoes">
+        <button class="btn" id="n-salvar">Salvar</button>
+        <button class="btn-secundario" id="n-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="n-recado"></div>
+      ${!FIN_CACHE.contas.length ? `<p class="aviso">
+        Nenhuma conta cadastrada ainda. Dá para salvar sem conta, mas o saldo
+        por conta só funciona depois que você cadastrar uma em Contas.</p>` : ''}
+    </div>`
+
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#n-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const aviso = t => {
+    const el = q('#n-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  q('#n-salvar').onclick = async () => {
+    const desc = q('#n-desc').value.trim()
+    const valor = numeroBR(q('#n-valor').value)
+    if (!desc) { aviso('Escreva a descrição.'); return }
+    if (valor === null || valor <= 0) { aviso('Informe um valor maior que zero.'); return }
+
+    const btn = q('#n-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const { error } = await db.from('lancamento_financeiro').insert({
+      tipo, descricao: desc, valor,
+      data_lancamento: q('#n-data').value,
+      categoria_id: q('#n-cat').value || null,
+      conta_id: q('#n-conta').value || null,
+      centro_custo_id: q('#n-centro').value || null,
+      situacao: q('#n-sit').value,
+      observacao: q('#n-obs').value.trim() || null,
+      registrado_por: PERFIL.pessoaId
+    })
+    btn.disabled = false; btn.textContent = 'Salvar'
+    if (error) { aviso(error.message); return }
+    fechar()
+    abrirFin('lancamentos', true)
+  }
+}
+
+// ----- Financeiro › Faturamento de NF -----
+async function finFaturar (alvo, editavel) {
+  const { data, error } = await db.from('carregamento_a_faturar')
+    .select('*').order('data_carregamento', { ascending: false }).limit(400)
+
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  const semValor = (data || []).filter(c => c.valor_sugerido == null).length
+  const totalSugerido = (data || []).reduce((t, c) => t + Number(c.valor_sugerido || 0), 0)
+
+  $('#kpis').innerHTML =
+    kpi('NFs a faturar', (data || []).length, 'ainda sem lançamento') +
+    kpi('Valor sugerido', 'R$ ' + fmtNum(totalSugerido),
+        semValor ? `${semValor} sem preço` : 'com base no preço cadastrado') +
+    kpi('Toneladas', fmtNum((data || []).reduce((t, c) => t + Number(c.quantidade_t || 0), 0), 2))
+
+  alvo.innerHTML = `
+    <p class="aviso" style="margin-top:0;">
+      Cada carregamento com nota fiscal pode virar um recebimento no financeiro.
+      Faturado uma vez, sai desta lista.</p>
+    ${semValor ? `<div class="badge-alerta" style="padding:9px 12px;border-radius:6px;font-size:12.5px;margin-bottom:14px;">
+      ${semValor} carregamento(s) sem preço. Cadastre o preço em Categorias e centros →
+      preços de venda, ou digite o valor na hora de faturar.</div>` : ''}
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>Data</th><th>NF</th><th>Cliente</th><th>Produto</th>
+        <th class="num">Qtd (t)</th><th class="num">Valor</th><th></th>
+      </tr></thead><tbody id="fat-corpo"></tbody></table>
+    </div></div>`
+
+  $('#fat-corpo').innerHTML = (data || []).map(c => `<tr>
+    <td>${fmtData(c.data_carregamento)}</td>
+    <td>${esc(c.numero_nf ?? '—')}</td>
+    <td>${esc(c.cliente ?? '—')}</td>
+    <td><span class="chip">${esc(c.produto ?? '—')}</span></td>
+    <td class="num">${fmtNum(c.quantidade_t, 3)}</td>
+    <td class="num ${c.valor_sugerido == null ? 'texto-dim2' : ''}">
+      ${c.valor_sugerido == null ? 'sem preço' : 'R$ ' + fmtNum(c.valor_sugerido)}</td>
+    <td style="text-align:right;">${editavel
+      ? `<button class="btn-secundario mini" data-faturar="${c.id}">faturar</button>` : ''}</td>
+  </tr>`).join('') || `<tr><td colspan="7" class="vazio">
+    ${(data || []).length === 0 ? 'Nenhuma NF pendente de faturamento.' : ''}</td></tr>`
+
+  $('#rodape').textContent = `${(data || []).length} carregamento(s) com NF a faturar`
+
+  if (!editavel) return
+  $('#fat-corpo').querySelectorAll('[data-faturar]').forEach(b => {
+    b.onclick = () => telaFaturar((data || []).find(c => c.id === b.dataset.faturar))
+  })
+}
+
+// ----- Faturar um carregamento -----
+function telaFaturar (c) {
+  if (!c) return
+  const receitas = FIN_CACHE.categorias.filter(x => x.tipo === 'RECEITA')
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal">
+      <h3>Faturar NF ${esc(c.numero_nf ?? '')}</h3>
+      <div class="ficha" style="margin-bottom:16px;">
+        <div class="item"><div class="rot">Cliente</div><div class="val">${esc(c.cliente ?? '—')}</div></div>
+        <div class="item"><div class="rot">Produto</div><div class="val">${esc(c.produto ?? '—')}</div></div>
+        <div class="item"><div class="rot">Quantidade</div>
+          <div class="val">${fmtNum(c.quantidade_t, 3)} t</div></div>
+        <div class="item"><div class="rot">Data</div>
+          <div class="val">${fmtData(c.data_carregamento)}</div></div>
+      </div>
+
+      <div class="form-grade">
+        <div class="campo"><label>Preço por tonelada (R$)</label>
+          <input id="ft-preco" inputmode="decimal" value="${c.preco_unitario ?? ''}"></div>
+        <div class="campo"><label>Valor da nota (R$) *</label>
+          <input id="ft-valor" inputmode="decimal" value="${c.valor_sugerido ?? ''}"></div>
+        <div class="campo"><label>Categoria</label>
+          <select id="ft-cat"><option value="">—</option>
+            ${receitas.map(x => `<option value="${x.id}">${esc(x.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Conta</label>
+          <select id="ft-conta"><option value="">—</option>
+            ${FIN_CACHE.contas.map(x => `<option value="${x.id}">${esc(x.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Situação</label>
+          <select id="ft-sit">
+            <option value="PENDENTE">a receber</option>
+            <option value="EFETIVADO">já recebido</option></select></div>
+      </div>
+
+      <div class="acoes">
+        <button class="btn" id="ft-ok">Gerar recebimento</button>
+        <button class="btn-secundario" id="ft-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="ft-recado"></div>
+      <p class="aviso">O preço por tonelada fica gravado no carregamento.
+      Para não digitar toda vez, cadastre um preço de venda do produto.</p>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#ft-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const aviso = t => {
+    const el = q('#ft-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  // digitou o preço: recalcula o valor
+  q('#ft-preco').oninput = () => {
+    const p = numeroBR(q('#ft-preco').value)
+    if (p !== null) q('#ft-valor').value = (p * Number(c.quantidade_t || 0)).toFixed(2).replace('.', ',')
+  }
+
+  q('#ft-ok').onclick = async () => {
+    const valor = numeroBR(q('#ft-valor').value)
+    if (valor === null || valor <= 0) { aviso('Informe o valor da nota.'); return }
+
+    const btn = q('#ft-ok'); btn.disabled = true; btn.textContent = 'Gerando...'
+
+    const { data: lanc, error: eL } = await db.from('lancamento_financeiro').insert({
+      tipo: 'ENTRADA',
+      descricao: `NF ${c.numero_nf ?? ''} — ${c.cliente ?? ''}`.trim(),
+      valor,
+      data_lancamento: c.data_carregamento,
+      categoria_id: q('#ft-cat').value || null,
+      conta_id: q('#ft-conta').value || null,
+      situacao: q('#ft-sit').value,
+      observacao: `${fmtNum(c.quantidade_t, 3)} t de ${c.produto ?? '—'}`,
+      registrado_por: PERFIL.pessoaId
+    }).select('id').single()
+
+    if (eL) { aviso(eL.message); btn.disabled = false; btn.textContent = 'Gerar recebimento'; return }
+
+    const { error } = await db.from('carregamento').update({
+      preco_unitario: numeroBR(q('#ft-preco').value),
+      valor_nf: valor,
+      lancamento_id: lanc.id,
+      faturado_em: new Date().toISOString()
+    }).eq('id', c.id)
+
+    if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Gerar recebimento'; return }
+    fechar()
+    abrirFin('faturar', true)
+  }
+}
+
+// ----- Financeiro › Contas -----
+async function finContas (alvo, editavel) {
+  const { data: saldos } = await db.from('saldo_conta').select('*')
+  const porId = {}
+  ;(saldos || []).forEach(s => { porId[s.id ?? s.conta_id] = s.saldo })
+
+  const total = (saldos || []).reduce((t, s) => t + Number(s.saldo || 0), 0)
+  $('#kpis').innerHTML =
+    kpi('Saldo total', 'R$ ' + fmtNum(total), `${FIN_CACHE.contas.length} conta(s)`)
+
+  alvo.innerHTML = `
+    ${editavel ? `<div class="secao panel" style="padding:20px;">
+      <h3>Nova conta</h3>
+      <div class="form-grade">
+        <div class="campo"><label>Nome *</label><input id="ct-nome" placeholder="Banco X — corrente"></div>
+        <div class="campo"><label>Instituição</label><input id="ct-inst"></div>
+        <div class="campo"><label>Saldo inicial (R$)</label><input id="ct-saldo" inputmode="decimal" value="0"></div>
+      </div>
+      <div class="acoes"><button class="btn" id="ct-salvar">Adicionar conta</button></div>
+      <div class="recado oculto" id="ct-recado"></div>
+    </div>` : ''}
+
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr><th>Conta</th><th>Instituição</th>
+        <th class="num">Saldo inicial</th><th class="num">Saldo atual</th></tr></thead>
+      <tbody>${FIN_CACHE.contas.map(c => `<tr>
+        <td>${esc(c.nome)}</td>
+        <td class="texto-dim">${esc(c.instituicao ?? '—')}</td>
+        <td class="num">${fmtNum(c.saldo_ini ?? 0)}</td>
+        <td class="num">${porId[c.id] != null ? 'R$ ' + fmtNum(porId[c.id]) : '—'}</td>
+      </tr>`).join('') || `<tr><td colspan="4" class="vazio">
+        Nenhuma conta cadastrada. Sem conta, os lançamentos funcionam,
+        mas não há saldo para acompanhar.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+
+  if (!editavel) return
+  $('#ct-salvar').onclick = async () => {
+    const nome = $('#ct-nome').value.trim()
+    const el = $('#ct-recado')
+    const falhar = t => { el.textContent = t; el.classList.remove('oculto')
+      el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    if (!nome) { falhar('Escreva o nome da conta.'); return }
+
+    const { error } = await db.from('conta_financeira').insert({
+      nome,
+      instituicao: $('#ct-inst').value.trim() || null,
+      saldo_ini: numeroBR($('#ct-saldo').value) ?? 0
+    })
+    if (error) { falhar(error.message); return }
+    paginaFinanceiro()
+  }
+}
+
+// ----- Financeiro › Categorias, centros e preços -----
+async function finCadastros (alvo, editavel) {
+  const { data: precos } = await db.from('preco_venda')
+    .select('id,preco,vigente_de,produto:produto_id(nome),cliente:cliente_id(razao_social)')
+    .order('vigente_de', { ascending: false })
+  const { data: produtos } = await db.from('produto').select('id,nome').order('nome')
+
+  const bloco = (titulo, itens, extra = i => '') => `
+    <div class="panel" style="padding:18px;">
+      <h3>${titulo}</h3>
+      <table><tbody>${itens.map(i => `<tr>
+        <td>${esc(i.nome)}</td><td style="text-align:right;">${extra(i)}</td>
+      </tr>`).join('') || `<tr><td class="vazio">Nada cadastrado.</td></tr>`}</tbody></table>
+    </div>`
+
+  alvo.innerHTML = `
+    <div class="duas-colunas" style="margin-bottom:18px;">
+      ${bloco('Categorias', FIN_CACHE.categorias,
+        c => `<span class="chip">${esc(c.tipo)}</span>`)}
+      ${bloco('Centros de custo', FIN_CACHE.centros)}
+    </div>
+
+    <div class="panel" style="padding:20px;">
+      <div class="cabeca-secao">
+        <h3>Preços de venda</h3>
+        <span class="texto-dim2" style="font-size:12px;">usados para sugerir o valor da NF</span>
+      </div>
+      ${editavel ? `<div class="form-grade" style="margin-bottom:12px;">
+        <div class="campo"><label>Produto</label>
+          <select id="pv-produto">${(produtos || []).map(p =>
+            `<option value="${p.id}">${esc(p.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Preço por tonelada (R$)</label>
+          <input id="pv-preco" inputmode="decimal" placeholder="1.250,00"></div>
+        <div class="campo"><label>Vigente a partir de</label>
+          <input type="date" id="pv-data" value="${new Date().toISOString().slice(0, 10)}"></div>
+      </div>
+      <div class="acoes" style="margin-top:0;">
+        <button class="btn" id="pv-salvar">Adicionar preço</button></div>
+      <div class="recado oculto" id="pv-recado"></div>` : ''}
+
+      <table style="margin-top:14px;"><thead><tr>
+        <th>Produto</th><th>Cliente</th><th class="num">Preço/t</th><th>Vigente de</th>
+      </tr></thead><tbody>
+        ${(precos || []).map(p => `<tr>
+          <td>${esc(p.produto?.nome ?? '—')}</td>
+          <td class="texto-dim">${esc(p.cliente?.razao_social ?? 'todos')}</td>
+          <td class="num">R$ ${fmtNum(p.preco)}</td>
+          <td>${fmtData(p.vigente_de)}</td>
+        </tr>`).join('') || `<tr><td colspan="4" class="vazio">
+          Nenhum preço cadastrado — por isso o faturamento pede o valor a cada NF.</td></tr>`}
+      </tbody></table>
+    </div>`
+
+  if (!editavel) return
+  $('#pv-salvar').onclick = async () => {
+    const el = $('#pv-recado')
+    const falhar = t => { el.textContent = t; el.classList.remove('oculto')
+      el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const preco = numeroBR($('#pv-preco').value)
+    if (preco === null || preco <= 0) { falhar('Informe o preço por tonelada.'); return }
+
+    const { error } = await db.from('preco_venda').insert({
+      produto_id: $('#pv-produto').value,
+      preco,
+      vigente_de: $('#pv-data').value
+    })
+    if (error) { falhar(error.message); return }
+    abrirFin('cadastros', true)
+  }
 }
 
 // ---------------------------------------------------------------
