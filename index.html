@@ -651,6 +651,9 @@ async function paginaVisaoGeral () {
     }
   }
 
+  // painel do financeiro, para quem trabalha nele
+  if (podeVer('financeiro')) await painelFinanceiro(area)
+
   const { data, error } = await db.from('visao_geral_pessoa')
     .select('html_conteudo,atualizado_em').eq('pessoa_id', PERFIL.pessoaId).maybeSingle()
 
@@ -1089,6 +1092,154 @@ async function subVisao (alvo, editavel) {
     await db.from('visao_geral_pessoa').delete().eq('pessoa_id', $('#v-pessoa').value)
     $('#v-html').value = ''; $('#v-recado').textContent = 'Painel apagado.'
   }
+}
+
+// ---------------------------------------------------------------
+// Painel do financeiro — o que precisa de ação hoje
+// ---------------------------------------------------------------
+async function painelFinanceiro (area) {
+  const hoje = new Date().toISOString().slice(0, 10)
+  const em7 = new Date(Date.now() + 7 * 864e5).toISOString().slice(0, 10)
+
+  const [{ data: p }, { data: compras }, { data: titulos }, { data: emails }] =
+    await Promise.all([
+      db.from('painel_financeiro').select('*').maybeSingle(),
+      db.from('solicitacao_compra')
+        .select('id,numero,produto_servico,valor_estimado,valor_aprovado,vencimento,urgencia,solicitante:solicitante_id(nome)')
+        .eq('status', 'APROVADA').order('vencimento', { nullsFirst: false }).limit(8),
+      db.from('titulo_externo').select('id,tipo,parceiro,descricao,documento,vencimento,valor')
+        .eq('situacao', 'ABERTO').lte('vencimento', em7)
+        .order('vencimento').limit(12),
+      db.from('email_financeiro').select('id,conta,remetente,assunto,recebido_em,tem_anexo,link')
+        .is('tratado_em', null).order('recebido_em', { ascending: false }).limit(6)
+    ])
+
+  const n = p || {}
+  const bloco = document.createElement('div')
+  bloco.style.marginBottom = '18px'
+
+  const tarefas = []
+  if (Number(n.compras_a_pagar) > 0)
+    tarefas.push([`${n.compras_a_pagar} compra(s) aprovada(s) esperando pagamento`,
+                  'R$ ' + fmtNum(n.compras_a_pagar_valor), 'financeiro', 'pagar'])
+  if (Number(n.pagar_vencidos) > 0)
+    tarefas.push([`${n.pagar_vencidos} título(s) vencido(s) sem baixa`,
+                  'R$ ' + fmtNum(n.pagar_vencidos_valor), 'financeiro', 'lancamentos'])
+  if (Number(n.nf_a_faturar) > 0)
+    tarefas.push([`${n.nf_a_faturar} nota(s) fiscal(is) sem faturamento`, '', 'financeiro', 'faturar'])
+  if (Number(n.emails_pendentes) > 0)
+    tarefas.push([`${n.emails_pendentes} e-mail(s) do setor sem tratamento`, '', null, null])
+
+  bloco.innerHTML = `
+    <div class="cabeca-secao">
+      <h3 style="font-family:var(--serif);font-size:18px;">Painel do financeiro</h3>
+      <span class="texto-dim2" style="font-size:12px;">${fmtData(hoje)}</span>
+    </div>
+
+    <div class="kpis" style="margin-bottom:14px;">
+      ${kpi('A pagar esta semana', 'R$ ' + fmtNum(n.pagar_semana),
+            Number(n.pagar_vencidos_valor) > 0
+              ? 'mais R$ ' + fmtNum(n.pagar_vencidos_valor) + ' vencido' : 'nada vencido')}
+      ${kpi('A receber esta semana', 'R$ ' + fmtNum(n.receber_semana),
+            Number(n.receber_vencidos_valor) > 0
+              ? 'mais R$ ' + fmtNum(n.receber_vencidos_valor) + ' vencido' : 'nada vencido')}
+      ${kpi('Compras aprovadas', 'R$ ' + fmtNum(n.compras_a_pagar_valor),
+            `${n.compras_a_pagar ?? 0} aguardando baixa`)}
+      ${kpi('Saldo em contas', 'R$ ' + fmtNum(n.saldo_contas))}
+    </div>
+
+    ${tarefas.length ? `
+    <div class="panel" style="padding:16px 18px;margin-bottom:14px;">
+      <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;">
+        Precisa de você hoje</div>
+      ${tarefas.map(([t, v, pag, sub]) => `
+        <div class="passo" ${pag ? `data-ir="${pag}" data-sub="${sub}" style="cursor:pointer;"` : ''}>
+          <span class="quando">${esc(v)}</span>
+          <span>${esc(t)}${pag ? ' <span class="texto-dim2">— abrir</span>' : ''}</span>
+        </div>`).join('')}
+    </div>` : `
+    <div class="panel" style="padding:16px 18px;margin-bottom:14px;">
+      <p class="texto-dim" style="margin:0;font-size:13.5px;">
+        Nada pendente no financeiro. Sem títulos vencidos, sem compras esperando baixa
+        e sem notas a faturar.</p>
+    </div>`}
+
+    <div class="duas-colunas" style="margin-bottom:14px;">
+      <div class="panel" style="padding:0;">
+        <div style="padding:13px 16px 0;">
+          <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;">
+            Vencendo até ${fmtData(em7)}</div>
+        </div>
+        <table style="margin-top:6px;"><tbody>
+          ${(titulos || []).map(t => {
+            const atrasado = t.vencimento < hoje
+            return `<tr>
+              <td style="width:74px;" class="${atrasado ? 'badge-alerta' : ''}">${fmtData(t.vencimento)}</td>
+              <td>${esc(t.parceiro || t.descricao || t.documento || '—')}
+                <span class="chip">${t.tipo === 'PAGAR' ? 'pagar' : 'receber'}</span></td>
+              <td class="num">R$ ${fmtNum(t.valor)}</td>
+            </tr>`
+          }).join('') || `<tr><td class="vazio" style="padding:18px;">
+            Nenhum título importado. Use Financeiro → Cadastros para trazer o relatório do mês.</td></tr>`}
+        </tbody></table>
+      </div>
+
+      <div class="panel" style="padding:0;">
+        <div style="padding:13px 16px 0;">
+          <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;">
+            Compras aprovadas a pagar</div>
+        </div>
+        <table style="margin-top:6px;"><tbody>
+          ${(compras || []).map(c => `<tr>
+            <td style="width:74px;">${c.vencimento ? fmtData(c.vencimento) : '<span class="texto-dim2">sem data</span>'}</td>
+            <td>${esc(c.produto_servico)}
+              ${c.urgencia === 'URGENTE_4H' ? '<span class="urgente">● urgente</span>' : ''}
+              <br><span class="texto-dim2" style="font-size:11.5px;">
+                ${esc(c.numero ?? '')} · ${esc(c.solicitante?.nome ?? '—')}</span></td>
+            <td class="num">R$ ${fmtNum(c.valor_aprovado ?? c.valor_estimado)}</td>
+          </tr>`).join('') || `<tr><td class="vazio" style="padding:18px;">
+            Nenhuma compra aguardando pagamento.</td></tr>`}
+        </tbody></table>
+      </div>
+    </div>
+
+    <div class="panel" style="padding:0;">
+      <div style="padding:13px 16px 0;display:flex;justify-content:space-between;align-items:baseline;">
+        <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;">
+          Caixa de entrada do setor</div>
+        <span class="texto-dim2" style="font-size:11.5px;">${(emails || []).length} sem tratar</span>
+      </div>
+      <table style="margin-top:6px;"><tbody>
+        ${(emails || []).map(e => `<tr>
+          <td style="width:74px;" class="texto-dim2">${fmtQuando(e.recebido_em) ?? '—'}</td>
+          <td>${esc(e.assunto ?? '(sem assunto)')}
+            ${e.tem_anexo ? '<span class="chip">anexo</span>' : ''}
+            <br><span class="texto-dim2" style="font-size:11.5px;">
+              ${esc(e.remetente ?? '—')} → ${esc(e.conta)}</span></td>
+          <td style="text-align:right;white-space:nowrap;">
+            ${e.link ? `<a class="anexo-link" href="${esc(e.link)}" target="_blank" rel="noopener">abrir</a>` : ''}
+            <button class="btn-secundario mini" data-tratado="${e.id}">tratado</button></td>
+        </tr>`).join('') || `<tr><td class="vazio" style="padding:18px;">
+          A ponte com os e-mails do setor ainda não está ligada.</td></tr>`}
+      </tbody></table>
+    </div>`
+
+  area.appendChild(bloco)
+
+  bloco.querySelectorAll('[data-ir]').forEach(el => {
+    el.onclick = () => {
+      irPara(el.dataset.ir)
+      if (el.dataset.sub) setTimeout(() => abrirFinanceiro(el.dataset.sub, podeEditar('financeiro')), 350)
+    }
+  })
+  bloco.querySelectorAll('[data-tratado]').forEach(b => {
+    b.onclick = async () => {
+      await db.from('email_financeiro').update({
+        tratado_em: new Date().toISOString(), tratado_por: PERFIL.pessoaId
+      }).eq('id', b.dataset.tratado)
+      irPara('visao_geral')
+    }
+  })
 }
 
 // ---------------------------------------------------------------
@@ -3144,6 +3295,11 @@ async function finCadastros (alvo, editavel) {
     .select('id,preco,vigente_de,produto:produto_id(nome),cliente:cliente_id(razao_social)')
     .order('vigente_de', { ascending: false })
   const { data: produtos } = await db.from('produto').select('id,nome').order('nome')
+  const { data: titulos } = await db.from('titulo_externo')
+    .select('id,tipo,situacao,vencimento,valor').order('vencimento', { ascending: false }).limit(500)
+
+  const abertos = (titulos || []).filter(t => t.situacao === 'ABERTO')
+  const ultimo = (titulos || [])[0]
 
   const bloco = (titulo, itens, extra = i => '') => `
     <div class="panel" style="padding:18px;">
@@ -3154,6 +3310,26 @@ async function finCadastros (alvo, editavel) {
     </div>`
 
   alvo.innerHTML = `
+    ${editavel ? `<div class="panel" style="padding:20px;margin-bottom:18px;">
+      <div class="cabeca-secao">
+        <h3>Importar contas a pagar e receber</h3>
+        <span class="texto-dim2" style="font-size:12px;">
+          ${abertos.length} título(s) em aberto${ultimo ? ' · último até ' + fmtData(ultimo.vencimento) : ''}</span>
+      </div>
+      <p class="aviso" style="margin-top:0;">
+        Cole o relatório do sistema contábil, uma linha por título, separado por ponto e vírgula
+        ou por tabulação (copiar do Excel já funciona). Ordem das colunas:
+        <b>tipo; documento; parceiro; vencimento; valor</b> — tipo é P para pagar ou R para receber,
+        vencimento em dd/mm/aaaa. Linhas repetidas são ignoradas.</p>
+      <textarea id="ti-dados" style="min-height:150px;"
+        placeholder="P;NF 1234;Fornecedor X;15/08/2026;1.250,00&#10;R;NF 5678;Cliente Y;20/08/2026;8.400,00"></textarea>
+      <div class="acoes">
+        <button class="btn" id="ti-importar">Importar</button>
+        <button class="btn-secundario" id="ti-conferir">Só conferir</button>
+      </div>
+      <div class="recado oculto" id="ti-recado"></div>
+    </div>` : ''}
+
     <div class="duas-colunas" style="margin-bottom:18px;">
       ${bloco('Categorias', FIN_CACHE.categorias,
         c => `<span class="chip">${esc(c.tipo)}</span>`)}
@@ -3192,6 +3368,83 @@ async function finCadastros (alvo, editavel) {
     </div>`
 
   if (!editavel) return
+
+  // ---- importação do relatório contábil ----
+  const lerLinhas = texto => {
+    const erros = []
+    const linhas = texto.split('\n').map(l => l.trim()).filter(Boolean)
+    const titulos = []
+    linhas.forEach((l, i) => {
+      const c = l.split(/;|\t/).map(x => x.trim())
+      if (c.length < 5) { erros.push(`linha ${i + 1}: só ${c.length} coluna(s)`); return }
+      const [tipoBruto, documento, parceiro, vencBruto, valorBruto] = c
+      const tipo = /^p/i.test(tipoBruto) ? 'PAGAR' : /^r/i.test(tipoBruto) ? 'RECEBER' : null
+      if (!tipo) { erros.push(`linha ${i + 1}: tipo "${tipoBruto}" não é P nem R`); return }
+
+      const d = vencBruto.match(/^(\d{2})\/(\d{2})\/(\d{4})$/)
+      let venc = d ? `${d[3]}-${d[2]}-${d[1]}`
+                   : (/^\d{4}-\d{2}-\d{2}$/.test(vencBruto) ? vencBruto : null)
+      // o formato bater não garante que a data existe: 31/13 e 31/02 passariam
+      if (venc) {
+        const [a, m, dia] = venc.split('-').map(Number)
+        const t = new Date(Date.UTC(a, m - 1, dia))
+        if (t.getUTCFullYear() !== a || t.getUTCMonth() !== m - 1 || t.getUTCDate() !== dia) venc = null
+      }
+      if (!venc) { erros.push(`linha ${i + 1}: data "${vencBruto}" inválida`); return }
+
+      const valor = numeroBR(valorBruto)
+      if (valor === null || valor <= 0) { erros.push(`linha ${i + 1}: valor "${valorBruto}" inválido`); return }
+
+      titulos.push({
+        tipo, documento: documento || null, parceiro: parceiro || null,
+        vencimento: venc, valor, competencia: venc.slice(0, 7),
+        origem: 'importação manual', importado_por: PERFIL.pessoaId
+      })
+    })
+    return { titulos, erros }
+  }
+
+  const dizer = (t, alerta = false) => {
+    const el = $('#ti-recado'); el.innerHTML = t; el.classList.remove('oculto')
+    el.style.borderColor = alerta ? 'var(--warn-text)' : 'var(--line2)'
+    el.style.color = alerta ? 'var(--warn-text)' : 'var(--dim)'
+  }
+
+  const resumir = ({ titulos, erros }) => {
+    const pagar = titulos.filter(t => t.tipo === 'PAGAR')
+    const receber = titulos.filter(t => t.tipo === 'RECEBER')
+    const soma = l => l.reduce((s, t) => s + t.valor, 0)
+    return `<b>${titulos.length}</b> título(s) lido(s): `
+      + `${pagar.length} a pagar (R$ ${fmtNum(soma(pagar))}), `
+      + `${receber.length} a receber (R$ ${fmtNum(soma(receber))}).`
+      + (erros.length ? `<br><b>${erros.length} linha(s) ignorada(s):</b><br>`
+          + erros.slice(0, 6).map(esc).join('<br>')
+          + (erros.length > 6 ? `<br>e mais ${erros.length - 6}...` : '') : '')
+  }
+
+  $('#ti-conferir').onclick = () => {
+    const r = lerLinhas($('#ti-dados').value)
+    if (!r.titulos.length && !r.erros.length) { dizer('Cole o relatório antes.', true); return }
+    dizer(resumir(r) + '<br>Nada foi gravado ainda.', r.erros.length > 0)
+  }
+
+  $('#ti-importar').onclick = async () => {
+    const r = lerLinhas($('#ti-dados').value)
+    if (!r.titulos.length) { dizer('Nenhuma linha válida para importar.<br>' + resumir(r), true); return }
+
+    const btn = $('#ti-importar'); btn.disabled = true; btn.textContent = 'Importando...'
+    // ignora o que já existe, em vez de duplicar ou falhar tudo
+    const { error, count } = await db.from('titulo_externo')
+      .upsert(r.titulos, { onConflict: 'tipo,documento,parceiro,vencimento,valor',
+                           ignoreDuplicates: true, count: 'exact' })
+    btn.disabled = false; btn.textContent = 'Importar'
+
+    if (error) { dizer('Não deu para importar: ' + esc(error.message), true); return }
+    dizer(resumir(r) + `<br><b>${count ?? r.titulos.length} novo(s)</b> gravado(s); repetidos foram ignorados.`)
+    $('#ti-dados').value = ''
+    setTimeout(() => abrirFinanceiro('cadastros', true), 1800)
+  }
+
   $('#pv-salvar').onclick = async () => {
     const el = $('#pv-recado')
     const falhar = t => { el.textContent = t; el.classList.remove('oculto')
