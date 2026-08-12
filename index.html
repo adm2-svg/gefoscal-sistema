@@ -1116,7 +1116,7 @@ function formSolicitacao (s = null) {
         <div class="campo"><label>Setor</label>
           <select id="s-setor">${opc(COMPRAS_CACHE.setores, s?.setor_id)}</select></div>
         <div class="campo"><label>Valor estimado (R$)</label>
-          <input id="s-valor" type="number" step="0.01" value="${s?.valor_estimado ?? ''}"></div>
+          <input id="s-valor" inputmode="decimal" value="${s?.valor_estimado ?? ''}" placeholder="80,00"></div>
         <div class="campo"><label>Fornecedor sugerido</label>
           <select id="s-forn">${opc(COMPRAS_CACHE.fornecedores, s?.fornecedor_id)}</select></div>
         <div class="campo"><label>Local de entrega</label>
@@ -1172,7 +1172,17 @@ function formSolicitacao (s = null) {
       urgencia: q('#s-urg').value,
       tipo_solicitacao: q('#s-tipo').value.trim() || null,
       setor_id: q('#s-setor').value || null,
-      valor_estimado: q('#s-valor').value ? Number(q('#s-valor').value) : null,
+      valor_estimado: (() => {
+        let b = q('#s-valor').value.trim()
+        if (!b) return null
+        if (b.includes(',')) {
+          b = b.replace(/\./g, '').replace(',', '.')   // 1.250,50   -> 1250.50
+        } else if (/^\d{1,3}(\.\d{3})+$/.test(b)) {
+          b = b.replace(/\./g, '')                     // 1.234.567  -> 1234567
+        }                                              // 80.5 fica como está
+        const n = Number(b)
+        return Number.isNaN(n) ? null : n
+      })(),
       fornecedor_id: q('#s-forn').value || null,
       local_entrega: q('#s-local').value.trim() || null,
       recorrencia: q('#s-recor').value.trim() || null,
@@ -1185,6 +1195,7 @@ function formSolicitacao (s = null) {
     if (!s) {
       corpo.solicitante_id = PERFIL.pessoaId
       corpo.status = 'AGUARDANDO_COORD'
+      corpo.data_solicitacao = new Date().toISOString()
     }
 
     const { error } = s
