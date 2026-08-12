@@ -56,15 +56,6 @@ tbody tr:hover { background: var(--hover-bg); }
 /* ---- Marca ---- */
 .logo-login { display:block; height:64px; width:auto; margin:0 auto 14px; }
 .logo-nav { display:block; height:34px; width:auto; margin-bottom:14px; }
-.marca-pdf { display:none; }
-@media print {
-  .marca-pdf { display:flex !important; align-items:center; gap:12px;
-               border-bottom:2px solid #1c5632; padding-bottom:10px; margin-bottom:18px; }
-  .marca-pdf img { height:46px; width:auto; }
-  .marca-pdf span { font-family:var(--serif); font-size:15px; color:#1c5632;
-                    letter-spacing:.5px; margin-left:auto; }
-}
-
 /* ---- Documento do pedido: cores fixas da marca, para sair igual no papel ---- */
 .doc { --verde:#1c5632; --verde-claro:#eef5f0; --ouro:#c8a11a; --borda:#d7e3da;
        background:#fff; color:#1b1b1b; border-radius:10px; overflow:hidden; }
@@ -102,12 +93,44 @@ tbody tr:hover { background: var(--hover-bg); }
 .doc table { font-size:12.5px; }
 .doc table th { background:var(--verde-claro); color:var(--verde); position:static; }
 .doc table td { border-bottom:1px solid var(--borda); }
+.assinaturas { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-top:10px;
+               text-align:center; font-size:11px; color:#5b6b60; }
+.assinaturas .risco { border-top:1px solid #98a89e; margin:24px 8px 5px; }
+.assinaturas b { color:#1b1b1b; }
+
+@page { size: A4; margin: 8mm; }
+
 @media print {
   .doc { border-radius:0; }
-  .doc-topo { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .doc-topo { -webkit-print-color-adjust:exact; print-color-adjust:exact;
+              padding:10px 14px; border-bottom-width:3px; }
+  .doc-topo h2 { font-size:16px; }
+  .doc-topo .sub { font-size:9.5px; }
+  .doc-topo img { height:30px; }
   .bloco > h4, .doc .valor-caixa.destaque, .doc table th {
     -webkit-print-color-adjust:exact; print-color-adjust:exact; }
-  .doc-linha { grid-template-columns:1fr 1fr 1fr; }
+
+  /* tudo mais compacto para caber em uma folha */
+  .doc-corpo { padding:9px; gap:7px; }
+  .doc-linha { grid-template-columns:1fr 1fr 1fr; gap:7px; }
+  .bloco > h4 { padding:4px 9px; font-size:9px; }
+  .bloco .conteudo { padding:7px 9px; font-size:10px; line-height:1.45; }
+  .doc .valor-caixa { padding:5px 9px; margin-top:4px; border-radius:5px; }
+  .doc .valor-caixa .rotulo { font-size:9px; }
+  .doc .valor-caixa .nota { font-size:8.5px; }
+  .doc .valor-caixa .cifra { font-size:13px; }
+  .doc .valor-caixa.destaque .cifra { font-size:16px; }
+  .doc .caixa-texto { padding:6px 9px; border-width:1px; border-radius:5px; }
+  .doc .caixa-texto .rot { font-size:8.5px; margin-bottom:2px; }
+  .doc .caixa-texto p { font-size:10px; line-height:1.4; }
+  .doc .estado { padding:2px 9px; font-size:10px; }
+  .doc table { font-size:9.5px; }
+  .doc table th, .doc table td { padding:3px 6px; }
+  .assinaturas { font-size:9px; margin-top:6px; }
+  .assinaturas .risco { margin:18px 6px 3px; }
+
+  /* nunca partir um bloco entre páginas */
+  .bloco, .caixa-texto, .valor-caixa, .assinaturas, tr { break-inside:avoid; page-break-inside:avoid; }
 }
 
 /* ---- Administração e Visão geral ---- */
@@ -293,9 +316,53 @@ import { SUPABASE_URL, SUPABASE_KEY, SKIN_PADRAO } from './config.js'
 // e por isso aparece também na impressão em PDF.
 const LOGO_COMPLETO = 'data:image/png;base64,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'
 const LOGO_MARCA = 'data:image/png;base64,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'
-const marcaPDF = () => `<div class="marca-pdf">
-  <img src="${LOGO_COMPLETO}" alt="Grupo Gefoscal">
-  <span>Grupo Gefoscal</span></div>`
+// Molde único dos documentos imprimíveis. Todo PDF do sistema sai por aqui,
+// então mudar o cabeçalho aqui muda em todos.
+function documentoPDF ({ titulo, subtitulo = '', corpo, acoes = '' }) {
+  return `
+    <div class="modal area-impressao" style="max-width:920px;padding:0;background:transparent;border:none;">
+      <div class="doc">
+        <div class="doc-topo">
+          <div style="display:flex;align-items:center;gap:16px;">
+            <img src="${LOGO_COMPLETO}" alt="Grupo Gefoscal"
+                 style="background:#fff;border-radius:6px;padding:5px 8px;">
+            <div>
+              <h2>${titulo}</h2>
+              <div class="sub">Grupo Gefoscal${subtitulo ? ' · ' + subtitulo : ''}</div>
+            </div>
+          </div>
+        </div>
+        <div class="doc-corpo">${corpo}</div>
+      </div>
+      <div class="acoes nao-imprime" style="justify-content:center;">${acoes}</div>
+    </div>`
+}
+
+// pedaços reaproveitados pelos documentos
+const docLinha = (rot, val) => val
+  ? `<div><span class="rot">${esc(rot)}:</span> <b>${esc(val)}</b></div>` : ''
+
+const docValor = (rotulo, nota, valor, destaque = false) => `
+  <div class="valor-caixa ${destaque ? 'destaque' : ''}">
+    <div><div class="rotulo">${esc(rotulo)}</div><div class="nota">${esc(nota)}</div></div>
+    <div class="cifra">R$ ${fmtNum(valor ?? 0)}</div>
+  </div>`
+
+const docTexto = (rot, texto, classe = '') => `
+  <div class="caixa-texto ${classe}">
+    <div class="rot">${esc(rot)}</div>
+    <p>${texto ? esc(texto) : '<span style="color:#8a9990">não informado</span>'}</p>
+  </div>`
+
+const docBloco = (titulo, conteudo) => `
+  <div class="bloco"><h4>${esc(titulo)}</h4><div class="conteudo">${conteudo}</div></div>`
+
+const docAssinaturas = nomes => `
+  <div class="assinaturas">
+    ${nomes.map(([papel, nome]) => `
+      <div><div class="risco"></div>${esc(papel)}<br>
+        <b>${esc(nome ?? '')}</b></div>`).join('')}
+  </div>`
 
 const db = createClient(SUPABASE_URL, SUPABASE_KEY)
 const $ = s => document.querySelector(s)
@@ -1034,8 +1101,6 @@ async function paginaCompras () {
     { chave: 'coordenar',    nome: 'Coordenação',  mostrar: podeCoordenar() },
     { chave: 'cotar',        nome: 'Cotação',      mostrar: podeCotar() },
     { chave: 'aprovar',      nome: 'Aprovação',    mostrar: podeAprovar() },
-    { chave: 'pagar',        nome: 'Pagamento',    mostrar: podePagar() },
-    { chave: 'receber',      nome: 'Recebimento',  mostrar: true },
     { chave: 'fornecedores', nome: 'Fornecedores', mostrar: true }
   ].filter(a => a.mostrar)
 
@@ -1062,8 +1127,6 @@ function abrirCompras (sub, editavel) {
   if (sub === 'coordenar') comprasDecidir(alvo, 'coordenacao')
   if (sub === 'cotar') comprasCotar(alvo)
   if (sub === 'aprovar') comprasDecidir(alvo, 'aprovacao')
-  if (sub === 'pagar') comprasPagar(alvo)
-  if (sub === 'receber') comprasReceber(alvo, editavel)
   if (sub === 'fornecedores') comprasFornecedores(alvo, editavel)
 }
 
@@ -1107,7 +1170,7 @@ async function comprasSolicitacoes (alvo, editavel) {
   // Concluída = recebida. Em andamento = ainda vai andar.
   // Encerrada sem compra = reprovada, devolvida ou cancelada: saiu da fila,
   // então não entra na conta do que "falta concluir".
-  const CONCLUIDAS = ['RECEBIDA']
+  const CONCLUIDAS = ['PAGA', 'RECEBIDA']
   const PARADAS = ['REPROVADA', 'CANCELADA', 'DEVOLVIDA']
 
   const resumir = lista => {
@@ -1188,7 +1251,6 @@ async function abrirFicha (s, editavel) {
   const fechar = () => fundo.remove()
   fundo.onclick = e => { if (e.target === fundo) fechar() }
 
-  // orçamentos entram no bloco de análise
   const { data: orcs } = await db.from('orcamento')
     .select('valor,prazo_entrega,forma_pagamento,condicao_pagamento,link_proposta,escolhido,fornecedor_avulso,fornecedor:fornecedor_id(nome)')
     .eq('solicitacao_id', s.id).order('valor')
@@ -1198,133 +1260,85 @@ async function abrirFicha (s, editavel) {
   const menor = lista.length ? Math.min(...lista.map(o => Number(o.valor))) : null
   const nomeForn = o => o?.fornecedor?.nome || o?.fornecedor_avulso || null
 
-  const linha = (rot, val) => val
-    ? `<div><span class="rot">${esc(rot)}:</span> <b>${esc(val)}</b></div>` : ''
+  const corpo = `
+    <div class="doc-linha">
+      ${docBloco('Dados do solicitante',
+        docLinha('Solicitante', s.solicitante?.nome) +
+        docLinha('Setor', s.setor?.nome) +
+        docLinha('Gestor', s.gestor?.nome) +
+        docLinha('Local de entrega', s.local_entrega))}
 
-  const caixaValor = (rotulo, nota, valor, destaque = false) => `
-    <div class="valor-caixa ${destaque ? 'destaque' : ''}">
-      <div><div class="rotulo">${esc(rotulo)}</div><div class="nota">${esc(nota)}</div></div>
-      <div class="cifra">R$ ${fmtNum(valor ?? 0)}</div>
-    </div>`
+      ${docBloco('Controle',
+        docLinha('Nº', s.numero) +
+        `<div style="margin:6px 0;"><span class="estado">${
+          esc((STATUS_COMPRA[s.status] || {}).rotulo || s.status || '—')}</span></div>` +
+        docLinha('Data', fmtQuando(s.data_solicitacao)) +
+        docLinha('Analista', s.analista?.nome) +
+        docLinha('Aprovador', s.aprovador?.nome))}
 
-  const caixaTexto = (rot, texto, classe = '') => `
-    <div class="caixa-texto ${classe}">
-      <div class="rot">${esc(rot)}</div>
-      <p>${texto ? esc(texto) : '<span style="color:#8a9990">não informado</span>'}</p>
-    </div>`
+      ${docBloco('Urgência e tipo',
+        docLinha('Tipo', s.tipo_solicitacao) +
+        docLinha('Urgência', URGENCIA[s.urgencia] ?? s.urgencia) +
+        docLinha('Recorrência', s.recorrencia) +
+        (s.tem_risco
+          ? `<div style="color:#a33;"><b>Risco:</b> ${esc(s.descricao_risco || 'apontado')}</div>`
+          : '<div><span class="rot">Risco:</span> não</div>'))}
+    </div>
 
-  fundo.innerHTML = `
-    <div class="modal area-impressao" style="max-width:920px;padding:0;background:transparent;border:none;">
-      <div class="doc">
-        <div class="doc-topo">
-          <div style="display:flex;align-items:center;gap:16px;">
-            <img src="${LOGO_COMPLETO}" alt="Grupo Gefoscal"
-                 style="background:#fff;border-radius:6px;padding:5px 8px;">
-            <div>
-              <h2>PEDIDO DE COMPRA</h2>
-              <div class="sub">Grupo Gefoscal · documento para aprovação e arquivo</div>
-            </div>
-          </div>
-        </div>
+    <div class="doc-linha" style="grid-template-columns:1fr 1fr;">
+      ${docBloco('Detalhamento',
+        docLinha('Produto ou serviço', s.produto_servico) +
+        docLinha('Quantidade', s.quantidade ? `${s.quantidade} ${s.unidade ?? ''}` : null) +
+        docLinha('Especificações', s.especificacoes) +
+        docLinha('Finalidade', s.finalidade))}
 
-        <div class="doc-corpo">
-          <div class="doc-linha">
-            <div class="bloco"><h4>Dados do solicitante</h4><div class="conteudo">
-              ${linha('Solicitante', s.solicitante?.nome)}
-              ${linha('Setor', s.setor?.nome)}
-              ${linha('Gestor', s.gestor?.nome)}
-              ${linha('Local de entrega', s.local_entrega)}
-            </div></div>
+      ${docBloco('Fornecedor e valores',
+        docLinha('Fornecedor sugerido', s.fornecedor?.nome) +
+        docLinha('Fornecedor escolhido', nomeForn(escolhido)) +
+        docLinha('Pagamento', [s.forma_pagamento, s.condicao_pagamento].filter(Boolean).join(' · ') || null) +
+        docLinha('Parcelas', s.parcelas ? s.parcelas + 'x' : null) +
+        docLinha('Vencimento', s.vencimento ? fmtData(s.vencimento) : null) +
+        docValor('Valor solicitado', 'estimativa do solicitante', s.valor_estimado) +
+        docValor('Valor análise compras', 'cotação e negociação', escolhido?.valor) +
+        docValor('Valor aprovado', 'valor final autorizado',
+          s.valor_aprovado ?? (['APROVADA','PAGA','RECEBIDA'].includes(s.status) ? escolhido?.valor : null), true))}
+    </div>
 
-            <div class="bloco"><h4>Controle</h4><div class="conteudo">
-              ${linha('Nº', s.numero)}
-              <div style="margin:8px 0;"><span class="estado">${
-                esc((STATUS_COMPRA[s.status] || {}).rotulo || s.status || '—')}</span></div>
-              ${linha('Data', fmtQuando(s.data_solicitacao))}
-              ${linha('Aprovador', s.aprovador?.nome)}
-              ${linha('Analista', s.analista?.nome)}
-            </div></div>
+    ${docBloco('Análise do compras e coordenação',
+      docLinha('Onde achou mais barato', s.onde_mais_barato) +
+      docLinha('Fornecedor mais barato', nomeForn(lista.find(o => Number(o.valor) === menor))) +
+      (lista.length ? `
+        <table style="margin-top:8px;"><thead><tr>
+          <th>Fornecedor</th><th class="num">Valor</th><th>Prazo</th><th>Pagamento</th><th></th>
+        </tr></thead><tbody>
+          ${lista.map(o => `<tr>
+            <td>${esc(nomeForn(o) ?? '—')}</td>
+            <td class="num">R$ ${fmtNum(o.valor)}</td>
+            <td>${esc(o.prazo_entrega ?? '—')}</td>
+            <td>${esc([o.forma_pagamento, o.condicao_pagamento].filter(Boolean).join(' · ') || '—')}</td>
+            <td>${o.escolhido ? '<b>escolhido</b>' : (Number(o.valor) === menor ? 'menor preço' : '')}</td>
+          </tr>`).join('')}
+        </tbody></table>` : '') +
+      docValor('Total', 'valor do orçamento escolhido', escolhido?.valor ?? s.valor_estimado, true))}
 
-            <div class="bloco"><h4>Urgência e tipo</h4><div class="conteudo">
-              ${linha('Tipo', s.tipo_solicitacao)}
-              ${linha('Urgência', URGENCIA[s.urgencia] ?? s.urgencia)}
-              ${linha('Recorrência', s.recorrencia)}
-              ${s.tem_risco
-                ? `<div style="color:#a33;margin-top:4px;"><b>Risco:</b> ${
-                    esc(s.descricao_risco || 'apontado, sem descrição')}</div>`
-                : '<div><span class="rot">Risco:</span> não</div>'}
-            </div></div>
-          </div>
+    ${docTexto('Justificativa do solicitante', s.justificativa)}
+    ${docTexto('Orçamento e cotação', s.parecer_cotacao)}
+    ${s.observacao_compras ? docTexto('Observação do compras', s.observacao_compras) : ''}
+    ${docTexto('Justificativa da coordenação', s.parecer_coordenacao, 'coord')}
+    ${s.parecer_aprovacao ? docTexto('Parecer da aprovação', s.parecer_aprovacao) : ''}
 
-          <div class="doc-linha" style="grid-template-columns:1fr 1fr;">
-            <div class="bloco"><h4>Detalhamento</h4><div class="conteudo">
-              ${linha('Produto ou serviço', s.produto_servico)}
-              ${linha('Quantidade', s.quantidade ? `${s.quantidade} ${s.unidade ?? ''}` : null)}
-              ${linha('Especificações', s.especificacoes)}
-              ${linha('Finalidade', s.finalidade)}
-            </div></div>
+    ${docAssinaturas([['Solicitante', s.solicitante?.nome],
+                      ['Coordenação', s.gestor?.nome],
+                      ['Aprovação', s.aprovador?.nome]])}`
 
-            <div class="bloco"><h4>Fornecedor e valores</h4><div class="conteudo">
-              ${linha('Fornecedor sugerido', s.fornecedor?.nome)}
-              ${linha('Fornecedor escolhido', nomeForn(escolhido))}
-              ${linha('Forma de pagamento', s.forma_pagamento)}
-              ${linha('Condição', s.condicao_pagamento)}
-              ${linha('Parcelas', s.parcelas ? s.parcelas + 'x' : null)}
-              ${linha('Vencimento', s.vencimento ? fmtData(s.vencimento) : null)}
-              ${caixaValor('Valor solicitado', 'estimativa do solicitante', s.valor_estimado)}
-              ${caixaValor('Valor análise compras', 'cotação e negociação', escolhido?.valor)}
-              ${caixaValor('Valor aprovado', 'valor final autorizado',
-                  s.valor_aprovado ?? (s.status === 'APROVADA' || s.status === 'PAGA'
-                    ? escolhido?.valor : null), true)}
-            </div></div>
-          </div>
-
-          <div class="bloco"><h4>Análise do compras e coordenação</h4><div class="conteudo">
-            ${linha('Onde achou mais barato', s.onde_mais_barato)}
-            ${linha('Fornecedor mais barato', nomeForn(lista.find(o => Number(o.valor) === menor)))}
-
-            ${lista.length ? `
-              <table style="margin-top:10px;"><thead><tr>
-                <th>Fornecedor</th><th class="num">Valor</th><th>Prazo</th>
-                <th>Pagamento</th><th></th>
-              </tr></thead><tbody>
-                ${lista.map(o => `<tr>
-                  <td>${esc(nomeForn(o) ?? '—')}</td>
-                  <td class="num">R$ ${fmtNum(o.valor)}</td>
-                  <td>${esc(o.prazo_entrega ?? '—')}</td>
-                  <td>${esc([o.forma_pagamento, o.condicao_pagamento].filter(Boolean).join(' · ') || '—')}</td>
-                  <td>${o.escolhido ? '<b>escolhido</b>' : (Number(o.valor) === menor ? 'menor preço' : '')}</td>
-                </tr>`).join('')}
-              </tbody></table>` : ''}
-
-            ${caixaValor('Preço encontrado', 'melhor condição', menor)}
-            ${caixaValor('Total', 'valor do orçamento escolhido',
-                escolhido?.valor ?? s.valor_estimado, true)}
-          </div></div>
-
-          ${caixaTexto('Justificativa do solicitante', s.justificativa)}
-          ${caixaTexto('Orçamento e cotação', s.parecer_cotacao)}
-          ${caixaTexto('Observação do compras', s.observacao_compras)}
-          ${caixaTexto('Justificativa da coordenação', s.parecer_coordenacao, 'coord')}
-          ${s.parecer_aprovacao ? caixaTexto('Parecer da aprovação', s.parecer_aprovacao) : ''}
-
-          <div class="doc-linha" style="grid-template-columns:repeat(3,1fr);margin-top:8px;">
-            ${['Solicitante', 'Coordenação', 'Aprovação'].map((r, i) => `
-              <div style="text-align:center;font-size:11.5px;color:#5b6b60;">
-                <div style="border-top:1px solid #98a89e;margin:26px 8px 5px;"></div>
-                ${r}<br><b style="color:#1b1b1b;">${esc(
-                  [s.solicitante?.nome, s.gestor?.nome, s.aprovador?.nome][i] ?? '')}</b>
-              </div>`).join('')}
-          </div>
-        </div>
-      </div>
-
-      <div class="acoes nao-imprime" style="justify-content:center;">
-        <button class="btn" id="f-imprimir">Gerar PDF do pedido</button>
-        ${editavel ? `<button class="btn-secundario" id="f-editar">Editar</button>` : ''}
-        <button class="btn-secundario" id="f-fechar">Fechar</button>
-      </div>
-    </div>`
+  fundo.innerHTML = documentoPDF({
+    titulo: 'PEDIDO DE COMPRA',
+    subtitulo: 'documento para aprovação e arquivo',
+    corpo,
+    acoes: `<button class="btn" id="f-imprimir">Gerar PDF do pedido</button>
+      ${editavel ? '<button class="btn-secundario" id="f-editar">Editar</button>' : ''}
+      <button class="btn-secundario" id="f-fechar">Fechar</button>`
+  })
 
   fundo.querySelector('#f-fechar').onclick = fechar
   fundo.querySelector('#f-imprimir').onclick = () => window.print()
@@ -1818,50 +1832,56 @@ function numeroBR (raw) {
 // ----- PDF: quadro comparativo dos orçamentos -----
 function pdfOrcamentos (s, orcs) {
   const menor = orcs.length ? Math.min(...orcs.map(o => Number(o.valor))) : null
-  const fundo = document.createElement('div')
-  fundo.className = 'modal-fundo'
-  fundo.innerHTML = `
-    <div class="modal area-impressao" style="max-width:860px;">
-      ${marcaPDF()}
-      <h3>Quadro comparativo de orçamentos</h3>
-      <div class="ficha" style="margin-bottom:18px;">
-        <div class="item"><div class="rot">Produto ou serviço</div>
-          <div class="val">${esc(s.produto_servico)}</div></div>
-        <div class="item"><div class="rot">Quantidade</div>
-          <div class="val">${esc(s.quantidade ?? '—')} ${esc(s.unidade ?? '')}</div></div>
-        <div class="item"><div class="rot">Solicitante</div>
-          <div class="val">${esc(s.solicitante?.nome ?? '—')}</div></div>
-        <div class="item"><div class="rot">Setor</div>
-          <div class="val">${esc(s.setor?.nome ?? '—')}</div></div>
-        <div class="item"><div class="rot">Valor estimado</div>
-          <div class="val">${s.valor_estimado ? 'R$ ' + fmtNum(s.valor_estimado) : '—'}</div></div>
-        <div class="item"><div class="rot">Cotado em</div>
-          <div class="val">${fmtQuando(new Date().toISOString())}</div></div>
-      </div>
+  const nomeForn = o => o?.fornecedor?.nome || o?.fornecedor_avulso || null
+  const escolhido = orcs.find(o => o.escolhido)
 
+  const corpo = `
+    <div class="doc-linha">
+      ${docBloco('Solicitação',
+        docLinha('Nº', s.numero) +
+        docLinha('Produto ou serviço', s.produto_servico) +
+        docLinha('Quantidade', s.quantidade ? `${s.quantidade} ${s.unidade ?? ''}` : null))}
+      ${docBloco('Origem',
+        docLinha('Solicitante', s.solicitante?.nome) +
+        docLinha('Setor', s.setor?.nome) +
+        docLinha('Data', fmtQuando(s.data_solicitacao)))}
+      ${docBloco('Cotação',
+        docLinha('Levantado por', PERFIL.nome) +
+        docLinha('Em', fmtQuando(new Date().toISOString())) +
+        docLinha('Orçamentos', String(orcs.length)))}
+    </div>
+
+    ${docBloco('Orçamentos levantados', `
       <table><thead><tr>
-        <th>Fornecedor</th><th class="num">Valor</th><th>Prazo</th>
-        <th>Pagamento</th><th>Escolhido</th>
+        <th>Fornecedor</th><th class="num">Valor</th><th>Prazo</th><th>Pagamento</th><th></th>
       </tr></thead><tbody>
         ${orcs.map(o => `<tr>
-          <td>${esc(o.fornecedor?.nome || o.fornecedor_avulso || '—')}</td>
-          <td class="num">R$ ${fmtNum(o.valor)}${Number(o.valor) === menor ? ' ◂ menor' : ''}</td>
+          <td>${esc(nomeForn(o) ?? '—')}</td>
+          <td class="num">R$ ${fmtNum(o.valor)}</td>
           <td>${esc(o.prazo_entrega ?? '—')}</td>
           <td>${esc([o.forma_pagamento, o.condicao_pagamento].filter(Boolean).join(' · ') || '—')}</td>
-          <td>${o.escolhido ? 'sim' : ''}</td>
-        </tr>`).join('')}
+          <td>${o.escolhido ? '<b>escolhido</b>' : (Number(o.valor) === menor ? 'menor preço' : '')}</td>
+        </tr>`).join('') || '<tr><td colspan="5">Nenhum orçamento lançado.</td></tr>'}
       </tbody></table>
+      ${docValor('Menor preço', 'melhor condição encontrada', menor)}
+      ${docValor('Escolhido', nomeForn(escolhido) ?? 'ainda não definido', escolhido?.valor, true)}`)}
 
-      <div class="secao" style="margin-top:18px;">
-        <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;">Levantado por</div>
-        <p style="margin:4px 0 0;font-size:13.5px;">${esc(PERFIL.nome)}</p>
-      </div>
+    ${s.parecer_cotacao ? docTexto('Por que este orçamento', s.parecer_cotacao) : ''}
+    ${s.onde_mais_barato ? docTexto('Onde achou mais barato', s.onde_mais_barato) : ''}
 
-      <div class="acoes nao-imprime">
-        <button class="btn" id="pq-imprimir">Salvar em PDF</button>
-        <button class="btn-secundario" id="pq-fechar">Fechar</button>
-      </div>
-    </div>`
+    ${docAssinaturas([['Levantado por', PERFIL.nome],
+                      ['Conferido por', ''],
+                      ['Aprovação', s.aprovador?.nome]])}`
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = documentoPDF({
+    titulo: 'QUADRO COMPARATIVO DE ORÇAMENTOS',
+    subtitulo: 'cotação de compras',
+    corpo,
+    acoes: `<button class="btn" id="pq-imprimir">Gerar PDF</button>
+      <button class="btn-secundario" id="pq-fechar">Fechar</button>`
+  })
   document.body.appendChild(fundo)
   fundo.querySelector('#pq-fechar').onclick = () => fundo.remove()
   fundo.querySelector('#pq-imprimir').onclick = () => window.print()
@@ -1945,58 +1965,57 @@ async function comprasPagar (alvo) {
 // ----- Ordem de pagamento, para imprimir -----
 async function ordemPagamento (s) {
   if (!s) return
-  const { data: orcs } = await db.from('orcamento')
-    .select('valor,prazo_entrega,forma_pagamento,condicao_pagamento,escolhido,fornecedor_avulso,fornecedor:fornecedor_id(nome)')
+  const { data: o } = await db.from('orcamento')
+    .select('valor,prazo_entrega,forma_pagamento,condicao_pagamento,fornecedor_avulso,fornecedor:fornecedor_id(nome)')
     .eq('solicitacao_id', s.id).eq('escolhido', true).maybeSingle()
-    .then(r => ({ data: r.data ? [r.data] : [] }))
 
-  const o = orcs[0]
-  const item = (rot, val) => val
-    ? `<div class="item"><div class="rot">${esc(rot)}</div><div class="val">${esc(val)}</div></div>` : ''
+  const forn = o?.fornecedor?.nome || o?.fornecedor_avulso || s.fornecedor?.nome
+  const valor = s.valor_aprovado ?? o?.valor ?? s.valor_estimado
+
+  const corpo = `
+    <div class="doc-linha">
+      ${docBloco('Pedido',
+        docLinha('Nº', s.numero) +
+        docLinha('Produto ou serviço', s.produto_servico) +
+        docLinha('Quantidade', s.quantidade ? `${s.quantidade} ${s.unidade ?? ''}` : null) +
+        docLinha('Local de entrega', s.local_entrega))}
+
+      ${docBloco('Solicitante',
+        docLinha('Nome', s.solicitante?.nome) +
+        docLinha('Setor', s.setor?.nome) +
+        docLinha('Data do pedido', fmtQuando(s.data_solicitacao)))}
+
+      ${docBloco('Pagamento',
+        docLinha('Fornecedor', forn) +
+        docLinha('Forma', s.forma_pagamento || o?.forma_pagamento) +
+        docLinha('Condição', s.condicao_pagamento || o?.condicao_pagamento) +
+        docLinha('Parcelas', s.parcelas ? s.parcelas + 'x' : null) +
+        docLinha('Vencimento', s.vencimento ? fmtData(s.vencimento) : null))}
+    </div>
+
+    ${docBloco('Valor a pagar',
+      docValor('Valor autorizado', 'aprovado pela diretoria', valor, true))}
+
+    ${s.dados_pagamento ? docTexto('Dados de pagamento', s.dados_pagamento) : ''}
+
+    ${docBloco('Autorizações',
+      docLinha('Coordenação', s.gestor?.nome ? `${s.gestor.nome} — ${s.parecer_coordenacao ?? ''}` : null) +
+      docLinha('Cotação', s.analista?.nome ? `${s.analista.nome} — ${s.parecer_cotacao ?? ''}` : null) +
+      docLinha('Aprovação', s.aprovador?.nome ? `${s.aprovador.nome} — ${s.parecer_aprovacao ?? ''}` : null))}
+
+    ${docAssinaturas([['Aprovação', s.aprovador?.nome],
+                      ['Financeiro', ''],
+                      ['Recebido pelo fornecedor', '']])}`
 
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
-  fundo.innerHTML = `
-    <div class="modal area-impressao">
-      ${marcaPDF()}
-      <div class="cabeca-secao">
-        <h3>Ordem de pagamento</h3>
-        <span class="texto-dim2" style="font-size:12px;">${fmtQuando(new Date().toISOString())}</span>
-      </div>
-      <div class="ficha">
-        ${item('Produto ou serviço', s.produto_servico)}
-        ${item('Quantidade', s.quantidade ? `${s.quantidade} ${s.unidade ?? ''}` : null)}
-        ${item('Solicitante', s.solicitante?.nome)}
-        ${item('Setor', s.setor?.nome)}
-        ${item('Fornecedor', o?.fornecedor?.nome || o?.fornecedor_avulso || s.fornecedor?.nome)}
-        ${item('Valor', o ? 'R$ ' + fmtNum(o.valor) : (s.valor_estimado ? 'R$ ' + fmtNum(s.valor_estimado) : null))}
-        ${item('Forma de pagamento', s.forma_pagamento || o?.forma_pagamento)}
-        ${item('Condição', s.condicao_pagamento || o?.condicao_pagamento)}
-        ${item('Parcelas', s.parcelas ? s.parcelas + 'x' : null)}
-        ${item('Vencimento', s.vencimento ? fmtData(s.vencimento) : null)}
-        ${item('Local de entrega', s.local_entrega)}
-      </div>
-
-      ${s.dados_pagamento ? `<div class="secao" style="margin-top:18px;">
-        <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;">Dados de pagamento</div>
-        <p style="margin:4px 0 0;font-size:13.5px;white-space:pre-wrap;">${esc(s.dados_pagamento)}</p></div>` : ''}
-
-      <div class="secao">
-        <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;">Autorizações</div>
-        ${s.parecer_coordenacao ? `<div class="passo"><span class="quando">${fmtQuando(s.coordenado_em) ?? '—'}</span>
-          <span><b>Coordenação</b> — ${esc(s.gestor?.nome ?? '—')}<br>${esc(s.parecer_coordenacao)}</span></div>` : ''}
-        ${s.parecer_cotacao ? `<div class="passo"><span class="quando">${fmtQuando(s.cotado_em) ?? '—'}</span>
-          <span><b>Cotação</b> — ${esc(s.analista?.nome ?? '—')}<br>${esc(s.parecer_cotacao)}</span></div>` : ''}
-        ${s.parecer_aprovacao ? `<div class="passo"><span class="quando">${fmtQuando(s.decidido_em) ?? '—'}</span>
-          <span><b>Aprovação</b> — ${esc(s.aprovador?.nome ?? '—')}<br>${esc(s.parecer_aprovacao)}</span></div>` : ''}
-      </div>
-
-      <div class="acoes nao-imprime">
-        <button class="btn" id="op-imprimir">Imprimir</button>
-        <button class="btn-secundario" id="op-fechar">Fechar</button>
-      </div>
-    </div>`
-
+  fundo.innerHTML = documentoPDF({
+    titulo: 'ORDEM DE PAGAMENTO',
+    subtitulo: 'autorização financeira',
+    corpo,
+    acoes: `<button class="btn" id="op-imprimir">Gerar PDF</button>
+      <button class="btn-secundario" id="op-fechar">Fechar</button>`
+  })
   document.body.appendChild(fundo)
   fundo.querySelector('#op-fechar').onclick = () => fundo.remove()
   fundo.querySelector('#op-imprimir').onclick = () => window.print()
@@ -2118,7 +2137,7 @@ function telaBaixa (s, contas, categorias, centros) {
     }
 
     fechar()
-    abrirCompras('pagar', true)
+    abrirFin('pagar', true)
   }
 }
 
@@ -2235,100 +2254,6 @@ function telaDecisao (s, nomeEtapa) {
                 ${esc(s.dados_pagamento ?? '')}</p>` : ''}
           </div>`
       })
-  }
-}
-
-// ----- Compras › Recebimento -----
-async function comprasReceber (alvo, editavel) {
-  const [{ data: recs }, { data: aprovadas }] = await Promise.all([
-    db.from('recebimento_mercadoria').select(`
-      id, numero_nf, data_recebimento, observacoes,
-      recebido_por:recebido_por_id ( nome ),
-      fornecedor:fornecedor_id ( nome ),
-      setor:setor_id ( nome ),
-      solicitacao:solicitacao_id ( produto_servico )
-    `).order('data_recebimento', { ascending: false }).limit(200),
-    db.from('solicitacao_compra').select('id,produto_servico')
-      .eq('status', 'APROVADA').order('data_solicitacao')
-  ])
-
-  alvo.innerHTML = `
-    ${editavel ? `<div class="secao panel" style="padding:20px;">
-      <h3>Registrar recebimento</h3>
-      <div class="form-grade">
-        <div class="campo"><label>Solicitação</label>
-          <select id="r-sol"><option value="">— avulso —</option>
-            ${(aprovadas || []).map(a =>
-              `<option value="${a.id}">${esc(a.produto_servico)}</option>`).join('')}
-          </select></div>
-        <div class="campo"><label>Fornecedor</label>
-          <select id="r-forn"><option value="">—</option>
-            ${COMPRAS_CACHE.fornecedores.map(f =>
-              `<option value="${f.id}">${esc(f.nome)}</option>`).join('')}
-          </select></div>
-        <div class="campo"><label>Nota fiscal</label><input id="r-nf"></div>
-        <div class="campo"><label>Data</label>
-          <input type="date" id="r-data" value="${new Date().toISOString().slice(0, 10)}"></div>
-        <div class="campo"><label>Setor</label>
-          <select id="r-setor"><option value="">—</option>
-            ${COMPRAS_CACHE.setores.map(x =>
-              `<option value="${x.id}">${esc(x.nome)}</option>`).join('')}
-          </select></div>
-      </div>
-      <div class="campo" style="margin-top:12px;"><label>Observações</label>
-        <textarea id="r-obs" style="min-height:60px;"></textarea></div>
-      <div class="acoes"><button class="btn" id="r-salvar">Registrar</button></div>
-      <div class="recado oculto" id="r-recado"></div>
-    </div>` : ''}
-
-    <div class="cabeca-secao">
-      <h3 style="font-family:var(--serif);font-size:17px;">Recebimentos</h3>
-      <span class="texto-dim2" style="font-size:12px;">${(recs || []).length} registro(s)</span>
-    </div>
-    <div class="panel" style="padding:0;"><div class="tabela-scroll">
-      <table><thead><tr>
-        <th>Data</th><th>Item</th><th>Fornecedor</th><th>NF</th><th>Setor</th><th>Recebido por</th>
-      </tr></thead><tbody>
-        ${(recs || []).map(r => `<tr>
-          <td>${fmtQuando(r.data_recebimento) ?? '—'}</td>
-          <td>${esc(r.solicitacao?.produto_servico ?? 'avulso')}</td>
-          <td>${esc(r.fornecedor?.nome ?? '—')}</td>
-          <td>${esc(r.numero_nf ?? '—')}</td>
-          <td>${esc(r.setor?.nome ?? '—')}</td>
-          <td class="texto-dim">${esc(r.recebido_por?.nome ?? '—')}</td>
-        </tr>`).join('') || `<tr><td colspan="6" class="vazio">Nenhum recebimento registrado.</td></tr>`}
-      </tbody></table>
-    </div></div>`
-
-  if (!editavel) return
-
-  $('#r-salvar').onclick = async () => {
-    const aviso = (t, alerta = true) => {
-      const el = $('#r-recado'); el.textContent = t; el.classList.remove('oculto')
-      el.style.borderColor = alerta ? 'var(--warn-text)' : 'var(--line2)'
-      el.style.color = alerta ? 'var(--warn-text)' : 'var(--dim)'
-    }
-    const btn = $('#r-salvar'); btn.disabled = true; btn.textContent = 'Registrando...'
-
-    const solId = $('#r-sol').value || null
-    const { error } = await db.from('recebimento_mercadoria').insert({
-      solicitacao_id: solId,
-      fornecedor_id: $('#r-forn').value || null,
-      setor_id: $('#r-setor').value || null,
-      numero_nf: $('#r-nf').value.trim() || null,
-      data_recebimento: $('#r-data').value || new Date().toISOString(),
-      observacoes: $('#r-obs').value.trim() || null,
-      recebido_por_id: PERFIL.pessoaId
-    })
-
-    btn.disabled = false; btn.textContent = 'Registrar'
-    if (error) { aviso(error.message); return }
-
-    // recebeu contra uma solicitação: ela passa a RECEBIDA
-    if (solId) await db.from('solicitacao_compra')
-      .update({ status: 'RECEBIDA' }).eq('id', solId)
-
-    abrirCompras('receber', true)
   }
 }
 
@@ -2495,6 +2420,7 @@ async function paginaFinanceiro () {
 
   const abas = [
     { chave: 'lancamentos', nome: 'Lançamentos' },
+    { chave: 'pagar',       nome: 'A pagar' },
     { chave: 'faturar',     nome: 'Faturamento de NF' },
     { chave: 'contas',      nome: 'Contas' },
     { chave: 'cadastros',   nome: 'Categorias e centros' }
@@ -2519,6 +2445,7 @@ function abrirFin (sub, editavel) {
   const alvo = $('#sub-fin')
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
   if (sub === 'lancamentos') finLancamentos(alvo, editavel)
+  if (sub === 'pagar') comprasPagar(alvo)
   if (sub === 'faturar') finFaturar(alvo, editavel)
   if (sub === 'contas') finContas(alvo, editavel)
   if (sub === 'cadastros') finCadastros(alvo, editavel)
