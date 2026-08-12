@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-skin="plataforma">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sistema Gefoscal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@400;600&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="skins_gefoscal.css">
+<style>
+  /* Layout do app. Usa só os tokens das skins — nenhuma cor fixa aqui. */
+  .app { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+  @media (max-width: 860px) { .app { grid-template-columns: 1fr; } .nav { display: none; } }
+
+  .nav { background: var(--panel); border-right: 1px solid var(--line); padding: 18px 12px; }
+  .nav h1 { font-family: var(--serif); font-size: 19px; margin: 0 0 2px; }
+  .nav .sub { color: var(--dim2); font-size: 11px; margin-bottom: 22px; }
+  .nav a { display:block; padding:9px 11px; border-radius:6px; color:var(--dim);
+           text-decoration:none; font-size:14px; margin-bottom:2px; cursor:pointer; }
+  .nav a:hover { background: var(--hover-bg); color: var(--txt); }
+  .nav a.ativo { background: var(--hover-bg); color: var(--txt); border-left:3px solid var(--rust); }
+  .nav a.bloqueado { opacity:.35; cursor:not-allowed; }
+
+  .conteudo { padding: 22px 26px; max-width: 1400px; }
+  .topo { display:flex; justify-content:space-between; align-items:flex-start;
+          gap:16px; flex-wrap:wrap; margin-bottom:20px; }
+  .topo h2 { font-family: var(--serif); margin:0 0 4px; font-size:24px; }
+
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(165px,1fr)); gap:12px; margin-bottom:20px; }
+  .kpi .rotulo { color:var(--dim2); font-size:11px; text-transform:uppercase; letter-spacing:.5px; }
+  .kpi .valor  { font-family:var(--serif); font-size:26px; margin-top:6px; }
+  .kpi .nota   { color:var(--dim); font-size:12px; margin-top:2px; }
+
+  .filtros { display:flex; gap:10px; flex-wrap:wrap; align-items:end; margin-bottom:16px; }
+  .campo { display:flex; flex-direction:column; gap:4px; }
+  .campo label { color:var(--dim2); font-size:11px; text-transform:uppercase; letter-spacing:.4px; }
+
+  table { width:100%; border-collapse:collapse; font-size:13.5px; }
+  th { text-align:left; color:var(--dim2); font-weight:600; font-size:11px;
+       text-transform:uppercase; letter-spacing:.4px; padding:9px 10px;
+       border-bottom:1px solid var(--line2); position:sticky; top:0; background:var(--panel); }
+  td { padding:9px 10px; border-bottom:1px solid var(--line); }
+  tbody tr:hover { background: var(--hover-bg); }
+  .num { text-align:right; font-variant-numeric: tabular-nums; }
+  .tabela-scroll { max-height: 62vh; overflow:auto; }
+
+  .chip { display:inline-block; font-size:11px; padding:2px 8px; border-radius:20px;
+          border:1px solid var(--line2); color:var(--dim); }
+  .anexo-link { color:var(--rust); text-decoration:none; font-size:12px; margin-right:6px; }
+  .anexo-link:hover { text-decoration:underline; }
+
+  .login-wrap { display:flex; align-items:center; justify-content:center; min-height:100vh; padding:20px; }
+  .login { width:100%; max-width:380px; }
+  .login h1 { font-family:var(--serif); margin:0 0 4px; }
+  .login .campo { margin-bottom:12px; }
+  .login input { width:100%; }
+
+  .erro { color:var(--warn-text); font-size:13px; margin-top:10px; min-height:18px; }
+  .vazio { color:var(--dim2); padding:28px; text-align:center; }
+  .oculto { display:none !important; }
+  .barra-skin { display:flex; gap:6px; }
+  .barra-skin button { font-size:11px; padding:5px 9px; }
+</style>
+</head>
+<body>
+
+<!-- ================= LOGIN ================= -->
+<div id="tela-login" class="login-wrap">
+  <div class="login panel" style="padding:26px;">
+    <h1 class="titulo-serif">Gefoscal</h1>
+    <p class="texto-dim" style="margin-top:0;font-size:13px;">Sistema interno</p>
+
+    <div class="campo">
+      <label>E-mail</label>
+      <input id="email" type="email" autocomplete="username" placeholder="voce@grupogefoscal.com.br">
+    </div>
+    <div class="campo">
+      <label>Senha</label>
+      <input id="senha" type="password" autocomplete="current-password" placeholder="••••••••">
+    </div>
+
+    <button class="btn" id="btn-entrar" style="width:100%;margin-top:6px;">Entrar</button>
+    <div class="erro" id="erro-login"></div>
+
+    <div class="linha-divisoria" style="margin:18px 0 12px;"></div>
+    <div class="barra-skin">
+      <button class="btn-secundario" onclick="trocarSkin('sofisticado')">Sofisticado</button>
+      <button class="btn-secundario" onclick="trocarSkin('plataforma')">Plataforma</button>
+      <button class="btn-secundario" onclick="trocarSkin('daylight')">Daylight</button>
+    </div>
+  </div>
+</div>
+
+<!-- ================= APP ================= -->
+<div id="tela-app" class="app oculto">
+  <nav class="nav">
+    <h1 class="titulo-serif">Gefoscal</h1>
+    <div class="sub" id="quem-sou"></div>
+    <div id="menu"></div>
+
+    <div class="linha-divisoria" style="margin:18px 0 12px;"></div>
+    <div class="barra-skin" style="flex-direction:column;">
+      <button class="btn-secundario" onclick="trocarSkin('sofisticado')">Sofisticado</button>
+      <button class="btn-secundario" onclick="trocarSkin('plataforma')">Plataforma</button>
+      <button class="btn-secundario" onclick="trocarSkin('daylight')">Daylight</button>
+    </div>
+    <button class="btn-secundario" style="width:100%;margin-top:14px;" onclick="sair()">Sair</button>
+  </nav>
+
+  <main class="conteudo">
+    <div class="topo">
+      <div>
+        <h2 id="titulo-pagina">Expedição</h2>
+        <div class="texto-dim" id="subtitulo-pagina" style="font-size:13px;"></div>
+      </div>
+    </div>
+
+    <div class="kpis" id="kpis"></div>
+
+    <div class="filtros" id="filtros"></div>
+
+    <div class="panel">
+      <div class="tabela-scroll">
+        <table>
+          <thead id="cabecalho"></thead>
+          <tbody id="corpo"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="texto-dim2" id="rodape" style="font-size:12px;margin-top:10px;"></div>
+  </main>
+</div>
+
+<script type="module">
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { SUPABASE_URL, SUPABASE_KEY, SKIN_PADRAO } from './config.js'
+
+const db = createClient(SUPABASE_URL, SUPABASE_KEY)
+
+const $ = s => document.querySelector(s)
+const fmtNum = (n, d = 2) => (n ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: d, maximumFractionDigits: d })
+const fmtData = d => d ? d.split('-').reverse().join('/') : '—'
+const esc = t => String(t ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
+
+window.trocarSkin = s => {
+  document.documentElement.setAttribute('data-skin', s)
+  localStorage.setItem('gefoscal-skin', s)
+}
+document.documentElement.setAttribute('data-skin',
+  localStorage.getItem('gefoscal-skin') || SKIN_PADRAO)
+
+// ---------------------------------------------------------------
+// Login
+// ---------------------------------------------------------------
+$('#btn-entrar').onclick = entrar
+$('#senha').onkeydown = e => { if (e.key === 'Enter') entrar() }
+
+async function entrar () {
+  const btn = $('#btn-entrar')
+  btn.disabled = true; btn.textContent = 'Entrando...'
+  $('#erro-login').textContent = ''
+  const { error } = await db.auth.signInWithPassword({
+    email: $('#email').value.trim(),
+    password: $('#senha').value
+  })
+  btn.disabled = false; btn.textContent = 'Entrar'
+  if (error) { $('#erro-login').textContent = traduzErro(error.message); return }
+  await abrirApp()
+}
+
+function traduzErro (m) {
+  if (/invalid login/i.test(m)) return 'E-mail ou senha incorretos.'
+  if (/email not confirmed/i.test(m)) return 'E-mail ainda não confirmado.'
+  return m
+}
+
+window.sair = async () => { await db.auth.signOut(); location.reload() }
+
+// ---------------------------------------------------------------
+// Sessão e menu
+// ---------------------------------------------------------------
+let PERFIL = { nome: '', papeis: [], modulos: [] }
+
+async function abrirApp () {
+  const { data: { user } } = await db.auth.getUser()
+  if (!user) return
+
+  const [{ data: papeis }, { data: modulos }, { data: perfil }] = await Promise.all([
+    db.from('usuario_papel').select('papel'),
+    db.from('modulo').select('chave,nome,ordem').order('ordem'),
+    db.from('usuario_perfil').select('pessoa:pessoa_id(nome)').maybeSingle()
+  ])
+
+  PERFIL.papeis  = (papeis || []).map(p => p.papel)
+  PERFIL.modulos = modulos || []
+  PERFIL.nome    = perfil?.pessoa?.nome || user.email
+
+  if (PERFIL.papeis.length === 0) {
+    $('#erro-login').textContent =
+      'Seu usuário entrou, mas não tem papel definido. Fale com o administrador.'
+    await db.auth.signOut()
+    return
+  }
+
+  $('#quem-sou').textContent = PERFIL.nome + ' · ' + PERFIL.papeis.join(', ')
+  montarMenu()
+  $('#tela-login').classList.add('oculto')
+  $('#tela-app').classList.remove('oculto')
+  irPara('expedicao')
+}
+
+const PAGINAS = {
+  expedicao:   { nome: 'Expedição',           render: paginaExpedicao },
+  financeiro:  { nome: 'Financeiro',          render: paginaFinanceiro },
+  estoque:     { nome: 'Estoque e Produção',  render: paginaEstoque }
+}
+
+function montarMenu () {
+  $('#menu').innerHTML = PERFIL.modulos.map(m => {
+    const temPagina = !!PAGINAS[m.chave]
+    return `<a data-chave="${m.chave}" class="${temPagina ? '' : 'bloqueado'}">${esc(m.nome)}</a>`
+  }).join('')
+  $('#menu').querySelectorAll('a').forEach(a => {
+    if (!a.classList.contains('bloqueado')) a.onclick = () => irPara(a.dataset.chave)
+  })
+}
+
+function irPara (chave) {
+  const p = PAGINAS[chave]
+  if (!p) return
+  $('#menu').querySelectorAll('a').forEach(a => a.classList.toggle('ativo', a.dataset.chave === chave))
+  $('#titulo-pagina').textContent = p.nome
+  $('#kpis').innerHTML = ''; $('#filtros').innerHTML = ''
+  $('#cabecalho').innerHTML = ''; $('#corpo').innerHTML = ''
+  $('#rodape').textContent = ''
+  p.render()
+}
+
+function kpi (rotulo, valor, nota = '') {
+  return `<div class="card kpi"><div class="rotulo">${esc(rotulo)}</div>
+          <div class="valor">${valor}</div><div class="nota">${esc(nota)}</div></div>`
+}
+function semAcesso (modulo) {
+  $('#corpo').innerHTML = `<tr><td class="vazio">
+    Você não tem acesso ao módulo <b>${esc(modulo)}</b>.<br>
+    Peça a liberação ao administrador do sistema.</td></tr>`
+}
+
+// ---------------------------------------------------------------
+// Página: Expedição
+// ---------------------------------------------------------------
+async function paginaExpedicao () {
+  $('#subtitulo-pagina').textContent = 'Carregamentos migrados da planilha'
+  $('#filtros').innerHTML = `
+    <div class="campo"><label>Cliente</label><select id="f-cliente"><option value="">todos</option></select></div>
+    <div class="campo"><label>Vendedor</label><select id="f-vendedor"><option value="">todos</option></select></div>
+    <div class="campo"><label>De</label><input type="date" id="f-de"></div>
+    <div class="campo"><label>Até</label><input type="date" id="f-ate"></div>
+    <button class="btn" id="f-aplicar">Filtrar</button>
+    <button class="btn-secundario" id="f-limpar">Limpar</button>`
+
+  const [{ data: clientes }, { data: vendedores }] = await Promise.all([
+    db.from('cliente').select('id,razao_social').order('razao_social'),
+    db.from('pessoa').select('id,nome').eq('eh_vendedor', true).order('nome')
+  ])
+  ;(clientes || []).forEach(c => $('#f-cliente').add(new Option(c.razao_social, c.id)))
+  ;(vendedores || []).forEach(v => $('#f-vendedor').add(new Option(v.nome, v.id)))
+
+  $('#f-aplicar').onclick = carregar
+  $('#f-limpar').onclick = () => {
+    $('#f-cliente').value = ''; $('#f-vendedor').value = ''
+    $('#f-de').value = ''; $('#f-ate').value = ''; carregar()
+  }
+
+  $('#cabecalho').innerHTML = `<tr>
+    <th>Linha</th><th>Data</th><th>Cliente</th><th>Vendedor</th>
+    <th>Produto</th><th>Placa</th><th class="num">Qtd (t)</th>
+    <th>NF</th><th>UF</th><th>Anexos</th></tr>`
+
+  await carregar()
+
+  async function carregar () {
+    $('#corpo').innerHTML = `<tr><td colspan="10" class="vazio">carregando...</td></tr>`
+
+    let q = db.from('carregamento').select(`
+        origem_linha, data_carregamento, quantidade_t, numero_nf, uf_destino,
+        cliente:cliente_id ( razao_social ),
+        vendedor:vendedor_id ( nome ),
+        produto:produto_id ( nome ),
+        veiculo:veiculo_id ( placa )
+      `).order('data_carregamento', { ascending: false }).limit(500)
+
+    if ($('#f-cliente').value)  q = q.eq('cliente_id', $('#f-cliente').value)
+    if ($('#f-vendedor').value) q = q.eq('vendedor_id', $('#f-vendedor').value)
+    if ($('#f-de').value)       q = q.gte('data_carregamento', $('#f-de').value)
+    if ($('#f-ate').value)      q = q.lte('data_carregamento', $('#f-ate').value)
+
+    const { data, error } = await q
+    if (error) { $('#corpo').innerHTML = `<tr><td colspan="10" class="vazio">${esc(error.message)}</td></tr>`; return }
+    if (!data.length) { $('#corpo').innerHTML = `<tr><td colspan="10" class="vazio">Nenhum carregamento no filtro.</td></tr>`; return }
+
+    const total = data.reduce((s, c) => s + Number(c.quantidade_t || 0), 0)
+    const nClientes = new Set(data.map(c => c.cliente?.razao_social)).size
+    $('#kpis').innerHTML =
+      kpi('Carregamentos', data.length, data.length === 500 ? 'limite de 500 atingido' : '') +
+      kpi('Toneladas', fmtNum(total), 'soma do período') +
+      kpi('Clientes', nClientes) +
+      kpi('Média por carga', fmtNum(total / data.length) + ' t')
+
+    $('#corpo').innerHTML = data.map(c => `<tr>
+      <td class="texto-dim2">${c.origem_linha ?? '—'}</td>
+      <td>${fmtData(c.data_carregamento)}</td>
+      <td>${esc(c.cliente?.razao_social)}</td>
+      <td>${c.vendedor?.nome ? esc(c.vendedor.nome) : '<span class="badge-alerta">sem vendedor</span>'}</td>
+      <td><span class="chip">${esc(c.produto?.nome ?? '—')}</span></td>
+      <td>${esc(c.veiculo?.placa ?? '—')}</td>
+      <td class="num">${fmtNum(c.quantidade_t, 3)}</td>
+      <td>${esc(c.numero_nf ?? '—')}</td>
+      <td>${esc(c.uf_destino ?? '—')}</td>
+      <td><a class="anexo-link" data-linha="${c.origem_linha}">ver</a></td>
+    </tr>`).join('')
+
+    $('#corpo').querySelectorAll('.anexo-link').forEach(a => { a.onclick = () => verAnexos(a.dataset.linha) })
+    $('#rodape').textContent = `${data.length} registros · ${fmtNum(total)} t`
+  }
+
+  async function verAnexos (linha) {
+    const { data: c } = await db.from('carregamento').select('id').eq('origem_linha', linha).maybeSingle()
+    if (!c) return
+    const { data: anexos } = await db.from('anexo').select('tipo, drive_file_id')
+      .eq('entidade', 'CARREGAMENTO').eq('registro_id', c.id)
+    if (!anexos?.length) { alert('Sem anexos nesta linha.'); return }
+    anexos.forEach(a => window.open('https://drive.google.com/open?id=' + a.drive_file_id, '_blank'))
+  }
+}
+
+// ---------------------------------------------------------------
+// Página: Financeiro
+// ---------------------------------------------------------------
+async function paginaFinanceiro () {
+  $('#subtitulo-pagina').textContent = 'Lançamentos, contas e resultado'
+  $('#cabecalho').innerHTML = `<tr>
+    <th>Data</th><th>Descrição</th><th>Categoria</th><th>Centro de custo</th>
+    <th>Conta</th><th>Situação</th><th class="num">Valor</th></tr>`
+
+  const { data, error } = await db.from('lancamento_financeiro').select(`
+      data_lancamento, descricao, tipo, valor, situacao,
+      categoria:categoria_id ( nome, tipo ),
+      centro:centro_custo_id ( nome ),
+      conta:conta_id ( nome )
+    `).order('data_lancamento', { ascending: false }).limit(300)
+
+  if (error) { semAcesso('Financeiro'); return }
+
+  const { data: contas } = await db.from('saldo_conta').select('*')
+  const receitas = (data || []).filter(l => l.tipo === 'ENTRADA').reduce((s, l) => s + Number(l.valor), 0)
+  const despesas = (data || []).filter(l => l.tipo === 'SAIDA').reduce((s, l) => s + Number(l.valor), 0)
+  const pendentes = (data || []).filter(l => l.situacao === 'PENDENTE').length
+
+  $('#kpis').innerHTML =
+    kpi('Receitas', 'R$ ' + fmtNum(receitas)) +
+    kpi('Despesas', 'R$ ' + fmtNum(despesas)) +
+    kpi('Resultado', 'R$ ' + fmtNum(receitas - despesas)) +
+    kpi('Pendentes', pendentes, 'a efetivar') +
+    kpi('Saldo em contas', 'R$ ' + fmtNum((contas || []).reduce((s, c) => s + Number(c.saldo), 0)))
+
+  if (!data?.length) {
+    $('#corpo').innerHTML = `<tr><td colspan="7" class="vazio">
+      Nenhum lançamento ainda. As categorias e centros de custo da empresa já estão cadastrados.</td></tr>`
+    return
+  }
+
+  $('#corpo').innerHTML = data.map(l => `<tr>
+    <td>${fmtData(l.data_lancamento)}</td>
+    <td>${esc(l.descricao)}</td>
+    <td><span class="chip">${esc(l.categoria?.nome ?? '—')}</span></td>
+    <td>${esc(l.centro?.nome ?? '—')}</td>
+    <td>${esc(l.conta?.nome ?? '—')}</td>
+    <td class="${l.situacao === 'EFETIVADO' ? 'badge-bom' : 'badge-alerta'}">${esc(l.situacao)}</td>
+    <td class="num ${l.tipo === 'ENTRADA' ? 'badge-bom' : ''}">
+      ${l.tipo === 'SAIDA' ? '−' : '+'} ${fmtNum(l.valor)}</td>
+  </tr>`).join('')
+}
+
+// ---------------------------------------------------------------
+// Página: Estoque
+// ---------------------------------------------------------------
+async function paginaEstoque () {
+  $('#subtitulo-pagina').textContent = 'Saldo por produto e por local'
+  $('#cabecalho').innerHTML = `<tr><th>Produto</th><th>Local</th><th>Unidade</th><th class="num">Saldo</th></tr>`
+
+  const [{ data: total }, { data: porLocal }] = await Promise.all([
+    db.from('saldo_estoque').select('*'),
+    db.from('saldo_estoque_por_local').select('*')
+  ])
+
+  $('#kpis').innerHTML = (total || []).map(p =>
+    kpi(p.nome, fmtNum(p.saldo, 3), p.unidade)).join('') || kpi('Sem produtos', '—')
+
+  if (!porLocal?.length) {
+    $('#corpo').innerHTML = `<tr><td colspan="4" class="vazio">
+      Nenhuma movimentação de estoque carregada ainda.</td></tr>`
+    return
+  }
+  $('#corpo').innerHTML = porLocal.map(s => `<tr>
+    <td>${esc(s.produto)}</td><td><span class="chip">${esc(s.local)}</span></td>
+    <td>${esc(s.unidade)}</td><td class="num">${fmtNum(s.saldo, 3)}</td></tr>`).join('')
+}
+
+// ---------------------------------------------------------------
+// Se já houver sessão salva, entra direto
+// ---------------------------------------------------------------
+const { data: { session } } = await db.auth.getSession()
+if (session) await abrirApp()
+</script>
+</body>
+</html>
