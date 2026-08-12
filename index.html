@@ -1337,6 +1337,23 @@ function formSolicitacao (s = null) {
   const opc = (lista, atual) => '<option value="">—</option>' +
     lista.map(i => `<option value="${i.id}" ${i.id === atual ? 'selected' : ''}>${esc(i.nome)}</option>`).join('')
 
+  // listas fixas. Se o registro tiver um valor antigo fora da lista,
+  // ele entra como opção para a edição não apagar o que já estava gravado.
+  const opcTexto = (lista, atual, vazio = '—') => {
+    const itens = atual && !lista.includes(atual) ? [...lista, atual] : lista
+    return `<option value="">${esc(vazio)}</option>` +
+      itens.map(v => `<option value="${esc(v)}" ${v === atual ? 'selected' : ''}>${esc(v)}</option>`).join('')
+  }
+
+  const UNIDADES = ['un', 'cx', 'pct', 'kg', 't', 'L', 'm', 'm²', 'm³',
+                    'par', 'jogo', 'rolo', 'saco', 'balde', 'galão',
+                    'peça', 'hora', 'mês', 'serviço']
+  const TIPOS = ['Material', 'Peça de reposição', 'Equipamento', 'Ferramenta',
+                 'EPI', 'Insumo', 'Serviço', 'Manutenção', 'Locação',
+                 'Software ou licença', 'Frete', 'Obra', 'Outro']
+  const RECORRENCIAS = ['Única', 'Sob demanda', 'Semanal', 'Quinzenal', 'Mensal',
+                        'Bimestral', 'Trimestral', 'Semestral', 'Anual']
+
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
   fundo.innerHTML = `
@@ -1348,14 +1365,14 @@ function formSolicitacao (s = null) {
         <div class="campo"><label>Quantidade</label>
           <input id="s-qtd" value="${esc(s?.quantidade ?? '')}"></div>
         <div class="campo"><label>Unidade</label>
-          <input id="s-unid" value="${esc(s?.unidade ?? '')}" placeholder="un, kg, cx"></div>
+          <select id="s-unid">${opcTexto(UNIDADES, s?.unidade)}</select></div>
         <div class="campo"><label>Urgência</label>
           <select id="s-urg">
             <option value="NAO_URGENTE_5D" ${s?.urgencia === 'NAO_URGENTE_5D' ? 'selected' : ''}>Normal — 5 dias</option>
             <option value="URGENTE_4H" ${s?.urgencia === 'URGENTE_4H' ? 'selected' : ''}>Urgente — 4 horas</option>
           </select></div>
         <div class="campo"><label>Tipo</label>
-          <input id="s-tipo" value="${esc(s?.tipo_solicitacao ?? '')}" placeholder="material, serviço..."></div>
+          <select id="s-tipo">${opcTexto(TIPOS, s?.tipo_solicitacao)}</select></div>
         <div class="campo"><label>Setor</label>
           <select id="s-setor">${opc(COMPRAS_CACHE.setores, s?.setor_id)}</select></div>
         <div class="campo"><label>Valor estimado (R$)</label>
@@ -1365,7 +1382,7 @@ function formSolicitacao (s = null) {
         <div class="campo"><label>Local de entrega</label>
           <input id="s-local" value="${esc(s?.local_entrega ?? '')}"></div>
         <div class="campo"><label>Recorrência</label>
-          <input id="s-recor" value="${esc(s?.recorrencia ?? '')}" placeholder="única, mensal..."></div>
+          <select id="s-recor">${opcTexto(RECORRENCIAS, s?.recorrencia)}</select></div>
       </div>
 
       <div class="campo" style="margin-top:12px;"><label>Finalidade</label>
@@ -1411,9 +1428,9 @@ function formSolicitacao (s = null) {
     const corpo = {
       produto_servico: produto,
       quantidade: q('#s-qtd').value.trim() || null,
-      unidade: q('#s-unid').value.trim() || null,
+      unidade: q('#s-unid').value || null,
       urgencia: q('#s-urg').value,
-      tipo_solicitacao: q('#s-tipo').value.trim() || null,
+      tipo_solicitacao: q('#s-tipo').value || null,
       setor_id: q('#s-setor').value || null,
       valor_estimado: (() => {
         let b = q('#s-valor').value.trim()
@@ -1428,7 +1445,7 @@ function formSolicitacao (s = null) {
       })(),
       fornecedor_id: q('#s-forn').value || null,
       local_entrega: q('#s-local').value.trim() || null,
-      recorrencia: q('#s-recor').value.trim() || null,
+      recorrencia: q('#s-recor').value || null,
       finalidade: q('#s-final').value.trim() || null,
       especificacoes: q('#s-espec').value.trim() || null,
       justificativa: q('#s-just').value.trim() || null,
