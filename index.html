@@ -65,6 +65,51 @@ tbody tr:hover { background: var(--hover-bg); }
                     letter-spacing:.5px; margin-left:auto; }
 }
 
+/* ---- Documento do pedido: cores fixas da marca, para sair igual no papel ---- */
+.doc { --verde:#1c5632; --verde-claro:#eef5f0; --ouro:#c8a11a; --borda:#d7e3da;
+       background:#fff; color:#1b1b1b; border-radius:10px; overflow:hidden; }
+.doc-topo { background:var(--verde); color:#fff; padding:18px 22px; border-bottom:4px solid var(--ouro); }
+.doc-topo h2 { margin:0; font-size:21px; letter-spacing:.5px; font-weight:600; }
+.doc-topo .sub { font-size:12px; opacity:.85; margin-top:3px; }
+.doc-topo img { height:40px; width:auto; }
+.doc-corpo { padding:16px; display:grid; gap:12px; }
+.doc-linha { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); }
+.bloco { border:1px solid var(--borda); border-radius:8px; overflow:hidden; background:#fff; }
+.bloco > h4 { margin:0; background:var(--verde-claro); color:var(--verde);
+              font-size:11px; letter-spacing:.6px; text-transform:uppercase;
+              padding:8px 12px; border-bottom:1px solid var(--borda); font-weight:600; }
+.bloco .conteudo { padding:12px; font-size:13px; line-height:1.65; }
+.bloco .conteudo .rot { color:#5b6b60; }
+.bloco .conteudo b { color:#1b1b1b; }
+.doc .valor-caixa { display:flex; justify-content:space-between; align-items:center;
+                    gap:12px; border:1px solid var(--borda); border-radius:7px;
+                    padding:10px 12px; margin-top:8px; }
+.doc .valor-caixa .rotulo { font-size:11.5px; letter-spacing:.5px;
+                            text-transform:uppercase; color:var(--verde); font-weight:600; }
+.doc .valor-caixa .nota { font-size:11px; color:#6d7c72; }
+.doc .valor-caixa .cifra { font-size:19px; font-weight:600; color:var(--verde); white-space:nowrap; }
+.doc .valor-caixa.destaque { background:#fffcf0; border-color:var(--ouro); }
+.doc .valor-caixa.destaque .cifra { color:#8a5a12; font-size:24px; }
+.doc .caixa-texto { border:1.5px solid var(--verde); border-radius:8px; padding:11px 13px; }
+.doc .caixa-texto .rot { color:var(--verde); font-size:11px; letter-spacing:.6px;
+                         text-transform:uppercase; font-weight:600; margin-bottom:4px; }
+.doc .caixa-texto p { margin:0; font-size:13.5px; white-space:pre-wrap; }
+.doc .caixa-texto.coord { border-color:#4b4fd0; background:#f2f3ff; }
+.doc .caixa-texto.coord .rot { color:#4b4fd0; }
+.doc .estado { display:inline-block; border:1px solid var(--ouro); background:#fffaf0;
+               color:#8a5a12; border-radius:20px; padding:5px 14px;
+               font-size:12.5px; font-weight:600; letter-spacing:.4px; }
+.doc table { font-size:12.5px; }
+.doc table th { background:var(--verde-claro); color:var(--verde); position:static; }
+.doc table td { border-bottom:1px solid var(--borda); }
+@media print {
+  .doc { border-radius:0; }
+  .doc-topo { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .bloco > h4, .doc .valor-caixa.destaque, .doc table th {
+    -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .doc-linha { grid-template-columns:1fr 1fr 1fr; }
+}
+
 /* ---- Administração e Visão geral ---- */
 .subabas { display:flex; gap:2px; margin-bottom:18px; border-bottom:1px solid var(--line2); }
 .subabas button { background:none; border:none; color:var(--dim); cursor:pointer;
@@ -1026,6 +1071,7 @@ const selSolicitacao = `
   id, status, urgencia, tipo_solicitacao, justificativa, tem_risco, descricao_risco,
   produto_servico, quantidade, unidade, especificacoes, finalidade, local_entrega,
   valor_estimado, recorrencia, data_solicitacao, setor_id,
+  numero, valor_aprovado, onde_mais_barato, observacao_compras,
   parecer_coordenacao, coordenado_em, parecer_aprovacao, decidido_em,
   parecer_cotacao, cotado_em, forma_pagamento, condicao_pagamento,
   parcelas, vencimento, dados_pagamento, orcamento_escolhido_id,
@@ -1120,7 +1166,7 @@ async function comprasSolicitacoes (alvo, editavel) {
       `<p class="vazio">Nenhuma solicitação${(data || []).length ? ' com esse filtro' : ' registrada ainda'}.</p>`
 
     $('#c-lista').querySelectorAll('[data-ficha]').forEach(b => {
-      b.onclick = () => abrirFicha(data.find(x => x.id === b.dataset.ficha), editavel)
+      b.onclick = () => { abrirFicha(data.find(x => x.id === b.dataset.ficha), editavel).catch(e => console.error(e)) }
     })
   }
 
@@ -1131,71 +1177,155 @@ async function comprasSolicitacoes (alvo, editavel) {
   if (editavel) $('#c-nova').onclick = () => formSolicitacao()
 }
 
-// ----- Ficha da solicitação, com impressão em PDF -----
-function abrirFicha (s, editavel) {
+// ----- Ficha da solicitação: documento imprimível -----
+async function abrirFicha (s, editavel) {
   if (!s) return
-  const item = (rot, val) => val
-    ? `<div class="item"><div class="rot">${esc(rot)}</div><div class="val">${esc(val)}</div></div>` : ''
 
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal"><p class="texto-dim2">montando o pedido...</p></div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  // orçamentos entram no bloco de análise
+  const { data: orcs } = await db.from('orcamento')
+    .select('valor,prazo_entrega,forma_pagamento,condicao_pagamento,link_proposta,escolhido,fornecedor_avulso,fornecedor:fornecedor_id(nome)')
+    .eq('solicitacao_id', s.id).order('valor')
+
+  const lista = orcs || []
+  const escolhido = lista.find(o => o.escolhido)
+  const menor = lista.length ? Math.min(...lista.map(o => Number(o.valor))) : null
+  const nomeForn = o => o?.fornecedor?.nome || o?.fornecedor_avulso || null
+
+  const linha = (rot, val) => val
+    ? `<div><span class="rot">${esc(rot)}:</span> <b>${esc(val)}</b></div>` : ''
+
+  const caixaValor = (rotulo, nota, valor, destaque = false) => `
+    <div class="valor-caixa ${destaque ? 'destaque' : ''}">
+      <div><div class="rotulo">${esc(rotulo)}</div><div class="nota">${esc(nota)}</div></div>
+      <div class="cifra">R$ ${fmtNum(valor ?? 0)}</div>
+    </div>`
+
+  const caixaTexto = (rot, texto, classe = '') => `
+    <div class="caixa-texto ${classe}">
+      <div class="rot">${esc(rot)}</div>
+      <p>${texto ? esc(texto) : '<span style="color:#8a9990">não informado</span>'}</p>
+    </div>`
+
   fundo.innerHTML = `
-    <div class="modal area-impressao">
-      ${marcaPDF()}
-      <div class="cabeca-secao">
-        <h3>Solicitação de compra</h3>
-        <span>${selo(s.status)}</span>
-      </div>
-      <div class="ficha">
-        ${item('Produto ou serviço', s.produto_servico)}
-        ${item('Quantidade', s.quantidade ? `${s.quantidade} ${s.unidade ?? ''}` : null)}
-        ${item('Solicitante', s.solicitante?.nome)}
-        ${item('Setor', s.setor?.nome)}
-        ${item('Urgência', URGENCIA[s.urgencia] ?? s.urgencia)}
-        ${item('Tipo', s.tipo_solicitacao)}
-        ${item('Valor estimado', s.valor_estimado ? 'R$ ' + fmtNum(s.valor_estimado) : null)}
-        ${item('Fornecedor sugerido', s.fornecedor?.nome)}
-        ${item('Local de entrega', s.local_entrega)}
-        ${item('Recorrência', s.recorrencia)}
-        ${item('Data', fmtQuando(s.data_solicitacao))}
-      </div>
-      ${s.finalidade ? `<div class="secao" style="margin-top:18px;">
-        <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;">Finalidade</div>
-        <p style="margin:4px 0 0;font-size:13.5px;">${esc(s.finalidade)}</p></div>` : ''}
-      ${s.especificacoes ? `<div class="secao">
-        <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;">Especificações</div>
-        <p style="margin:4px 0 0;font-size:13.5px;">${esc(s.especificacoes)}</p></div>` : ''}
-      ${s.justificativa ? `<div class="secao">
-        <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;">Justificativa do solicitante</div>
-        <p style="margin:4px 0 0;font-size:13.5px;">${esc(s.justificativa)}</p></div>` : ''}
-      ${s.tem_risco ? `<div class="secao">
-        <div class="rot" style="font-size:10.5px;text-transform:uppercase;color:var(--warn-text);">Risco apontado</div>
-        <p style="margin:4px 0 0;font-size:13.5px;">${esc(s.descricao_risco || 'sim, sem descrição')}</p></div>` : ''}
+    <div class="modal area-impressao" style="max-width:920px;padding:0;background:transparent;border:none;">
+      <div class="doc">
+        <div class="doc-topo">
+          <div style="display:flex;align-items:center;gap:16px;">
+            <img src="${LOGO_COMPLETO}" alt="Grupo Gefoscal"
+                 style="background:#fff;border-radius:6px;padding:5px 8px;">
+            <div>
+              <h2>PEDIDO DE COMPRA</h2>
+              <div class="sub">Grupo Gefoscal · documento para aprovação e arquivo</div>
+            </div>
+          </div>
+        </div>
 
-      <div class="secao" style="margin-top:18px;">
-        <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;">Andamento</div>
-        <div class="passo"><span class="quando">${fmtQuando(s.data_solicitacao) ?? '—'}</span>
-          <span>Solicitada por ${esc(s.solicitante?.nome ?? '—')}</span></div>
-        ${s.coordenado_em || s.parecer_coordenacao ? `<div class="passo">
-          <span class="quando">${fmtQuando(s.coordenado_em) ?? '—'}</span>
-          <span><b>Coordenação</b> — ${esc(s.gestor?.nome ?? 'sem nome')}<br>
-          ${esc(s.parecer_coordenacao ?? 'sem parecer registrado')}</span></div>` : ''}
-        ${s.decidido_em || s.parecer_aprovacao ? `<div class="passo">
-          <span class="quando">${fmtQuando(s.decidido_em) ?? '—'}</span>
-          <span><b>Aprovação</b> — ${esc(s.aprovador?.nome ?? 'sem nome')}<br>
-          ${esc(s.parecer_aprovacao ?? 'sem parecer registrado')}</span></div>` : ''}
+        <div class="doc-corpo">
+          <div class="doc-linha">
+            <div class="bloco"><h4>Dados do solicitante</h4><div class="conteudo">
+              ${linha('Solicitante', s.solicitante?.nome)}
+              ${linha('Setor', s.setor?.nome)}
+              ${linha('Gestor', s.gestor?.nome)}
+              ${linha('Local de entrega', s.local_entrega)}
+            </div></div>
+
+            <div class="bloco"><h4>Controle</h4><div class="conteudo">
+              ${linha('Nº', s.numero)}
+              <div style="margin:8px 0;"><span class="estado">${
+                esc((STATUS_COMPRA[s.status] || {}).rotulo || s.status || '—')}</span></div>
+              ${linha('Data', fmtQuando(s.data_solicitacao))}
+              ${linha('Aprovador', s.aprovador?.nome)}
+              ${linha('Analista', s.analista?.nome)}
+            </div></div>
+
+            <div class="bloco"><h4>Urgência e tipo</h4><div class="conteudo">
+              ${linha('Tipo', s.tipo_solicitacao)}
+              ${linha('Urgência', URGENCIA[s.urgencia] ?? s.urgencia)}
+              ${linha('Recorrência', s.recorrencia)}
+              ${s.tem_risco
+                ? `<div style="color:#a33;margin-top:4px;"><b>Risco:</b> ${
+                    esc(s.descricao_risco || 'apontado, sem descrição')}</div>`
+                : '<div><span class="rot">Risco:</span> não</div>'}
+            </div></div>
+          </div>
+
+          <div class="doc-linha" style="grid-template-columns:1fr 1fr;">
+            <div class="bloco"><h4>Detalhamento</h4><div class="conteudo">
+              ${linha('Produto ou serviço', s.produto_servico)}
+              ${linha('Quantidade', s.quantidade ? `${s.quantidade} ${s.unidade ?? ''}` : null)}
+              ${linha('Especificações', s.especificacoes)}
+              ${linha('Finalidade', s.finalidade)}
+            </div></div>
+
+            <div class="bloco"><h4>Fornecedor e valores</h4><div class="conteudo">
+              ${linha('Fornecedor sugerido', s.fornecedor?.nome)}
+              ${linha('Fornecedor escolhido', nomeForn(escolhido))}
+              ${linha('Forma de pagamento', s.forma_pagamento)}
+              ${linha('Condição', s.condicao_pagamento)}
+              ${linha('Parcelas', s.parcelas ? s.parcelas + 'x' : null)}
+              ${linha('Vencimento', s.vencimento ? fmtData(s.vencimento) : null)}
+              ${caixaValor('Valor solicitado', 'estimativa do solicitante', s.valor_estimado)}
+              ${caixaValor('Valor análise compras', 'cotação e negociação', escolhido?.valor)}
+              ${caixaValor('Valor aprovado', 'valor final autorizado',
+                  s.valor_aprovado ?? (s.status === 'APROVADA' || s.status === 'PAGA'
+                    ? escolhido?.valor : null), true)}
+            </div></div>
+          </div>
+
+          <div class="bloco"><h4>Análise do compras e coordenação</h4><div class="conteudo">
+            ${linha('Onde achou mais barato', s.onde_mais_barato)}
+            ${linha('Fornecedor mais barato', nomeForn(lista.find(o => Number(o.valor) === menor)))}
+
+            ${lista.length ? `
+              <table style="margin-top:10px;"><thead><tr>
+                <th>Fornecedor</th><th class="num">Valor</th><th>Prazo</th>
+                <th>Pagamento</th><th></th>
+              </tr></thead><tbody>
+                ${lista.map(o => `<tr>
+                  <td>${esc(nomeForn(o) ?? '—')}</td>
+                  <td class="num">R$ ${fmtNum(o.valor)}</td>
+                  <td>${esc(o.prazo_entrega ?? '—')}</td>
+                  <td>${esc([o.forma_pagamento, o.condicao_pagamento].filter(Boolean).join(' · ') || '—')}</td>
+                  <td>${o.escolhido ? '<b>escolhido</b>' : (Number(o.valor) === menor ? 'menor preço' : '')}</td>
+                </tr>`).join('')}
+              </tbody></table>` : ''}
+
+            ${caixaValor('Preço encontrado', 'melhor condição', menor)}
+            ${caixaValor('Total', 'valor do orçamento escolhido',
+                escolhido?.valor ?? s.valor_estimado, true)}
+          </div></div>
+
+          ${caixaTexto('Justificativa do solicitante', s.justificativa)}
+          ${caixaTexto('Orçamento e cotação', s.parecer_cotacao)}
+          ${caixaTexto('Observação do compras', s.observacao_compras)}
+          ${caixaTexto('Justificativa da coordenação', s.parecer_coordenacao, 'coord')}
+          ${s.parecer_aprovacao ? caixaTexto('Parecer da aprovação', s.parecer_aprovacao) : ''}
+
+          <div class="doc-linha" style="grid-template-columns:repeat(3,1fr);margin-top:8px;">
+            ${['Solicitante', 'Coordenação', 'Aprovação'].map((r, i) => `
+              <div style="text-align:center;font-size:11.5px;color:#5b6b60;">
+                <div style="border-top:1px solid #98a89e;margin:26px 8px 5px;"></div>
+                ${r}<br><b style="color:#1b1b1b;">${esc(
+                  [s.solicitante?.nome, s.gestor?.nome, s.aprovador?.nome][i] ?? '')}</b>
+              </div>`).join('')}
+          </div>
+        </div>
       </div>
 
-      <div class="acoes nao-imprime">
-        <button class="btn" id="f-imprimir">Salvar em PDF</button>
+      <div class="acoes nao-imprime" style="justify-content:center;">
+        <button class="btn" id="f-imprimir">Gerar PDF do pedido</button>
         ${editavel ? `<button class="btn-secundario" id="f-editar">Editar</button>` : ''}
         <button class="btn-secundario" id="f-fechar">Fechar</button>
       </div>
     </div>`
 
-  document.body.appendChild(fundo)
-  const fechar = () => fundo.remove()
-  fundo.onclick = e => { if (e.target === fundo) fechar() }
   fundo.querySelector('#f-fechar').onclick = fechar
   fundo.querySelector('#f-imprimir').onclick = () => window.print()
   const bEditar = fundo.querySelector('#f-editar')
@@ -1408,7 +1538,7 @@ async function comprasDecidir (alvo, nomeEtapa) {
     </div>`).join('') || `<p class="vazio">Nada pendente nesta etapa.</p>`
 
   $('#c-fila').querySelectorAll('[data-ficha]').forEach(b => {
-    b.onclick = () => abrirFicha(data.find(x => x.id === b.dataset.ficha), false)
+    b.onclick = () => { abrirFicha(data.find(x => x.id === b.dataset.ficha), false).catch(e => console.error(e)) }
   })
   $('#c-fila').querySelectorAll('[data-decidir]').forEach(b => {
     b.onclick = () => telaDecisao(data.find(x => x.id === b.dataset.decidir), nomeEtapa)
@@ -1474,7 +1604,7 @@ async function comprasCotar (alvo) {
   }).join('') || `<p class="vazio">Nada aguardando cotação.</p>`
 
   $('#c-cotar').querySelectorAll('[data-ficha]').forEach(b => {
-    b.onclick = () => abrirFicha(data.find(x => x.id === b.dataset.ficha), false)
+    b.onclick = () => { abrirFicha(data.find(x => x.id === b.dataset.ficha), false).catch(e => console.error(e)) }
   })
   $('#c-cotar').querySelectorAll('[data-cotar]').forEach(b => {
     b.onclick = () => telaCotacao(data.find(x => x.id === b.dataset.cotar))
@@ -1559,6 +1689,11 @@ async function telaCotacao (s) {
           <div class="campo" style="margin-top:10px;"><label>Dados de pagamento</label>
             <textarea id="p-dados" style="min-height:64px;"
               placeholder="PIX, dados bancários ou instruções">${esc(s.dados_pagamento ?? '')}</textarea></div>
+          <div class="campo" style="margin-top:10px;"><label>Onde achou mais barato</label>
+            <input id="p-onde" value="${esc(s.onde_mais_barato ?? '')}"
+              placeholder="loja, site ou representante"></div>
+          <div class="campo" style="margin-top:10px;"><label>Observação do compras</label>
+            <textarea id="p-obs" style="min-height:56px;">${esc(s.observacao_compras ?? '')}</textarea></div>
           <div class="campo" style="margin-top:10px;"><label>Por que este orçamento *</label>
             <textarea id="p-parecer" style="min-height:64px;"
               placeholder="Menor preço, prazo melhor, único fornecedor homologado...">${esc(s.parecer_cotacao ?? '')}</textarea></div>
@@ -1631,6 +1766,8 @@ async function telaCotacao (s) {
         analista_id: PERFIL.pessoaId,
         cotado_em: new Date().toISOString(),
         parecer_cotacao: parecer,
+        onde_mais_barato: q('#p-onde').value.trim() || null,
+        observacao_compras: q('#p-obs').value.trim() || null,
         orcamento_escolhido_id: escolhido.id,
         forma_pagamento: escolhido.forma_pagamento ?? null,
         condicao_pagamento: escolhido.condicao_pagamento ?? null,
@@ -1852,7 +1989,7 @@ async function ordemPagamento (s) {
 // ----- Baixa do pagamento -----
 function telaBaixa (s, contas, categorias, centros) {
   if (!s) return
-  const despesas = categorias.filter(c => c.tipo !== 'ENTRADA')
+  const despesas = categorias.filter(c => c.tipo === 'DESPESA')
 
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
@@ -2003,6 +2140,10 @@ function telaDecisao (s, nomeEtapa) {
 
       <div id="d-orcamentos"></div>
 
+      ${nomeEtapa === 'aprovacao' ? `<div class="campo" style="margin-bottom:10px;">
+        <label>Valor aprovado (R$)</label>
+        <input id="d-valor" inputmode="decimal" value="${s.valor_aprovado ?? ''}"
+          placeholder="deixe vazio para usar o valor cotado"></div>` : ''}
       <div class="campo"><label>${etapa.rotuloParecer} *</label>
         <textarea id="d-parecer" placeholder="Por que está ${nomeEtapa === 'coordenacao' ? 'encaminhando ou devolvendo' : 'aprovando ou reprovando'}"></textarea></div>
 
@@ -2032,6 +2173,10 @@ function telaDecisao (s, nomeEtapa) {
 
     const corpo = { status: novoStatus }
     corpo[etapa.campoParecer] = parecer
+    if (nomeEtapa === 'aprovacao' && novoStatus === 'APROVADA') {
+      const va = numeroBR(q('#d-valor')?.value)
+      if (va !== null) corpo.valor_aprovado = va
+    }
     corpo[etapa.campoData] = new Date().toISOString()
     corpo[etapa.campoPessoa] = PERFIL.pessoaId
 
