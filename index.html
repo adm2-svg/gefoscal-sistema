@@ -1,4 +1,4 @@
-!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="pt-BR" data-skin="plataforma">
 <head>
 <meta charset="UTF-8">
@@ -52,7 +52,7 @@ tbody tr:hover { background: var(--hover-bg); }
 .oculto { display:none !important; }
 .barra-skin { display:flex; gap:6px; }
 .barra-skin button { font-size:11px; padding:5px 9px; }
- 
+
 /* ---- Administração e Visão geral ---- */
 .subabas { display:flex; gap:2px; margin-bottom:18px; border-bottom:1px solid var(--line2); }
 .subabas button { background:none; border:none; color:var(--dim); cursor:pointer;
@@ -75,7 +75,7 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
 .moldura-visao { width:100%; height:60vh; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
 .duas-colunas { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
 @media (max-width: 900px) { .duas-colunas { grid-template-columns:1fr; } }
- 
+
 /* ---- Lista de pessoas ---- */
 .lista-pessoas { display:grid; gap:9px; }
 .cartao-pessoa { display:flex; align-items:center; gap:13px; padding:12px 14px;
@@ -107,13 +107,13 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
 </style>
 </head>
 <body>
- 
+
 <!-- ================= LOGIN ================= -->
 <div id="tela-login" class="login-wrap">
   <div class="login panel" style="padding:26px;">
     <h1 class="titulo-serif">Gefoscal</h1>
     <p class="texto-dim" style="margin-top:0;font-size:13px;">Sistema interno</p>
- 
+
     <div class="campo">
       <label>E-mail</label>
       <input id="email" type="email" autocomplete="username" placeholder="voce@grupogefoscal.com.br">
@@ -127,7 +127,7 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
       Receber link de acesso por e-mail
     </button>
     <div class="erro" id="erro-login"></div>
- 
+
     <div class="linha-divisoria" style="margin:18px 0 12px;"></div>
     <div class="barra-skin">
       <button class="btn-secundario" onclick="trocarSkin('sofisticado')">Sofisticado</button>
@@ -136,7 +136,7 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
     </div>
   </div>
 </div>
- 
+
 <!-- ================= APP ================= -->
 <div id="tela-app" class="app oculto">
   <nav class="nav">
@@ -151,7 +151,7 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
     </div>
     <button class="btn-secundario" style="width:100%;margin-top:14px;" onclick="sair()">Sair</button>
   </nav>
- 
+
   <main class="conteudo">
     <div class="topo">
       <div>
@@ -159,13 +159,13 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
         <div class="texto-dim" id="subtitulo-pagina" style="font-size:13px;"></div>
       </div>
     </div>
- 
+
     <div class="kpis" id="kpis"></div>
     <div class="filtros" id="filtros"></div>
- 
+
     <!-- área livre: telas que não são tabela (Visão geral, Administração) -->
     <div id="area-livre" class="oculto"></div>
- 
+
     <div class="panel" id="painel-tabela">
       <div class="tabela-scroll">
         <table>
@@ -174,36 +174,36 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
         </table>
       </div>
     </div>
- 
+
     <div class="texto-dim2" id="rodape" style="font-size:12px;margin-top:10px;"></div>
   </main>
 </div>
- 
+
 <script type="module">
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { SUPABASE_URL, SUPABASE_KEY, SKIN_PADRAO } from './config.js'
- 
+
 const db = createClient(SUPABASE_URL, SUPABASE_KEY)
 const $ = s => document.querySelector(s)
 const fmtNum = (n, d = 2) => (n ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: d, maximumFractionDigits: d })
 const fmtData = d => d ? d.split('-').reverse().join('/') : '—'
 const fmtQuando = t => t ? new Date(t).toLocaleDateString('pt-BR') : null
 const esc = t => String(t ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
- 
+
 window.trocarSkin = s => {
   document.documentElement.setAttribute('data-skin', s)
   localStorage.setItem('gefoscal-skin', s)
 }
 document.documentElement.setAttribute('data-skin',
   localStorage.getItem('gefoscal-skin') || SKIN_PADRAO)
- 
+
 // ---------------------------------------------------------------
 // Login
 // ---------------------------------------------------------------
 $('#btn-entrar').onclick = entrar
 $('#btn-link').onclick = entrarPorLink
 $('#senha').onkeydown = e => { if (e.key === 'Enter') entrar() }
- 
+
 async function entrar () {
   const btn = $('#btn-entrar')
   btn.disabled = true; btn.textContent = 'Entrando...'
@@ -216,7 +216,7 @@ async function entrar () {
   if (error) { $('#erro-login').textContent = traduzErro(error.message); return }
   await abrirApp()
 }
- 
+
 // Primeiro acesso: quem foi cadastrado ainda não tem senha.
 async function entrarPorLink () {
   const email = $('#email').value.trim().toLowerCase()
@@ -231,7 +231,7 @@ async function entrarPorLink () {
     ? traduzErro(error.message)
     : 'Link enviado. Abra o e-mail neste mesmo navegador.'
 }
- 
+
 function traduzErro (m) {
   if (/invalid login/i.test(m)) return 'E-mail ou senha incorretos.'
   if (/email not confirmed/i.test(m)) return 'E-mail ainda não confirmado.'
@@ -239,27 +239,27 @@ function traduzErro (m) {
   if (/signups not allowed/i.test(m)) return 'Cadastro por e-mail desligado no painel do Supabase.'
   return m
 }
- 
+
 window.sair = async () => { await db.auth.signOut(); location.reload() }
- 
+
 // ---------------------------------------------------------------
 // Sessão, permissões e menu
 // ---------------------------------------------------------------
 const CHAVE_ADMIN = 'ti'          // módulo "Administração do sistema"
 const PAPEIS_TOTAIS = ['ADMIN', 'DIRETORIA']   // enxergam tudo, por tem_modulo()
- 
+
 let PERFIL = {
   userId: '', email: '', nome: '',
   pessoaId: null, setorId: null,
   papeis: [], modulos: [], permissoes: []
 }
- 
+
 async function abrirApp () {
   const { data: { user } } = await db.auth.getUser()
   if (!user) return
   PERFIL.userId = user.id
   PERFIL.email = user.email
- 
+
   const [{ data: papeis }, { data: modulos }, { data: perfil }] = await Promise.all([
     db.from('usuario_papel').select('papel').eq('user_id', user.id),
     db.from('modulo').select('id,chave,nome,ordem').order('ordem'),
@@ -267,51 +267,51 @@ async function abrirApp () {
       .select('pessoa_id,setor_id,ativo,pessoa:pessoa_id(nome)')
       .eq('user_id', user.id).maybeSingle()
   ])
- 
+
   PERFIL.papeis = (papeis || []).map(p => p.papel)
   PERFIL.modulos = modulos || []
   PERFIL.pessoaId = perfil?.pessoa_id ?? null
   PERFIL.setorId = perfil?.setor_id ?? null
   PERFIL.nome = perfil?.pessoa?.nome || user.email
- 
+
   if (PERFIL.papeis.length === 0 || perfil?.ativo === false) {
     $('#erro-login').textContent =
       'Seu usuário entrou, mas ainda não tem acesso liberado. Fale com o administrador do sistema.'
     await db.auth.signOut()
     return
   }
- 
+
   const { data: perms } = await db.from('modulo_permissao')
     .select('modulo_id,pessoa_id,setor_id,pode_editar')
   // administrador enxerga as permissões de todo mundo; aqui só interessam as minhas
   PERFIL.permissoes = (perms || []).filter(p =>
     (p.pessoa_id && p.pessoa_id === PERFIL.pessoaId) ||
     (p.setor_id && p.setor_id === PERFIL.setorId))
- 
+
   $('#quem-sou').textContent = PERFIL.nome + ' · ' + PERFIL.papeis.join(', ')
   montarMenu()
   $('#tela-login').classList.add('oculto')
   $('#tela-app').classList.remove('oculto')
   irPara('visao_geral')
 }
- 
+
 const ehTotal = () => PERFIL.papeis.some(p => PAPEIS_TOTAIS.includes(p))
- 
+
 function moduloPorChave (chave) { return PERFIL.modulos.find(m => m.chave === chave) }
- 
+
 function podeVer (chave) {
   if (ehTotal()) return true
   const m = moduloPorChave(chave)
   return !!m && PERFIL.permissoes.some(p => p.modulo_id === m.id)
 }
- 
+
 // espelha tem_modulo(chave, true) do banco — o RLS é quem manda de verdade
 function podeEditar (chave) {
   if (ehTotal()) return true
   const m = moduloPorChave(chave)
   return !!m && PERFIL.permissoes.some(p => p.modulo_id === m.id && p.pode_editar)
 }
- 
+
 const PAGINAS = {
   visao_geral: { nome: 'Visão geral', render: paginaVisaoGeral, sempre: true },
   expedicao:   { nome: 'Expedição', render: paginaExpedicao },
@@ -319,7 +319,7 @@ const PAGINAS = {
   estoque:     { nome: 'Estoque e Produção', render: paginaEstoque },
   ti:          { nome: 'Administração', render: paginaAdministracao }
 }
- 
+
 function montarMenu () {
   const fixos = `<a data-chave="visao_geral">Visão geral</a>`
   const doBanco = PERFIL.modulos.map(m => {
@@ -333,7 +333,7 @@ function montarMenu () {
     if (!a.classList.contains('bloqueado')) a.onclick = () => irPara(a.dataset.chave)
   })
 }
- 
+
 function irPara (chave) {
   const p = PAGINAS[chave]
   if (!p) return
@@ -347,37 +347,37 @@ function irPara (chave) {
   $('#rodape').textContent = ''
   p.render()
 }
- 
+
 // telas que não usam a tabela padrão
 function areaLivre () {
   $('#painel-tabela').classList.add('oculto')
   $('#area-livre').classList.remove('oculto')
   return $('#area-livre')
 }
- 
+
 function kpi (rotulo, valor, nota = '') {
   return `<div class="card kpi"><div class="rotulo">${esc(rotulo)}</div>
     <div class="valor">${valor}</div><div class="nota">${esc(nota)}</div></div>`
 }
- 
+
 function semAcesso (modulo) {
   $('#corpo').innerHTML = `<tr><td class="vazio">
     Você não tem acesso ao módulo <b>${esc(modulo)}</b>.<br>
     Peça a liberação ao administrador do sistema.</td></tr>`
 }
- 
+
 // avisa quando a migração ainda não rodou, em vez de quebrar calado
 function faltaMigracao (erro) {
   return erro && /does not exist|schema cache/i.test(erro.message || '')
 }
- 
+
 // ---------------------------------------------------------------
 // Página: Visão geral (tela inicial)
 // ---------------------------------------------------------------
 async function paginaVisaoGeral () {
   $('#subtitulo-pagina').textContent = 'O painel montado para você'
   const area = areaLivre()
- 
+
   if (!PERFIL.pessoaId) {
     area.innerHTML = `<div class="panel" style="padding:22px;">
       <p class="texto-dim">Seu login ainda não está ligado a uma pessoa do cadastro,
@@ -385,17 +385,17 @@ async function paginaVisaoGeral () {
       Administração → Usuários.</p></div>`
     return
   }
- 
+
   const { data, error } = await db.from('visao_geral_pessoa')
     .select('html_conteudo,atualizado_em').eq('pessoa_id', PERFIL.pessoaId).maybeSingle()
- 
+
   if (faltaMigracao(error)) {
     area.innerHTML = `<div class="panel" style="padding:22px;">
       <p class="texto-dim">A tabela <code>visao_geral_pessoa</code> ainda não existe no banco.
       Rode a migração no SQL Editor do Supabase para ligar esta tela.</p></div>`
     return
   }
- 
+
   if (!data?.html_conteudo) {
     area.innerHTML = `<div class="panel" style="padding:22px;">
       <h3 style="font-family:var(--serif);margin-top:0;">Olá, ${esc(PERFIL.nome.split(' ')[0])}</h3>
@@ -404,7 +404,7 @@ async function paginaVisaoGeral () {
         ? ', ou monte um painel em Administração → Visão geral.' : '.'}</p></div>`
     return
   }
- 
+
   // conteúdo montado por administrador: isolado em iframe para não injetar script na página
   const quadro = document.createElement('iframe')
   quadro.className = 'moldura-visao'
@@ -413,7 +413,7 @@ async function paginaVisaoGeral () {
   area.appendChild(quadro)
   $('#rodape').textContent = 'Atualizado em ' + (fmtQuando(data.atualizado_em) || '—')
 }
- 
+
 // ---------------------------------------------------------------
 // Página: Administração  (módulo 'ti')
 // ---------------------------------------------------------------
@@ -421,12 +421,12 @@ async function paginaAdministracao () {
   if (!podeVer(CHAVE_ADMIN)) { areaLivre().innerHTML =
     `<div class="panel" style="padding:22px;"><p class="texto-dim">
      Você não tem acesso à Administração.</p></div>`; return }
- 
+
   const editavel = podeEditar(CHAVE_ADMIN)
   $('#subtitulo-pagina').textContent = editavel
     ? 'Usuários, cadastros de apoio e painéis'
     : 'Somente leitura — você pode consultar, mas não alterar'
- 
+
   const area = areaLivre()
   area.innerHTML = `
     <div class="subabas">
@@ -435,7 +435,7 @@ async function paginaAdministracao () {
       <button data-sub="visao">Visão geral</button>
     </div>
     <div id="sub-conteudo"></div>`
- 
+
   area.querySelectorAll('.subabas button').forEach(b => {
     b.onclick = () => {
       area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
@@ -444,7 +444,7 @@ async function paginaAdministracao () {
   })
   abrirSub('usuarios', editavel)
 }
- 
+
 function abrirSub (sub, editavel) {
   const alvo = $('#sub-conteudo')
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
@@ -452,7 +452,7 @@ function abrirSub (sub, editavel) {
   if (sub === 'apoio') subApoio(alvo, editavel)
   if (sub === 'visao') subVisao(alvo, editavel)
 }
- 
+
 // ----- Administração › Usuários -----
 async function subUsuarios (alvo, editavel) {
   const [{ data: pessoas }, { data: cargos, error: erroCargo },
@@ -463,17 +463,17 @@ async function subUsuarios (alvo, editavel) {
     db.from('usuario_precadastro').select('email,papeis,pessoa_id,usado_em,convite_enviado_em'),
     db.from('modulo_permissao').select('modulo_id,pessoa_id,pode_editar')
   ])
- 
+
   if (faltaMigracao(erroCargo)) {
     alvo.innerHTML = `<div class="panel" style="padding:22px;"><p class="texto-dim">
       A tabela <code>cargo</code> ainda não existe. Rode a migração no SQL Editor
       do Supabase antes de usar esta tela.</p></div>`
     return
   }
- 
+
   const preDe = e => (pre || []).find(p => p.email === (e || '').toLowerCase())
   const nivelDe = p => (p?.papeis || []).includes('ADMIN') ? 'Administrador' : 'Usuário'
- 
+
   alvo.innerHTML = `
     <div class="secao panel" style="padding:20px;">
       <div class="cabeca-secao">
@@ -508,14 +508,18 @@ async function subUsuarios (alvo, editavel) {
             <option value="usuario">Usuário — só consulta</option>
             <option value="administrador">Administrador — consulta e altera</option>
           </select></div>
+        ${editavel ? `<div class="campo"><label>Senha de acesso</label>
+          <input id="u-senha" type="text" autocomplete="off" placeholder="mínimo 8 caracteres">
+          <span class="texto-dim2" style="font-size:11px;">deixe vazio para não mexer na senha</span>
+        </div>` : ''}
       </div>
- 
+
       <div class="secao" style="margin-top:18px;">
         <label class="texto-dim2" style="font-size:11px;text-transform:uppercase;letter-spacing:.4px;">
           Abas que esta pessoa enxerga</label>
         <div class="grade-modulos" id="u-modulos"></div>
       </div>
- 
+
       ${editavel ? `<div class="acoes">
         <button class="btn" id="u-salvar">Salvar cadastro</button>
         <button class="btn-secundario" id="u-limpar">Limpar</button>
@@ -524,13 +528,13 @@ async function subUsuarios (alvo, editavel) {
       <p class="aviso">O nível de acesso e as abas são independentes: dá para liberar
       todas as abas para alguém que só consulta.</p>
     </div>
- 
+
     <div class="cabeca-secao">
       <h3 style="font-family:var(--serif);font-size:17px;">Pessoas cadastradas</h3>
       <span class="texto-dim2" style="font-size:12px;">${(pessoas || []).length} no total</span>
     </div>
     <div class="lista-pessoas" id="u-lista"></div>`
- 
+
   // selects de apoio
   const encher = (sel, itens) => {
     sel.innerHTML = '<option value="">—</option>' +
@@ -538,7 +542,7 @@ async function subUsuarios (alvo, editavel) {
   }
   encher($('#u-cargo'), cargos || [])
   encher($('#u-setor'), setores || [])
- 
+
   // checkboxes de módulo
   $('#u-modulos').innerHTML = PERFIL.modulos.map(m => `
     <div class="linha-modulo">
@@ -546,12 +550,12 @@ async function subUsuarios (alvo, editavel) {
       <label><input type="checkbox" data-ver="${m.id}" ${editavel ? '' : 'disabled'}> ver</label>
       <label><input type="checkbox" data-editar="${m.id}" ${editavel ? '' : 'disabled'}> editar</label>
     </div>`).join('')
- 
+
   // "editar" implica "ver"
   $('#u-modulos').querySelectorAll('[data-editar]').forEach(c => {
     c.onchange = () => { if (c.checked) $(`#u-modulos [data-ver="${c.dataset.editar}"]`).checked = true }
   })
- 
+
   const recado = (texto, alerta = false) => {
     const el = $('#u-recado'); if (!el) return
     el.textContent = texto
@@ -559,17 +563,16 @@ async function subUsuarios (alvo, editavel) {
     el.style.borderColor = alerta ? 'var(--warn-text)' : 'var(--line2)'
     el.style.color = alerta ? 'var(--warn-text)' : 'var(--dim)'
   }
- 
+
   // lista em cartões
   const iniciais = n => n.split(' ').filter(Boolean).slice(0, 2).map(x => x[0]).join('').toUpperCase()
- 
+
   $('#u-lista').innerHTML = (pessoas || []).map(p => {
     const pc = preDe(p.email)
     const n = (perms || []).filter(x => x.pessoa_id === p.id).length
-    const estado = !pc ? 'sem login'
-      : pc.usado_em ? 'entrou em ' + fmtQuando(pc.usado_em)
-      : pc.convite_enviado_em ? 'convidado em ' + fmtQuando(pc.convite_enviado_em)
-      : 'aguardando convite'
+    const estado = !pc ? 'sem cadastro de acesso'
+      : pc.usado_em ? 'último acesso em ' + fmtQuando(pc.usado_em)
+      : 'cadastrado, aguardando primeiro acesso'
     return `<div class="cartao-pessoa">
       <div class="inicial">${esc(iniciais(p.nome))}</div>
       <div class="dados">
@@ -581,12 +584,11 @@ async function subUsuarios (alvo, editavel) {
       </div>
       <div class="botoes">
         <button class="btn-secundario mini" data-abrir="${p.id}">abrir</button>
-        ${editavel && pc ? `<button class="btn-secundario mini" data-convidar="${esc(p.email)}">
-          ${pc.convite_enviado_em ? 'reenviar' : 'convidar'}</button>` : ''}
+        ${editavel && pc ? `<button class="btn-secundario mini" data-senha="${esc(p.email)}">senha</button>` : ''}
       </div>
     </div>`
   }).join('') || `<p class="vazio">Nenhuma pessoa cadastrada ainda.</p>`
- 
+
   // abrir uma pessoa no formulário
   $('#u-lista').querySelectorAll('[data-abrir]').forEach(b => {
     b.onclick = () => {
@@ -606,29 +608,29 @@ async function subUsuarios (alvo, editavel) {
       window.scrollTo({ top: 0, behavior: 'smooth' })
     }
   })
- 
+
   if (!editavel) return
- 
-  // convidar
-  $('#u-lista').querySelectorAll('[data-convidar]').forEach(b => {
+
+  // definir senha direto na lista, sem passar pelo formulário inteiro
+  $('#u-lista').querySelectorAll('[data-senha]').forEach(b => {
     b.onclick = async () => {
-      b.disabled = true; const antes = b.textContent; b.textContent = 'enviando...'
-      const email = b.dataset.convidar
-      const { error } = await db.auth.signInWithOtp({
-        email, options: { emailRedirectTo: location.origin + location.pathname }
+      const email = b.dataset.senha
+      const nova = window.prompt(`Senha de acesso para ${email}\n(mínimo 8 caracteres)`)
+      if (nova === null) return
+      if (nova.trim().length < 8) { recado('A senha precisa de pelo menos 8 caracteres.', true); return }
+      b.disabled = true; const antes = b.textContent; b.textContent = 'salvando...'
+      const { data: r, error } = await db.functions.invoke('criar-usuario', {
+        body: { email, senha: nova.trim() }
       })
-      if (error) {
-        b.disabled = false; b.textContent = antes
-        recado('Não deu para enviar o convite: ' + traduzErro(error.message), true)
-        return
-      }
-      await db.from('usuario_precadastro')
-        .update({ convite_enviado_em: new Date().toISOString() }).eq('email', email)
-      b.textContent = 'enviado'
-      recado('Link de acesso enviado para ' + email + '.')
+      b.disabled = false; b.textContent = antes
+      if (error || r?.erro) { recado('Não deu certo: ' + (r?.erro || error.message), true); return }
+      recado(r.acao === 'usuario_criado'
+        ? `${email} já pode entrar com essa senha.`
+        : `Senha de ${email} atualizada.`)
+      setTimeout(() => abrirSub('usuarios', true), 1200)
     }
   })
- 
+
   // + cargo / + setor, sem prompt do navegador
   const criador = (btnAbrir, linha, campo, tabela, select) => {
     $(btnAbrir).onclick = () => {
@@ -650,36 +652,38 @@ async function subUsuarios (alvo, editavel) {
   }
   criador('#u-novo-cargo', '#linha-cargo', '#nome-cargo', 'cargo', '#u-cargo')
   criador('#u-novo-setor', '#linha-setor', '#nome-setor', 'setor', '#u-setor')
- 
+
   $('#u-limpar').onclick = () => {
-    ;['u-nome','u-email','u-cargo','u-setor'].forEach(i => $('#' + i).value = '')
+    ;['u-nome','u-email','u-cargo','u-setor','u-senha'].forEach(i => {
+      const el = $('#' + i); if (el) el.value = ''
+    })
     $('#u-nivel').value = 'usuario'
     $('#u-modulos').querySelectorAll('input').forEach(c => c.checked = false)
     $('#u-recado').classList.add('oculto')
   }
- 
+
   $('#u-salvar').onclick = async () => {
     const nome = $('#u-nome').value.trim()
     const email = $('#u-email').value.trim().toLowerCase()
     if (!nome) { recado('Escreva o nome.', true); return }
     if (!email) { recado('Escreva o e-mail — é ele que liga a pessoa ao login.', true); return }
- 
+
     const btn = $('#u-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
- 
+
     const { data: pessoa, error: e1 } = await db.from('pessoa').upsert({
       nome, email,
       cargo_id: $('#u-cargo').value || null,
       setor_id: $('#u-setor').value || null
     }, { onConflict: 'email' }).select('id,setor_id').single()
- 
+
     if (e1) { recado(e1.message, true); btn.disabled = false; btn.textContent = 'Salvar cadastro'; return }
- 
+
     const papeis = $('#u-nivel').value === 'administrador' ? ['ADMIN', 'DIRETORIA'] : ['LEITOR']
     const { error: e2 } = await db.from('usuario_precadastro').upsert({
       email, papeis, pessoa_id: pessoa.id, setor_id: pessoa.setor_id
     }, { onConflict: 'email' })
     if (e2) { recado(e2.message, true); btn.disabled = false; btn.textContent = 'Salvar cadastro'; return }
- 
+
     // permissões: apaga as antigas e grava as marcadas
     const marcadas = [...$('#u-modulos').querySelectorAll('[data-ver]:checked')].map(c => ({
       modulo_id: c.dataset.ver,
@@ -688,34 +692,49 @@ async function subUsuarios (alvo, editavel) {
     }))
     await db.from('modulo_permissao').delete().eq('pessoa_id', pessoa.id)
     if (marcadas.length) await db.from('modulo_permissao').insert(marcadas)
- 
-    btn.disabled = false; btn.textContent = 'Salvar cadastro'
- 
-    if (confirm('Cadastro salvo. Enviar agora o link de acesso para ' + email + '?')) {
-      const { error } = await db.auth.signInWithOtp({
-        email, options: { emailRedirectTo: location.origin + location.pathname }
+
+    // senha: cria o login de verdade, sem depender de e-mail
+    const senha = $('#u-senha')?.value.trim()
+    if (senha) {
+      if (senha.length < 8) {
+        btn.disabled = false; btn.textContent = 'Salvar cadastro'
+        recado('Cadastro salvo, mas a senha precisa de pelo menos 8 caracteres.', true)
+        abrirSub('usuarios', true)
+        return
+      }
+      const { data: r, error: e3 } = await db.functions.invoke('criar-usuario', {
+        body: { email, senha }
       })
-      if (error) recado('Cadastro salvo, mas o convite falhou: ' + traduzErro(error.message), true)
-      else await db.from('usuario_precadastro')
-        .update({ convite_enviado_em: new Date().toISOString() }).eq('email', email)
+      btn.disabled = false; btn.textContent = 'Salvar cadastro'
+      if (e3 || r?.erro) {
+        recado('Cadastro salvo, mas a senha não foi definida: ' + (r?.erro || e3.message), true)
+      } else {
+        recado(r.acao === 'usuario_criado'
+          ? `Pronto. ${email} já pode entrar com essa senha.`
+          : `Senha de ${email} atualizada.`)
+      }
+    } else {
+      btn.disabled = false; btn.textContent = 'Salvar cadastro'
+      recado('Cadastro salvo. Sem senha definida, essa pessoa ainda não consegue entrar.')
     }
-    abrirSub('usuarios', true)
+
+    setTimeout(() => abrirSub('usuarios', true), 1200)
   }
 }
- 
+
 // ----- Administração › Cargos e setores -----
 async function subApoio (alvo, editavel) {
   const [{ data: cargos, error: erroCargo }, { data: setores }] = await Promise.all([
     db.from('cargo').select('id,nome').order('nome'),
     db.from('setor').select('id,nome').order('nome')
   ])
- 
+
   if (faltaMigracao(erroCargo)) {
     alvo.innerHTML = `<div class="panel" style="padding:22px;"><p class="texto-dim">
       A tabela <code>cargo</code> ainda não existe. Rode a migração no Supabase.</p></div>`
     return
   }
- 
+
   const bloco = (titulo, tabela, itens) => `
     <div class="panel" style="padding:18px;">
       <h3>${titulo}</h3>
@@ -728,14 +747,14 @@ async function subApoio (alvo, editavel) {
           ? `<button class="btn-secundario mini" data-del="${tabela}" data-id="${i.id}">remover</button>` : ''}</td>
       </tr>`).join('') || `<tr><td class="vazio">Nada cadastrado ainda.</td></tr>`}</tbody></table>
     </div>`
- 
+
   alvo.innerHTML = `<div class="duas-colunas">
     ${bloco('Cargos', 'cargo', cargos)}
     ${bloco('Setores', 'setor', setores)}
   </div>`
- 
+
   if (!editavel) return
- 
+
   alvo.querySelectorAll('[data-add]').forEach(b => {
     b.onclick = async () => {
       const t = b.dataset.add
@@ -754,7 +773,7 @@ async function subApoio (alvo, editavel) {
     }
   })
 }
- 
+
 // ----- Administração › Visão geral -----
 async function subVisao (alvo, editavel) {
   if (!editavel) {
@@ -762,10 +781,10 @@ async function subVisao (alvo, editavel) {
       Só quem pode editar a Administração monta os painéis.</p></div>`
     return
   }
- 
+
   const { data: pessoas } = await db.from('pessoa')
     .select('id,nome,email').not('email', 'is', null).order('nome')
- 
+
   alvo.innerHTML = `<div class="panel" style="padding:18px;">
     <h3>Painel de abertura por pessoa</h3>
     <div class="campo" style="max-width:340px;margin-bottom:12px;">
@@ -782,7 +801,7 @@ async function subVisao (alvo, editavel) {
     <p class="aviso">O conteúdo é exibido isolado, sem acesso ao resto do sistema.
     Ainda assim, cole só HTML de origem conhecida.</p>
   </div>`
- 
+
   const carregar = async () => {
     const { data, error } = await db.from('visao_geral_pessoa')
       .select('html_conteudo').eq('pessoa_id', $('#v-pessoa').value).maybeSingle()
@@ -791,7 +810,7 @@ async function subVisao (alvo, editavel) {
   }
   $('#v-pessoa').onchange = carregar
   await carregar()
- 
+
   $('#v-salvar').onclick = async () => {
     const { error } = await db.from('visao_geral_pessoa').upsert({
       pessoa_id: $('#v-pessoa').value,
@@ -806,7 +825,7 @@ async function subVisao (alvo, editavel) {
     $('#v-html').value = ''; $('#v-recado').textContent = 'Painel apagado.'
   }
 }
- 
+
 // ---------------------------------------------------------------
 // Página: Expedição
 // ---------------------------------------------------------------
@@ -819,26 +838,26 @@ async function paginaExpedicao () {
     <div class="campo"><label>Até</label><input type="date" id="f-ate"></div>
     <button class="btn" id="f-aplicar">Filtrar</button>
     <button class="btn-secundario" id="f-limpar">Limpar</button>`
- 
+
   const [{ data: clientes }, { data: vendedores }] = await Promise.all([
     db.from('cliente').select('id,razao_social').order('razao_social'),
     db.from('pessoa').select('id,nome').eq('eh_vendedor', true).order('nome')
   ])
   ;(clientes || []).forEach(c => $('#f-cliente').add(new Option(c.razao_social, c.id)))
   ;(vendedores || []).forEach(v => $('#f-vendedor').add(new Option(v.nome, v.id)))
- 
+
   $('#f-aplicar').onclick = carregar
   $('#f-limpar').onclick = () => {
     $('#f-cliente').value = ''; $('#f-vendedor').value = ''
     $('#f-de').value = ''; $('#f-ate').value = ''; carregar()
   }
- 
+
   $('#cabecalho').innerHTML = `<tr>
     <th>Linha</th><th>Data</th><th>Cliente</th><th>Vendedor</th>
     <th>Produto</th><th>Placa</th><th class="num">Qtd (t)</th>
     <th>NF</th><th>UF</th><th>Anexos</th></tr>`
   await carregar()
- 
+
   async function carregar () {
     $('#corpo').innerHTML = `<tr><td colspan="10" class="vazio">carregando...</td></tr>`
     let q = db.from('carregamento').select(`
@@ -848,16 +867,16 @@ async function paginaExpedicao () {
       produto:produto_id ( nome ),
       veiculo:veiculo_id ( placa )
     `).order('data_carregamento', { ascending: false }).limit(500)
- 
+
     if ($('#f-cliente').value) q = q.eq('cliente_id', $('#f-cliente').value)
     if ($('#f-vendedor').value) q = q.eq('vendedor_id', $('#f-vendedor').value)
     if ($('#f-de').value) q = q.gte('data_carregamento', $('#f-de').value)
     if ($('#f-ate').value) q = q.lte('data_carregamento', $('#f-ate').value)
- 
+
     const { data, error } = await q
     if (error) { $('#corpo').innerHTML = `<tr><td colspan="10" class="vazio">${esc(error.message)}</td></tr>`; return }
     if (!data.length) { $('#corpo').innerHTML = `<tr><td colspan="10" class="vazio">Nenhum carregamento no filtro.</td></tr>`; return }
- 
+
     const total = data.reduce((s, c) => s + Number(c.quantidade_t || 0), 0)
     const nClientes = new Set(data.map(c => c.cliente?.razao_social)).size
     $('#kpis').innerHTML =
@@ -865,7 +884,7 @@ async function paginaExpedicao () {
       kpi('Toneladas', fmtNum(total), 'soma do período') +
       kpi('Clientes', nClientes) +
       kpi('Média por carga', fmtNum(total / data.length) + ' t')
- 
+
     $('#corpo').innerHTML = data.map(c => `<tr>
       <td class="texto-dim2">${c.origem_linha ?? '—'}</td>
       <td>${fmtData(c.data_carregamento)}</td>
@@ -878,11 +897,11 @@ async function paginaExpedicao () {
       <td>${esc(c.uf_destino ?? '—')}</td>
       <td><a class="anexo-link" data-linha="${c.origem_linha}">ver</a></td>
     </tr>`).join('')
- 
+
     $('#corpo').querySelectorAll('.anexo-link').forEach(a => { a.onclick = () => verAnexos(a.dataset.linha) })
     $('#rodape').textContent = `${data.length} registros · ${fmtNum(total)} t`
   }
- 
+
   async function verAnexos (linha) {
     const { data: c } = await db.from('carregamento').select('id').eq('origem_linha', linha).maybeSingle()
     if (!c) return
@@ -892,7 +911,7 @@ async function paginaExpedicao () {
     anexos.forEach(a => window.open('https://drive.google.com/open?id=' + a.drive_file_id, '_blank'))
   }
 }
- 
+
 // ---------------------------------------------------------------
 // Página: Financeiro
 // ---------------------------------------------------------------
@@ -901,34 +920,34 @@ async function paginaFinanceiro () {
   $('#cabecalho').innerHTML = `<tr>
     <th>Data</th><th>Descrição</th><th>Categoria</th><th>Centro de custo</th>
     <th>Conta</th><th>Situação</th><th class="num">Valor</th></tr>`
- 
+
   const { data, error } = await db.from('lancamento_financeiro').select(`
     data_lancamento, descricao, tipo, valor, situacao,
     categoria:categoria_id ( nome, tipo ),
     centro:centro_custo_id ( nome ),
     conta:conta_id ( nome )
   `).order('data_lancamento', { ascending: false }).limit(300)
- 
+
   if (error) { semAcesso('Financeiro'); return }
- 
+
   const { data: contas } = await db.from('saldo_conta').select('*')
   const receitas = (data || []).filter(l => l.tipo === 'ENTRADA').reduce((s, l) => s + Number(l.valor), 0)
   const despesas = (data || []).filter(l => l.tipo === 'SAIDA').reduce((s, l) => s + Number(l.valor), 0)
   const pendentes = (data || []).filter(l => l.situacao === 'PENDENTE').length
- 
+
   $('#kpis').innerHTML =
     kpi('Receitas', 'R$ ' + fmtNum(receitas)) +
     kpi('Despesas', 'R$ ' + fmtNum(despesas)) +
     kpi('Resultado', 'R$ ' + fmtNum(receitas - despesas)) +
     kpi('Pendentes', pendentes, 'a efetivar') +
     kpi('Saldo em contas', 'R$ ' + fmtNum((contas || []).reduce((s, c) => s + Number(c.saldo), 0)))
- 
+
   if (!data?.length) {
     $('#corpo').innerHTML = `<tr><td colspan="7" class="vazio">
       Nenhum lançamento ainda. As categorias e centros de custo da empresa já estão cadastrados.</td></tr>`
     return
   }
- 
+
   $('#corpo').innerHTML = data.map(l => `<tr>
     <td>${fmtData(l.data_lancamento)}</td>
     <td>${esc(l.descricao)}</td>
@@ -940,7 +959,7 @@ async function paginaFinanceiro () {
       ${l.tipo === 'SAIDA' ? '−' : '+'} ${fmtNum(l.valor)}</td>
   </tr>`).join('')
 }
- 
+
 // ---------------------------------------------------------------
 // Página: Estoque
 // ---------------------------------------------------------------
@@ -949,32 +968,32 @@ async function paginaEstoque () {
   $('#cabecalho').innerHTML = `<tr>
     <th>Produto</th><th>Local</th><th>Unidade</th>
     <th class="num">Saldo</th><th class="num">Preço ref.</th><th class="num">Valor</th></tr>`
- 
+
   const [{ data: total }, { data: porLocal }] = await Promise.all([
     db.from('valor_estoque').select('*').order('nome'),
     db.from('valor_estoque_por_local').select('*').order('produto')
   ])
- 
+
   const valorTotal = (total || []).reduce((s, p) => s + Number(p.valor || 0), 0)
   const semPreco = (total || []).filter(p => p.sem_preco && Number(p.saldo) !== 0)
- 
+
   $('#kpis').innerHTML =
     kpi('Valor do estoque', 'R$ ' + fmtNum(valorTotal),
         semPreco.length ? `${semPreco.length} produto(s) sem preço` : 'saldo × preço de referência') +
     (total || []).map(p => kpi(p.nome, fmtNum(p.saldo, 3), p.unidade)).join('')
- 
+
   if (semPreco.length) {
     $('#filtros').innerHTML = `<div class="badge-alerta" style="padding:8px 12px;border-radius:6px;font-size:12.5px;">
       Sem preço de referência: ${esc(semPreco.map(p => p.nome).join(', '))}.
       Esses produtos entram como zero no valor total.</div>`
   }
- 
+
   if (!porLocal?.length) {
     $('#corpo').innerHTML = `<tr><td colspan="6" class="vazio">
       Nenhuma movimentação de estoque carregada ainda.</td></tr>`
     return
   }
- 
+
   $('#corpo').innerHTML = porLocal.map(s => `<tr>
     <td>${esc(s.produto)}</td><td><span class="chip">${esc(s.local)}</span></td>
     <td>${esc(s.unidade)}</td>
@@ -982,11 +1001,11 @@ async function paginaEstoque () {
     <td class="num ${s.sem_preco ? 'texto-dim2' : ''}">${s.sem_preco ? '—' : fmtNum(s.preco_ref)}</td>
     <td class="num">${s.sem_preco ? '<span class="texto-dim2">—</span>' : 'R$ ' + fmtNum(s.valor)}</td>
   </tr>`).join('')
- 
+
   $('#rodape').textContent =
     `${porLocal.length} linhas · valor total R$ ${fmtNum(valorTotal)}`
 }
- 
+
 // ---------------------------------------------------------------
 // Se já houver sessão salva, entra direto
 // ---------------------------------------------------------------
@@ -995,4 +1014,3 @@ if (session) await abrirApp()
 </script>
 </body>
 </html>
- 
