@@ -9050,11 +9050,15 @@ function combRelatorio (alvo) {
 // geral); só ADMIN/DIRETORIA/MANUTENCAO decidem status, materiais e
 // cadastro de equipamento — por isso "editavel" só trava essas partes.
 // ---------------------------------------------------------------
-const STATUS_OS = ['ABERTA', 'EM_PROGRAMACAO', 'EM_EXECUCAO', 'CONCLUIDA', 'CANCELADA']
+const STATUS_OS = ['ABERTA', 'EM_PROGRAMACAO', 'EM_EXECUCAO', 'AGUARDANDO_PECA', 'SERVICO_TERCEIRO', 'CONCLUIDA', 'CANCELADA']
 const ROTULO_STATUS_OS = { ABERTA: 'Aberta', EM_PROGRAMACAO: 'Em programação', EM_EXECUCAO: 'Em execução',
+                            AGUARDANDO_PECA: 'Aguardando peça', SERVICO_TERCEIRO: 'Serviço terceiro',
                             CONCLUIDA: 'Concluída', CANCELADA: 'Cancelada' }
 const PRIORIDADE_OS = ['BAIXA', 'MEDIA', 'ALTA', 'CRITICA']
 const ROTULO_PRIORIDADE_OS = { BAIXA: 'Baixa', MEDIA: 'Média', ALTA: 'Alta', CRITICA: 'Crítica' }
+const AREAS_OS = ['INDUSTRIA_PLANTA', 'PATIO_ESTOQUE_CARREGAMENTO', 'EXTRACAO_MINA', 'OUTRO']
+const ROTULO_AREA_OS = { INDUSTRIA_PLANTA: 'Indústria / Planta', PATIO_ESTOQUE_CARREGAMENTO: 'Pátio / Estoque / Carregamento',
+                          EXTRACAO_MINA: 'Extração / Mina', OUTRO: 'Outro' }
 
 let MANUT_CACHE = { equipamentos: [], veiculos: [], pessoas: [], setores: [] }
 
@@ -9064,6 +9068,17 @@ function corStatusOS (s) {
   if (s === 'ABERTA') return 'badge-alerta'
   return 'chip'
 }
+
+// alvo unificado: equipamento (sem placa) ou veículo (com placa) numa lista só,
+// pra usar num único dropdown de "o que recebeu a manutenção"
+function alvosManutencao () {
+  return [
+    ...MANUT_CACHE.equipamentos.map(e => ({ valor: 'e:' + e.id, rotulo: `${e.tag}${e.descricao ? ' — ' + e.descricao : ''}` })),
+    ...MANUT_CACHE.veiculos.map(v => ({ valor: 'v:' + v.id, rotulo: `${v.placa}${v.descricao ? ' — ' + v.descricao : ''}` }))
+  ].sort((a, b) => a.rotulo.localeCompare(b.rotulo))
+}
+const nomeAlvoOS = os => os.equipamento?.tag ? `${os.equipamento.tag}${os.equipamento.descricao ? ' — ' + os.equipamento.descricao : ''}`
+  : os.veiculo?.placa ? `${os.veiculo.placa}${os.veiculo.descricao ? ' — ' + os.veiculo.descricao : ''}` : (os.local_descricao || '—')
 
 async function paginaManutencao () {
   if (!podeVer('manutencao')) { areaLivre().innerHTML =
@@ -9083,8 +9098,8 @@ async function paginaManutencao () {
   ])
   MANUT_CACHE = { equipamentos: equipamentos || [], veiculos: veiculos || [], pessoas: pessoas || [], setores: setores || [] }
 
-  const abas = [['os', 'Ordens de serviço'], ['nova', 'Abrir chamado'],
-                ['equipamentos', 'Equipamentos'], ['relatorio', 'Relatório']]
+  const abas = [['painel', 'Painel'], ['lancar', 'Lançar manutenção'], ['os', 'Ordens de serviço'],
+                ['nova', 'Abrir chamado'], ['equipamentos', 'Equipamentos'], ['relatorio', 'Relatório']]
 
   area.innerHTML = `
     <div class="subabas">
@@ -9098,17 +9113,244 @@ async function paginaManutencao () {
       abrirManutencao(b.dataset.sub, editavel)
     }
   })
-  abrirManutencao('os', editavel)
+  abrirManutencao('painel', editavel)
 }
 
 function abrirManutencao (sub, editavel) {
   const alvo = $('#sub-manutencao')
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
   $('#kpis').innerHTML = ''
+  if (sub === 'painel') manutPainel(alvo, editavel)
+  if (sub === 'lancar') manutLancar(alvo, editavel)
   if (sub === 'os') manutOS(alvo, editavel)
   if (sub === 'nova') manutNova(alvo)
   if (sub === 'equipamentos') manutEquipamentos(alvo, editavel)
   if (sub === 'relatorio') manutRelatorio(alvo)
+}
+
+// ---------------------------------------------------------------
+// Painel de Manutenção — mesmo padrão visual do Painel de Combustível
+// (reaproveita svgDonut/barrasHorizontais/barrasVerticais).
+// ---------------------------------------------------------------
+async function manutPainel (alvo, editavel) {
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+
+  const { data, error } = await db.from('ordem_servico').select(`
+    id, codigo, status, prioridade, area, data_solicitacao, data_limite, data_conclusao,
+    valor_pecas, valor_terceiros, valor_total, tipo,
+    equipamento:equipamento_id ( tag, descricao ), veiculo:veiculo_id ( placa, descricao ),
+    solicitante:solicitante_id ( nome ), responsavel:responsavel_id ( nome )
+  `).order('data_solicitacao', { ascending: false }).limit(2000)
+
+  if (faltaMigracao(error)) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  const lista = data || []
+  const hoje = hojeISO()
+
+  const porStatus = {}
+  STATUS_OS.forEach(s => { porStatus[s] = 0 })
+  lista.forEach(os => { porStatus[os.status] = (porStatus[os.status] || 0) + 1 })
+
+  const emAndamento = (porStatus.EM_PROGRAMACAO || 0) + (porStatus.EM_EXECUCAO || 0)
+  const criticas = lista.filter(os => os.prioridade === 'CRITICA').length
+  const atrasadas = lista.filter(os => os.data_limite && os.data_limite < hoje &&
+    !['CONCLUIDA', 'CANCELADA'].includes(os.status)).length
+  const valorTotal = lista.reduce((s, os) => s + Number(os.valor_total || 0), 0)
+
+  const kpiCard = (rot, val, nota, cor) => `
+    <div class="bloco" style="${cor ? `background:${cor};color:#fff;` : ''}">
+      <div class="rot" style="${cor ? 'color:rgba(255,255,255,.85);' : ''}">${esc(rot)}</div>
+      <div class="val" style="${cor ? 'color:#fff;' : ''}">${val}</div>
+      ${nota ? `<div class="nota" style="${cor ? 'color:rgba(255,255,255,.75);' : ''}">${esc(nota)}</div>` : ''}
+    </div>`
+
+  const statusItens = [
+    ['ABERTA', 'Abertas'], ['EM_PROGRAMACAO', 'Em programação'], ['EM_EXECUCAO', 'Em execução'],
+    ['AGUARDANDO_PECA', 'Aguard. peça'], ['SERVICO_TERCEIRO', 'Serviço terceiro'], ['CONCLUIDA', 'Concluídas']
+  ]
+  const barrasStatus = statusItens.map(([k, rot]) => ({ rotulo: rot, valor: porStatus[k] || 0 }))
+
+  const donutStatus = [
+    { rotulo: 'Concluídas', valor: porStatus.CONCLUIDA || 0 },
+    { rotulo: 'Em andamento', valor: emAndamento },
+    { rotulo: 'Demais', valor: lista.length - (porStatus.CONCLUIDA || 0) - emAndamento }
+  ]
+
+  // consumo por equipamento/veículo (valor total)
+  const gastoPorAlvo = {}
+  lista.forEach(os => {
+    const v = Number(os.valor_total || 0)
+    if (!v) return
+    const k = nomeAlvoOS(os)
+    gastoPorAlvo[k] = (gastoPorAlvo[k] || 0) + v
+  })
+  const topGasto = Object.entries(gastoPorAlvo).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([rotulo, valor]) => ({ rotulo, valor }))
+
+  alvo.innerHTML = `
+    <div class="panel" style="padding:22px;margin-bottom:16px;background:var(--rust);color:#fff;
+      display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px;">
+      <div>
+        <div style="font-size:12px;text-transform:uppercase;letter-spacing:.5px;opacity:.85;">Total geral de ordens de serviço</div>
+        <div style="font-family:var(--serif);font-size:38px;margin-top:4px;">${lista.length}</div>
+      </div>
+      <div style="display:flex;gap:20px;flex-wrap:wrap;">
+        <div><div style="font-size:11px;opacity:.8;">Em andamento</div><div style="font-size:19px;">${emAndamento}</div></div>
+        <div><div style="font-size:11px;opacity:.8;">Concluídas</div><div style="font-size:19px;">${porStatus.CONCLUIDA || 0}</div></div>
+        <div><div style="font-size:11px;opacity:.8;">Críticas</div><div style="font-size:19px;">${criticas}</div></div>
+        <div><div style="font-size:11px;opacity:.8;">Atrasadas</div><div style="font-size:19px;">${atrasadas}</div></div>
+      </div>
+    </div>
+
+    <div class="resumo-topo" style="margin-bottom:18px;">
+      ${kpiCard('Total', lista.length, 'ordens registradas', 'var(--rust)')}
+      ${kpiCard('Concluídas', porStatus.CONCLUIDA || 0, 'finalizadas', '#3f8f5f')}
+      ${kpiCard('Abertas', porStatus.ABERTA || 0, 'aguardando ação', '#4b5fd0')}
+      ${kpiCard('Em programação', porStatus.EM_PROGRAMACAO || 0, 'em planejamento', '#c8a11a')}
+      ${kpiCard('Em execução', porStatus.EM_EXECUCAO || 0, 'em atendimento', '#3a8fc8')}
+      ${kpiCard('Aguard. peça', porStatus.AGUARDANDO_PECA || 0, 'dependência externa', '#8a5fc8')}
+      ${kpiCard('Serviço terceiro', porStatus.SERVICO_TERCEIRO || 0, 'fornecedor externo', '#c85050')}
+      ${kpiCard('Críticas', criticas, 'maior prioridade', '#8a2020')}
+      ${kpiCard('Atrasadas', atrasadas, 'prazo vencido', '#4a4a55')}
+      ${kpiCard('Valor total', 'R$ ' + fmtNum(valorTotal), 'peças + terceiros')}
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;" class="grade-painel-comb">
+      <div class="panel" style="padding:18px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Status das OS</h3>
+        ${barrasHorizontais(barrasStatus, { unidade: '', casas: 0 })}
+      </div>
+      <div class="panel" style="padding:18px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Proporção geral</h3>
+        ${svgDonut(donutStatus)}
+      </div>
+    </div>
+
+    <div class="panel" style="padding:18px;margin-bottom:16px;">
+      <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Maior gasto por equipamento/veículo (R$)</h3>
+      ${barrasVerticais(topGasto)}
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;" class="grade-painel-comb">
+      <div class="panel" style="padding:0;">
+        <div style="padding:16px 18px;" class="cabeca-secao">
+          <h3 style="font-family:var(--serif);font-size:15px;">Em andamento <span class="chip">${emAndamento}</span></h3>
+        </div>
+        <div id="mp-andamento" style="max-height:340px;overflow:auto;"></div>
+      </div>
+      <div class="panel" style="padding:0;">
+        <div style="padding:16px 18px;" class="cabeca-secao">
+          <h3 style="font-family:var(--serif);font-size:15px;">Concluídas <span class="chip">${porStatus.CONCLUIDA || 0}</span></h3>
+        </div>
+        <div id="mp-concluidas" style="max-height:340px;overflow:auto;"></div>
+      </div>
+    </div>`
+
+  const linhaOS = os => `<div class="passo" style="cursor:pointer;padding:10px 18px;" data-abrir-os="${os.id}">
+      <span class="quando" style="width:auto;">
+        <span class="${corStatusOS(os.status)}" style="font-size:10px;">${esc(ROTULO_STATUS_OS[os.status] ?? os.status)}</span>
+      </span>
+      <span><b>${esc(os.codigo)}</b>
+        <span class="texto-dim2"> — ${esc(nomeAlvoOS(os))}</span>
+        ${os.prioridade ? `<br><span class="texto-dim2" style="font-size:11.5px;">${esc(ROTULO_PRIORIDADE_OS[os.prioridade] ?? '')}${os.tipo ? ' · ' + esc(os.tipo) : ''}</span>` : ''}
+      </span>
+    </div>`
+
+  const andamento = lista.filter(os => ['EM_PROGRAMACAO', 'EM_EXECUCAO', 'AGUARDANDO_PECA', 'SERVICO_TERCEIRO', 'ABERTA'].includes(os.status))
+  const concluidas = lista.filter(os => os.status === 'CONCLUIDA')
+  $('#mp-andamento').innerHTML = andamento.map(linhaOS).join('') || `<p class="vazio">Nenhuma OS em andamento.</p>`
+  $('#mp-concluidas').innerHTML = concluidas.slice(0, 100).map(linhaOS).join('') || `<p class="vazio">Nenhuma OS concluída.</p>`
+
+  alvo.querySelectorAll('[data-abrir-os]').forEach(el => {
+    el.onclick = () => {
+      const os = lista.find(x => x.id === el.dataset.abrirOs)
+      if (os) detalheOS(os, editavel, () => abrirManutencao('painel', editavel))
+    }
+  })
+}
+
+// ---------------------------------------------------------------
+// Lançar manutenção — tela única (abre já com todos os campos,
+// pensada pra quem faz a manutenção registrar o que já foi feito,
+// não só abrir um chamado). Cobre tanto máquina industrial quanto
+// carro/caminhão da Gefoscal, com setor/área.
+// ---------------------------------------------------------------
+function manutLancar (alvo, editavel) {
+  if (!editavel) { alvo.innerHTML = `<div class="panel" style="padding:22px;">
+    <p class="texto-dim">Você pode consultar, mas não lançar manutenções.</p></div>`; return }
+
+  const agora = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)
+  const alvos = alvosManutencao()
+
+  alvo.innerHTML = `
+    <div class="panel" style="padding:20px;max-width:900px;">
+      <h3 style="font-family:var(--serif);font-size:18px;margin:0 0 14px;">Lançar manutenção</h3>
+      <div class="form-grade">
+        <div class="campo" style="grid-column:1/-1;"><label>Equipamento / veículo *</label>
+          <select id="ml-alvo"><option value="">Selecione...</option>
+            ${alvos.map(a => `<option value="${a.valor}">${esc(a.rotulo)}</option>`).join('')}
+          </select></div>
+        <div class="campo"><label>Setor / área *</label>
+          <select id="ml-area">${AREAS_OS.map(a => `<option value="${a}">${ROTULO_AREA_OS[a]}</option>`).join('')}</select></div>
+        <div class="campo"><label>Tipo</label>
+          <select id="ml-tipo">${['Mecânica', 'Elétrica', 'Estrutural / Civil', 'Ajuste operacional', 'Manutenção preventiva', 'Manutenção corretiva (quebrou / parou)'].map(t => `<option>${t}</option>`).join('')}</select></div>
+        <div class="campo"><label>Prioridade</label>
+          <select id="ml-prioridade">${PRIORIDADE_OS.map(p => `<option value="${p}" ${p === 'MEDIA' ? 'selected' : ''}>${ROTULO_PRIORIDADE_OS[p]}</option>`).join('')}</select></div>
+        <div class="campo"><label>Status</label>
+          <select id="ml-status">${STATUS_OS.filter(s => s !== 'CANCELADA').map(s => `<option value="${s}">${ROTULO_STATUS_OS[s]}</option>`).join('')}</select></div>
+        <div class="campo"><label>Data/hora *</label><input type="datetime-local" id="ml-data" value="${agora}"></div>
+        <div class="campo"><label>Prazo</label><input type="date" id="ml-prazo"></div>
+        <div class="campo"><label>Data de conclusão</label><input type="date" id="ml-conclusao"></div>
+        <div class="campo"><label>Solicitante</label>
+          <select id="ml-solicitante"><option value="">—</option>${MANUT_CACHE.pessoas.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Responsável pela manutenção</label>
+          <select id="ml-responsavel"><option value="">—</option>${MANUT_CACHE.pessoas.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Valor peças (R$)</label><input id="ml-pecas" inputmode="decimal" placeholder="opcional"></div>
+        <div class="campo"><label>Valor terceiros (R$)</label><input id="ml-terceiros" inputmode="decimal" placeholder="opcional"></div>
+      </div>
+      <div class="campo" style="margin-top:12px;"><label>O que precisa ser feito / problema *</label>
+        <textarea id="ml-problema" style="min-height:80px;" placeholder="descreva o problema ou serviço"></textarea></div>
+      <div class="campo" style="margin-top:10px;"><label>Diagnóstico / o que foi feito</label>
+        <textarea id="ml-diagnostico" style="min-height:70px;" placeholder="opcional — preencha quando concluir"></textarea></div>
+      <div class="acoes"><button class="btn" id="ml-salvar">Lançar manutenção</button></div>
+      <div class="recado oculto" id="ml-recado"></div>
+    </div>`
+
+  const aviso = (t, alerta = true) => {
+    const el = $('#ml-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = alerta ? 'var(--warn-text)' : 'var(--line2)'
+    el.style.color = alerta ? 'var(--warn-text)' : 'var(--dim)'
+  }
+
+  $('#ml-salvar').onclick = async () => {
+    const alvoVal = $('#ml-alvo').value
+    const problema = $('#ml-problema').value.trim()
+    if (!alvoVal) { aviso('Escolha o equipamento ou veículo.'); return }
+    if (!problema) { aviso('Descreva o que precisa ser feito.'); return }
+
+    const [tipoAlvo, id] = alvoVal.split(':')
+    const btn = $('#ml-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const { error } = await db.from('ordem_servico').insert({
+      equipamento_id: tipoAlvo === 'e' ? id : null,
+      veiculo_id: tipoAlvo === 'v' ? id : null,
+      area: $('#ml-area').value,
+      tipo: $('#ml-tipo').value,
+      prioridade: $('#ml-prioridade').value,
+      status: $('#ml-status').value,
+      descricao_problema: problema,
+      diagnostico: $('#ml-diagnostico').value.trim() || null,
+      data_solicitacao: new Date($('#ml-data').value).toISOString(),
+      data_limite: $('#ml-prazo').value || null,
+      data_conclusao: $('#ml-conclusao').value || null,
+      solicitante_id: $('#ml-solicitante').value || null,
+      responsavel_id: $('#ml-responsavel').value || null,
+      valor_pecas: numeroBR($('#ml-pecas').value),
+      valor_terceiros: numeroBR($('#ml-terceiros').value)
+    })
+    btn.disabled = false; btn.textContent = 'Lançar manutenção'
+    if (error) { aviso(error.message); return }
+    aviso('Manutenção lançada.', false)
+    $('#ml-problema').value = ''; $('#ml-diagnostico').value = ''
+    $('#ml-pecas').value = ''; $('#ml-terceiros').value = ''
+  }
 }
 
 // ----- Ordens de serviço (lista + detalhe) -----
@@ -9131,9 +9373,9 @@ async function manutOS (alvo, editavel) {
 
   const buscar = async () => {
     let q = db.from('ordem_servico').select(`
-      id, codigo, data_solicitacao, tipo, prioridade, status, descricao_problema,
+      id, codigo, data_solicitacao, tipo, prioridade, status, descricao_problema, area,
       data_limite, data_conclusao, valor_pecas, valor_terceiros, valor_total,
-      setor:setor_id ( nome ), equipamento:equipamento_id ( tag, descricao ),
+      equipamento:equipamento_id ( tag, descricao ), veiculo:veiculo_id ( placa, descricao ),
       solicitante:solicitante_id ( nome ), responsavel:responsavel_id ( nome )
     `).order('data_solicitacao', { ascending: false }).limit(500)
     if ($('#mo-status').value) q = q.eq('status', $('#mo-status').value)
@@ -9145,7 +9387,7 @@ async function manutOS (alvo, editavel) {
 
     const termo = $('#mo-busca').value.trim().toLowerCase()
     const lista = termo ? cache.filter(o =>
-      `${o.codigo} ${o.equipamento?.tag ?? ''} ${o.descricao_problema ?? ''}`.toLowerCase().includes(termo)) : cache
+      `${o.codigo} ${nomeAlvoOS(o)} ${o.descricao_problema ?? ''}`.toLowerCase().includes(termo)) : cache
 
     const abertas = cache.filter(o => !['CONCLUIDA', 'CANCELADA'].includes(o.status)).length
     const criticas = cache.filter(o => o.prioridade === 'CRITICA' && !['CONCLUIDA', 'CANCELADA'].includes(o.status)).length
@@ -9157,13 +9399,13 @@ async function manutOS (alvo, editavel) {
     $('#mo-lista').innerHTML = `
       <div class="panel" style="padding:0;"><div class="tabela-scroll">
         <table><thead><tr>
-          <th>Código</th><th>Aberta em</th><th>Equipamento</th><th>Problema</th>
+          <th>Código</th><th>Aberta em</th><th>Equipamento/veículo</th><th>Problema</th>
           <th>Prioridade</th><th>Status</th><th>Responsável</th><th class="num">Valor</th>
         </tr></thead><tbody>
           ${lista.map(o => `<tr style="cursor:pointer;" data-abrir-os="${o.id}">
             <td><b>${esc(o.codigo)}</b></td>
             <td class="texto-dim">${fmtQuando(o.data_solicitacao) ?? '—'}</td>
-            <td>${esc(o.equipamento?.tag ?? o.setor?.nome ?? '—')}</td>
+            <td>${esc(nomeAlvoOS(o))}</td>
             <td class="texto-dim2" style="max-width:280px;">${esc((o.descricao_problema ?? '').slice(0, 70))}</td>
             <td><span class="chip">${esc(ROTULO_PRIORIDADE_OS[o.prioridade] ?? '—')}</span></td>
             <td><span class="${corStatusOS(o.status)}">${esc(ROTULO_STATUS_OS[o.status] ?? o.status)}</span></td>
@@ -9205,7 +9447,7 @@ async function detalheOS (os, editavel, aoFechar) {
       </div>
       <p class="texto-dim2" style="font-size:12px;margin:-8px 0 14px;">
         Aberta em ${fmtQuando(os.data_solicitacao) ?? '—'} por ${esc(os.solicitante?.nome ?? '—')}
-        · ${esc(os.setor?.nome ?? 'sem setor')} · ${esc(os.equipamento?.tag ?? 'sem equipamento vinculado')}</p>
+        · ${esc(os.area ? ROTULO_AREA_OS[os.area] : (os.setor?.nome ?? 'sem área'))} · ${esc(nomeAlvoOS(os))}</p>
 
       <div class="caixa-texto" style="margin-bottom:12px;">
         <div class="rot">Problema relatado</div>
