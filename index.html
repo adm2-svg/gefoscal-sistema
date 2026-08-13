@@ -156,6 +156,57 @@ tbody tr:hover { background: var(--hover-bg); }
 .prio.MEDIA { border:1px solid var(--line2); color:var(--dim); }
 .prio.BAIXA { border:1px solid var(--line); color:var(--dim2); }
 
+/* ---- Ferramentas ---- */
+.calc-grade { display:grid; grid-template-columns:1fr 380px; gap:24px; align-items:start; }
+@media (max-width:1000px){ .calc-grade { grid-template-columns:1fr; } }
+.memo { font-size:13px; }
+.memo-linha { display:flex; gap:10px; align-items:baseline; padding:7px 0; border-bottom:1px solid var(--line); }
+.memo-linha.total { border-top:1px solid var(--line2); border-bottom:none; font-weight:600; }
+.memo-linha.off { opacity:.45; }
+.memo-n { color:var(--dim2); font-size:11px; width:20px; flex:none; font-variant-numeric:tabular-nums; }
+.memo-d { flex:1; }
+.memo-d small { display:block; color:var(--dim2); font-size:11.5px; }
+.memo-v { font-variant-numeric:tabular-nums; text-align:right; white-space:nowrap; }
+.saida { background:var(--surface2); border:1px solid var(--line2); border-radius:8px; padding:16px; }
+.saida .destaque { font-family:var(--serif); font-size:30px; margin:2px 0 14px; }
+.saida .par { display:flex; justify-content:space-between; padding:6px 0; border-top:1px solid var(--line); font-size:13px; }
+.saida .par span:last-child { font-variant-numeric:tabular-nums; }
+.chaves { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0 4px; }
+.chaves label { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--dim);
+                border:1px solid var(--line); border-radius:20px; padding:5px 11px; cursor:pointer; }
+.sens-linha { display:flex; align-items:center; gap:8px; font-size:12px; padding:3px 0; }
+.sens-linha .p { width:78px; flex:none; font-variant-numeric:tabular-nums; }
+.sens-linha .barra { flex:1; }
+.sens-linha .v { width:96px; flex:none; text-align:right; font-variant-numeric:tabular-nums; }
+.sens-linha.agora { color:var(--gold); font-weight:600; }
+.alerta-caixa { font-size:12.5px; padding:10px 13px; border-radius:6px; margin-top:14px;
+                background:rgba(var(--warn-rgb),.13); color:var(--warn-text); line-height:1.5; }
+.cartao-ferramenta { border:1px solid var(--line); border-radius:8px; background:var(--panel);
+                     padding:16px 18px; cursor:pointer; }
+.cartao-ferramenta:hover { border-color:var(--rust); }
+.cartao-ferramenta h4 { font-family:var(--serif); font-size:15px; margin:0 0 5px; }
+.cartao-ferramenta p { margin:0; font-size:12.5px; color:var(--dim); line-height:1.5; }
+.grade-cartoes { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px; }
+.lead-linha td { vertical-align:top; }
+.lead-obs { color:var(--dim2); font-size:11.5px; margin-top:3px; max-width:520px; line-height:1.45; }
+
+/* ---- Crédito e Cobrança ---- */
+.chips-cred { display:flex; gap:7px; flex-wrap:wrap; margin-bottom:14px; }
+.chips-cred button { font-size:12px; padding:5px 13px; border-radius:20px; cursor:pointer;
+                      border:1px solid var(--line2); background:none; color:var(--dim); }
+.chips-cred button:hover { color:var(--txt); }
+.chips-cred button.ativo { border-color:var(--rust); color:var(--rust); background:rgba(var(--rust-rgb),.12); }
+.tag-aging { font-size:11px; padding:2px 8px; border-radius:20px; white-space:nowrap; }
+.tag-aging.critico { background:rgba(var(--warn-rgb),.18); color:var(--warn-text); }
+.tag-aging.alerta  { background:rgba(var(--gold-rgb),.18); color:var(--gold); }
+.tag-aging.ok      { background:rgba(var(--good-rgb),.16); color:var(--good-text); }
+.tag-aging.futuro  { background:var(--surface2); color:var(--dim); }
+.tag-aging.quitado { background:rgba(var(--good-rgb),.16); color:var(--good-text); }
+.carreg-disponivel { border:1px solid var(--line); border-radius:6px; padding:8px 10px; margin-bottom:6px;
+                      font-size:12.5px; display:flex; justify-content:space-between; align-items:center; cursor:pointer; }
+.carreg-disponivel:hover { border-color:var(--rust); }
+.carreg-disponivel.selecionado { border-color:var(--rust); background:rgba(var(--rust-rgb),.08); }
+
 @page { size: A4; margin: 8mm; }
 
 @media print {
@@ -541,8 +592,15 @@ const ehTotal = () => PERFIL.papeis.some(p => PAPEIS_TOTAIS.includes(p))
 
 function moduloPorChave (chave) { return PERFIL.modulos.find(m => m.chave === chave) }
 
+// 'cobranca' é liberado por PAPEL, não por modulo_permissao: a tabela por trás
+// (pedido) já tinha RLS por papel de outra frente de trabalho (vendas), e
+// seguimos o mesmo mecanismo em vez de competir com um segundo sistema de
+// permissão pra mesma tabela.
+const MODULOS_POR_PAPEL = { cobranca: ['ADMIN', 'DIRETORIA', 'COMERCIAL', 'COBRANCA'] }
+
 function podeVer (chave) {
   if (ehTotal()) return true
+  if (MODULOS_POR_PAPEL[chave]) return PERFIL.papeis.some(p => MODULOS_POR_PAPEL[chave].includes(p))
   const m = moduloPorChave(chave)
   return !!m && PERFIL.permissoes.some(p => p.modulo_id === m.id)
 }
@@ -550,6 +608,7 @@ function podeVer (chave) {
 // espelha tem_modulo(chave, true) do banco — o RLS é quem manda de verdade
 function podeEditar (chave) {
   if (ehTotal()) return true
+  if (MODULOS_POR_PAPEL[chave]) return PERFIL.papeis.some(p => MODULOS_POR_PAPEL[chave].includes(p))
   const m = moduloPorChave(chave)
   return !!m && PERFIL.permissoes.some(p => p.modulo_id === m.id && p.pode_editar)
 }
@@ -558,8 +617,10 @@ const PAGINAS = {
   visao_geral: { nome: 'Visão geral', render: paginaVisaoGeral, sempre: true },
   expedicao:   { nome: 'Expedição', render: paginaExpedicao },
   compras:     { nome: 'Compras e Recebimento', render: paginaCompras },
+  cobranca:    { nome: 'Crédito e Cobrança', render: paginaCobranca },
   financeiro:  { nome: 'Financeiro', render: paginaFinanceiro },
   projetos:    { nome: 'Projetos', render: paginaProjetos },
+  ferramentas: { nome: 'Ferramentas', render: paginaFerramentas },
   estoque:     { nome: 'Estoque e Produção', render: paginaEstoque },
   ti:          { nome: 'Administração', render: paginaAdministracao }
 }
@@ -2360,6 +2421,269 @@ async function paginaExpedicao () {
   }
 }
 
+// ---------------------------------------------------------------
+// Página: Crédito e Cobrança  (módulo 'cobranca')
+// Carteira de pedidos vendidos a prazo: quem deve, desde quando, e dá
+// pra dar baixa anexando o comprovante. Fica sobre a tabela `pedido`
+// (numero = "PD"), que já existe pro lado comercial/vendas — aqui só
+// somamos os campos de vencimento/baixa e a tela.
+//
+// "Puxar da Expedição": ao escolher um cliente no formulário de novo
+// pedido, listamos os carregamentos FATURADOS dele que ainda não têm
+// pedido vinculado — clicar num deles preenche toneladas/preço/PD e,
+// ao salvar, liga aquele carregamento a este pedido (carregamento.pedido_id).
+// ---------------------------------------------------------------
+let CRED_CACHE = { pedidos: [], clientes: [] }
+let CRED_FILTRO = 'tudo'
+let CRED_CLIENTE = ''
+
+function nomeCliente (c) { return c?.nome_fantasia || c?.razao_social || '—' }
+
+function diasAging (venc) {
+  if (!venc) return null
+  return Math.round((new Date(hojeISO()) - new Date(venc)) / 86400000)
+}
+
+function tagAging (p) {
+  if (p.situacao_pagamento === 'QUITADO') return `<span class="tag-aging quitado">quitado</span>`
+  const dias = diasAging(p.vencimento)
+  if (dias === null) return `<span class="tag-aging futuro">sem prazo</span>`
+  if (dias > 60) return `<span class="tag-aging critico">${dias} dias</span>`
+  if (dias > 0) return `<span class="tag-aging alerta">${dias} dias</span>`
+  if (dias === 0) return `<span class="tag-aging alerta">vence hoje</span>`
+  return `<span class="tag-aging futuro">faltam ${-dias} d</span>`
+}
+
+async function paginaCobranca () {
+  if (!podeVer('cobranca')) { areaLivre().innerHTML =
+    `<div class="panel" style="padding:22px;"><p class="texto-dim">
+     Você não tem acesso a Crédito e Cobrança.</p></div>`; return }
+
+  $('#subtitulo-pagina').textContent = 'Carteira de recebimentos por cliente'
+  const area = areaLivre()
+  area.innerHTML = `<p class="texto-dim2">carregando...</p>`
+
+  const [{ data: pedidos, error }, { data: clientes }] = await Promise.all([
+    db.from('pedido').select(`
+      id, numero, cliente_id, quantidade_t, preco_unitario, valor_total,
+      condicao_pagamento, data_pedido, vencimento, situacao_pagamento,
+      baixado_em, valor_recebido, observacao_cobranca,
+      cliente:cliente_id ( nome_fantasia, razao_social )
+    `).order('vencimento', { ascending: true, nullsFirst: false }),
+    db.from('cliente').select('id,nome_fantasia,razao_social').eq('status', 'ATIVO').order('nome_fantasia')
+  ])
+  if (error) { area.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  CRED_CACHE = { pedidos: pedidos || [], clientes: clientes || [] }
+
+  renderCobranca(area)
+}
+
+function renderCobranca (area) {
+  const editavel = podeEditar('cobranca')
+  const todos = CRED_CACHE.pedidos
+  const abertos = todos.filter(p => p.situacao_pagamento === 'EM_ABERTO')
+  const vencidos = abertos.filter(p => diasAging(p.vencimento) > 0)
+  const mais60 = vencidos.filter(p => diasAging(p.vencimento) > 60)
+  const aVencer = abertos.filter(p => (diasAging(p.vencimento) ?? -1) <= 0)
+  const quitados = todos.filter(p => p.situacao_pagamento === 'QUITADO')
+
+  const carteiraAberta = abertos.reduce((s, p) => s + Number(p.valor_total || 0), 0)
+  const totVencido = vencidos.reduce((s, p) => s + Number(p.valor_total || 0), 0)
+  const totAVencer = aVencer.reduce((s, p) => s + Number(p.valor_total || 0), 0)
+  const totRecebido = quitados.reduce((s, p) => s + Number(p.valor_recebido ?? p.valor_total ?? 0), 0)
+
+  const porCliente = {}
+  abertos.forEach(p => { porCliente[p.cliente_id] = (porCliente[p.cliente_id] || 0) + Number(p.valor_total || 0) })
+  let maiorId = null, maiorVal = 0
+  Object.entries(porCliente).forEach(([k, v]) => { if (v > maiorVal) { maiorVal = v; maiorId = k } })
+  const maiorCliente = todos.find(p => p.cliente_id === maiorId)?.cliente
+
+  const filtros = [
+    ['tudo', 'tudo', todos], ['vencido', 'vencido', vencidos], ['mais60', '+60 dias', mais60],
+    ['avencer', 'a vencer', aVencer], ['quitado', 'quitado', quitados]
+  ]
+  const listaAtual = (filtros.find(f => f[0] === CRED_FILTRO) || filtros[0])[2]
+  const listaFiltrada = CRED_CLIENTE ? listaAtual.filter(p => p.cliente_id === CRED_CLIENTE) : listaAtual
+
+  area.innerHTML = `
+    <div class="kpis" style="margin-bottom:16px;">
+      ${kpi('Carteira em aberto', 'R$ ' + fmtNum(carteiraAberta), abertos.length + ' pedidos')}
+      ${kpi('Vencido', 'R$ ' + fmtNum(totVencido), carteiraAberta ? Math.round(totVencido / carteiraAberta * 100) + '% da carteira' : '')}
+      ${kpi('A vencer', 'R$ ' + fmtNum(totAVencer), carteiraAberta ? Math.round(totAVencer / carteiraAberta * 100) + '%' : '')}
+      ${kpi('Já recebido', 'R$ ' + fmtNum(totRecebido), quitados.length + ' baixas lançadas')}
+      ${kpi('Maior exposição', 'R$ ' + fmtNum(maiorVal), maiorCliente ? nomeCliente(maiorCliente) + (carteiraAberta ? ' · ' + Math.round(maiorVal / carteiraAberta * 100) + '%' : '') : '—')}
+    </div>
+
+    <div class="chips-cred">
+      ${filtros.map(f => `<button data-f="${f[0]}" class="${CRED_FILTRO === f[0] ? 'ativo' : ''}">${f[1]}</button>`).join('')}
+    </div>
+
+    <select id="cb-cliente" style="margin-bottom:14px;min-width:260px;">
+      <option value="">todos os clientes</option>
+      ${CRED_CACHE.clientes.map(c => `<option value="${c.id}" ${CRED_CLIENTE === c.id ? 'selected' : ''}>${esc(nomeCliente(c))}</option>`).join('')}
+    </select>
+
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>Cliente</th><th>PD</th><th>Vencimento</th><th class="num">Toneladas</th>
+        <th class="num">R$/t</th><th class="num">Valor do pedido</th><th>Situação</th>${editavel ? '<th></th>' : ''}
+      </tr></thead><tbody>
+      ${listaFiltrada.map(p => `<tr>
+        <td><b>${esc(nomeCliente(p.cliente))}</b>${p.observacao_cobranca ? `<div class="texto-dim2" style="font-size:11.5px;margin-top:2px;max-width:280px;">${esc(p.observacao_cobranca)}</div>` : ''}</td>
+        <td class="texto-dim">${esc(p.numero || '—')}</td>
+        <td class="texto-dim">${fmtData(p.vencimento)}</td>
+        <td class="num">${fmtNum(p.quantidade_t)}</td>
+        <td class="num">${fmtNum(p.preco_unitario)}</td>
+        <td class="num">R$ ${fmtNum(p.valor_total)}</td>
+        <td>${tagAging(p)}</td>
+        ${editavel ? `<td class="num">${p.situacao_pagamento === 'EM_ABERTO'
+          ? `<button class="btn-secundario mini" data-baixa="${p.id}">baixa</button>`
+          : `<span class="texto-dim2" style="font-size:11px;">${p.baixado_em ? fmtData(p.baixado_em.slice(0, 10)) : ''}</span>`}</td>` : ''}
+      </tr>`).join('') || `<tr><td colspan="${editavel ? 8 : 7}" class="vazio">Nada aqui.</td></tr>`}
+      </tbody></table>
+    </div></div>
+
+    ${editavel ? `<div class="secao panel" style="padding:18px;margin-top:16px;">
+      <h3>Novo pedido</h3>
+      <div class="form-grade">
+        <div class="campo"><label>Cliente *</label><select id="np-cliente">
+          <option value="">selecione…</option>
+          ${CRED_CACHE.clientes.map(c => `<option value="${c.id}">${esc(nomeCliente(c))}</option>`).join('')}
+        </select></div>
+        <div class="campo"><label>PD</label><input id="np-numero" placeholder="número do pedido"></div>
+        <div class="campo"><label>Vencimento</label><input id="np-venc" type="date"></div>
+        <div class="campo"><label>Toneladas *</label><input id="np-ton" type="number" step="0.01"></div>
+        <div class="campo"><label>R$/t *</label><input id="np-preco" type="number" step="0.01"></div>
+      </div>
+      <div id="np-carregamentos" style="margin-top:12px;"></div>
+      <div class="campo" style="margin-top:10px;"><label>Observação</label><input id="np-obs" placeholder="opcional"></div>
+      <div class="acoes"><button class="btn" id="np-salvar">Adicionar</button></div>
+      <div class="recado oculto" id="np-recado"></div>
+      <p class="texto-dim2" style="font-size:11.5px;margin-top:8px;">O valor do pedido é calculado por toneladas × R$/t.</p>
+    </div>` : ''}`
+
+  area.querySelectorAll('.chips-cred button').forEach(b => {
+    b.onclick = () => { CRED_FILTRO = b.dataset.f; renderCobranca(area) }
+  })
+  $('#cb-cliente').onchange = e => { CRED_CLIENTE = e.target.value; renderCobranca(area) }
+
+  if (!editavel) return
+
+  area.querySelectorAll('[data-baixa]').forEach(b => {
+    b.onclick = () => abrirBaixa(CRED_CACHE.pedidos.find(p => p.id === b.dataset.baixa))
+  })
+
+  $('#np-cliente').onchange = () => carregarCarregamentosCliente($('#np-cliente').value)
+
+  $('#np-salvar').onclick = async () => {
+    const clienteId = $('#np-cliente').value
+    const ton = Number($('#np-ton').value)
+    const preco = Number($('#np-preco').value)
+    const el = $('#np-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    if (!clienteId || !ton || !preco) { aviso('Selecione o cliente e preencha toneladas e R$/t.'); return }
+
+    const selecionado = $('#np-carregamentos [data-selecionado="1"]')
+    const carregamentoId = selecionado ? selecionado.dataset.carregamento : null
+
+    const { data: novo, error } = await db.from('pedido').insert({
+      cliente_id: clienteId, numero: $('#np-numero').value.trim() || null,
+      quantidade_t: ton, preco_unitario: preco, valor_total: ton * preco,
+      vencimento: $('#np-venc').value || null,
+      observacao_cobranca: $('#np-obs').value.trim() || null,
+      data_pedido: new Date().toISOString().slice(0, 10)
+    }).select('id').single()
+    if (error) { aviso(error.message); return }
+
+    if (novo && carregamentoId) {
+      await db.from('carregamento').update({ pedido_id: novo.id }).eq('id', carregamentoId)
+    }
+    paginaCobranca()
+  }
+}
+
+async function carregarCarregamentosCliente (clienteId) {
+  const alvo = $('#np-carregamentos')
+  if (!clienteId) { alvo.innerHTML = ''; return }
+  alvo.innerHTML = '<p class="texto-dim2" style="font-size:12px;">carregando NFs do cliente...</p>'
+
+  const { data } = await db.from('carregamento')
+    .select('id,numero_nf,data_carregamento,quantidade_t,preco_unitario,valor_nf')
+    .eq('cliente_id', clienteId).eq('status', 'FATURADO').is('pedido_id', null)
+    .order('data_carregamento', { ascending: false }).limit(20)
+
+  if (!data?.length) { alvo.innerHTML = '<p class="texto-dim2" style="font-size:12px;">nenhum carregamento faturado sem pedido vinculado pra este cliente.</p>'; return }
+
+  alvo.innerHTML = `<label class="texto-dim2" style="font-size:11px;">puxar de um carregamento da Expedição (opcional)</label>` +
+    data.map(c => `<div class="carreg-disponivel" data-carregamento="${c.id}">
+      <span>NF ${esc(c.numero_nf || '—')} · ${fmtData(c.data_carregamento)} · ${fmtNum(c.quantidade_t)} t</span>
+      <span class="texto-dim2">R$ ${fmtNum(c.valor_nf)}</span></div>`).join('')
+
+  alvo.querySelectorAll('[data-carregamento]').forEach(el => {
+    el.onclick = () => {
+      const jaSelecionado = el.dataset.selecionado === '1'
+      alvo.querySelectorAll('[data-carregamento]').forEach(x => { x.classList.remove('selecionado'); delete x.dataset.selecionado })
+      if (!jaSelecionado) {
+        el.classList.add('selecionado'); el.dataset.selecionado = '1'
+        const c = data.find(x => x.id === el.dataset.carregamento)
+        $('#np-ton').value = c.quantidade_t
+        $('#np-preco').value = c.preco_unitario || (c.quantidade_t ? (c.valor_nf / c.quantidade_t).toFixed(2) : '')
+        if (!$('#np-numero').value) $('#np-numero').value = c.numero_nf || ''
+      }
+    }
+  })
+}
+
+function abrirBaixa (p) {
+  if (!p) return
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>Dar baixa — ${esc(nomeCliente(p.cliente))}</h3>
+    <div class="form-grade">
+      <div class="campo"><label>Valor recebido</label><input id="bx-valor" type="number" step="0.01" value="${p.valor_total}"></div>
+      <div class="campo"><label>Data do recebimento</label><input id="bx-data" type="date" value="${new Date().toISOString().slice(0, 10)}"></div>
+    </div>
+    <div class="campo" style="margin-top:10px;"><label>Comprovante de pagamento</label>
+      <input id="bx-arquivo" type="file" accept="image/*,application/pdf"></div>
+    <div class="acoes"><button class="btn" id="bx-salvar">Confirmar baixa</button><button class="btn-secundario" id="bx-cancelar">Cancelar</button></div>
+    <div class="recado oculto" id="bx-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#bx-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  fundo.querySelector('#bx-salvar').onclick = async () => {
+    const el = fundo.querySelector('#bx-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const botao = fundo.querySelector('#bx-salvar')
+    botao.disabled = true
+
+    const arquivo = fundo.querySelector('#bx-arquivo').files[0]
+    if (arquivo) {
+      const caminho = `pedido/${p.id}/${Date.now()}_${arquivo.name}`
+      const { error: erroUpload } = await db.storage.from('comprovantes').upload(caminho, arquivo)
+      if (erroUpload) { aviso('Falha ao subir o comprovante: ' + erroUpload.message); botao.disabled = false; return }
+      await db.from('anexo').insert({
+        entidade: 'PEDIDO', registro_id: p.id, tipo: 'comprovante_pagamento',
+        nome_arquivo: arquivo.name, storage_path: caminho
+      })
+    }
+
+    const { error } = await db.from('pedido').update({
+      situacao_pagamento: 'QUITADO',
+      baixado_em: new Date(fundo.querySelector('#bx-data').value + 'T12:00:00').toISOString(),
+      valor_recebido: Number(fundo.querySelector('#bx-valor').value) || p.valor_total,
+      baixado_por: PERFIL.pessoaId
+    }).eq('id', p.id)
+    if (error) { aviso(error.message); botao.disabled = false; return }
+
+    fechar()
+    paginaCobranca()
+  }
+}
+
 
 // ---------------------------------------------------------------
 // Página: Financeiro
@@ -3467,6 +3791,520 @@ async function finCadastros (alvo, editavel) {
     if (error) { falhar(error.message); return }
     abrirFinanceiro('cadastros', true)
   }
+}
+
+// ---------------------------------------------------------------
+// Página: Ferramentas  (módulo 'ferramentas')
+// Calculadoras de trabalho + banco de informações por região.
+// Cada item é um "recurso" liberado individualmente pelo ADMIN em
+// Administração › Ferramentas e regiões — ver tem_recurso() no banco.
+// ---------------------------------------------------------------
+let RECURSOS = []          // recursos que ESTE usuário enxerga
+let FER_ABERTA = null      // chave do recurso aberto
+
+const meusRecursos = tipo => RECURSOS.filter(r => r.tipo === tipo)
+
+async function paginaFerramentas () {
+  if (!podeVer('ferramentas')) { areaLivre().innerHTML =
+    `<div class="panel" style="padding:22px;"><p class="texto-dim">
+     Você não tem acesso a Ferramentas.</p></div>`; return }
+
+  $('#subtitulo-pagina').textContent = 'Calculadoras e banco de informações comerciais'
+  const area = areaLivre()
+  area.innerHTML = `
+    <div class="subabas">
+      <button data-sub="calculadoras" class="ativo">Calculadoras</button>
+      <button data-sub="banco">Banco de informações</button>
+    </div>
+    <div id="sub-ferramentas"></div>`
+
+  area.querySelectorAll('.subabas button').forEach(b => {
+    b.onclick = () => {
+      area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
+      FER_ABERTA = null
+      abrirFerramentas(b.dataset.sub)
+    }
+  })
+
+  // a RLS já devolve só o que o usuário pode ver; se não puder nada, vem vazio
+  const { data } = await db.from('recurso').select('id,chave,nome,tipo,descricao').eq('status', 'ATIVO').order('ordem')
+  const visiveis = []
+  for (const r of (data || [])) {
+    const { data: ok } = await db.rpc('tem_recurso', { p_chave: r.chave })
+    if (ok === true) visiveis.push(r)
+  }
+  RECURSOS = visiveis
+
+  abrirFerramentas('calculadoras')
+}
+
+function abrirFerramentas (sub) {
+  const alvo = $('#sub-ferramentas')
+  if (sub === 'calculadoras') {
+    const calcs = meusRecursos('CALCULADORA')
+    if (FER_ABERTA === 'calc-barter') return calcBarter(alvo)
+    if (FER_ABERTA === 'calc-enxofre') return calcEnxofre(alvo)
+    alvo.innerHTML = calcs.length
+      ? `<div class="grade-cartoes">${calcs.map(c => `
+          <div class="cartao-ferramenta" data-abrir="${c.chave}">
+            <h4>${esc(c.nome)}</h4><p>${esc(c.descricao ?? '')}</p></div>`).join('')}</div>`
+      : `<p class="vazio">Nenhuma calculadora liberada para você. Peça ao administrador do sistema.</p>`
+    alvo.querySelectorAll('[data-abrir]').forEach(c => {
+      c.onclick = () => { FER_ABERTA = c.dataset.abrir; abrirFerramentas('calculadoras') }
+    })
+    return
+  }
+  if (sub === 'banco') bancoInformacoes(alvo)
+}
+
+function voltarFerramentas (sub) {
+  return `<div class="acoes" style="margin:0 0 16px;">
+    <button class="btn-secundario mini" id="fer-voltar">‹ voltar</button></div>`
+}
+function ligarVoltar (sub) {
+  const b = $('#fer-voltar'); if (b) b.onclick = () => { FER_ABERTA = null; abrirFerramentas(sub) }
+}
+
+// ===============================================================
+// Calculadora 1 — Simulador de barter
+// Regra idêntica à do simulador original: juros SIMPLES sobre
+// insumo+valorização; três relações de troca sucessivas (bruto,
+// líquido de funrural+margem, líquido de taxa de sucesso); cessão
+// da trading aplicada POR DENTRO (divide por 1−taxa).
+// ===============================================================
+const BARTER_PADRAO = { preco:720, ton:3000, valoriz:0, meses:8, dias:249, juros:2,
+  grao:121, margem:0, tha:2, prod:65, funrural:1.5, sucesso:0.50, cessao:1 }
+let BARTER = Object.assign({}, BARTER_PADRAO)
+let BARTER_ON = { funrural:true, sucesso:true, cessao:true }
+let BARTER_MODO = 'dia'
+let BARTER_PIN = null
+
+function calcularBarter (e) {
+  const insumo = e.preco * e.ton
+  const base = insumo + e.valoriz
+  const jm = e.juros / 100
+  const periodos = BARTER_MODO === 'mes' ? e.meses : e.dias / 30
+  const jurosPct = jm * periodos                       // juros simples, não compostos
+  const jurosRs = base * jurosPct
+  const montante = base + jurosRs
+
+  const rel1 = e.grao > 0 ? montante / e.grao : 0
+  const impSaca = BARTER_ON.funrural ? e.grao * (e.funrural / 100) : 0
+  const precoLiq = e.grao + e.margem - impSaca
+  const rel2 = precoLiq > 0 ? montante / precoLiq : 0
+  const suc = BARTER_ON.sucesso ? e.sucesso : 0
+  const precoLiq2 = precoLiq - suc
+  const rel3 = precoLiq2 > 0 ? montante / precoLiq2 : 0
+
+  const valorOp = rel3 * e.grao
+  const cess = BARTER_ON.cessao ? e.cessao / 100 : 0
+  const valorFinal = cess < 1 ? valorOp / (1 - cess) : valorOp   // cessão "por dentro"
+  const paridade = e.grao > 0 ? valorFinal / e.grao : 0
+  const porTon = e.ton > 0 ? valorFinal / e.ton : 0
+  const custoTotal = insumo > 0 ? valorFinal / insumo - 1 : 0
+  const taxaReal = periodos > 0 ? Math.pow(valorFinal / insumo, 1 / periodos) - 1 : 0
+  const ha = e.tha > 0 ? e.ton / e.tha : 0
+  const scHa = ha > 0 ? paridade / ha : 0
+
+  return { insumo, base, jm, periodos, jurosPct, jurosRs, montante, rel1, impSaca,
+    precoLiq, rel2, suc, precoLiq2, rel3, valorOp, cess, valorFinal, paridade,
+    porTon, custoTotal, taxaReal, ha, scHa }
+}
+
+const rs = v => 'R$ ' + fmtNum(v)
+const pc = v => fmtNum(v * 100) + '%'
+
+function calcBarter (alvo) {
+  const campo = (id, rot, pre, suf, passo) => `
+    <div class="campo"><label>${rot}</label>
+      <div style="display:flex;align-items:center;gap:6px;">
+        ${pre ? `<span class="texto-dim2" style="font-size:11px;">${pre}</span>` : ''}
+        <input id="b-${id}" type="number" step="${passo || '0.01'}" value="${BARTER[id]}" style="flex:1;">
+        ${suf ? `<span class="texto-dim2" style="font-size:11px;">${suf}</span>` : ''}
+      </div></div>`
+
+  alvo.innerHTML = voltarFerramentas('calculadoras') + `
+    <div class="calc-grade">
+      <div>
+        <div class="secao">
+          <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Insumo</h3>
+            <span class="texto-dim2" style="font-size:12px;">o que você entrega</span></div>
+          <div class="form-grade">
+            ${campo('preco','Preço à vista','R$','/t')}
+            ${campo('ton','Quantidade','','t')}
+            ${campo('valoriz','Valorização','R$','')}
+          </div>
+          <p class="aviso" id="b-auto"></p>
+        </div>
+
+        <div class="secao">
+          <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Prazo e juros</h3>
+            <div class="subabas" style="margin:0;border:none;">
+              <button id="b-modo-dia" class="${BARTER_MODO === 'dia' ? 'ativo' : ''}">dias</button>
+              <button id="b-modo-mes" class="${BARTER_MODO === 'mes' ? 'ativo' : ''}">meses</button>
+            </div></div>
+          <div class="form-grade">
+            ${BARTER_MODO === 'mes' ? campo('meses','Meses de diferença','','meses','1') : campo('dias','Dias de diferença','','dias','1')}
+            ${campo('juros','Juros ao mês','','% a.m.')}
+          </div>
+        </div>
+
+        <div class="secao">
+          <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Grão</h3>
+            <span class="texto-dim2" style="font-size:12px;">o que o produtor paga</span></div>
+          <div class="form-grade">
+            ${campo('grao','Preço bruto do grão','R$','/sc')}
+            ${campo('margem','Margem','R$','/sc')}
+            ${campo('tha','Aplicação','','t/ha')}
+            ${campo('prod','Produtividade','','sc/ha')}
+          </div>
+          <div class="chaves">
+            <label><input type="checkbox" id="b-on-funrural" ${BARTER_ON.funrural ? 'checked' : ''}> Funrural</label>
+            <label><input type="checkbox" id="b-on-sucesso" ${BARTER_ON.sucesso ? 'checked' : ''}> Taxa de sucesso</label>
+            <label><input type="checkbox" id="b-on-cessao" ${BARTER_ON.cessao ? 'checked' : ''}> Cessão da trading</label>
+          </div>
+          <div class="form-grade" style="margin-top:10px;">
+            ${campo('funrural','Funrural','','%')}
+            ${campo('sucesso','Taxa de sucesso','R$','/sc')}
+            ${campo('cessao','Cessão da trading','','%')}
+          </div>
+        </div>
+
+        <div class="secao">
+          <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Memória de cálculo</h3></div>
+          <div class="memo" id="b-memo"></div>
+        </div>
+
+        <div class="secao">
+          <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Se o grão mudar de preço</h3>
+            <span class="texto-dim2" style="font-size:12px;">a paridade em sacas está travada</span></div>
+          <div id="b-sens"></div>
+          <div class="alerta-caixa" id="b-alerta"></div>
+        </div>
+      </div>
+
+      <div>
+        <div class="saida">
+          <div class="rotulo texto-dim2" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;">Custo por tonelada</div>
+          <div class="destaque" id="b-o-ton">—</div>
+          <div class="par"><span class="texto-dim">Paridade final</span><span id="b-o-sacas">—</span></div>
+          <div class="par"><span class="texto-dim">Valor final da operação</span><span id="b-o-final">—</span></div>
+          <div class="par"><span class="texto-dim">Custo total sobre o insumo</span><span id="b-o-custo">—</span></div>
+          <div class="par"><span class="texto-dim">Taxa real equivalente</span><span id="b-o-taxa">—</span></div>
+          <div class="par"><span class="texto-dim">Diferença por tonelada</span><span id="b-o-delta">—</span></div>
+          <div class="par"><span class="texto-dim">Sacas por hectare</span><span id="b-o-scha">—</span></div>
+          <div class="par"><span class="texto-dim">% da produtividade</span><span id="b-o-prod">—</span></div>
+          <div class="acoes">
+            <button class="btn-secundario mini" id="b-fixar">fixar cenário</button>
+            <button class="btn-secundario mini" id="b-limpar">restaurar padrão</button>
+          </div>
+        </div>
+        <div class="saida" id="b-fixado" style="margin-top:14px;display:none;"></div>
+      </div>
+    </div>`
+
+  ligarVoltar('calculadoras')
+  const ids = Object.keys(BARTER_PADRAO)
+  ids.forEach(id => { const el = $('#b-' + id); if (el) el.oninput = () => { BARTER[id] = Number(el.value) || 0; pintarBarter() } })
+  ;['funrural','sucesso','cessao'].forEach(k => {
+    $('#b-on-' + k).onchange = e => { BARTER_ON[k] = e.target.checked; pintarBarter() }
+  })
+  $('#b-modo-dia').onclick = () => { BARTER_MODO = 'dia'; calcBarter(alvo) }
+  $('#b-modo-mes').onclick = () => { BARTER_MODO = 'mes'; calcBarter(alvo) }
+  $('#b-limpar').onclick = () => { BARTER = Object.assign({}, BARTER_PADRAO); calcBarter(alvo) }
+  $('#b-fixar').onclick = () => {
+    const r = calcularBarter(BARTER)
+    BARTER_PIN = { rotulo: rs(BARTER.grao) + '/sc · ' + rs(BARTER.preco) + '/t', porTon: r.porTon, paridade: r.paridade, custoTotal: r.custoTotal }
+    pintarBarter()
+  }
+  pintarBarter()
+}
+
+function pintarBarter () {
+  const e = BARTER, r = calcularBarter(e)
+  const linha = (n, d, sub, v, cls) => `<div class="memo-linha ${cls || ''}">
+    <span class="memo-n">${n}</span><span class="memo-d">${d}${sub ? `<small>${sub}</small>` : ''}</span>
+    <span class="memo-v">${v}</span></div>`
+
+  $('#b-auto').textContent = 'preço × quantidade = ' + rs(e.preco * e.ton) +
+    (e.valoriz ? ' · mais valorização de ' + rs(e.valoriz) : '')
+
+  $('#b-memo').innerHTML =
+    linha('01','Valor do insumo', rs(e.preco) + '/t × ' + fmtNum(e.ton) + ' t' + (e.valoriz ? ' + valorização' : ''), rs(r.base)) +
+    linha('02','Juros totais', (BARTER_MODO === 'mes'
+        ? fmtNum(r.periodos) + ' meses × ' + pc(r.jm)
+        : fmtNum(r.periodos * 30) + ' dias pro rata × ' + pc(r.jm) + ' a.m.') + ' = ' + pc(r.jurosPct), rs(r.jurosRs)) +
+    linha('03','Montante total','insumo mais juros', rs(r.montante), 'total') +
+    linha('04','Relação de troca 1','montante ÷ preço bruto do grão', fmtNum(r.rel1) + ' sc') +
+    linha('05','Funrural sobre a saca', BARTER_ON.funrural ? pc(e.funrural / 100) + ' de ' + rs(e.grao) : 'desligado',
+      BARTER_ON.funrural ? '− ' + rs(r.impSaca) : '—', BARTER_ON.funrural ? '' : 'off') +
+    linha('06','Preço do grão líquido', e.margem ? 'com margem de ' + rs(e.margem) : 'depois do imposto', rs(r.precoLiq) + '/sc') +
+    linha('07','Relação de troca 2','montante ÷ preço líquido', fmtNum(r.rel2) + ' sc') +
+    linha('08','Taxa de sucesso', BARTER_ON.sucesso ? 'valor fixo por saca' : 'desligada',
+      BARTER_ON.sucesso ? '− ' + rs(r.suc) : '—', BARTER_ON.sucesso ? '' : 'off') +
+    linha('09','Relação de troca 3','montante ÷ ' + rs(r.precoLiq2) + '/sc', fmtNum(r.rel3) + ' sc') +
+    linha('10','Valor da operação','relação de troca 3 × preço bruto', rs(r.valorOp)) +
+    linha('11','Cessão da trading', BARTER_ON.cessao ? pc(r.cess) + ' por dentro' : 'desligada',
+      BARTER_ON.cessao ? '+ ' + rs(r.valorFinal - r.valorOp) : '—', BARTER_ON.cessao ? '' : 'off') +
+    linha('12','Valor final da operação','o que o produtor paga em grão', rs(r.valorFinal), 'total') +
+    linha('13','Paridade final','valor final ÷ preço bruto do grão', fmtNum(r.paridade) + ' sc')
+
+  $('#b-o-ton').textContent = rs(r.porTon)
+  $('#b-o-sacas').textContent = fmtNum(r.paridade) + ' sc'
+  $('#b-o-final').textContent = rs(r.valorFinal)
+  $('#b-o-custo').textContent = pc(r.custoTotal)
+  $('#b-o-taxa').textContent = fmtNum(r.taxaReal * 100, 3) + '% a.m.'
+  $('#b-o-delta').textContent = (r.porTon >= e.preco ? '+ ' : '− ') + rs(Math.abs(r.porTon - e.preco))
+  $('#b-o-scha').textContent = fmtNum(r.scHa) + ' sc/ha'
+  $('#b-o-prod').textContent = e.prod > 0 ? pc(r.scHa / e.prod) : '—'
+
+  // sensibilidade: a paridade em sacas fica travada; se o grão sobe, o produtor paga mais
+  const base = e.grao, faixas = []
+  for (let k = -3; k <= 4; k++) faixas.push(Math.round(base * (1 + k * 0.05) * 100) / 100)
+  const entregues = faixas.map(p => r.paridade * p)
+  const max = Math.max.apply(null, entregues) || 1
+  $('#b-sens').innerHTML = faixas.map((p, i) => `
+    <div class="sens-linha ${Math.abs(p - base) < 0.005 ? 'agora' : ''}">
+      <span class="p">${rs(p)}</span>
+      <span class="barra"><span style="width:${(entregues[i] / max * 100).toFixed(1)}%"></span></span>
+      <span class="v">${e.ton > 0 ? rs(entregues[i] / e.ton) : '—'}/t</span></div>`).join('')
+
+  const alto = r.paridade * base * 1.05
+  const custoAlto = r.insumo > 0 ? alto / r.insumo - 1 : 0
+  $('#b-alerta').innerHTML = `<b>Atenção.</b> A conta do banco mostra ${pc(r.custoTotal)} de custo,
+    mas isso só vale se o grão ficar em ${rs(base)}. Se subir 5%, para ${rs(base * 1.05)},
+    o custo real do produtor vira ${pc(custoAlto)} e a tonelada equivale a
+    ${rs(e.ton > 0 ? alto / e.ton : 0)}.`
+
+  const cx = $('#b-fixado')
+  if (!BARTER_PIN) { cx.style.display = 'none'; return }
+  cx.style.display = 'block'
+  const dif = (agora, antes, suf) => {
+    const d = agora - antes
+    if (Math.abs(d) < 0.005) return '<span class="texto-dim2">igual</span>'
+    return `<span style="color:${d > 0 ? 'var(--warn-text)' : 'var(--good-text)'};">${d > 0 ? '+' : '−'}${fmtNum(Math.abs(d))}${suf || ''}</span>`
+  }
+  cx.innerHTML = `<div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:14px;margin:0;">Comparando com ${esc(BARTER_PIN.rotulo)}</h3>
+      <button class="btn-secundario mini" id="b-soltar">soltar</button></div>
+    <div class="par"><span class="texto-dim">R$/tonelada</span><span>${rs(BARTER_PIN.porTon)} &nbsp; ${dif(r.porTon, BARTER_PIN.porTon)}</span></div>
+    <div class="par"><span class="texto-dim">Paridade</span><span>${fmtNum(BARTER_PIN.paridade)} sc &nbsp; ${dif(r.paridade, BARTER_PIN.paridade, ' sc')}</span></div>
+    <div class="par"><span class="texto-dim">Custo total</span><span>${pc(BARTER_PIN.custoTotal)} &nbsp; ${dif(r.custoTotal * 100, BARTER_PIN.custoTotal * 100, '%')}</span></div>`
+  $('#b-soltar').onclick = () => { BARTER_PIN = null; pintarBarter() }
+}
+
+// ===============================================================
+// Calculadora 2 — Equiparação borra de enxofre × enxofre elementar
+//
+// Lógica conferida contra a aba "Resumo" da planilha original:
+//   custo de S por t de produto = preço × %S desejado ÷ %S do material
+//   preço equivalente 100% S    = preço ÷ %S
+//   kg de material por t produto= %S desejado ÷ %S × 1000
+//   produto possível por t mat. = %S ÷ %S desejado
+//
+// A aba "Compras" da planilha estava com as fórmulas deslocadas uma
+// coluna à esquerda dos cabeçalhos (F e H ficaram circulares), então
+// a avaliação por carga aqui foi reconstruída pelos cabeçalhos.
+// ===============================================================
+let ENX = { alvo:3, ref99:2700, borra:1800, teores:[99,90,80,70,60] }
+let ENX_CARGA = { qtd:0, teor:0, preco:0 }
+
+function calcEnxofre (alvo) {
+  const a = ENX.alvo / 100
+  const kgS = a * 1000
+  const custoRef = ENX.ref99 * a / 0.99
+
+  const linhas = ENX.teores.map(t => {
+    const s = t / 100
+    const preco = t >= 99 ? ENX.ref99 : ENX.borra
+    const custoS = preco * a / s
+    return { t, s, preco, pontos: s * 1000, kgPorT: a / s * 1000, custoS,
+      equiv: preco / s, dif: custoS - custoRef, possivel: s / a }
+  })
+
+  const c = ENX_CARGA
+  const cs = c.teor / 100
+  const carga = c.qtd > 0 && c.teor > 0 ? {
+    valorTotal: c.qtd * c.preco,
+    sPuro: c.qtd * cs,
+    precoKgS: cs > 0 ? c.preco / (cs * 1000) : 0,
+    equiv100: cs > 0 ? c.preco / cs : 0,
+    kgPorT: cs > 0 ? a / cs * 1000 : 0,
+    custoSporT: cs > 0 ? c.preco * a / cs : 0,
+    produtoPossivel: cs > 0 ? c.qtd * cs / a : 0
+  } : null
+
+  alvo.innerHTML = voltarFerramentas('calculadoras') + `
+    <div class="secao panel" style="padding:18px;">
+      <h3>Premissas</h3>
+      <div class="form-grade">
+        <div class="campo"><label>% de S puro desejado no produto</label>
+          <input id="e-alvo" type="number" step="0.1" value="${ENX.alvo}"></div>
+        <div class="campo"><label>Preço referência enxofre 99% (R$/t)</label>
+          <input id="e-ref" type="number" step="1" value="${ENX.ref99}"></div>
+        <div class="campo"><label>Preço da borra ofertada (R$/t)</label>
+          <input id="e-borra" type="number" step="1" value="${ENX.borra}"></div>
+      </div>
+      <p class="aviso">Para formar produto com ${fmtNum(ENX.alvo, 1)}% de S puro, cada tonelada
+        precisa de <b>${fmtNum(kgS, 0)} kg de S puro</b>. Quanto menor o teor da borra, mais
+        material entra na fórmula para entregar os mesmos pontos de enxofre.</p>
+    </div>
+
+    <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Comparação por teor</h3>
+      <span class="texto-dim2" style="font-size:12px;">a decisão é pelo custo de S por tonelada de produto, não pelo preço da tonelada comprada</span></div>
+    <div class="panel" style="padding:0;margin-bottom:20px;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>Material</th><th class="num">% S</th><th class="num">Pontos S/t</th>
+        <th class="num">Kg por t produto</th><th class="num">Preço R$/t</th>
+        <th class="num">Custo S/t produto</th><th class="num">Preço equiv. 100% S</th>
+        <th class="num">Dif. vs 99%</th><th class="num">Produto por t material</th>
+      </tr></thead><tbody>
+      ${linhas.map(l => `<tr>
+        <td>${l.t >= 99 ? 'Enxofre elementar 99%' : 'Borra ' + l.t + '%'}</td>
+        <td class="num">${fmtNum(l.t, 0)}%</td>
+        <td class="num">${fmtNum(l.pontos, 0)}</td>
+        <td class="num">${fmtNum(l.kgPorT, 1)}</td>
+        <td class="num">${rs(l.preco)}</td>
+        <td class="num"><b>${rs(l.custoS)}</b></td>
+        <td class="num">${rs(l.equiv)}</td>
+        <td class="num ${l.dif > 0 ? 'badge-alerta' : l.dif < 0 ? 'badge-bom' : ''}">${l.dif === 0 ? '—' : (l.dif > 0 ? '+ ' : '− ') + rs(Math.abs(l.dif))}</td>
+        <td class="num">${fmtNum(l.possivel, 1)} t</td>
+      </tr>`).join('')}
+      </tbody></table>
+    </div></div>
+
+    <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Avaliar uma carga ofertada</h3>
+      <span class="texto-dim2" style="font-size:12px;">preencha os três campos</span></div>
+    <div class="panel" style="padding:18px;">
+      <div class="form-grade">
+        <div class="campo"><label>Quantidade ofertada (t)</label>
+          <input id="e-qtd" type="number" step="0.1" value="${c.qtd || ''}" placeholder="0"></div>
+        <div class="campo"><label>% de enxofre da carga</label>
+          <input id="e-teor" type="number" step="0.1" value="${c.teor || ''}" placeholder="0"></div>
+        <div class="campo"><label>Preço pedido (R$/t)</label>
+          <input id="e-preco" type="number" step="1" value="${c.preco || ''}" placeholder="0"></div>
+      </div>
+      ${carga ? `
+      <div class="kpis" style="margin:16px 0 0;">
+        ${kpi('Custo S por t de produto', rs(carga.custoSporT),
+          carga.custoSporT <= custoRef ? 'melhor que o enxofre 99%' : 'pior que o enxofre 99%')}
+        ${kpi('Preço equivalente 100% S', rs(carga.equiv100), 'referência: ' + rs(ENX.ref99 / 0.99))}
+        ${kpi('Valor total da carga', rs(carga.valorTotal), fmtNum(carga.sPuro, 2) + ' t de S puro')}
+        ${kpi('Produto possível', fmtNum(carga.produtoPossivel, 1) + ' t', 'com esta carga')}
+      </div>
+      <div class="${carga.custoSporT <= custoRef ? 'recado' : 'alerta-caixa'}" style="margin-top:14px;">
+        ${carga.custoSporT <= custoRef
+          ? `<b>Vale a pena.</b> O custo de enxofre por tonelada de produto fica em ${rs(carga.custoSporT)},
+             contra ${rs(custoRef)} usando enxofre elementar 99% a ${rs(ENX.ref99)}/t —
+             economia de ${rs(custoRef - carga.custoSporT)} por tonelada de produto.`
+          : `<b>Não compensa neste preço.</b> O custo de enxofre por tonelada de produto sai a
+             ${rs(carga.custoSporT)}, contra ${rs(custoRef)} com enxofre elementar 99%.
+             Para empatar, o preço desta carga precisaria cair para
+             ${rs(ENX.ref99 * cs / 0.99)}/t.`}
+      </div>
+      <p class="aviso">Preço por kg de S puro: ${rs(carga.precoKgS)} ·
+        ${fmtNum(carga.kgPorT, 1)} kg desta carga entram em cada tonelada de produto.</p>`
+      : '<p class="aviso">Preencha quantidade, teor e preço para avaliar a carga.</p>'}
+    </div>`
+
+  ligarVoltar('calculadoras')
+  // onchange (e não oninput): esta tela se redesenha inteira a cada cálculo,
+  // então atualizar a cada tecla faria o cursor pular para fora do campo.
+  $('#e-alvo').onchange = ev => { ENX.alvo = Number(ev.target.value) || 0; calcEnxofre(alvo) }
+  $('#e-ref').onchange = ev => { ENX.ref99 = Number(ev.target.value) || 0; calcEnxofre(alvo) }
+  $('#e-borra').onchange = ev => { ENX.borra = Number(ev.target.value) || 0; calcEnxofre(alvo) }
+  ;['qtd','teor','preco'].forEach(k => {
+    $('#e-' + k).onchange = ev => { ENX_CARGA[k] = Number(ev.target.value) || 0; calcEnxofre(alvo) }
+  })
+}
+
+// ===============================================================
+// Banco de informações — leads por região
+// ===============================================================
+let BANCO = { regiao:'todas', busca:'', categoria:'', leads:[] }
+const ROTULO_CAT = { INSTITUCIONAL:'Institucional', MAIORES:'Maiores', BATER_PORTEIRA:'Bater porteira', SECUNDARIO:'Secundário' }
+
+async function bancoInformacoes (alvo) {
+  const regioes = meusRecursos('REGIAO')
+  if (!regioes.length) {
+    alvo.innerHTML = `<p class="vazio">Nenhuma região liberada para você.
+      Peça ao administrador do sistema o acesso às regiões que você atende.</p>`
+    return
+  }
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+
+  let q = db.from('regiao_lead').select('*').order('agricultavel', { ascending: false, nullsFirst: false })
+  if (BANCO.regiao !== 'todas') {
+    const r = regioes.find(x => x.chave === BANCO.regiao)
+    if (r) q = q.eq('recurso_id', r.id)
+  }
+  const { data, error } = await q
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  BANCO.leads = data || []
+  pintarBanco(alvo, regioes)
+}
+
+function pintarBanco (alvo, regioes) {
+  const nomeRegiao = id => (regioes.find(r => r.id === id) || {}).nome || '—'
+  const txt = BANCO.busca.trim().toLowerCase()
+  const lista = BANCO.leads.filter(l =>
+    (!BANCO.categoria || l.categoria === BANCO.categoria) &&
+    (!txt || `${l.grupo} ${l.cotitulares ?? ''} ${l.foco ?? ''}`.toLowerCase().includes(txt)))
+
+  const area = lista.reduce((s, l) => s + Number(l.area_total || 0), 0)
+  const agric = lista.reduce((s, l) => s + Number(l.agricultavel || 0), 0)
+
+  alvo.innerHTML = `
+    <div class="kpis" style="margin-bottom:16px;">
+      ${kpi('Leads na base', lista.length, lista.length === BANCO.leads.length ? 'no filtro atual' : `de ${BANCO.leads.length} carregados`)}
+      ${kpi('Área total', fmtNum(area / 1000, 1) + ' mil ha', 'no filtro atual')}
+      ${kpi('Agricultável', fmtNum(agric / 1000, 1) + ' mil ha', 'potencial de fertilizante')}
+    </div>
+    <div class="chaves">
+      <label style="${BANCO.regiao === 'todas' ? 'border-color:var(--rust);color:var(--txt);' : ''}"
+        data-reg="todas">todas</label>
+      ${regioes.map(r => `<label style="${BANCO.regiao === r.chave ? 'border-color:var(--rust);color:var(--txt);' : ''}"
+        data-reg="${r.chave}">${esc(r.nome)}</label>`).join('')}
+    </div>
+    <div class="filtros" style="margin:12px 0 14px;">
+      <div class="campo" style="flex:1;min-width:240px;">
+        <label>Buscar</label>
+        <input id="bc-busca" value="${esc(BANCO.busca)}" placeholder="produtor, grupo, co-titular ou foco"></div>
+      <div class="campo"><label>Categoria</label>
+        <select id="bc-cat"><option value="">todas</option>
+          ${Object.entries(ROTULO_CAT).map(([k, v]) =>
+            `<option value="${k}" ${BANCO.categoria === k ? 'selected' : ''}>${v}</option>`).join('')}
+        </select></div>
+    </div>
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>Grupo / produtor</th><th>Região</th><th>Categoria</th><th>Tipo</th>
+        <th class="num">Faz.</th><th class="num">Área (ha)</th><th class="num">Agric. (ha)</th>
+        <th class="num">Soja</th><th class="num">Milho</th><th class="num">Algodão</th><th>Foco</th>
+      </tr></thead><tbody>
+      ${lista.map(l => `<tr class="lead-linha">
+        <td><b>${esc(l.grupo)}</b>
+          ${l.cotitulares ? `<div class="lead-obs">${esc(l.cotitulares)}</div>` : ''}
+          ${l.observacoes ? `<div class="lead-obs">${esc(l.observacoes)}</div>` : ''}</td>
+        <td class="texto-dim2">${esc(nomeRegiao(l.recurso_id))}</td>
+        <td><span class="chip">${ROTULO_CAT[l.categoria] ?? l.categoria}</span></td>
+        <td class="texto-dim">${esc(l.tipo ?? '—')}</td>
+        <td class="num">${l.fazendas ?? '—'}</td>
+        <td class="num">${l.area_total ? fmtNum(l.area_total, 0) : '—'}</td>
+        <td class="num"><b>${l.agricultavel ? fmtNum(l.agricultavel, 0) : '—'}</b></td>
+        <td class="num">${l.soja ? fmtNum(l.soja, 0) : '—'}</td>
+        <td class="num">${l.milho ? fmtNum(l.milho, 0) : '—'}</td>
+        <td class="num">${l.algodao ? fmtNum(l.algodao, 0) : '—'}</td>
+        <td class="texto-dim">${esc(l.foco ?? '—')}</td>
+      </tr>`).join('') || `<tr><td colspan="11" class="vazio">
+        ${BANCO.leads.length ? 'Nenhum lead com esse filtro.' : 'Esta região ainda não tem dados carregados. O administrador importa a planilha em Administração › Ferramentas e regiões.'}</td></tr>`}
+      </tbody></table>
+    </div></div>`
+
+  alvo.querySelectorAll('[data-reg]').forEach(l => {
+    l.onclick = () => { BANCO.regiao = l.dataset.reg; bancoInformacoes(alvo, regioes) }
+  })
+  $('#bc-busca').oninput = e => { BANCO.busca = e.target.value; pintarBanco(alvo, regioes) }
+  $('#bc-cat').onchange = e => { BANCO.categoria = e.target.value; pintarBanco(alvo, regioes) }
 }
 
 // ---------------------------------------------------------------
