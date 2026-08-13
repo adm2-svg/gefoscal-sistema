@@ -1914,6 +1914,8 @@ async function comprasSolicitacoes (alvo, editavel) {
           <button class="btn-secundario mini" data-ficha="${s.id}">ficha</button>
           ${podeEditarSolicitacao(s)
             ? `<button class="btn-secundario mini" data-editar="${s.id}">editar</button>` : ''}
+          ${ehAdminSistema()
+            ? `<button class="btn-secundario mini" data-excluir="${s.id}">excluir</button>` : ''}
         </div>
       </div>
       <div class="meta">
@@ -1957,6 +1959,9 @@ async function comprasSolicitacoes (alvo, editavel) {
     alvo.querySelectorAll('[data-editar]').forEach(b => {
       b.onclick = () => formSolicitacao(todas.find(x => x.id === b.dataset.editar))
     })
+    alvo.querySelectorAll('[data-excluir]').forEach(b => {
+      b.onclick = () => excluirSolicitacao(todas.find(x => x.id === b.dataset.excluir))
+    })
   }
 
   $('#c-faixa').querySelectorAll('[data-etapa]').forEach(b => {
@@ -1972,6 +1977,76 @@ async function comprasSolicitacoes (alvo, editavel) {
 
   if (!editavel) return
   $('#c-nova').onclick = () => formSolicitacao()
+}
+
+
+// ----- Excluir solicitação em definitivo (só administrador) -----
+// Existe para limpar teste e lançamento duplicado. Para pedido real
+// que não vai acontecer, o certo é cancelar: preserva o histórico.
+function excluirSolicitacao (s) {
+  if (!s) return
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal">
+      <h3>Excluir solicitação ${esc(s.numero ?? '')}</h3>
+      <div class="ficha" style="margin-bottom:14px;">
+        <div class="item"><div class="rot">Item</div>
+          <div class="val">${esc(s.produto_servico ?? '—')}</div></div>
+        <div class="item"><div class="rot">Situação</div><div class="val">${selo(s.status)}</div></div>
+        <div class="item"><div class="rot">Valor</div>
+          <div class="val">${s.valor_estimado ? 'R$ ' + fmtNum(s.valor_estimado) : '—'}</div></div>
+      </div>
+      ${s.origem_id ? `<div class="recado" style="border-color:var(--warn-text);
+        color:var(--warn-text);margin:0 0 12px;">
+        Esta solicitação veio da planilha antiga (${esc(s.origem_id)}). Apagar remove
+        um registro do histórico da empresa. Tem certeza de que é um lançamento indevido?</div>` : ''}
+      <p class="aviso" style="margin-top:0;">
+        Apaga em definitivo, com os orçamentos e o histórico dela. Não há como desfazer.
+        Para pedido real que não vai acontecer, cancele em vez de apagar.</p>
+      <div class="campo"><label>Por que está excluindo *</label>
+        <textarea id="ex-motivo" style="min-height:70px;"
+          placeholder="lançamento de teste, duplicidade..."></textarea></div>
+      <div class="acoes">
+        <button class="btn" id="ex-ok" style="background:var(--warn-text);">Excluir</button>
+        <button class="btn-secundario" id="ex-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="ex-recado"></div>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#ex-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  q('#ex-ok').onclick = async () => {
+    const motivo = q('#ex-motivo').value.trim()
+    if (motivo.length < 5) {
+      const el = q('#ex-recado'); el.textContent = 'Escreva o motivo.'
+      el.classList.remove('oculto'); el.style.color = 'var(--warn-text)'
+      el.style.borderColor = 'var(--warn-text)'; return
+    }
+    const btn = q('#ex-ok'); btn.disabled = true; btn.textContent = 'Excluindo...'
+
+    // registra antes de apagar: se falhar, fica o rastro da tentativa
+    await db.from('solicitacao_historico').insert({
+      solicitacao_id: s.id, numero: s.numero, acao: 'EXCLUSAO',
+      justificativa: motivo,
+      antes: { numero: s.numero, produto_servico: s.produto_servico,
+               valor: s.valor_estimado, status: s.status, origem_id: s.origem_id },
+      pessoa_id: PERFIL.pessoaId
+    })
+
+    const { error } = await db.from('solicitacao_compra').delete().eq('id', s.id)
+    if (error) {
+      const el = q('#ex-recado'); el.textContent = error.message
+      el.classList.remove('oculto'); el.style.color = 'var(--warn-text)'
+      el.style.borderColor = 'var(--warn-text)'
+      btn.disabled = false; btn.textContent = 'Excluir'; return
+    }
+    fechar(); abrirCompras('solicitacoes', true)
+  }
 }
 
 // ----- Compras › Relatório -----
