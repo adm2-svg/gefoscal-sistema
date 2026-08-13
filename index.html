@@ -1656,8 +1656,9 @@ const selo = s => {
 }
 const URGENCIA = { URGENTE_4H: 'Urgente — 4h', NAO_URGENTE_5D: 'Normal — 5 dias' }
 
-// Setor que exige passar pela coordenação antes de cotar.
-const SETOR_COM_COORDENACAO = 'Indústria'
+// Setores que exigem passar pela coordenação antes de cotar.
+// O resto vai direto para o analista cotar.
+const SETORES_COM_COORDENACAO = ['Indústria', 'P-TEC']
 
 // Quem faz o quê:
 //   ver e solicitar   -> qualquer um com acesso ao módulo compras
@@ -2286,7 +2287,7 @@ function formSolicitacao (s = null) {
       corpo.data_solicitacao = new Date().toISOString()
       // Indústria passa pela coordenação; os demais vão direto para o analista
       const setorEscolhido = COMPRAS_CACHE.setores.find(x => x.id === corpo.setor_id)
-      corpo.status = setorEscolhido?.nome === SETOR_COM_COORDENACAO
+      corpo.status = SETORES_COM_COORDENACAO.includes(setorEscolhido?.nome)
         ? 'AGUARDANDO_COORD'
         : 'AGUARDANDO_COTACAO'
     }
@@ -2315,7 +2316,7 @@ const ETAPAS = {
     campoData: 'coordenado_em',
     campoPessoa: 'gestor_id',
     rotuloParecer: 'Justificativa da compra',
-    explica: `Só solicitações de ${SETOR_COM_COORDENACAO} passam por aqui. ` +
+    explica: `Só solicitações de ${SETORES_COM_COORDENACAO.join(' e ')} passam por aqui. ` +
              'Justifique a necessidade e encaminhe para o analista cotar.'
   },
   aprovacao: {
