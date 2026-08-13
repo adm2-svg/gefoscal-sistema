@@ -282,6 +282,45 @@ tbody tr:hover { background: var(--hover-bg); }
 .resumo-topo .bloco.bom .val { color:var(--ok-text, var(--rust)); }
 @media (max-width:640px) { .resumo-topo .val { font-size:26px; } }
 
+
+/* ---- Linha que abre em detalhe ---- */
+tr.abrivel { cursor:pointer; }
+tr.abrivel:hover { background:var(--hover-bg); }
+tr.abrivel .seta { display:inline-block; color:var(--dim2); font-size:10px;
+                   transition:transform .15s ease; margin-right:6px; }
+tr.abrivel.aberta .seta { transform:rotate(90deg); color:var(--rust); }
+tr.detalhe > td { background:var(--hover-bg); padding:0; border-bottom:1px solid var(--line2); }
+tr.detalhe .conteudo { padding:16px 18px; }
+.det-grade { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
+             gap:12px 22px; margin-bottom:12px; }
+.det-grade .rot { color:var(--dim2); font-size:10px; text-transform:uppercase;
+                  letter-spacing:.1em; }
+.det-grade .val { font-size:13.5px; margin-top:3px; }
+.det-texto { border-left:2px solid var(--line2); padding-left:11px; margin-top:10px;
+             font-size:13px; line-height:1.6; }
+.det-texto b { color:var(--dim); font-size:10.5px; text-transform:uppercase;
+               letter-spacing:.08em; display:block; margin-bottom:2px; }
+
+
+/* ---- Documentos anexados dentro do detalhe ---- */
+.docs-anexos { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr));
+               gap:9px; margin:12px 0 4px; }
+.doc-card { border:1px solid var(--line2); border-radius:8px; padding:11px 13px;
+            background:var(--panel); display:flex; gap:11px; align-items:flex-start; }
+.doc-card .icone { width:34px; height:34px; border-radius:7px; flex:none; display:grid;
+                   place-items:center; background:var(--hover-bg); font-size:14px; }
+.doc-card.comprovante .icone { color:var(--ok-text, var(--rust)); }
+.doc-card.boleto .icone { color:var(--rust); }
+.doc-card .corpo { flex:1; min-width:0; }
+.doc-card .tipo { font-size:10px; text-transform:uppercase; letter-spacing:.1em;
+                  color:var(--dim2); }
+.doc-card .valor { font-size:14px; margin-top:3px; }
+.doc-card .quando { font-size:11.5px; color:var(--dim2); margin-top:2px; }
+.doc-card .nome { font-size:11px; color:var(--dim2); margin-top:4px;
+                  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.sem-doc { border:1px dashed var(--line2); border-radius:8px; padding:12px 14px;
+           font-size:12.5px; color:var(--dim2); margin:12px 0 4px; }
+
 @page { size: A4; margin: 8mm; }
 
 @media print {
@@ -5384,14 +5423,18 @@ async function finCompras (alvo, editavel) {
         </tr></thead><tbody>
           ${filtrada.map(x => {
             const atrasado = x.vencimento && x.vencimento < hoje
-            return `<tr>
+            return `<tr class="abrivel" data-abrir="${x.id}">
               <td class="${atrasado ? 'badge-alerta' : ''}">
+                <span class="seta">▶</span>
                 ${x.vencimento ? fmtData(x.vencimento) : '<span class="texto-dim2">sem data</span>'}
                 ${x.urgencia === 'URGENTE_4H' ? '<br><span class="urgente">urgente</span>' : ''}</td>
               <td class="texto-dim2">${esc(x.documento ?? '—')}</td>
               <td>${esc((x.descricao ?? '').slice(0, 55))}</td>
               <td class="texto-dim">${esc(x.setor ?? '—')}</td>
               <td class="num">R$ ${fmtNum(x.valor)}</td>
+            </tr>
+            <tr class="detalhe oculto" data-detalhe="${x.id}">
+              <td colspan="5"><div class="conteudo">carregando...</div></td>
             </tr>`
           }).join('') || `<tr><td colspan="5" class="vazio">
             ${termo ? 'Nada encontrado com esse termo.' : 'Nenhuma compra aguardando pagamento.'}</td></tr>`}
@@ -5403,15 +5446,169 @@ async function finCompras (alvo, editavel) {
       </div>`
   }
 
-  $('#fc-busca').oninput = pintar
-  $('#fc-ordem').onchange = pintar
-  pintar()
+  const ligarLinhas = () => {
+    $('#fc-tabela').querySelectorAll('[data-abrir]').forEach(tr => {
+      tr.onclick = async () => {
+        const id = tr.dataset.abrir
+        const det = $('#fc-tabela').querySelector(`[data-detalhe="${id}"]`)
+        const abrindo = det.classList.contains('oculto')
+
+        // uma aberta por vez: mais fácil de ler
+        $('#fc-tabela').querySelectorAll('[data-detalhe]').forEach(d => d.classList.add('oculto'))
+        $('#fc-tabela').querySelectorAll('[data-abrir]').forEach(l => l.classList.remove('aberta'))
+        if (!abrindo) return
+
+        det.classList.remove('oculto')
+        tr.classList.add('aberta')
+        await detalheCompra(id, det.querySelector('.conteudo'))
+      }
+    })
+  }
+
+  const pintarELigar = () => { pintar(); ligarLinhas() }
+  $('#fc-busca').oninput = pintarELigar
+  $('#fc-ordem').onchange = pintarELigar
+  pintarELigar()
 
   // a fila com a baixa continua abaixo, inteira
   const caixaFila = document.createElement('div')
   caixaFila.id = 'fc-fila'
   alvo.appendChild(caixaFila)
   await comprasPagar(caixaFila)
+}
+
+// Detalhe da compra aberto dentro da própria linha da tabela.
+// Busca só quando a pessoa abre — evita carregar 300 solicitações inteiras.
+const CACHE_DETALHE = {}
+async function detalheCompra (id, alvo) {
+  if (CACHE_DETALHE[id]) {
+    alvo.innerHTML = CACHE_DETALHE[id]
+    ligarBotoesDetalhe(id, alvo)
+    return
+  }
+
+  const [{ data: s }, { data: orcs }, { data: docs }] = await Promise.all([
+    db.from('solicitacao_compra').select(`
+      numero, produto_servico, quantidade, unidade, especificacoes, finalidade,
+      local_entrega, urgencia, tipo_solicitacao, recorrencia, tem_risco, descricao_risco,
+      justificativa, parecer_coordenacao, parecer_cotacao, parecer_aprovacao,
+      observacao_compras, onde_mais_barato, forma_pagamento, condicao_pagamento,
+      parcelas, vencimento, dados_pagamento, valor_estimado, valor_aprovado,
+      data_solicitacao, solicitante_nome, gestor_nome, aprovador_nome,
+      solicitante:solicitante_id(nome), analista:analista_id(nome),
+      aprovador:aprovador_id(nome), setor:setor_id(nome), fornecedor:fornecedor_id(nome)
+    `).eq('id', id).maybeSingle(),
+    db.from('orcamento').select('valor,prazo_entrega,forma_pagamento,escolhido,fornecedor_avulso,fornecedor:fornecedor_id(nome)')
+      .eq('solicitacao_id', id).order('valor'),
+    db.from('documento_pagamento')
+      .select('id,tipo,descricao,valor,vencimento,pago_em,arquivo_caminho,arquivo_nome,criado_em,criado:criado_por(nome)')
+      .eq('solicitacao_id', id).order('criado_em')
+  ])
+
+  if (!s) { alvo.innerHTML = '<p class="texto-dim2">Não encontrei os detalhes.</p>'; return }
+
+  const item = (rot, val) => val
+    ? `<div><div class="rot">${esc(rot)}</div><div class="val">${esc(val)}</div></div>` : ''
+  const texto = (rot, val) => val
+    ? `<div class="det-texto"><b>${esc(rot)}</b>${esc(val)}</div>` : ''
+  const nomeF = o => o?.fornecedor?.nome || o?.fornecedor_avulso || null
+  const escolhido = (orcs || []).find(o => o.escolhido)
+
+  const html = `
+    <div class="det-grade">
+      ${item('Solicitante', s.solicitante?.nome ?? s.solicitante_nome)}
+      ${item('Setor', s.setor?.nome)}
+      ${item('Aberta em', fmtQuando(s.data_solicitacao))}
+      ${item('Quantidade', s.quantidade ? `${s.quantidade} ${s.unidade ?? ''}` : null)}
+      ${item('Tipo', s.tipo_solicitacao)}
+      ${item('Urgência', URGENCIA[s.urgencia] ?? s.urgencia)}
+      ${item('Entrega', s.local_entrega)}
+      ${item('Recorrência', s.recorrencia)}
+      ${item('Fornecedor', nomeF(escolhido) ?? s.fornecedor?.nome)}
+      ${item('Pagamento', [s.forma_pagamento, s.condicao_pagamento].filter(Boolean).join(' · '))}
+      ${item('Parcelas', s.parcelas ? `${s.parcelas}x` : null)}
+      ${item('Vencimento', s.vencimento ? fmtData(s.vencimento) : null)}
+      ${item('Valor estimado', s.valor_estimado ? 'R$ ' + fmtNum(s.valor_estimado) : null)}
+      ${item('Valor aprovado', s.valor_aprovado ? 'R$ ' + fmtNum(s.valor_aprovado) : null)}
+      ${item('Coordenação', s.gestor_nome)}
+      ${item('Cotação', s.analista?.nome)}
+      ${item('Aprovação', s.aprovador?.nome ?? s.aprovador_nome)}
+    </div>
+
+    ${(orcs || []).length ? `
+      <table style="margin:4px 0 10px;"><thead><tr>
+        <th>Orçamento</th><th class="num">Valor</th><th>Prazo</th><th></th>
+      </tr></thead><tbody>
+        ${orcs.map(o => `<tr>
+          <td>${esc(nomeF(o) ?? '—')}</td>
+          <td class="num">R$ ${fmtNum(o.valor)}</td>
+          <td>${esc(o.prazo_entrega ?? '—')}</td>
+          <td>${o.escolhido ? '<b>escolhido</b>' : ''}</td>
+        </tr>`).join('')}
+      </tbody></table>` : ''}
+
+    ${(docs || []).length ? `
+      <div class="rot texto-dim2" style="font-size:10px;text-transform:uppercase;
+           letter-spacing:.1em;margin-top:6px;">Documentos anexados</div>
+      <div class="docs-anexos">
+        ${docs.map(d => {
+          const rotulo = { BOLETO: 'boleto', COMPROVANTE: 'comprovante',
+                           NOTA: 'nota fiscal', OUTRO: 'documento' }[d.tipo] ?? 'documento'
+          const icone = { BOLETO: '▤', COMPROVANTE: '✓', NOTA: '▦', OUTRO: '▢' }[d.tipo] ?? '▢'
+          const quando = d.pago_em ? 'pago em ' + fmtData(d.pago_em)
+            : d.vencimento ? 'vence ' + fmtData(d.vencimento)
+            : 'anexado em ' + (fmtQuando(d.criado_em) ?? '—')
+          return `
+            <div class="doc-card ${d.tipo.toLowerCase()}">
+              <div class="icone">${icone}</div>
+              <div class="corpo">
+                <div class="tipo">${esc(rotulo)}</div>
+                <div class="valor">${d.valor ? 'R$ ' + fmtNum(d.valor) : esc(d.descricao ?? '—')}</div>
+                <div class="quando">${esc(quando)}${
+                  d.criado?.nome ? ' · ' + esc(d.criado.nome) : ''}</div>
+                ${d.arquivo_nome ? `<div class="nome">${esc(d.arquivo_nome)}</div>` : ''}
+                ${d.arquivo_caminho
+                  ? `<button class="btn-secundario mini" style="margin-top:7px;"
+                       data-ver-doc="${esc(d.arquivo_caminho)}">abrir arquivo</button>`
+                  : '<div class="nome">sem arquivo anexado</div>'}
+              </div>
+            </div>`
+        }).join('')}
+      </div>` : `
+      <div class="sem-doc">Nenhum boleto ou comprovante anexado ainda.
+        Eles entram aqui quando a baixa é feita na fila abaixo.</div>`}
+
+    ${texto('Finalidade', s.finalidade)}
+    ${texto('Especificações', s.especificacoes)}
+    ${texto('Justificativa do solicitante', s.justificativa)}
+    ${s.tem_risco ? texto('Risco apontado', s.descricao_risco || 'sim, sem descrição') : ''}
+    ${texto('Coordenação', s.parecer_coordenacao)}
+    ${texto('Cotação', s.parecer_cotacao)}
+    ${texto('Onde achou mais barato', s.onde_mais_barato)}
+    ${texto('Observação do compras', s.observacao_compras)}
+    ${texto('Parecer da aprovação', s.parecer_aprovacao)}
+    ${texto('Dados de pagamento', s.dados_pagamento)}
+
+    <div class="acoes" style="margin-top:12px;">
+      <button class="btn-secundario mini" data-ficha-det="${id}">abrir ficha em PDF</button>
+    </div>`
+
+  CACHE_DETALHE[id] = html
+  alvo.innerHTML = html
+  // os botões precisam ser religados a cada abertura, mesmo vindo do cache
+  ligarBotoesDetalhe(id, alvo)
+}
+
+function ligarBotoesDetalhe (id, alvo) {
+  alvo.querySelectorAll('[data-ver-doc]').forEach(b => {
+    b.onclick = e => { e.stopPropagation(); abrirArquivo(b.dataset.verDoc) }
+  })
+  const ficha = alvo.querySelector('[data-ficha-det]')
+  if (ficha) ficha.onclick = async e => {
+    e.stopPropagation()
+    const { data } = await db.from('solicitacao_compra').select(selSolicitacao).eq('id', id).maybeSingle()
+    if (data) abrirFicha(data, false).catch(err => console.error(err))
+  }
 }
 
 // ----- Financeiro › Gastos por setor -----
