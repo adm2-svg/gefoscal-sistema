@@ -265,6 +265,23 @@ tbody tr:hover { background: var(--hover-bg); }
 .faixa-etapa button.ativo { background:var(--rust); color:#fff; }
 .faixa-etapa button .n { display:block; font-size:16px; font-family:var(--serif); }
 
+
+/* ---- Resumo grande do financeiro ---- */
+.resumo-topo { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr));
+               gap:1px; background:var(--line); border:1px solid var(--line);
+               border-radius:10px; overflow:hidden; margin-bottom:20px; }
+.resumo-topo .bloco { background:var(--panel); padding:20px 22px; }
+.resumo-topo .rot { color:var(--dim2); font-size:10.5px; text-transform:uppercase;
+                    letter-spacing:.12em; }
+.resumo-topo .val { font-family:var(--serif); font-size:34px; line-height:1.05;
+                    margin-top:10px; letter-spacing:-.01em; }
+.resumo-topo .nota { color:var(--dim); font-size:12.5px; margin-top:7px; }
+.resumo-topo .bloco.destaque { box-shadow:inset 4px 0 0 var(--rust); }
+.resumo-topo .bloco.alerta  { box-shadow:inset 4px 0 0 var(--warn-text); }
+.resumo-topo .bloco.alerta .val { color:var(--warn-text); }
+.resumo-topo .bloco.bom .val { color:var(--ok-text, var(--rust)); }
+@media (max-width:640px) { .resumo-topo .val { font-size:26px; } }
+
 @page { size: A4; margin: 8mm; }
 
 @media print {
@@ -4312,7 +4329,7 @@ async function paginaFinanceiro () {
     : 'Somente leitura — você pode consultar, mas não alterar'
 
   const area = areaLivre()
-  const abas = [['lancamentos', 'Lançamentos'], ['pagar', 'A pagar'], ['fechamento', 'Fechamento'], ['gastos', 'Gastos por setor'],
+  const abas = [['lancamentos', 'Lançamentos'], ['compras', 'Compras'], ['pagar', 'A pagar'], ['fechamento', 'Fechamento'], ['gastos', 'Gastos por setor'],
     ['orcamento', 'Orçamento'], ['contas', 'Saldo e contas'], ['planos', 'Planos e metas'],
     ['investimentos', 'Investimentos'], ['relatorios', 'Relatórios'], ['cadastros', 'Cadastros']]
   area.innerHTML = `
@@ -4343,6 +4360,7 @@ function abrirFinanceiro (sub, editavel) {
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
   if (sub === 'lancamentos') finLancamentos(alvo, editavel)
   if (sub === 'pagar') finAPagar(alvo, editavel)
+  if (sub === 'compras') finCompras(alvo, editavel)
   if (sub === 'gastos') finGastos(alvo)
   if (sub === 'fechamento') finFechamento(alvo, editavel)
   if (sub === 'cadastros') finCadastros(alvo, editavel)
@@ -4377,15 +4395,16 @@ async function finLancamentos (alvo, editavel) {
   const { data: comp } = await db.from('compras_por_mes').select('*').eq('competencia', mesComp)
   const compras = comp?.[0] ?? { quantidade: 0, valor: 0 }
 
-  alvo.innerHTML = navMesHtml() + `
-    <div class="kpis" style="margin-bottom:16px;">
-      ${kpi('Receitas', 'R$ ' + fmtNum(rec))}
-      ${kpi('Despesas', 'R$ ' + fmtNum(des))}
-      ${kpi('Resultado', 'R$ ' + fmtNum(rec - des))}
-      ${kpi('Pendentes', pend, 'a efetivar')}
-      ${kpi('Compras aprovadas', 'R$ ' + fmtNum(compras.valor),
-            `${compras.quantidade} no mês · fora dos lançamentos`)}
-    </div>
+  alvo.innerHTML = navMesHtml() + resumoTopo([
+    { rotulo: 'Receitas', valor: 'R$ ' + fmtNum(rec), nota: 'entradas do mês', classe: 'bom' },
+    { rotulo: 'Despesas', valor: 'R$ ' + fmtNum(des), nota: 'saídas do mês' },
+    { rotulo: 'Resultado', valor: 'R$ ' + fmtNum(rec - des),
+      nota: rec - des >= 0 ? 'positivo' : 'negativo',
+      classe: rec - des >= 0 ? 'bom' : 'alerta' },
+    pend ? { rotulo: 'Pendentes', valor: String(pend), nota: 'a efetivar', classe: 'alerta' } : null,
+    { rotulo: 'Compras aprovadas', valor: 'R$ ' + fmtNum(compras.valor),
+      nota: `${compras.quantidade} no mês · ainda fora do caixa`, classe: 'destaque' }
+  ]) + `
     ${editavel ? `<div class="secao panel" style="padding:18px;">
       <h3>Novo lançamento</h3>
       <div class="form-grade">
@@ -5093,39 +5112,48 @@ function telaBaixa (s, contas, categorias, centros) {
   }
 }
 
+
+// Resumo grande do topo: poucos números, grandes, sem gráfico.
+// Cada bloco aceita destaque (ocre) ou alerta (vermelho).
+function resumoTopo (blocos) {
+  return `<div class="resumo-topo">` + blocos.filter(Boolean).map(b => `
+    <div class="bloco ${b.classe ?? ''}">
+      <div class="rot">${esc(b.rotulo)}</div>
+      <div class="val">${b.valor}</div>
+      ${b.nota ? `<div class="nota">${esc(b.nota)}</div>` : ''}
+    </div>`).join('') + `</div>`
+}
+
 // ----- Financeiro › A pagar, separado por origem -----
 // O que vem do Compras fica em cima, com a baixa que gera lançamento.
 // Títulos do relatório contábil e lançamentos manuais ficam abaixo.
 async function finAPagar (alvo, editavel) {
   const hoje = new Date().toISOString().slice(0, 10)
+  const em7 = new Date(Date.now() + 7 * 864e5).toISOString().slice(0, 10)
 
   const { data, error } = await db.from('contas_a_pagar').select('*')
+    .neq('origem', 'compra')
     .order('vencimento', { nullsFirst: false })
   if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
 
   const tudo = data || []
-  const porOrigem = o => tudo.filter(x => x.origem === o)
   const soma = l => l.reduce((s, x) => s + Number(x.valor || 0), 0)
   const vencidas = tudo.filter(x => x.vencimento && x.vencimento < hoje)
+  const semana = tudo.filter(x => x.vencimento && x.vencimento >= hoje && x.vencimento <= em7)
+  const titulos = tudo.filter(x => x.origem === 'título')
+  const manuais = tudo.filter(x => x.origem === 'lançamento')
 
-  $('#kpis').innerHTML =
-    kpi('Total a pagar', 'R$ ' + fmtNum(soma(tudo)), `${tudo.length} conta(s)`) +
-    kpi('Vindo do Compras', 'R$ ' + fmtNum(soma(porOrigem('compra'))),
-        `${porOrigem('compra').length} compra(s) aprovada(s)`) +
-    kpi('Títulos e lançamentos', 'R$ ' + fmtNum(soma(porOrigem('título')) + soma(porOrigem('lançamento'))),
-        `${porOrigem('título').length + porOrigem('lançamento').length} conta(s)`) +
-    kpi('Vencidas', vencidas.length, vencidas.length ? 'R$ ' + fmtNum(soma(vencidas)) : 'nada em atraso')
+  $('#kpis').innerHTML = ''
 
   const tabela = (lista, vazio) => `
     <div class="panel" style="padding:0;"><div class="tabela-scroll">
       <table><thead><tr>
-        <th>Vencimento</th><th>Documento</th><th>Descrição</th><th>Setor</th><th class="num">Valor</th>
+        <th>Vencimento</th><th>Documento</th><th>Descrição</th><th>Centro</th><th class="num">Valor</th>
       </tr></thead><tbody>
         ${lista.map(x => {
           const atrasado = x.vencimento && x.vencimento < hoje
           return `<tr>
-            <td class="${atrasado ? 'badge-alerta' : ''}">${x.vencimento ? fmtData(x.vencimento) : '—'}
-              ${x.urgencia === 'URGENTE_4H' ? '<br><span class="urgente">urgente</span>' : ''}</td>
+            <td class="${atrasado ? 'badge-alerta' : ''}">${x.vencimento ? fmtData(x.vencimento) : '—'}</td>
             <td class="texto-dim2">${esc(x.documento ?? '—')}</td>
             <td>${esc((x.descricao ?? '').slice(0, 60))}</td>
             <td class="texto-dim">${esc(x.setor ?? '—')}</td>
@@ -5135,32 +5163,76 @@ async function finAPagar (alvo, editavel) {
       </tbody></table>
     </div></div>`
 
-  alvo.innerHTML = `
-    <div class="cabeca-secao">
-      <h3 style="font-family:var(--serif);font-size:17px;">Do Compras</h3>
-      <span class="texto-dim2" style="font-size:12px;">
-        compras aprovadas esperando pagamento · R$ ${fmtNum(soma(porOrigem('compra')))}</span>
-    </div>
+  alvo.innerHTML = resumoTopo([
+    { rotulo: 'Total a pagar', valor: 'R$ ' + fmtNum(soma(tudo)),
+      nota: `${tudo.length} conta(s) em aberto`, classe: 'destaque' },
+    vencidas.length
+      ? { rotulo: 'Vencido', valor: 'R$ ' + fmtNum(soma(vencidas)),
+          nota: `${vencidas.length} conta(s) em atraso`, classe: 'alerta' }
+      : { rotulo: 'Vencido', valor: 'nada', nota: 'em dia', classe: 'bom' },
+    { rotulo: 'Vence em 7 dias', valor: 'R$ ' + fmtNum(soma(semana)),
+      nota: `${semana.length} conta(s)` },
+    { rotulo: 'Do relatório contábil', valor: 'R$ ' + fmtNum(soma(titulos)),
+      nota: `${titulos.length} título(s) importado(s)` }
+  ]) + `
     <p class="aviso" style="margin-top:0;">
-      A baixa destas é feita na fila abaixo, que registra comprovante e gera o lançamento.</p>
-    <div id="ap-compras"></div>
+      As compras aprovadas ficam na aba <b>Compras</b>, onde a baixa anexa comprovante
+      e gera o lançamento.</p>
 
-    <div class="cabeca-secao" style="margin-top:26px;">
+    <div class="cabeca-secao" style="margin-top:20px;">
       <h3 style="font-family:var(--serif);font-size:17px;">Títulos do relatório contábil</h3>
-      <span class="texto-dim2" style="font-size:12px;">
-        ${porOrigem('título').length} · R$ ${fmtNum(soma(porOrigem('título')))}</span>
+      <span class="texto-dim2" style="font-size:12px;">${titulos.length} · R$ ${fmtNum(soma(titulos))}</span>
     </div>
-    ${tabela(porOrigem('título'), 'Nenhum título em aberto. Importe o relatório em Cadastros.')}
+    ${tabela(titulos, 'Nenhum título em aberto. Importe o relatório em Cadastros.')}
 
     <div class="cabeca-secao" style="margin-top:26px;">
       <h3 style="font-family:var(--serif);font-size:17px;">Lançamentos pendentes</h3>
-      <span class="texto-dim2" style="font-size:12px;">
-        ${porOrigem('lançamento').length} · R$ ${fmtNum(soma(porOrigem('lançamento')))}</span>
+      <span class="texto-dim2" style="font-size:12px;">${manuais.length} · R$ ${fmtNum(soma(manuais))}</span>
     </div>
-    ${tabela(porOrigem('lançamento'), 'Nenhum lançamento pendente de efetivação.')}`
+    ${tabela(manuais, 'Nenhum lançamento pendente de efetivação.')}`
+}
 
-  // a fila de compras continua sendo a tela que ja existia, com baixa e anexos
-  await comprasPagar($('#ap-compras'))
+// ----- Financeiro › Compras -----
+// A fila que vem do módulo de Compras, com resumo próprio.
+async function finCompras (alvo, editavel) {
+  const hoje = new Date().toISOString().slice(0, 10)
+
+  const [{ data: fila }, { data: porMes }] = await Promise.all([
+    db.from('contas_a_pagar').select('*').eq('origem', 'compra'),
+    db.from('compras_por_mes').select('*').order('competencia', { ascending: false }).limit(6)
+  ])
+
+  const lista = fila || []
+  const soma = l => l.reduce((s, x) => s + Number(x.valor || 0), 0)
+  const vencidas = lista.filter(x => x.vencimento && x.vencimento < hoje)
+  const urgentes = lista.filter(x => x.urgencia === 'URGENTE_4H')
+  const mes = (porMes || [])[0]
+
+  $('#kpis').innerHTML = ''
+
+  alvo.innerHTML = resumoTopo([
+    { rotulo: 'Compras a pagar', valor: 'R$ ' + fmtNum(soma(lista)),
+      nota: `${lista.length} aprovada(s) esperando pagamento`, classe: 'destaque' },
+    vencidas.length
+      ? { rotulo: 'Passou do prazo', valor: String(vencidas.length),
+          nota: 'R$ ' + fmtNum(soma(vencidas)), classe: 'alerta' }
+      : { rotulo: 'Passou do prazo', valor: 'nenhuma', nota: 'tudo dentro do prazo', classe: 'bom' },
+    urgentes.length
+      ? { rotulo: 'Marcadas como urgentes', valor: String(urgentes.length),
+          nota: 'R$ ' + fmtNum(soma(urgentes)), classe: 'alerta' }
+      : null,
+    mes ? { rotulo: 'Aprovado neste mês', valor: 'R$ ' + fmtNum(mes.valor),
+            nota: `${mes.quantidade} compra(s)` } : null
+  ]) + `
+    ${(porMes || []).length > 1 ? `
+    <div class="panel" style="padding:16px 18px;margin-bottom:18px;">
+      <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.12em;">
+        Aprovado por mês</div>
+      <div style="margin-top:10px;">${barrasMes(porMes)}</div>
+    </div>` : ''}
+    <div id="fc-fila"></div>`
+
+  await comprasPagar($('#fc-fila'))
 }
 
 // ----- Financeiro › Gastos por setor -----
@@ -5189,6 +5261,7 @@ async function finGastos (alvo) {
         </select></div>
       <button class="btn-secundario" id="g-pdf">Gerar PDF</button>
     </div>
+    <div id="g-topo"></div>
     <div id="g-resultado"></div>`
 
   const desenhar = () => {
@@ -5207,12 +5280,15 @@ async function finGastos (alvo) {
     const total = ordenado.reduce((s, [, v]) => s + v.valor, 0)
     const maior = ordenado[0]
 
-    $('#kpis').innerHTML =
-      kpi('Gasto total', 'R$ ' + fmtNum(total), mes || `${meses.length} meses`) +
-      kpi('Setor que mais gastou', maior ? maior[0] : '—',
-          maior ? 'R$ ' + fmtNum(maior[1].valor) + ` · ${(maior[1].valor / total * 100).toFixed(0)}%` : '') +
-      kpi('Setores', ordenado.length) +
-      kpi('Média por mês', 'R$ ' + fmtNum(total / Math.max(1, mes ? 1 : meses.length)))
+    $('#kpis').innerHTML = ''
+    $('#g-topo').innerHTML = resumoTopo([
+      { rotulo: 'Gasto total', valor: 'R$ ' + fmtNum(total),
+        nota: mes || `últimos ${meses.length} meses`, classe: 'destaque' },
+      maior ? { rotulo: 'Quem mais gastou', valor: esc(maior[0]),
+        nota: `R$ ${fmtNum(maior[1].valor)} · ${(maior[1].valor / total * 100).toFixed(0)}% do total` } : null,
+      { rotulo: 'Média por mês', valor: 'R$ ' + fmtNum(total / Math.max(1, mes ? 1 : meses.length)),
+        nota: `${ordenado.length} setor(es)` }
+    ])
 
     $('#g-resultado').innerHTML = `
       <div class="panel" style="padding:18px;margin-bottom:14px;">
@@ -5309,7 +5385,9 @@ function telaLancamento (l, acao) {
         </div>
         <p class="aviso" style="margin-top:0;">
           O lançamento some do caixa e dos relatórios. Fica o registro de que existiu,
-          com o motivo, para a conciliação fazer sentido depois.</p>
+          com o motivo, para a conciliação fazer sentido depois.
+          Se ele veio da baixa de uma compra, essa compra volta para
+          <b>aprovada a pagar</b> — o pagamento deixa de constar.</p>
         <div class="campo"><label>Por que está excluindo *</label>
           <textarea id="tl-motivo" style="min-height:80px;"
             placeholder="lançado em duplicidade, valor errado, teste..."></textarea></div>
@@ -5377,11 +5455,28 @@ function telaLancamento (l, acao) {
 
     if (excluindo) {
       if (motivo.length < 5) { aviso('Escreva o motivo da exclusão.'); btn.disabled = false; return }
+      // quem apontava para este lançamento volta a ficar em aberto
+      const { data: compras } = await db.from('solicitacao_compra')
+        .select('id, numero, produto_servico').eq('lancamento_id', l.id)
+
       await db.from('lancamento_historico').insert({
-        lancamento_id: l.id, acao: 'EXCLUSAO', antes, motivo, pessoa_id: PERFIL.pessoaId
+        lancamento_id: l.id, acao: 'EXCLUSAO',
+        antes: { ...antes, compras_vinculadas: (compras || []).map(c => c.numero) },
+        motivo, pessoa_id: PERFIL.pessoaId
       })
+
       const { error } = await db.from('lancamento_financeiro').delete().eq('id', l.id)
       if (error) { aviso(error.message); btn.disabled = false; return }
+
+      // a compra volta para "aprovada a pagar": ela nunca foi paga de fato
+      if (compras?.length) {
+        await db.from('solicitacao_compra').update({
+          status: 'APROVADA', pago_em: null, valor_pago: null, pago_por_id: null
+        }).in('id', compras.map(c => c.id))
+        alert(`Lançamento excluído.\n\n${compras.length} compra(s) voltaram para "aprovada a pagar":\n`
+          + compras.map(c => `· ${c.numero} — ${c.produto_servico}`).join('\n'))
+      }
+
       fechar(); abrirFinanceiro('lancamentos', true)
       return
     }
@@ -5630,12 +5725,17 @@ async function finFechamento (alvo, editavel) {
 
   const totalPago = comprovantes.reduce((s, d) => s + Number(d.valor || 0), 0)
 
-  $('#kpis').innerHTML =
-    kpi('Documentos no mês', lista.length, `${boletos.length} boleto(s), ${comprovantes.length} comprovante(s)`) +
-    kpi('Total comprovado', 'R$ ' + fmtNum(totalPago)) +
-    kpi('Pares completos', completos.length, 'boleto com comprovante') +
-    kpi('Faltando par', soBoleto.length + soComprovante.length,
-        soBoleto.length ? `${soBoleto.length} sem comprovante` : 'tudo pareado')
+  $('#kpis').innerHTML = ''
+  const topoFechamento = resumoTopo([
+    { rotulo: 'Total comprovado', valor: 'R$ ' + fmtNum(totalPago),
+      nota: `${comprovantes.length} comprovante(s) no mês`, classe: 'destaque' },
+    { rotulo: 'Documentos', valor: String(lista.length),
+      nota: `${boletos.length} boleto(s) · ${comprovantes.length} comprovante(s)` },
+    (soBoleto.length + soComprovante.length)
+      ? { rotulo: 'Falta parear', valor: String(soBoleto.length + soComprovante.length),
+          nota: 'antes de fechar o mês', classe: 'alerta' }
+      : { rotulo: 'Conferência', valor: 'tudo pareado', nota: `${completos.length} par(es)`, classe: 'bom' }
+  ])
 
   const linha = d => `
     <tr>
@@ -5652,6 +5752,7 @@ async function finFechamento (alvo, editavel) {
 
   alvo.innerHTML = `
     ${navMesHtml()}
+    ${topoFechamento}
 
     ${(soBoleto.length || soComprovante.length) ? `
     <div class="panel" style="padding:16px 18px;margin-bottom:14px;border-color:var(--warn-text);">
