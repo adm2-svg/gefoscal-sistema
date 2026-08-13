@@ -115,6 +115,10 @@ tbody tr:hover { background: var(--hover-bg); }
 .conta-linha:last-child { border-bottom:none; }
 .conta-linha .saldo.neg { color:var(--warn-text); }
 .conta-linha .saldo.pos { color:var(--good-text); }
+.aviso-bloqueio, .aviso-pausa { font-size:12.5px; padding:9px 12px; border-radius:6px;
+               background:rgba(var(--warn-rgb),.13); color:var(--warn-text); line-height:1.6; }
+.aviso-bloqueio > div + div { margin-top:6px; padding-top:6px; border-top:1px solid rgba(var(--warn-rgb),.25); }
+.mini-kv { display:flex; justify-content:space-between; font-size:13px; padding:5px 0; }
 .anel { position:relative; width:96px; height:96px; }
 .anel svg { width:100%; height:100%; transform:rotate(-90deg); }
 .anel circle { fill:none; stroke-width:8; }
@@ -775,6 +779,8 @@ const PAGINAS = {
   estoque:     { nome: 'Estoque e Produção', render: paginaEstoque },
   combustivel: { nome: 'Combustível', render: paginaCombustivel },
   manutencao:  { nome: 'Manutenção', render: paginaManutencao },
+  frota:       { nome: 'Frota', render: paginaFrota },
+  juridico:    { nome: 'Jurídico', render: paginaJuridico },
   ti:          { nome: 'Administração', render: paginaAdministracao }
 }
 
@@ -10250,6 +10256,1328 @@ function formTarefa (projetosOpts, editModulo) {
     })
     if (error) { aviso(error.message); return }
     fechar(); abrirProjetos('kanban', editModulo)
+  }
+}
+
+// ---------------------------------------------------------------
+// Página: Frota  (módulo 'frota')
+// Sub-abas: Painel · Itens · Ações · Calculadora de ágio/deságio.
+//
+// "Itens" cobre os dois sentidos que a tabela `veiculo` guarda:
+// frota própria (eh_proprio=true) e itens recebidos em negócio pra
+// revenda (eh_proprio=false — ex.: dação em pagamento, ver Crédito e
+// Cobrança). Custo de manutenção NÃO é duplicado aqui: é somado direto
+// de ordem_servico.valor_total por veiculo_id (Manutenção já rastreia
+// isso). Custo de documento/imposto (IPVA, licenciamento, multa...)
+// mora em veiculo_custo, por veículo.
+// "Ações" é o acompanhamento pontual (manutenção/frete/vistoria) com
+// prestador, prazo e lembrete — não é a OS completa, é o "preciso
+// cobrar isso até sexta" que dispara aviso no painel de Frota e
+// Jurídico até alguém marcar como vista.
+// ---------------------------------------------------------------
+let FROTA_CACHE = { pessoas: [], processos: [], fornecedores: [] }
+const ROTULO_STATUS_FROTA = { EM_USO: 'Em uso', DISPONIVEL_VENDA: 'Disponível para venda', VENDIDO: 'Vendido' }
+const ROTULO_CAT_ACAO_FROTA = { MANUTENCAO: 'manutenção', FRETE: 'frete', VISTORIA: 'vistoria', OUTRO: 'outro' }
+const ROTULO_TIPO_CUSTO_VEICULO = { IPVA: 'IPVA', LICENCIAMENTO: 'licenciamento', MULTA: 'multa', SEGURO: 'seguro', IMPOSTO_VENDA: 'imposto sobre venda', OUTRO: 'outro' }
+
+async function paginaFrota () {
+  if (!podeVer('frota')) { areaLivre().innerHTML =
+    `<div class="panel" style="padding:22px;"><p class="texto-dim">
+     Você não tem acesso a Frota.</p></div>`; return }
+
+  const editavel = podeEditar('frota')
+  $('#subtitulo-pagina').textContent = 'Frota própria e itens recebidos em negócio para revenda'
+  const area = areaLivre()
+  area.innerHTML = `<p class="texto-dim2">carregando...</p>`
+
+  const [{ data: pessoas }, { data: processos }, { data: fornecedores }] = await Promise.all([
+    db.from('pessoa').select('id,nome').eq('status', 'ATIVO').order('nome'),
+    db.from('juridico_processo').select('id,assunto,parte_contraria').order('assunto'),
+    db.from('fornecedor').select('id,nome').eq('status', 'ATIVO').order('nome')
+  ])
+  FROTA_CACHE = { pessoas: pessoas || [], processos: processos || [], fornecedores: fornecedores || [] }
+
+  const abas = [['painel', 'Painel'], ['itens', 'Itens'], ['acoes', 'Ações'], ['calc', 'Calculadora de ágio/deságio']]
+  area.innerHTML = `
+    <div class="subabas">
+      ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
+    </div>
+    <div id="sub-frota"></div>`
+
+  area.querySelectorAll('.subabas button').forEach(b => {
+    b.onclick = () => {
+      area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
+      abrirFrota(b.dataset.sub, editavel)
+    }
+  })
+  abrirFrota('painel', editavel)
+}
+
+function abrirFrota (sub, editavel) {
+  const alvo = $('#sub-frota')
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  if (sub === 'painel') frotaPainel(alvo, editavel)
+  if (sub === 'itens') frotaItens(alvo, editavel)
+  if (sub === 'acoes') frotaAcoes(alvo, editavel)
+  if (sub === 'calc') frotaCalculadora(alvo)
+}
+
+function custoTotalFrota (item, custosDoc, custosManut) {
+  const doc = (custosDoc || []).filter(c => c.veiculo_id === item.id).reduce((s, c) => s + Number(c.valor), 0)
+  const manut = (custosManut || []).filter(o => o.veiculo_id === item.id).reduce((s, o) => s + Number(o.valor_total || 0), 0)
+  return doc + manut
+}
+function resultadoFrota (item, custosDoc, custosManut) {
+  if (item.valor_venda == null || item.valor_entrada == null) return null
+  const dif = Number(item.valor_venda) - Number(item.valor_entrada)
+  const custos = custoTotalFrota(item, custosDoc, custosManut)
+  const liquido = dif - custos
+  const pct = Number(item.valor_entrada) ? (dif / Number(item.valor_entrada)) * 100 : null
+  return { dif, custos, liquido, pct }
+}
+function nomeProcessoFrota (proc) {
+  if (!proc) return null
+  return proc.assunto + (proc.parte_contraria ? ' · ' + proc.parte_contraria : '')
+}
+
+// ----- Frota › Painel -----
+async function frotaPainel (alvo, editavel) {
+  const [{ data: veiculos }, { data: acoes }] = await Promise.all([
+    db.from('veiculo').select('id,descricao,status_frota,eh_proprio,valor_entrada'),
+    db.from('frota_acao').select('id,descricao,categoria,sla_prazo,lembrete_data,lembrete_visto,status,veiculo:veiculo_id(descricao),fornecedor:fornecedor_id(nome)')
+      .eq('lembrete_visto', false).lte('lembrete_data', hojeISO()).eq('status', 'ABERTA').order('lembrete_data')
+  ])
+  const lista = veiculos || []
+  const emUso = lista.filter(v => v.status_frota === 'EM_USO')
+  const disponiveis = lista.filter(v => v.status_frota === 'DISPONIVEL_VENDA')
+  const vendidos = lista.filter(v => v.status_frota === 'VENDIDO')
+
+  alvo.innerHTML = `
+    <div class="kpis" style="margin-bottom:16px;">
+      ${kpi('Em uso', String(emUso.length), 'frota própria + negócio em uso')}
+      ${kpi('Disponíveis p/ venda', String(disponiveis.length), 'aguardando comprador')}
+      ${kpi('Vendidos', String(vendidos.length), 'histórico')}
+      ${kpi('Lembretes pendentes', String((acoes || []).length), 'pra cobrar hoje')}
+    </div>
+    ${(acoes || []).length ? `<div class="aviso-bloqueio" style="margin-bottom:16px;">
+      ${acoes.map(a => `<div>⏰ <b>${esc(ROTULO_CAT_ACAO_FROTA[a.categoria])}</b>
+        ${a.veiculo?.descricao ? ' · ' + esc(a.veiculo.descricao) : ''}
+        ${a.fornecedor?.nome ? ' · cobrar ' + esc(a.fornecedor.nome) : ''} — ${esc(a.descricao)}
+        ${editavel ? ` <button class="btn-secundario mini" data-visto="${a.id}" style="margin-left:6px;">marcar visto</button>` : ''}</div>`).join('')}
+    </div>` : ''}
+    <p class="texto-dim2" style="font-size:12.5px;">Use as sub-abas Itens e Ações pra ver o detalhe.</p>`
+
+  alvo.querySelectorAll('[data-visto]').forEach(b => {
+    b.onclick = async () => {
+      await db.from('frota_acao').update({ lembrete_visto: true }).eq('id', b.dataset.visto)
+      frotaPainel(alvo, editavel)
+    }
+  })
+}
+
+// ----- Frota › Itens -----
+async function frotaItens (alvo, editavel) {
+  const [{ data, error }, { data: custosDoc }, { data: custosManut }] = await Promise.all([
+    db.from('veiculo').select(`id,placa,descricao,eh_proprio,ano_modelo,renavam,chassi,contraparte,
+      valor_entrada,data_entrada,status_frota,valor_venda,data_venda,comprador,processo_id,observacoes,responsavel_id,
+      responsavel:responsavel_id ( nome )`).order('data_entrada', { ascending: false, nullsFirst: false }),
+    db.from('veiculo_custo').select('veiculo_id,valor'),
+    db.from('ordem_servico').select('veiculo_id,valor_total').not('veiculo_id', 'is', null)
+  ])
+
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  const lista = data || []
+  const disponiveis = lista.filter(i => i.status_frota === 'DISPONIVEL_VENDA')
+  const vendidos = lista.filter(i => i.status_frota === 'VENDIDO')
+  const valorDisponivel = disponiveis.reduce((s, i) => s + Number(i.valor_entrada || 0), 0)
+  const resultadoAcumulado = vendidos.reduce((s, i) => { const r = resultadoFrota(i, custosDoc, custosManut); return s + (r ? r.liquido : 0) }, 0)
+
+  alvo.innerHTML = `
+    <div class="form-grade" style="margin-bottom:16px;">
+      ${kpi('Disponíveis para venda', String(disponiveis.length), 'R$ ' + fmtNum(valorDisponivel) + ' em valor de entrada')}
+      ${kpi('Vendidos', String(vendidos.length), (resultadoAcumulado >= 0 ? 'ganho' : 'perda') + ' líquida R$ ' + fmtNum(Math.abs(resultadoAcumulado)))}
+    </div>
+    ${editavel ? `<div class="acoes" style="margin-bottom:14px;"><button class="btn" id="fr-novo">+ Novo item</button></div>` : ''}
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>Item</th><th>Tipo</th><th>Origem / contraparte</th>
+        <th class="num">Valor recebido</th><th>Status</th><th class="num">Valor final</th><th>Resultado</th>
+        <th>Vínculo jurídico</th><th>Responsável</th>${editavel ? '<th></th>' : ''}
+      </tr></thead><tbody>
+      ${lista.map(i => {
+        const proc = FROTA_CACHE.processos.find(p => p.id === i.processo_id)
+        const ident = [i.placa, i.renavam ? 'renavam ' + i.renavam : null].filter(Boolean).join(' · ')
+        const r = resultadoFrota(i, custosDoc, custosManut)
+        return `<tr>
+        <td><b>${esc(i.descricao)}</b>${i.ano_modelo ? ` <span class="texto-dim2">(${esc(i.ano_modelo)})</span>` : ''}
+          ${ident ? `<br><span class="texto-dim2" style="font-size:11px;">${esc(ident)}</span>` : ''}</td>
+        <td><span class="chip">${i.eh_proprio ? 'Frota própria' : 'Recebido em negócio'}</span></td>
+        <td class="texto-dim">${esc(i.contraparte || '—')}</td>
+        <td class="num">${i.valor_entrada != null ? 'R$ ' + fmtNum(i.valor_entrada) : '<span class="texto-dim2">—</span>'}</td>
+        <td>${i.status_frota === 'VENDIDO' ? '<span class="badge-bom">vendido</span>'
+          : i.status_frota === 'DISPONIVEL_VENDA' ? '<span class="badge-alerta">disponível</span>'
+          : '<span class="chip">em uso</span>'}</td>
+        <td class="num">${i.valor_venda != null ? 'R$ ' + fmtNum(i.valor_venda) : '<span class="texto-dim2">—</span>'}</td>
+        <td>${r ? `<span class="tag-aging ${r.liquido > 0 ? 'ok' : r.liquido < 0 ? 'critico' : 'futuro'}">${r.dif > 0 ? 'ágio' : r.dif < 0 ? 'deságio' : 'sem diferença'}${r.pct !== null ? ' · ' + fmtNum(Math.abs(r.pct), 1) + '%' : ''}</span>
+          ${r.custos ? `<div class="texto-dim2" style="font-size:10.5px;margin-top:2px;">líquido R$ ${fmtNum(r.liquido)}</div>` : ''}` : '<span class="texto-dim2">—</span>'}</td>
+        <td class="texto-dim" style="font-size:12px;">${proc ? esc(nomeProcessoFrota(proc)) : '<span class="texto-dim2">—</span>'}</td>
+        <td class="texto-dim">${esc(i.responsavel?.nome || '—')}</td>
+        ${editavel ? `<td style="text-align:right;white-space:nowrap;">
+          <button class="btn-secundario mini" data-custos="${i.id}">custos</button>
+          <button class="btn-secundario mini" data-editar="${i.id}">editar</button>
+          ${i.status_frota !== 'VENDIDO' ? `<button class="btn-secundario mini" data-vender="${i.id}">vender</button>` : ''}
+        </td>` : ''}
+      </tr>`}).join('') || `<tr><td colspan="${editavel ? 10 : 9}" class="vazio">Nenhum item cadastrado ainda.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+
+  alvo.querySelectorAll('[data-custos]').forEach(b => {
+    b.onclick = () => formCustosVeiculo(lista.find(x => x.id === b.dataset.custos), custosManut, editavel)
+  })
+  if (!editavel) return
+  $('#fr-novo').onclick = () => formFrotaItem(null)
+  alvo.querySelectorAll('[data-editar]').forEach(b => {
+    b.onclick = () => formFrotaItem(lista.find(x => x.id === b.dataset.editar))
+  })
+  alvo.querySelectorAll('[data-vender]').forEach(b => {
+    b.onclick = () => formFrotaVenda(lista.find(x => x.id === b.dataset.vender), custosDoc, custosManut)
+  })
+}
+
+function formFrotaItem (item) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  const v = k => esc(item?.[k] ?? '')
+  const opcoesProcesso = `<option value="">sem vínculo</option>` + FROTA_CACHE.processos.map(p =>
+    `<option value="${p.id}" ${p.id === item?.processo_id ? 'selected' : ''}>${esc(nomeProcessoFrota(p))}</option>`).join('')
+
+  fundo.innerHTML = `
+    <div class="modal" style="max-width:720px;">
+      <h3>${item ? 'Editar item' : 'Novo item de frota'}</h3>
+      <div class="form-grade">
+        <div class="campo" style="grid-column:1/-1;"><label>Descrição *</label>
+          <input id="fr-desc" value="${v('descricao')}" placeholder="Ex.: HILUX, SCANIA 440, IVECO..."></div>
+        <div class="campo"><label>Tipo *</label>
+          <select id="fr-tipo">
+            <option value="1" ${!item || item.eh_proprio ? 'selected' : ''}>Frota própria</option>
+            <option value="0" ${item && !item.eh_proprio ? 'selected' : ''}>Recebido em negócio (para revenda)</option>
+          </select></div>
+        <div class="campo"><label>Ano/Modelo</label><input id="fr-ano" value="${v('ano_modelo')}" placeholder="2020/2020"></div>
+        <div class="campo"><label>Placa</label><input id="fr-placa" value="${v('placa')}"></div>
+        <div class="campo"><label>Renavam</label><input id="fr-renavam" value="${v('renavam')}"></div>
+        <div class="campo"><label>Chassi</label><input id="fr-chassi" value="${v('chassi')}"></div>
+        <div class="campo" style="grid-column:1/-1;"><label>Origem / contraparte (propriedade anterior)</label>
+          <input id="fr-contra" value="${v('contraparte')}" placeholder="de quem veio, ex.: Laerte Baechtold"></div>
+        <div class="campo"><label>Valor de entrada / referência</label>
+          <input id="fr-valor-ent" type="number" step="0.01" value="${item?.valor_entrada ?? ''}"></div>
+        <div class="campo"><label>Data de entrada</label>
+          <input id="fr-data-ent" type="date" value="${item?.data_entrada ?? new Date().toISOString().slice(0, 10)}"></div>
+        <div class="campo"><label>Responsável</label>
+          <select id="fr-resp">${opcoesFin(FROTA_CACHE.pessoas, 'sem responsável', item?.responsavel_id)}</select></div>
+        <div class="campo" style="grid-column:1/-1;"><label>Vínculo jurídico (dação em pagamento, cobrança...)</label>
+          <select id="fr-processo">${opcoesProcesso}</select></div>
+        <div class="campo"><label>Status</label>
+          <select id="fr-status" ${item?.status_frota === 'VENDIDO' ? 'disabled' : ''}>
+            <option value="EM_USO" ${(!item || item.status_frota === 'EM_USO') ? 'selected' : ''}>Em uso</option>
+            <option value="DISPONIVEL_VENDA" ${item?.status_frota === 'DISPONIVEL_VENDA' ? 'selected' : ''}>Disponível para venda</option>
+            ${item?.status_frota === 'VENDIDO' ? `<option value="VENDIDO" selected>Vendido</option>` : ''}
+          </select>
+          ${item?.status_frota === 'VENDIDO' ? '<span class="texto-dim2" style="font-size:11px;">venda já registrada, use "vender" pra corrigir</span>' : ''}</div>
+      </div>
+      <div class="campo" style="margin-top:12px;"><label>Observações</label>
+        <textarea id="fr-obs" style="min-height:64px;">${v('observacoes')}</textarea></div>
+      <div class="acoes">
+        <button class="btn" id="fr-salvar">Salvar</button>
+        ${item ? '<button class="btn-secundario" id="fr-excluir">Excluir</button>' : ''}
+        <button class="btn-secundario" id="fr-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="fr-recado"></div>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#fr-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  const aviso = t => {
+    const el = q('#fr-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  q('#fr-salvar').onclick = async () => {
+    const desc = q('#fr-desc').value.trim()
+    if (!desc) { aviso('Escreva a descrição do item.'); return }
+    const corpo = {
+      descricao: desc,
+      eh_proprio: q('#fr-tipo').value === '1',
+      ano_modelo: q('#fr-ano').value.trim() || null,
+      placa: q('#fr-placa').value.trim() || null,
+      renavam: q('#fr-renavam').value.trim() || null,
+      chassi: q('#fr-chassi').value.trim() || null,
+      contraparte: q('#fr-contra').value.trim() || null,
+      valor_entrada: q('#fr-valor-ent').value ? Number(q('#fr-valor-ent').value) : null,
+      data_entrada: q('#fr-data-ent').value || null,
+      responsavel_id: q('#fr-resp').value || null,
+      processo_id: q('#fr-processo').value || null,
+      status_frota: q('#fr-status').value,
+      observacoes: q('#fr-obs').value.trim() || null
+    }
+    let error
+    if (item) {
+      corpo.editado_por = PERFIL.pessoaId; corpo.editado_em = new Date().toISOString()
+      ;({ error } = await db.from('veiculo').update(corpo).eq('id', item.id))
+    } else {
+      corpo.criado_por = PERFIL.pessoaId
+      ;({ error } = await db.from('veiculo').insert(corpo))
+    }
+    if (error) { aviso(error.message); return }
+    fechar(); abrirFrota('itens', true)
+  }
+
+  const bx = q('#fr-excluir')
+  if (bx) bx.onclick = async () => {
+    if (!confirm('Excluir este item em definitivo?')) return
+    const { error } = await db.from('veiculo').delete().eq('id', item.id)
+    if (error) { aviso(error.message); return }
+    fechar(); abrirFrota('itens', true)
+  }
+}
+
+function formFrotaVenda (item, custosDoc, custosManut) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal">
+      <h3>Registrar venda</h3>
+      <p class="texto-dim" style="margin:0 0 14px;">${esc(item.descricao)} · valor de entrada R$ ${fmtNum(item.valor_entrada)}</p>
+      <div class="form-grade">
+        <div class="campo"><label>Valor final / de venda *</label>
+          <input id="fv-valor" type="number" step="0.01" value="${item.valor_venda ?? ''}"></div>
+        <div class="campo"><label>Data da venda</label>
+          <input id="fv-data" type="date" value="${item.data_venda ?? new Date().toISOString().slice(0, 10)}"></div>
+        <div class="campo" style="grid-column:1/-1;"><label>Comprador</label>
+          <input id="fv-comprador" value="${esc(item.comprador ?? '')}" placeholder="ex.: Gefoscal (incorporado à frota) ou nome do comprador externo"></div>
+      </div>
+      <p class="aviso" id="fv-preview"></p>
+      <div class="acoes">
+        <button class="btn" id="fv-salvar">Confirmar venda</button>
+        <button class="btn-secundario" id="fv-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="fv-recado"></div>
+    </div>`
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#fv-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const atualizarPreview = () => {
+    const val = Number(q('#fv-valor').value)
+    if (!val || item.valor_entrada == null) { q('#fv-preview').textContent = ''; return }
+    const custos = custoTotalFrota(item, custosDoc, custosManut)
+    const dif = val - Number(item.valor_entrada)
+    const liquido = dif - custos
+    const pct = (dif / Number(item.valor_entrada)) * 100
+    q('#fv-preview').textContent = (dif >= 0 ? 'Ágio de ' : 'Deságio de ') +
+      'R$ ' + fmtNum(Math.abs(dif)) + ' (' + fmtNum(Math.abs(pct), 1) + '%)' +
+      (custos ? ' · resultado líquido após custos: R$ ' + fmtNum(liquido) : '')
+  }
+  q('#fv-valor').oninput = atualizarPreview
+  atualizarPreview()
+
+  q('#fv-salvar').onclick = async () => {
+    const val = Number(q('#fv-valor').value)
+    const el = q('#fv-recado')
+    if (!val) { el.textContent = 'Informe o valor final.'; el.classList.remove('oculto'); return }
+    const { error } = await db.from('veiculo').update({
+      status_frota: 'VENDIDO', valor_venda: val,
+      data_venda: q('#fv-data').value || new Date().toISOString().slice(0, 10),
+      comprador: q('#fv-comprador').value.trim() || null,
+      editado_por: PERFIL.pessoaId, editado_em: new Date().toISOString()
+    }).eq('id', item.id)
+    if (error) { el.textContent = error.message; el.classList.remove('oculto'); return }
+    fechar(); abrirFrota('itens', true)
+  }
+}
+
+// custos de documento/imposto por veículo + total de manutenção (só leitura, vem de ordem_servico)
+function formCustosVeiculo (item, custosManut, editavel) {
+  if (!item) return
+  const totalManut = (custosManut || []).filter(o => o.veiculo_id === item.id).reduce((s, o) => s + Number(o.valor_total || 0), 0)
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>Custos — ${esc(item.descricao)}</h3>
+    <div class="mini-kv" style="margin-bottom:12px;"><span>Manutenção (Ordens de Serviço vinculadas)</span><span>R$ ${fmtNum(totalManut)}</span></div>
+    <div id="cv-lista"><p class="texto-dim2" style="font-size:12px;">carregando...</p></div>
+    ${editavel ? `<div class="secao" style="margin-top:16px;">
+      <h3 style="font-size:15px;">Novo custo de documento/imposto</h3>
+      <div class="form-grade">
+        <div class="campo"><label>Tipo</label><select id="cv-tipo">
+          ${Object.entries(ROTULO_TIPO_CUSTO_VEICULO).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div>
+        <div class="campo"><label>Valor *</label><input id="cv-valor" type="number" step="0.01"></div>
+        <div class="campo"><label>Data</label><input id="cv-data" type="date" value="${new Date().toISOString().slice(0, 10)}"></div>
+        <div class="campo"><label>Vencimento (se houver)</label><input id="cv-venc" type="date"></div>
+      </div>
+      <div class="campo" style="margin-top:10px;"><label>Descrição</label><input id="cv-desc" placeholder="opcional"></div>
+      <div class="acoes"><button class="btn" id="cv-salvar">Adicionar custo</button></div>
+      <div class="recado oculto" id="cv-recado"></div>
+    </div>` : ''}
+    <div class="acoes" style="margin-top:16px;"><button class="btn-secundario" id="cv-fechar">Fechar</button></div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.querySelector('#cv-fechar').onclick = () => fundo.remove()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+
+  const carregarLista = async () => {
+    const { data } = await db.from('veiculo_custo').select('id,tipo,descricao,valor,data,vencimento')
+      .eq('veiculo_id', item.id).order('data', { ascending: false })
+    const alvoLista = fundo.querySelector('#cv-lista')
+    const total = (data || []).reduce((s, c) => s + Number(c.valor), 0)
+    alvoLista.innerHTML = `<div class="mini-kv"><span>Documentos/impostos lançados</span><span>R$ ${fmtNum(total)}</span></div>
+      <div class="panel" style="padding:0;margin-top:8px;">
+        ${(data || []).map(c => `<div class="conta-linha">
+          <span>${esc(ROTULO_TIPO_CUSTO_VEICULO[c.tipo] || c.tipo)}${c.descricao ? ' · ' + esc(c.descricao) : ''}
+            <span class="texto-dim2"> — ${fmtData(c.data)}${c.vencimento ? ' · vence ' + fmtData(c.vencimento) : ''}</span></span>
+          <b>R$ ${fmtNum(c.valor)}</b></div>`).join('') || '<div class="vazio">Nenhum custo lançado ainda.</div>'}
+      </div>`
+  }
+  carregarLista()
+
+  const bs = fundo.querySelector('#cv-salvar')
+  if (bs) bs.onclick = async () => {
+    const el = fundo.querySelector('#cv-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const valor = Number(fundo.querySelector('#cv-valor').value)
+    if (!valor || valor <= 0) { aviso('Informe o valor.'); return }
+    const { error } = await db.from('veiculo_custo').insert({
+      veiculo_id: item.id, tipo: fundo.querySelector('#cv-tipo').value, valor,
+      data: fundo.querySelector('#cv-data').value || new Date().toISOString().slice(0, 10),
+      vencimento: fundo.querySelector('#cv-venc').value || null,
+      descricao: fundo.querySelector('#cv-desc').value.trim() || null,
+      criado_por: PERFIL.pessoaId
+    })
+    if (error) { aviso(error.message); return }
+    fundo.querySelector('#cv-valor').value = ''; fundo.querySelector('#cv-desc').value = ''
+    carregarLista()
+  }
+}
+
+// ----- Frota › Ações (acompanhamento com lembrar-me) -----
+async function frotaAcoes (alvo, editavel) {
+  const [{ data: acoes, error }, { data: veiculos }] = await Promise.all([
+    db.from('frota_acao').select(`id,categoria,descricao,sla_prazo,lembrete_data,lembrete_visto,status,
+      veiculo:veiculo_id(descricao), fornecedor:fornecedor_id(nome), veiculo_id, fornecedor_id`)
+      .order('sla_prazo', { ascending: true, nullsFirst: false }),
+    db.from('veiculo').select('id,descricao').order('descricao')
+  ])
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  const lista = acoes || []
+  const abertas = lista.filter(a => a.status === 'ABERTA')
+
+  alvo.innerHTML = `
+    ${editavel ? `<div class="acoes" style="margin-bottom:14px;"><button class="btn" id="ac-nova">+ Nova ação</button></div>` : ''}
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>Categoria</th><th>Veículo</th><th>Prestador</th><th>Descrição</th>
+        <th>Prazo (SLA)</th><th>Lembrete</th><th>Status</th>${editavel ? '<th></th>' : ''}
+      </tr></thead><tbody>
+      ${lista.map(a => `<tr>
+        <td><span class="chip">${esc(ROTULO_CAT_ACAO_FROTA[a.categoria] || a.categoria)}</span></td>
+        <td class="texto-dim">${esc(a.veiculo?.descricao || '—')}</td>
+        <td class="texto-dim">${esc(a.fornecedor?.nome || '—')}</td>
+        <td>${esc(a.descricao)}</td>
+        <td class="texto-dim">${a.sla_prazo ? fmtData(a.sla_prazo) : '—'}</td>
+        <td>${a.lembrete_data ? (a.lembrete_visto ? `<span class="chip">visto · ${fmtData(a.lembrete_data)}</span>` : `<span class="badge-alerta">${fmtData(a.lembrete_data)}</span>`) : '<span class="texto-dim2">sem lembrete</span>'}</td>
+        <td>${a.status === 'CONCLUIDA' ? '<span class="badge-bom">concluída</span>' : '<span class="chip">aberta</span>'}</td>
+        ${editavel ? `<td style="text-align:right;white-space:nowrap;">
+          ${a.status === 'ABERTA' && !a.lembrete_data ? `<button class="btn-secundario mini" data-lembrar="${a.id}">lembrar-me</button>` : ''}
+          ${a.status === 'ABERTA' ? `<button class="btn-secundario mini" data-concluir="${a.id}">concluir</button>` : ''}
+        </td>` : ''}
+      </tr>`).join('') || `<tr><td colspan="${editavel ? 8 : 7}" class="vazio">Nenhuma ação registrada ainda.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+
+  if (!editavel) return
+  $('#ac-nova').onclick = () => formAcaoFrota(veiculos || [])
+  alvo.querySelectorAll('[data-lembrar]').forEach(b => {
+    b.onclick = async () => {
+      const a = lista.find(x => x.id === b.dataset.lembrar)
+      const data = prompt('Lembrar em que data? (o prazo combinado é ' + (a.sla_prazo ? fmtData(a.sla_prazo) : 'sem prazo') + ')', a.sla_prazo || new Date().toISOString().slice(0, 10))
+      if (!data) return
+      await db.from('frota_acao').update({ lembrete_data: data, lembrete_visto: false }).eq('id', a.id)
+      frotaAcoes(alvo, editavel)
+    }
+  })
+  alvo.querySelectorAll('[data-concluir]').forEach(b => {
+    b.onclick = async () => {
+      await db.from('frota_acao').update({ status: 'CONCLUIDA', concluido_em: new Date().toISOString() }).eq('id', b.dataset.concluir)
+      frotaAcoes(alvo, editavel)
+    }
+  })
+}
+
+function formAcaoFrota (veiculos) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>Nova ação de frota</h3>
+    <div class="form-grade">
+      <div class="campo"><label>Categoria *</label><select id="ac-cat">
+        ${Object.entries(ROTULO_CAT_ACAO_FROTA).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div>
+      <div class="campo"><label>Veículo</label><select id="ac-veiculo">
+        <option value="">—</option>${veiculos.map(v => `<option value="${v.id}">${esc(v.descricao)}</option>`).join('')}</select></div>
+      <div class="campo"><label>Prestador do serviço</label><select id="ac-forn">
+        <option value="">—</option>${FROTA_CACHE.fornecedores.map(f => `<option value="${f.id}">${esc(f.nome)}</option>`).join('')}</select></div>
+      <div class="campo"><label>Prazo (SLA)</label><input id="ac-sla" type="date"></div>
+    </div>
+    <div class="campo" style="margin-top:10px;"><label>Descrição *</label><input id="ac-desc" placeholder="ex.: revisão dos 40.000 km"></div>
+    <div class="acoes"><button class="btn" id="ac-salvar">Criar</button><button class="btn-secundario" id="ac-cancelar">Cancelar</button></div>
+    <div class="recado oculto" id="ac-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#ac-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  fundo.querySelector('#ac-salvar').onclick = async () => {
+    const desc = fundo.querySelector('#ac-desc').value.trim()
+    const el = fundo.querySelector('#ac-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    if (!desc) { aviso('Descreva a ação.'); return }
+    const { error } = await db.from('frota_acao').insert({
+      categoria: fundo.querySelector('#ac-cat').value,
+      veiculo_id: fundo.querySelector('#ac-veiculo').value || null,
+      fornecedor_id: fundo.querySelector('#ac-forn').value || null,
+      sla_prazo: fundo.querySelector('#ac-sla').value || null,
+      descricao: desc, criado_por: PERFIL.pessoaId
+    })
+    if (error) { aviso(error.message); return }
+    fechar(); abrirFrota('acoes', true)
+  }
+}
+
+// ----- Frota › Calculadora de ágio/deságio -----
+let FR_CALC = { entrada: 0, referencia: 0, negociado: 0 }
+
+function frotaCalculadora (alvo) {
+  const campo = (id, rot) => `
+    <div class="campo"><label>${rot}</label>
+      <input id="fc-${id}" type="number" step="0.01" value="${FR_CALC[id] || ''}"></div>`
+
+  alvo.innerHTML = `
+    <div class="calc-grade">
+      <div>
+        <div class="secao">
+          <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Valores</h3>
+            <span class="texto-dim2" style="font-size:12px;">para simular antes de fechar o negócio</span></div>
+          <div class="form-grade">
+            ${campo('entrada', 'Valor de entrada / recebido')}
+            ${campo('referencia', 'Valor de referência de mercado')}
+            ${campo('negociado', 'Valor negociado / final')}
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="saida">
+          <div class="rotulo texto-dim2" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;">Resultado sobre a entrada</div>
+          <div class="destaque" id="fc-o-resultado">—</div>
+          <div class="par"><span class="texto-dim">Diferença</span><span id="fc-o-dif">—</span></div>
+          <div class="par"><span class="texto-dim">Ágio/deságio sobre a entrada</span><span id="fc-o-pct-ent">—</span></div>
+          <div class="par"><span class="texto-dim">Ágio/deságio sobre a referência de mercado</span><span id="fc-o-pct-ref">—</span></div>
+        </div>
+      </div>
+    </div>`
+
+  const ids = ['entrada', 'referencia', 'negociado']
+  const recalcular = () => {
+    ids.forEach(id => { FR_CALC[id] = Number($('#fc-' + id).value) || 0 })
+    const { entrada, referencia, negociado } = FR_CALC
+    if (!entrada || !negociado) {
+      $('#fc-o-resultado').textContent = '—'
+      $('#fc-o-dif').textContent = '—'; $('#fc-o-pct-ent').textContent = '—'; $('#fc-o-pct-ref').textContent = '—'
+      return
+    }
+    const dif = negociado - entrada
+    const pctEnt = (dif / entrada) * 100
+    const rotulo = dif > 0 ? 'Ágio' : (dif < 0 ? 'Deságio' : 'Sem diferença')
+    $('#fc-o-resultado').textContent = rotulo + (dif !== 0 ? ' de R$ ' + fmtNum(Math.abs(dif)) : '')
+    $('#fc-o-dif').textContent = (dif >= 0 ? '+ ' : '− ') + 'R$ ' + fmtNum(Math.abs(dif))
+    $('#fc-o-pct-ent').textContent = (pctEnt >= 0 ? '+ ' : '− ') + fmtNum(Math.abs(pctEnt), 1) + '%'
+    if (referencia) {
+      const pctRef = ((negociado - referencia) / referencia) * 100
+      $('#fc-o-pct-ref').textContent = (pctRef >= 0 ? '+ ' : '− ') + fmtNum(Math.abs(pctRef), 1) + '%'
+    } else {
+      $('#fc-o-pct-ref').textContent = 'informe a referência'
+    }
+  }
+  ids.forEach(id => { $('#fc-' + id).oninput = recalcular })
+  recalcular()
+}
+
+// ---------------------------------------------------------------
+// Página: Jurídico  (módulo 'juridico')
+// Sub-abas: Painel · Contratos · Licenças e certidões · Processos ·
+// Notificações e autuações · Documentos.
+// Notificações/autuações podem virar um Projeto com 1 clique, pra
+// tocar o trabalho no Kanban/Progresso que já existe.
+// ---------------------------------------------------------------
+let JUR_CACHE = { pessoas: [] }
+const CATEGORIAS_LICENCA = ['Ambiental', 'Sanitária/Bombeiros', 'Municipal/Alvará', 'Fiscal/Certidões', 'Seguros', 'Trabalhista', 'Outra']
+const CATEGORIAS_CONTRATO = ['Fornecedor', 'Cliente', 'Locação', 'Prestação de serviço', 'Parceria', 'Financeiro', 'Outro']
+const ROTULO_TIPO_PROCESSO = { TRABALHISTA: 'trabalhista', TRIBUTARIO: 'tributário', AMBIENTAL: 'ambiental', CIVEL: 'cível', CRIMINAL: 'criminal', OUTRO: 'outro' }
+const ROTULO_TIPO_NOTIFICACAO = { AMBIENTAL: 'ambiental', TRABALHISTA: 'trabalhista', TRIBUTARIO: 'tributário', OUTRO: 'outro' }
+
+async function paginaJuridico () {
+  if (!podeVer('juridico')) { areaLivre().innerHTML =
+    `<div class="panel" style="padding:22px;"><p class="texto-dim">
+     Você não tem acesso a Jurídico.</p></div>`; return }
+
+  const editavel = podeEditar('juridico')
+  $('#subtitulo-pagina').textContent = 'Contratos, licenças, processos e notificações'
+  const area = areaLivre()
+  area.innerHTML = `<p class="texto-dim2">carregando...</p>`
+
+  const { data: pessoas } = await db.from('pessoa').select('id,nome').eq('status', 'ATIVO').order('nome')
+  JUR_CACHE.pessoas = pessoas || []
+
+  const abas = [['painel', 'Painel'], ['contratos', 'Contratos'], ['licencas', 'Licenças e certidões'],
+    ['processos', 'Processos'], ['notificacoes', 'Notificações e autuações'], ['documentos', 'Documentos']]
+  area.innerHTML = `
+    <div class="subabas">
+      ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
+    </div>
+    <div id="sub-juridico"></div>`
+
+  area.querySelectorAll('.subabas button').forEach(b => {
+    b.onclick = () => {
+      area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
+      abrirJuridico(b.dataset.sub, editavel)
+    }
+  })
+  abrirJuridico('painel', editavel)
+}
+
+function abrirJuridico (sub, editavel) {
+  const alvo = $('#sub-juridico')
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  if (sub === 'painel') juridicoPainel(alvo, editavel)
+  if (sub === 'contratos') juridicoContratos(alvo, editavel)
+  if (sub === 'licencas') juridicoLicencas(alvo, editavel)
+  if (sub === 'processos') juridicoProcessos(alvo, editavel)
+  if (sub === 'notificacoes') juridicoNotificacoes(alvo, editavel)
+  if (sub === 'documentos') juridicoDocumentos(alvo, editavel)
+}
+
+function diasParaVencer (data) {
+  if (!data) return null
+  return Math.round((new Date(data) - new Date(hojeISO())) / 86400000)
+}
+function tagVencimento (data) {
+  const dias = diasParaVencer(data)
+  if (dias === null) return '<span class="tag-aging futuro">sem vencimento</span>'
+  if (dias < 0) return `<span class="tag-aging critico">venceu há ${-dias} d</span>`
+  if (dias === 0) return `<span class="tag-aging critico">vence hoje</span>`
+  if (dias <= 30) return `<span class="tag-aging critico">vence em ${dias} d</span>`
+  if (dias <= 90) return `<span class="tag-aging alerta">vence em ${dias} d</span>`
+  return `<span class="tag-aging ok">vence em ${dias} d</span>`
+}
+
+// ----- Jurídico › Painel -----
+async function juridicoPainel (alvo, editavel) {
+  const [{ data: contratos }, { data: licencas }, { data: processosAbertos }, { data: notificacoes }, { data: lembretesFrota }] = await Promise.all([
+    db.from('juridico_contrato').select('id,titulo,contraparte,data_fim,status').neq('status', 'ENCERRADO'),
+    db.from('juridico_licenca').select('id,nome,categoria,data_validade,status').neq('status', 'VENCIDA'),
+    db.from('juridico_processo').select('id,assunto,numero_processo,proxima_data,status').eq('status', 'ATIVO')
+      .order('proxima_data', { ascending: true, nullsFirst: false }),
+    db.from('juridico_notificacao').select('id,tipo,descricao,prazo_resposta').neq('status', 'ENCERRADA'),
+    db.from('frota_acao').select('id,descricao,categoria,lembrete_data,veiculo:veiculo_id(descricao),fornecedor:fornecedor_id(nome)')
+      .eq('lembrete_visto', false).lte('lembrete_data', hojeISO()).eq('status', 'ABERTA').order('lembrete_data')
+  ])
+
+  const pendencias = [
+    ...(contratos || []).filter(c => c.data_fim).map(c => ({ tipo: 'Contrato', nome: c.titulo, extra: c.contraparte, data: c.data_fim })),
+    ...(licencas || []).filter(l => l.data_validade).map(l => ({ tipo: 'Licença', nome: l.nome, extra: l.categoria, data: l.data_validade })),
+    ...(notificacoes || []).filter(n => n.prazo_resposta).map(n => ({ tipo: 'Notificação', nome: n.descricao, extra: ROTULO_TIPO_NOTIFICACAO[n.tipo], data: n.prazo_resposta }))
+  ].map(p => ({ ...p, dias: diasParaVencer(p.data) })).sort((a, b) => (a.dias ?? 9e9) - (b.dias ?? 9e9))
+
+  const vencidas = pendencias.filter(p => p.dias < 0)
+  const em30 = pendencias.filter(p => p.dias >= 0 && p.dias <= 30)
+  const em90 = pendencias.filter(p => p.dias > 30 && p.dias <= 90)
+
+  alvo.innerHTML = `
+    <div class="form-grade" style="margin-bottom:16px;">
+      ${kpi('Vencidas', String(vencidas.length), 'contratos, licenças e notificações em atraso')}
+      ${kpi('Vencem em 30 dias', String(em30.length), 'atenção imediata')}
+      ${kpi('Vencem em 90 dias', String(em90.length), 'planejar')}
+      ${kpi('Processos ativos', String((processosAbertos || []).length), 'em andamento')}
+    </div>
+
+    ${(lembretesFrota || []).length ? `<div class="aviso-bloqueio" style="margin-bottom:16px;">
+      ${lembretesFrota.map(a => `<div>⏰ frota · <b>${esc(ROTULO_CAT_ACAO_FROTA[a.categoria])}</b>
+        ${a.veiculo?.descricao ? ' · ' + esc(a.veiculo.descricao) : ''}
+        ${a.fornecedor?.nome ? ' · cobrar ' + esc(a.fornecedor.nome) : ''} — ${esc(a.descricao)}</div>`).join('')}
+    </div>` : ''}
+
+    <div class="panel" style="padding:0;margin-bottom:16px;"><div class="tabela-scroll">
+      <table><thead><tr><th>Tipo</th><th>Item</th><th>Contraparte / categoria</th><th>Vencimento</th><th>Situação</th></tr></thead><tbody>
+      ${pendencias.slice(0, 25).map(p => `<tr>
+        <td><span class="chip">${esc(p.tipo)}</span></td>
+        <td><b>${esc(p.nome)}</b></td>
+        <td class="texto-dim">${esc(p.extra || '—')}</td>
+        <td>${fmtData(p.data)}</td>
+        <td>${tagVencimento(p.data)}</td>
+      </tr>`).join('') || `<tr><td colspan="5" class="vazio">Nenhum contrato, licença ou notificação com vencimento cadastrado.</td></tr>`}
+      </tbody></table>
+    </div></div>
+
+    <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Processos com próxima data</h3></div>
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr><th>Processo</th><th>Assunto</th><th>Próxima data</th></tr></thead><tbody>
+      ${(processosAbertos || []).filter(p => p.proxima_data).slice(0, 15).map(p => `<tr>
+        <td class="texto-dim">${esc(p.numero_processo || '—')}</td>
+        <td>${esc(p.assunto)}</td>
+        <td>${fmtData(p.proxima_data)}</td>
+      </tr>`).join('') || `<tr><td colspan="3" class="vazio">Nenhum processo ativo com próxima data marcada.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+}
+
+// ----- Jurídico › Contratos -----
+async function juridicoContratos (alvo, editavel) {
+  const { data, error } = await db.from('juridico_contrato')
+    .select(`id,titulo,contraparte,categoria,valor,data_inicio,data_fim,renovacao,status,anexo_link,observacoes,
+      responsavel:responsavel_id ( nome )`)
+    .order('data_fim', { ascending: true, nullsFirst: false })
+
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  const lista = data || []
+  alvo.innerHTML = `
+    ${editavel ? `<div class="acoes" style="margin-bottom:14px;"><button class="btn" id="ct-novo">+ Novo contrato</button></div>` : ''}
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>Contrato</th><th>Contraparte</th><th>Categoria</th><th class="num">Valor</th>
+        <th>Vigência</th><th>Renovação</th><th>Vencimento</th><th>Responsável</th>${editavel ? '<th></th>' : ''}
+      </tr></thead><tbody>
+      ${lista.map(c => `<tr>
+        <td><b>${esc(c.titulo)}</b>${c.anexo_link ? ` · <a href="${esc(c.anexo_link)}" target="_blank" rel="noopener">anexo</a>` : ''}</td>
+        <td class="texto-dim">${esc(c.contraparte || '—')}</td>
+        <td><span class="chip">${esc(c.categoria || '—')}</span></td>
+        <td class="num">${c.valor != null ? 'R$ ' + fmtNum(c.valor) : '<span class="texto-dim2">—</span>'}</td>
+        <td class="texto-dim">${fmtData(c.data_inicio)} – ${c.data_fim ? fmtData(c.data_fim) : 'indeterminado'}</td>
+        <td class="texto-dim">${{ AUTOMATICA: 'automática', MANUAL: 'manual', NAO_RENOVA: 'não renova' }[c.renovacao] || '—'}</td>
+        <td>${c.status === 'ENCERRADO' ? '<span class="chip">encerrado</span>' : tagVencimento(c.data_fim)}</td>
+        <td class="texto-dim">${esc(c.responsavel?.nome || '—')}</td>
+        ${editavel ? `<td style="text-align:right;white-space:nowrap;">
+          <button class="btn-secundario mini" data-editar="${c.id}">editar</button>
+        </td>` : ''}
+      </tr>`).join('') || `<tr><td colspan="${editavel ? 9 : 8}" class="vazio">Nenhum contrato cadastrado ainda.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+
+  if (!editavel) return
+  $('#ct-novo').onclick = () => formContrato(null)
+  alvo.querySelectorAll('[data-editar]').forEach(b => {
+    b.onclick = () => formContrato(lista.find(x => x.id === b.dataset.editar))
+  })
+}
+
+function formContrato (c) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  const v = k => esc(c?.[k] ?? '')
+
+  fundo.innerHTML = `
+    <div class="modal">
+      <h3>${c ? 'Editar contrato' : 'Novo contrato'}</h3>
+      <div class="form-grade">
+        <div class="campo" style="grid-column:1/-1;"><label>Título / objeto *</label>
+          <input id="ct-titulo" value="${v('titulo')}" placeholder="Ex.: Locação do galpão de LEM"></div>
+        <div class="campo"><label>Contraparte</label><input id="ct-contra" value="${v('contraparte')}"></div>
+        <div class="campo"><label>Categoria</label>
+          <select id="ct-cat">${CATEGORIAS_CONTRATO.map(x => `<option ${c?.categoria === x ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
+        <div class="campo"><label>Valor</label><input id="ct-valor" type="number" step="0.01" value="${c?.valor ?? ''}"></div>
+        <div class="campo"><label>Início da vigência</label><input id="ct-inicio" type="date" value="${c?.data_inicio ?? ''}"></div>
+        <div class="campo"><label>Fim da vigência</label><input id="ct-fim" type="date" value="${c?.data_fim ?? ''}"></div>
+        <div class="campo"><label>Renovação</label>
+          <select id="ct-renov">
+            <option value="MANUAL" ${(!c || c.renovacao === 'MANUAL') ? 'selected' : ''}>manual</option>
+            <option value="AUTOMATICA" ${c?.renovacao === 'AUTOMATICA' ? 'selected' : ''}>automática</option>
+            <option value="NAO_RENOVA" ${c?.renovacao === 'NAO_RENOVA' ? 'selected' : ''}>não renova</option>
+          </select></div>
+        <div class="campo"><label>Status</label>
+          <select id="ct-status">
+            <option value="VIGENTE" ${(!c || c.status === 'VIGENTE') ? 'selected' : ''}>vigente</option>
+            <option value="EM_RENOVACAO" ${c?.status === 'EM_RENOVACAO' ? 'selected' : ''}>em renovação</option>
+            <option value="ENCERRADO" ${c?.status === 'ENCERRADO' ? 'selected' : ''}>encerrado</option>
+          </select></div>
+        <div class="campo"><label>Responsável</label>
+          <select id="ct-resp">${opcoesFin(JUR_CACHE.pessoas, 'sem responsável', c?.responsavel_id)}</select></div>
+        <div class="campo" style="grid-column:1/-1;"><label>Link do anexo</label>
+          <input id="ct-anexo" value="${v('anexo_link')}" placeholder="link do Drive"></div>
+      </div>
+      <div class="campo" style="margin-top:12px;"><label>Observações</label>
+        <textarea id="ct-obs" style="min-height:64px;">${v('observacoes')}</textarea></div>
+      <div class="acoes">
+        <button class="btn" id="ct-salvar">Salvar</button>
+        ${c ? '<button class="btn-secundario" id="ct-excluir">Excluir</button>' : ''}
+        <button class="btn-secundario" id="ct-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="ct-recado"></div>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#ct-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  const aviso = t => {
+    const el = q('#ct-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  q('#ct-salvar').onclick = async () => {
+    const titulo = q('#ct-titulo').value.trim()
+    if (!titulo) { aviso('Escreva o título ou objeto do contrato.'); return }
+    const corpo = {
+      titulo,
+      contraparte: q('#ct-contra').value.trim() || null,
+      categoria: q('#ct-cat').value,
+      valor: q('#ct-valor').value ? Number(q('#ct-valor').value) : null,
+      data_inicio: q('#ct-inicio').value || null,
+      data_fim: q('#ct-fim').value || null,
+      renovacao: q('#ct-renov').value,
+      status: q('#ct-status').value,
+      responsavel_id: q('#ct-resp').value || null,
+      anexo_link: q('#ct-anexo').value.trim() || null,
+      observacoes: q('#ct-obs').value.trim() || null
+    }
+    let error
+    if (c) {
+      corpo.editado_por = PERFIL.pessoaId; corpo.editado_em = new Date().toISOString()
+      ;({ error } = await db.from('juridico_contrato').update(corpo).eq('id', c.id))
+    } else {
+      corpo.criado_por = PERFIL.pessoaId
+      ;({ error } = await db.from('juridico_contrato').insert(corpo))
+    }
+    if (error) { aviso(error.message); return }
+    fechar(); abrirJuridico('contratos', true)
+  }
+
+  const bx = q('#ct-excluir')
+  if (bx) bx.onclick = async () => {
+    if (!confirm('Excluir este contrato em definitivo?')) return
+    const { error } = await db.from('juridico_contrato').delete().eq('id', c.id)
+    if (error) { aviso(error.message); return }
+    fechar(); abrirJuridico('contratos', true)
+  }
+}
+
+// ----- Jurídico › Licenças e certidões -----
+async function juridicoLicencas (alvo, editavel) {
+  const { data, error } = await db.from('juridico_licenca')
+    .select(`id,nome,categoria,orgao_emissor,numero,data_emissao,data_validade,status,anexo_link,observacoes,
+      responsavel:responsavel_id ( nome )`)
+    .order('data_validade', { ascending: true, nullsFirst: false })
+
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  const lista = data || []
+  alvo.innerHTML = `
+    ${editavel ? `<div class="acoes" style="margin-bottom:14px;"><button class="btn" id="lc-novo">+ Nova licença/certidão</button></div>` : ''}
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>Nome</th><th>Categoria</th><th>Órgão</th><th>Nº</th>
+        <th>Validade</th><th>Situação</th><th>Responsável</th>${editavel ? '<th></th>' : ''}
+      </tr></thead><tbody>
+      ${lista.map(l => `<tr>
+        <td><b>${esc(l.nome)}</b>${l.anexo_link ? ` · <a href="${esc(l.anexo_link)}" target="_blank" rel="noopener">anexo</a>` : ''}</td>
+        <td><span class="chip">${esc(l.categoria || '—')}</span></td>
+        <td class="texto-dim">${esc(l.orgao_emissor || '—')}</td>
+        <td class="texto-dim">${esc(l.numero || '—')}</td>
+        <td class="texto-dim">${fmtData(l.data_validade)}</td>
+        <td>${tagVencimento(l.data_validade)}</td>
+        <td class="texto-dim">${esc(l.responsavel?.nome || '—')}</td>
+        ${editavel ? `<td style="text-align:right;white-space:nowrap;">
+          <button class="btn-secundario mini" data-editar="${l.id}">editar</button>
+        </td>` : ''}
+      </tr>`).join('') || `<tr><td colspan="${editavel ? 8 : 7}" class="vazio">Nenhuma licença ou certidão cadastrada ainda.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+
+  if (!editavel) return
+  $('#lc-novo').onclick = () => formLicenca(null)
+  alvo.querySelectorAll('[data-editar]').forEach(b => {
+    b.onclick = () => formLicenca(lista.find(x => x.id === b.dataset.editar))
+  })
+}
+
+function formLicenca (l) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  const v = k => esc(l?.[k] ?? '')
+
+  fundo.innerHTML = `
+    <div class="modal">
+      <h3>${l ? 'Editar licença/certidão' : 'Nova licença/certidão'}</h3>
+      <div class="form-grade">
+        <div class="campo" style="grid-column:1/-1;"><label>Nome *</label>
+          <input id="lc-nome" value="${v('nome')}" placeholder="Ex.: Licença de Operação, Alvará, AVCB, Certidão Negativa Federal"></div>
+        <div class="campo"><label>Categoria</label>
+          <select id="lc-cat">${CATEGORIAS_LICENCA.map(x => `<option ${l?.categoria === x ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
+        <div class="campo"><label>Órgão emissor</label><input id="lc-orgao" value="${v('orgao_emissor')}"></div>
+        <div class="campo"><label>Número</label><input id="lc-num" value="${v('numero')}"></div>
+        <div class="campo"><label>Emissão</label><input id="lc-emissao" type="date" value="${l?.data_emissao ?? ''}"></div>
+        <div class="campo"><label>Validade</label><input id="lc-validade" type="date" value="${l?.data_validade ?? ''}"></div>
+        <div class="campo"><label>Situação</label>
+          <select id="lc-status">
+            <option value="VALIDA" ${(!l || l.status === 'VALIDA') ? 'selected' : ''}>válida</option>
+            <option value="EM_RENOVACAO" ${l?.status === 'EM_RENOVACAO' ? 'selected' : ''}>em renovação</option>
+            <option value="VENCIDA" ${l?.status === 'VENCIDA' ? 'selected' : ''}>vencida</option>
+          </select></div>
+        <div class="campo"><label>Responsável</label>
+          <select id="lc-resp">${opcoesFin(JUR_CACHE.pessoas, 'sem responsável', l?.responsavel_id)}</select></div>
+        <div class="campo" style="grid-column:1/-1;"><label>Link do anexo</label>
+          <input id="lc-anexo" value="${v('anexo_link')}" placeholder="link do Drive"></div>
+      </div>
+      <div class="campo" style="margin-top:12px;"><label>Observações</label>
+        <textarea id="lc-obs" style="min-height:64px;">${v('observacoes')}</textarea></div>
+      <div class="acoes">
+        <button class="btn" id="lc-salvar">Salvar</button>
+        ${l ? '<button class="btn-secundario" id="lc-excluir">Excluir</button>' : ''}
+        <button class="btn-secundario" id="lc-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="lc-recado"></div>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#lc-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  const aviso = t => {
+    const el = q('#lc-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  q('#lc-salvar').onclick = async () => {
+    const nome = q('#lc-nome').value.trim()
+    if (!nome) { aviso('Escreva o nome da licença ou certidão.'); return }
+    const corpo = {
+      nome,
+      categoria: q('#lc-cat').value,
+      orgao_emissor: q('#lc-orgao').value.trim() || null,
+      numero: q('#lc-num').value.trim() || null,
+      data_emissao: q('#lc-emissao').value || null,
+      data_validade: q('#lc-validade').value || null,
+      status: q('#lc-status').value,
+      responsavel_id: q('#lc-resp').value || null,
+      anexo_link: q('#lc-anexo').value.trim() || null,
+      observacoes: q('#lc-obs').value.trim() || null
+    }
+    let error
+    if (l) {
+      corpo.editado_por = PERFIL.pessoaId; corpo.editado_em = new Date().toISOString()
+      ;({ error } = await db.from('juridico_licenca').update(corpo).eq('id', l.id))
+    } else {
+      corpo.criado_por = PERFIL.pessoaId
+      ;({ error } = await db.from('juridico_licenca').insert(corpo))
+    }
+    if (error) { aviso(error.message); return }
+    fechar(); abrirJuridico('licencas', true)
+  }
+
+  const bx = q('#lc-excluir')
+  if (bx) bx.onclick = async () => {
+    if (!confirm('Excluir esta licença/certidão em definitivo?')) return
+    const { error } = await db.from('juridico_licenca').delete().eq('id', l.id)
+    if (error) { aviso(error.message); return }
+    fechar(); abrirJuridico('licencas', true)
+  }
+}
+
+// ----- Jurídico › Processos (com filtro por tipo) -----
+let JUR_FILTRO_TIPO = ''
+
+async function juridicoProcessos (alvo, editavel) {
+  const [{ data, error }, { data: itensFrota }] = await Promise.all([
+    db.from('juridico_processo')
+      .select('id,numero_processo,orgao,assunto,tipo,parte_contraria,posicao,valor_causa,responsavel,status,proxima_data,observacoes')
+      .order('proxima_data', { ascending: true, nullsFirst: false }),
+    db.from('veiculo').select('id,descricao,processo_id').not('processo_id', 'is', null)
+  ])
+
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  const todos = data || []
+  const lista = JUR_FILTRO_TIPO ? todos.filter(p => p.tipo === JUR_FILTRO_TIPO) : todos
+  const vinculados = p => (itensFrota || []).filter(i => i.processo_id === p.id)
+  const tiposPresentes = [...new Set(todos.map(p => p.tipo).filter(Boolean))]
+
+  alvo.innerHTML = `
+    <div class="chips-cred" style="margin-bottom:14px;">
+      <button data-tipo="" class="${!JUR_FILTRO_TIPO ? 'ativo' : ''}">todos</button>
+      ${Object.entries(ROTULO_TIPO_PROCESSO).filter(([k]) => tiposPresentes.includes(k)).map(([k, v]) =>
+        `<button data-tipo="${k}" class="${JUR_FILTRO_TIPO === k ? 'ativo' : ''}">${v}</button>`).join('')}
+    </div>
+    ${editavel ? `<div class="acoes" style="margin-bottom:14px;"><button class="btn" id="pr-novo">+ Novo processo</button></div>` : ''}
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>Assunto</th><th>Tipo</th><th>Nº do processo</th><th>Parte contrária</th><th>Posição</th>
+        <th class="num">Valor da causa</th><th>Responsável</th><th>Próxima data</th><th>Status</th>
+        <th>Itens de frota vinculados</th>${editavel ? '<th></th>' : ''}
+      </tr></thead><tbody>
+      ${lista.map(p => { const vinc = vinculados(p); return `<tr>
+        <td><b>${esc(p.assunto)}</b></td>
+        <td>${p.tipo ? `<span class="chip">${ROTULO_TIPO_PROCESSO[p.tipo] || p.tipo}</span>` : '—'}</td>
+        <td class="texto-dim">${esc(p.numero_processo || '—')}</td>
+        <td class="texto-dim">${esc(p.parte_contraria || '—')}</td>
+        <td>${p.posicao ? `<span class="chip">${p.posicao === 'AUTORA' ? 'autora' : 'ré'}</span>` : '—'}</td>
+        <td class="num">${p.valor_causa != null ? 'R$ ' + fmtNum(p.valor_causa) : '<span class="texto-dim2">—</span>'}</td>
+        <td class="texto-dim">${esc(p.responsavel || '—')}</td>
+        <td>${p.proxima_data ? fmtData(p.proxima_data) : '<span class="texto-dim2">—</span>'}</td>
+        <td>${{ ATIVO: '<span class="badge-alerta">ativo</span>', SUSPENSO: '<span class="chip">suspenso</span>', ENCERRADO: '<span class="badge-bom">encerrado</span>' }[p.status] || esc(p.status)}</td>
+        <td class="texto-dim" style="font-size:12px;">${vinc.length ? vinc.map(i => esc(i.descricao)).join(', ') : '<span class="texto-dim2">nenhum</span>'}</td>
+        ${editavel ? `<td style="text-align:right;white-space:nowrap;">
+          <button class="btn-secundario mini" data-editar="${p.id}">editar</button>
+        </td>` : ''}
+      </tr>`}).join('') || `<tr><td colspan="${editavel ? 10 : 9}" class="vazio">Nenhum processo cadastrado ainda.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+
+  alvo.querySelectorAll('[data-tipo]').forEach(b => {
+    b.onclick = () => { JUR_FILTRO_TIPO = b.dataset.tipo; juridicoProcessos(alvo, editavel) }
+  })
+  if (!editavel) return
+  $('#pr-novo').onclick = () => formProcesso(null)
+  alvo.querySelectorAll('[data-editar]').forEach(b => {
+    b.onclick = () => formProcesso(lista.find(x => x.id === b.dataset.editar))
+  })
+}
+
+function formProcesso (p) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  const v = k => esc(p?.[k] ?? '')
+
+  fundo.innerHTML = `
+    <div class="modal">
+      <h3>${p ? 'Editar processo' : 'Novo processo'}</h3>
+      <div class="form-grade">
+        <div class="campo" style="grid-column:1/-1;"><label>Assunto *</label>
+          <input id="pr-assunto" value="${v('assunto')}"></div>
+        <div class="campo"><label>Tipo</label>
+          <select id="pr-tipo"><option value="">—</option>
+            ${Object.entries(ROTULO_TIPO_PROCESSO).map(([k, v2]) => `<option value="${k}" ${p?.tipo === k ? 'selected' : ''}>${v2}</option>`).join('')}
+          </select></div>
+        <div class="campo"><label>Nº do processo</label><input id="pr-num" value="${v('numero_processo')}"></div>
+        <div class="campo"><label>Órgão / tribunal / vara</label><input id="pr-orgao" value="${v('orgao')}"></div>
+        <div class="campo"><label>Parte contrária</label><input id="pr-parte" value="${v('parte_contraria')}"></div>
+        <div class="campo"><label>Posição da Gefoscal</label>
+          <select id="pr-posicao">
+            <option value="">—</option>
+            <option value="AUTORA" ${p?.posicao === 'AUTORA' ? 'selected' : ''}>autora</option>
+            <option value="RE" ${p?.posicao === 'RE' ? 'selected' : ''}>ré</option>
+          </select></div>
+        <div class="campo"><label>Valor da causa</label><input id="pr-valor" type="number" step="0.01" value="${p?.valor_causa ?? ''}"></div>
+        <div class="campo"><label>Responsável (advogado)</label>
+          <input id="pr-resp" value="${v('responsavel')}" placeholder="interno ou escritório externo"></div>
+        <div class="campo"><label>Próxima data / prazo</label><input id="pr-prox" type="date" value="${p?.proxima_data ?? ''}"></div>
+        <div class="campo"><label>Status</label>
+          <select id="pr-status">
+            <option value="ATIVO" ${(!p || p.status === 'ATIVO') ? 'selected' : ''}>ativo</option>
+            <option value="SUSPENSO" ${p?.status === 'SUSPENSO' ? 'selected' : ''}>suspenso</option>
+            <option value="ENCERRADO" ${p?.status === 'ENCERRADO' ? 'selected' : ''}>encerrado</option>
+          </select></div>
+      </div>
+      <div class="campo" style="margin-top:12px;"><label>Observações</label>
+        <textarea id="pr-obs" style="min-height:64px;">${v('observacoes')}</textarea></div>
+      <div class="acoes">
+        <button class="btn" id="pr-salvar">Salvar</button>
+        ${p ? '<button class="btn-secundario" id="pr-excluir">Excluir</button>' : ''}
+        <button class="btn-secundario" id="pr-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="pr-recado"></div>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#pr-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  const aviso = t => {
+    const el = q('#pr-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  q('#pr-salvar').onclick = async () => {
+    const assunto = q('#pr-assunto').value.trim()
+    if (!assunto) { aviso('Escreva o assunto do processo.'); return }
+    const corpo = {
+      assunto,
+      tipo: q('#pr-tipo').value || null,
+      numero_processo: q('#pr-num').value.trim() || null,
+      orgao: q('#pr-orgao').value.trim() || null,
+      parte_contraria: q('#pr-parte').value.trim() || null,
+      posicao: q('#pr-posicao').value || null,
+      valor_causa: q('#pr-valor').value ? Number(q('#pr-valor').value) : null,
+      responsavel: q('#pr-resp').value.trim() || null,
+      proxima_data: q('#pr-prox').value || null,
+      status: q('#pr-status').value,
+      observacoes: q('#pr-obs').value.trim() || null
+    }
+    let error
+    if (p) {
+      corpo.editado_por = PERFIL.pessoaId; corpo.editado_em = new Date().toISOString()
+      ;({ error } = await db.from('juridico_processo').update(corpo).eq('id', p.id))
+    } else {
+      corpo.criado_por = PERFIL.pessoaId
+      ;({ error } = await db.from('juridico_processo').insert(corpo))
+    }
+    if (error) { aviso(error.message); return }
+    fechar(); abrirJuridico('processos', true)
+  }
+
+  const bx = q('#pr-excluir')
+  if (bx) bx.onclick = async () => {
+    if (!confirm('Excluir este processo em definitivo?')) return
+    const { error } = await db.from('juridico_processo').delete().eq('id', p.id)
+    if (error) { aviso(error.message); return }
+    fechar(); abrirJuridico('processos', true)
+  }
+}
+
+// ----- Jurídico › Notificações e autuações -----
+async function juridicoNotificacoes (alvo, editavel) {
+  const { data, error } = await db.from('juridico_notificacao')
+    .select(`id,tipo,orgao,numero,data_recebimento,prazo_resposta,descricao,status,anexo_link,observacoes,
+      projeto_id, projeto:projeto_id ( nome ), responsavel:responsavel_id ( nome )`)
+    .order('prazo_resposta', { ascending: true, nullsFirst: false })
+
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  const lista = data || []
+  alvo.innerHTML = `
+    ${editavel ? `<div class="acoes" style="margin-bottom:14px;"><button class="btn" id="nt-nova">+ Nova notificação/autuação</button></div>` : ''}
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>Tipo</th><th>Órgão</th><th>Nº</th><th>Descrição</th><th>Prazo de resposta</th>
+        <th>Status</th><th>Projeto vinculado</th>${editavel ? '<th></th>' : ''}
+      </tr></thead><tbody>
+      ${lista.map(n => `<tr>
+        <td><span class="chip">${ROTULO_TIPO_NOTIFICACAO[n.tipo] || n.tipo}</span></td>
+        <td class="texto-dim">${esc(n.orgao || '—')}</td>
+        <td class="texto-dim">${esc(n.numero || '—')}</td>
+        <td>${esc(n.descricao)}</td>
+        <td>${n.prazo_resposta ? tagVencimento(n.prazo_resposta) : '<span class="texto-dim2">—</span>'}</td>
+        <td>${{ ABERTA: '<span class="badge-alerta">aberta</span>', RESPONDIDA: '<span class="chip">respondida</span>', ENCERRADA: '<span class="badge-bom">encerrada</span>' }[n.status]}</td>
+        <td class="texto-dim">${n.projeto?.nome ? esc(n.projeto.nome) : '<span class="texto-dim2">nenhum</span>'}</td>
+        ${editavel ? `<td style="text-align:right;white-space:nowrap;">
+          <button class="btn-secundario mini" data-editar="${n.id}">editar</button>
+          ${!n.projeto_id ? `<button class="btn-secundario mini" data-projeto="${n.id}">criar projeto</button>` : ''}
+        </td>` : ''}
+      </tr>`).join('') || `<tr><td colspan="${editavel ? 8 : 7}" class="vazio">Nenhuma notificação ou autuação registrada ainda.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+
+  if (!editavel) return
+  $('#nt-nova').onclick = () => formNotificacao(null)
+  alvo.querySelectorAll('[data-editar]').forEach(b => {
+    b.onclick = () => formNotificacao(lista.find(x => x.id === b.dataset.editar))
+  })
+  alvo.querySelectorAll('[data-projeto]').forEach(b => {
+    b.onclick = async () => {
+      const n = lista.find(x => x.id === b.dataset.projeto)
+      if (!confirm(`Criar um projeto no Kanban/Progresso pra "${n.descricao}"?`)) return
+      const { data: novo, error: e2 } = await db.from('projeto').insert({
+        nome: `[${ROTULO_TIPO_NOTIFICACAO[n.tipo]}] ${n.descricao}`.slice(0, 200),
+        descricao: [n.orgao ? 'Órgão: ' + n.orgao : '', n.numero ? 'Nº: ' + n.numero : '', n.observacoes || ''].filter(Boolean).join('\n'),
+        sla: n.prazo_resposta || null, criado_por_id: PERFIL.pessoaId
+      }).select('id').single()
+      if (e2) { alert(e2.message); return }
+      await db.from('projeto_membro').insert({ projeto_id: novo.id, pessoa_id: PERFIL.pessoaId })
+      await db.from('juridico_notificacao').update({ projeto_id: novo.id }).eq('id', n.id)
+      abrirJuridico('notificacoes', true)
+    }
+  })
+}
+
+function formNotificacao (n) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  const v = k => esc(n?.[k] ?? '')
+
+  fundo.innerHTML = `
+    <div class="modal">
+      <h3>${n ? 'Editar notificação/autuação' : 'Nova notificação/autuação'}</h3>
+      <div class="form-grade">
+        <div class="campo"><label>Tipo *</label>
+          <select id="nt-tipo">${Object.entries(ROTULO_TIPO_NOTIFICACAO).map(([k, v2]) => `<option value="${k}" ${n?.tipo === k ? 'selected' : ''}>${v2}</option>`).join('')}</select></div>
+        <div class="campo"><label>Órgão</label><input id="nt-orgao" value="${v('orgao')}"></div>
+        <div class="campo"><label>Número</label><input id="nt-num" value="${v('numero')}"></div>
+        <div class="campo"><label>Data de recebimento</label><input id="nt-receb" type="date" value="${n?.data_recebimento ?? ''}"></div>
+        <div class="campo"><label>Prazo de resposta</label><input id="nt-prazo" type="date" value="${n?.prazo_resposta ?? ''}"></div>
+        <div class="campo"><label>Responsável</label><select id="nt-resp">${opcoesFin(JUR_CACHE.pessoas, 'sem responsável', n?.responsavel_id)}</select></div>
+        <div class="campo"><label>Status</label>
+          <select id="nt-status">
+            <option value="ABERTA" ${(!n || n.status === 'ABERTA') ? 'selected' : ''}>aberta</option>
+            <option value="RESPONDIDA" ${n?.status === 'RESPONDIDA' ? 'selected' : ''}>respondida</option>
+            <option value="ENCERRADA" ${n?.status === 'ENCERRADA' ? 'selected' : ''}>encerrada</option>
+          </select></div>
+        <div class="campo" style="grid-column:1/-1;"><label>Link do anexo</label><input id="nt-anexo" value="${v('anexo_link')}" placeholder="link do Drive"></div>
+      </div>
+      <div class="campo" style="margin-top:12px;"><label>Descrição *</label><input id="nt-desc" value="${v('descricao')}" placeholder="o que a notificação/autuação diz"></div>
+      <div class="campo" style="margin-top:10px;"><label>Observações</label><textarea id="nt-obs" style="min-height:64px;">${v('observacoes')}</textarea></div>
+      <div class="acoes">
+        <button class="btn" id="nt-salvar">Salvar</button>
+        ${n ? '<button class="btn-secundario" id="nt-excluir">Excluir</button>' : ''}
+        <button class="btn-secundario" id="nt-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="nt-recado"></div>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#nt-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  const aviso = t => {
+    const el = q('#nt-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  q('#nt-salvar').onclick = async () => {
+    const desc = q('#nt-desc').value.trim()
+    if (!desc) { aviso('Descreva a notificação ou autuação.'); return }
+    const corpo = {
+      tipo: q('#nt-tipo').value,
+      orgao: q('#nt-orgao').value.trim() || null,
+      numero: q('#nt-num').value.trim() || null,
+      data_recebimento: q('#nt-receb').value || null,
+      prazo_resposta: q('#nt-prazo').value || null,
+      responsavel_id: q('#nt-resp').value || null,
+      status: q('#nt-status').value,
+      anexo_link: q('#nt-anexo').value.trim() || null,
+      descricao: desc,
+      observacoes: q('#nt-obs').value.trim() || null
+    }
+    let error
+    if (n) {
+      corpo.editado_por = PERFIL.pessoaId; corpo.editado_em = new Date().toISOString()
+      ;({ error } = await db.from('juridico_notificacao').update(corpo).eq('id', n.id))
+    } else {
+      corpo.criado_por = PERFIL.pessoaId
+      ;({ error } = await db.from('juridico_notificacao').insert(corpo))
+    }
+    if (error) { aviso(error.message); return }
+    fechar(); abrirJuridico('notificacoes', true)
+  }
+
+  const bx = q('#nt-excluir')
+  if (bx) bx.onclick = async () => {
+    if (!confirm('Excluir esta notificação/autuação em definitivo?')) return
+    const { error } = await db.from('juridico_notificacao').delete().eq('id', n.id)
+    if (error) { aviso(error.message); return }
+    fechar(); abrirJuridico('notificacoes', true)
+  }
+}
+
+// ----- Jurídico › Documentos (pastas/documentos padrão da empresa) -----
+async function juridicoDocumentos (alvo, editavel) {
+  const { data, error } = await db.from('juridico_documento')
+    .select('id,nome,categoria,link,observacoes,atualizado_em,responsavel:responsavel_id(nome)')
+    .order('categoria').order('nome')
+
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  const lista = data || []
+  const porCategoria = {}
+  lista.forEach(d => { const c = d.categoria || 'Sem categoria'; (porCategoria[c] = porCategoria[c] || []).push(d) })
+
+  alvo.innerHTML = `
+    ${editavel ? `<div class="acoes" style="margin-bottom:14px;"><button class="btn" id="dc-novo">+ Novo documento</button></div>` : ''}
+    ${Object.entries(porCategoria).map(([cat, docs]) => `
+      <div class="secao">
+        <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:15px;">${esc(cat)}</h3></div>
+        <div class="panel" style="padding:0;">
+          ${docs.map(d => `<div class="conta-linha">
+            <span><b>${esc(d.nome)}</b>${d.link ? ` · <a href="${esc(d.link)}" target="_blank" rel="noopener">abrir</a>` : ''}
+              <span class="texto-dim2"> — ${esc(d.responsavel?.nome || 'sem responsável')}</span></span>
+            ${editavel ? `<button class="btn-secundario mini" data-editar="${d.id}">editar</button>` : ''}
+          </div>`).join('')}
+        </div>
+      </div>`).join('') || '<p class="vazio">Nenhum documento cadastrado ainda.</p>'}`
+
+  if (!editavel) return
+  $('#dc-novo').onclick = () => formDocumentoJuridico(null)
+  alvo.querySelectorAll('[data-editar]').forEach(b => {
+    b.onclick = () => formDocumentoJuridico(lista.find(x => x.id === b.dataset.editar))
+  })
+}
+
+function formDocumentoJuridico (d) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  const v = k => esc(d?.[k] ?? '')
+  const CATEGORIAS_DOC = ['Societário', 'Fiscal', 'Trabalhista', 'Ambiental', 'Imobiliário', 'Seguros', 'Outro']
+
+  fundo.innerHTML = `<div class="modal">
+    <h3>${d ? 'Editar documento' : 'Novo documento'}</h3>
+    <div class="form-grade">
+      <div class="campo" style="grid-column:1/-1;"><label>Nome *</label>
+        <input id="dc-nome" value="${v('nome')}" placeholder="Ex.: Contrato social, CNPJ, Inscrição estadual"></div>
+      <div class="campo"><label>Categoria</label>
+        <select id="dc-cat">${CATEGORIAS_DOC.map(x => `<option ${d?.categoria === x ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
+      <div class="campo"><label>Responsável</label><select id="dc-resp">${opcoesFin(JUR_CACHE.pessoas, 'sem responsável', d?.responsavel_id)}</select></div>
+      <div class="campo" style="grid-column:1/-1;"><label>Link (Drive)</label><input id="dc-link" value="${v('link')}"></div>
+    </div>
+    <div class="campo" style="margin-top:10px;"><label>Observações</label><textarea id="dc-obs" style="min-height:64px;">${v('observacoes')}</textarea></div>
+    <div class="acoes">
+      <button class="btn" id="dc-salvar">Salvar</button>
+      ${d ? '<button class="btn-secundario" id="dc-excluir">Excluir</button>' : ''}
+      <button class="btn-secundario" id="dc-cancelar">Cancelar</button>
+    </div>
+    <div class="recado oculto" id="dc-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#dc-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  const aviso = t => {
+    const el = q('#dc-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  q('#dc-salvar').onclick = async () => {
+    const nome = q('#dc-nome').value.trim()
+    if (!nome) { aviso('Escreva o nome do documento.'); return }
+    const corpo = {
+      nome, categoria: q('#dc-cat').value, responsavel_id: q('#dc-resp').value || null,
+      link: q('#dc-link').value.trim() || null, observacoes: q('#dc-obs').value.trim() || null,
+      atualizado_em: new Date().toISOString()
+    }
+    let error
+    if (d) {
+      ;({ error } = await db.from('juridico_documento').update(corpo).eq('id', d.id))
+    } else {
+      corpo.criado_por = PERFIL.pessoaId
+      ;({ error } = await db.from('juridico_documento').insert(corpo))
+    }
+    if (error) { aviso(error.message); return }
+    fechar(); abrirJuridico('documentos', true)
+  }
+
+  const bx = q('#dc-excluir')
+  if (bx) bx.onclick = async () => {
+    if (!confirm('Excluir este documento em definitivo?')) return
+    const { error } = await db.from('juridico_documento').delete().eq('id', d.id)
+    if (error) { aviso(error.message); return }
+    fechar(); abrirJuridico('documentos', true)
   }
 }
 
