@@ -742,17 +742,15 @@ const ehTotal = () => PERFIL.papeis.some(p => PAPEIS_TOTAIS.includes(p))
 
 function moduloPorChave (chave) { return PERFIL.modulos.find(m => m.chave === chave) }
 
-// 'cobranca' aceita DOIS caminhos: um dos papéis especiais (ADMIN/DIRETORIA/
-// COMERCIAL/COBRANCA — porque a tabela pedido já tinha RLS por papel de outra
-// frente de trabalho quando chegamos nela) OU o checkbox normal de módulo em
-// Administração (tem_modulo). O RLS no banco já aceita os dois; aqui só
-// espelhamos a mesma regra pra não esconder uma aba que o ADMIN liberou.
+// 'cobranca' é liberado por PAPEL, não por modulo_permissao: a tabela por trás
+// (pedido) já tinha RLS por papel de outra frente de trabalho (vendas), e
+// seguimos o mesmo mecanismo em vez de competir com um segundo sistema de
+// permissão pra mesma tabela.
 const MODULOS_POR_PAPEL = { cobranca: ['ADMIN', 'DIRETORIA', 'COMERCIAL', 'COBRANCA'] }
 
 function podeVer (chave) {
   if (ehTotal()) return true
-  const papeisExtra = MODULOS_POR_PAPEL[chave]
-  if (papeisExtra && PERFIL.papeis.some(p => papeisExtra.includes(p))) return true
+  if (MODULOS_POR_PAPEL[chave]) return PERFIL.papeis.some(p => MODULOS_POR_PAPEL[chave].includes(p))
   const m = moduloPorChave(chave)
   return !!m && PERFIL.permissoes.some(p => p.modulo_id === m.id)
 }
@@ -760,8 +758,7 @@ function podeVer (chave) {
 // espelha tem_modulo(chave, true) do banco — o RLS é quem manda de verdade
 function podeEditar (chave) {
   if (ehTotal()) return true
-  const papeisExtra = MODULOS_POR_PAPEL[chave]
-  if (papeisExtra && PERFIL.papeis.some(p => papeisExtra.includes(p))) return true
+  if (MODULOS_POR_PAPEL[chave]) return PERFIL.papeis.some(p => MODULOS_POR_PAPEL[chave].includes(p))
   const m = moduloPorChave(chave)
   return !!m && PERFIL.permissoes.some(p => p.modulo_id === m.id && p.pode_editar)
 }
@@ -775,6 +772,8 @@ const PAGINAS = {
   projetos:    { nome: 'Projetos', render: paginaProjetos },
   ferramentas: { nome: 'Ferramentas', render: paginaFerramentas },
   estoque:     { nome: 'Estoque e Produção', render: paginaEstoque },
+  combustivel: { nome: 'Combustível', render: paginaCombustivel },
+  manutencao:  { nome: 'Manutenção', render: paginaManutencao },
   ti:          { nome: 'Administração', render: paginaAdministracao }
 }
 
@@ -7621,6 +7620,1082 @@ function formProduto (p, unidadeFixa) {
 }
 
 
+
+// ---------------------------------------------------------------
+// Página: Combustível  (módulo 'combustivel')
+// Sub-abas: Estoque · Abastecer · Abastecimentos · Registrar entrada ·
+// Entradas · Frota · Relatório.
+// RLS de verdade fica no banco (papéis ADMIN/DIRETORIA/ALMOXARIFADO/
+// PRODUCAO para lançar; EXPEDICAO também mexe em veículo, por ser o
+// cadastro da frota). Aqui só decidimos o que mostrar; se faltar
+// papel, o Supabase devolve erro e a tela mostra a mensagem.
+// ---------------------------------------------------------------
+const TIPOS_COMBUSTIVEL = ['S500', 'GASOLINA', 'ARLA', 'OUTRO']
+const ROTULO_COMBUSTIVEL = { S500: 'Diesel S500', GASOLINA: 'Gasolina', ARLA: 'Arla 32', OUTRO: 'Outro' }
+
+let COMB_CACHE = { veiculos: [], equipamentos: [], pessoas: [], fornecedores: [], setores: [] }
+
+async function paginaCombustivel () {
+  if (!podeVer('combustivel')) { areaLivre().innerHTML =
+    `<div class="panel" style="padding:22px;"><p class="texto-dim">
+     Você não tem acesso ao Combustível.</p></div>`; return }
+
+  const editavel = podeEditar('combustivel')
+  $('#subtitulo-pagina').textContent = 'Entradas, abastecimentos e frota'
+  const area = areaLivre()
+  area.innerHTML = `<p class="texto-dim2">carregando...</p>`
+
+  const [{ data: veiculos }, { data: equipamentos }, { data: pessoas },
+         { data: fornecedores }, { data: setores }] = await Promise.all([
+    db.from('veiculo').select('id,placa,descricao,eh_proprio').order('placa'),
+    db.from('equipamento').select('id,tag,descricao').eq('status', 'ATIVO').order('tag'),
+    db.from('pessoa').select('id,nome').eq('status', 'ATIVO').order('nome'),
+    db.from('fornecedor').select('id,nome').eq('status', 'ATIVO').order('nome'),
+    db.from('setor').select('id,nome').order('nome')
+  ])
+  COMB_CACHE = { veiculos: veiculos || [], equipamentos: equipamentos || [],
+                 pessoas: pessoas || [], fornecedores: fornecedores || [], setores: setores || [] }
+
+  const abas = [['estoque', 'Estoque'], ['abastecer', 'Abastecer'], ['abastecimentos', 'Abastecimentos'],
+                ['entrada', 'Registrar entrada'], ['entradas', 'Entradas'],
+                ['veiculos', 'Frota'], ['relatorio', 'Relatório']]
+
+  area.innerHTML = `
+    <div class="subabas">
+      ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
+    </div>
+    <div id="sub-combustivel"></div>`
+
+  area.querySelectorAll('.subabas button').forEach(b => {
+    b.onclick = () => {
+      area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
+      abrirCombustivel(b.dataset.sub, editavel)
+    }
+  })
+  abrirCombustivel('estoque', editavel)
+}
+
+function abrirCombustivel (sub, editavel) {
+  const alvo = $('#sub-combustivel')
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  $('#kpis').innerHTML = ''
+  if (sub === 'estoque') combEstoque(alvo)
+  if (sub === 'abastecer') combAbastecer(alvo, editavel)
+  if (sub === 'abastecimentos') combAbastecimentos(alvo, editavel)
+  if (sub === 'entrada') combEntrada(alvo, editavel)
+  if (sub === 'entradas') combEntradas(alvo, editavel)
+  if (sub === 'veiculos') combVeiculos(alvo, editavel)
+  if (sub === 'relatorio') combRelatorio(alvo)
+}
+
+const nomeAlvoAbastecimento = a => a.veiculo?.placa
+  ? `${a.veiculo.placa}${a.veiculo.descricao ? ' — ' + a.veiculo.descricao : ''}`
+  : a.equipamento?.tag ? `${a.equipamento.tag}${a.equipamento.descricao ? ' — ' + a.equipamento.descricao : ''}` : '—'
+
+// ----- Estoque (saldo = entradas − abastecimentos, por tipo) -----
+async function combEstoque (alvo) {
+  const inicioMes = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10)
+  const [{ data: entradas, error }, { data: saidas }] = await Promise.all([
+    db.from('entrada_combustivel').select('tipo,litros,valor_total,data_entrada'),
+    db.from('abastecimento').select('tipo,litros,data_abastecimento,veiculo:veiculo_id(placa),equipamento:equipamento_id(tag)')
+  ])
+  if (faltaMigracao(error)) {
+    alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return
+  }
+
+  const porTipo = {}
+  TIPOS_COMBUSTIVEL.forEach(t => { porTipo[t] = { entrou: 0, saiu: 0, custo: 0, litrosComprados: 0 } })
+  ;(entradas || []).forEach(e => {
+    porTipo[e.tipo] = porTipo[e.tipo] || { entrou: 0, saiu: 0, custo: 0, litrosComprados: 0 }
+    porTipo[e.tipo].entrou += Number(e.litros || 0)
+    porTipo[e.tipo].custo += Number(e.valor_total || 0)
+    porTipo[e.tipo].litrosComprados += Number(e.litros || 0)
+  })
+  ;(saidas || []).forEach(s => {
+    porTipo[s.tipo] = porTipo[s.tipo] || { entrou: 0, saiu: 0, custo: 0, litrosComprados: 0 }
+    porTipo[s.tipo].saiu += Number(s.litros || 0)
+  })
+
+  const entradasMes = (entradas || []).filter(e => e.data_entrada >= inicioMes)
+  const saidasMes = (saidas || []).filter(s => (s.data_abastecimento || '') >= inicioMes)
+  const litrosMes = saidasMes.reduce((s, x) => s + Number(x.litros || 0), 0)
+  const litrosCompradosMes = entradasMes.reduce((s, x) => s + Number(x.litros || 0), 0)
+  const custoMes = entradasMes.reduce((s, x) => s + Number(x.valor_total || 0), 0)
+
+  $('#kpis').innerHTML =
+    kpi('Abastecido no mês', fmtNum(litrosMes) + ' L', saidasMes.length + ' lançamento(s)') +
+    kpi('Comprado no mês', fmtNum(litrosCompradosMes) + ' L', entradasMes.length + ' entrada(s)') +
+    kpi('Gasto no mês', 'R$ ' + fmtNum(custoMes)) +
+    kpi('Custo médio', litrosCompradosMes ? 'R$ ' + fmtNum(custoMes / litrosCompradosMes, 3) + '/L' : '—')
+
+  const porVeiculo = {}
+  saidasMes.forEach(s => {
+    const k = s.veiculo?.placa || s.equipamento?.tag || '—'
+    porVeiculo[k] = (porVeiculo[k] || 0) + Number(s.litros || 0)
+  })
+  const topVeiculos = Object.entries(porVeiculo).sort((a, b) => b[1] - a[1]).slice(0, 12)
+
+  alvo.innerHTML = `
+    <div class="resumo-topo">
+      ${TIPOS_COMBUSTIVEL.map(t => {
+        const v = porTipo[t]
+        const saldo = v.entrou - v.saiu
+        return `<div class="bloco ${saldo < 0 ? 'alerta' : ''}">
+          <div class="rot">${esc(ROTULO_COMBUSTIVEL[t])}</div>
+          <div class="val">${fmtNum(saldo)} <span style="font-size:15px;color:var(--dim2);">L</span></div>
+          <div class="nota">${saldo < 0 ? 'saldo negativo — conferir lançamentos' : 'saldo estimado no tanque'}</div>
+        </div>`
+      }).join('')}
+    </div>
+
+    <div class="cabeca-secao" style="margin-top:6px;">
+      <h3 style="font-family:var(--serif);font-size:17px;">Consumo por veículo/equipamento no mês</h3>
+      <span class="texto-dim2" style="font-size:12px;">${topVeiculos.length} item(ns)</span>
+    </div>
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr><th>Veículo / equipamento</th><th class="num">Litros</th></tr></thead><tbody>
+        ${topVeiculos.map(([nome, litros]) => `<tr>
+          <td>${esc(nome)}</td><td class="num">${fmtNum(litros)}</td>
+        </tr>`).join('') || `<tr><td colspan="2" class="vazio">Nenhum abastecimento neste mês.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+}
+
+// ----- Abastecer -----
+function combAbastecer (alvo, editavel) {
+  if (!editavel) { alvo.innerHTML = `<div class="panel" style="padding:22px;">
+    <p class="texto-dim">Você pode consultar, mas não lançar abastecimentos.</p></div>`; return }
+
+  const agora = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)
+  alvo.innerHTML = `
+    <div class="panel" style="padding:20px;max-width:820px;">
+      <h3 style="font-family:var(--serif);font-size:18px;margin:0 0 14px;">Novo abastecimento</h3>
+      <div class="form-grade">
+        <div class="campo"><label>Combustível *</label>
+          <select id="ab-tipo">${TIPOS_COMBUSTIVEL.map(t => `<option value="${t}">${ROTULO_COMBUSTIVEL[t]}</option>`).join('')}</select></div>
+        <div class="campo"><label>Aplicar a *</label>
+          <select id="ab-alvo-tipo"><option value="veiculo">Veículo</option><option value="equipamento">Equipamento</option></select></div>
+        <div class="campo" id="ab-campo-veiculo"><label>Veículo *</label>
+          <select id="ab-veiculo">${COMB_CACHE.veiculos.map(v => `<option value="${v.id}">${esc(v.placa)}${v.descricao ? ' — ' + esc(v.descricao) : ''}</option>`).join('')}</select></div>
+        <div class="campo oculto" id="ab-campo-equipamento"><label>Equipamento *</label>
+          <select id="ab-equipamento">${COMB_CACHE.equipamentos.map(e => `<option value="${e.id}">${esc(e.tag)}${e.descricao ? ' — ' + esc(e.descricao) : ''}</option>`).join('')}</select></div>
+        <div class="campo"><label>Data e hora *</label><input type="datetime-local" id="ab-data" value="${agora}"></div>
+        <div class="campo"><label>Litros *</label><input id="ab-litros" inputmode="decimal" placeholder="Ex: 150,5"></div>
+        <div class="campo"><label>Horímetro / odômetro</label><input id="ab-horimetro" inputmode="decimal" placeholder="opcional"></div>
+        <div class="campo"><label>Leitura inicial</label><input id="ab-leitura-ini" inputmode="decimal" placeholder="opcional"></div>
+        <div class="campo"><label>Leitura final</label><input id="ab-leitura-fim" inputmode="decimal" placeholder="opcional"></div>
+        <div class="campo"><label>Bombista</label>
+          <select id="ab-bombista"><option value="">—</option>${COMB_CACHE.pessoas.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Operador</label>
+          <select id="ab-operador"><option value="">—</option>${COMB_CACHE.pessoas.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Setor de destino</label>
+          <select id="ab-setor"><option value="">—</option>${COMB_CACHE.setores.map(s => `<option value="${s.id}">${esc(s.nome)}</option>`).join('')}</select></div>
+      </div>
+      <div class="acoes"><button class="btn" id="ab-salvar">Salvar abastecimento</button></div>
+      <div class="recado oculto" id="ab-recado"></div>
+    </div>`
+
+  $('#ab-alvo-tipo').onchange = () => {
+    const ehVeiculo = $('#ab-alvo-tipo').value === 'veiculo'
+    $('#ab-campo-veiculo').classList.toggle('oculto', !ehVeiculo)
+    $('#ab-campo-equipamento').classList.toggle('oculto', ehVeiculo)
+  }
+
+  const aviso = (t, alerta = true) => {
+    const el = $('#ab-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = alerta ? 'var(--warn-text)' : 'var(--line2)'
+    el.style.color = alerta ? 'var(--warn-text)' : 'var(--dim)'
+  }
+
+  $('#ab-salvar').onclick = async () => {
+    const litros = numeroBR($('#ab-litros').value)
+    if (!litros || litros <= 0) { aviso('Informe os litros abastecidos.'); return }
+    const ehVeiculo = $('#ab-alvo-tipo').value === 'veiculo'
+    if (ehVeiculo && !COMB_CACHE.veiculos.length) { aviso('Cadastre um veículo na aba Frota antes de abastecer.'); return }
+    if (!ehVeiculo && !COMB_CACHE.equipamentos.length) { aviso('Cadastre um equipamento em Manutenção antes de abastecer.'); return }
+
+    const btn = $('#ab-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const { error } = await db.from('abastecimento').insert({
+      tipo: $('#ab-tipo').value,
+      veiculo_id: ehVeiculo ? $('#ab-veiculo').value : null,
+      equipamento_id: ehVeiculo ? null : $('#ab-equipamento').value,
+      data_abastecimento: new Date($('#ab-data').value).toISOString(),
+      litros,
+      horimetro_odometro: numeroBR($('#ab-horimetro').value),
+      leitura_inicial: numeroBR($('#ab-leitura-ini').value),
+      leitura_final: numeroBR($('#ab-leitura-fim').value),
+      bombista_id: $('#ab-bombista').value || null,
+      operador_id: $('#ab-operador').value || null,
+      setor_destino_id: $('#ab-setor').value || null
+    })
+    btn.disabled = false; btn.textContent = 'Salvar abastecimento'
+    if (error) { aviso(error.message); return }
+    aviso('Abastecimento salvo.', false)
+    $('#ab-litros').value = ''; $('#ab-horimetro').value = ''
+    $('#ab-leitura-ini').value = ''; $('#ab-leitura-fim').value = ''
+  }
+}
+
+// ----- Abastecimentos (histórico) -----
+async function combAbastecimentos (alvo, editavel) {
+  const hoje = new Date().toISOString().slice(0, 10)
+  const de = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10)
+
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>De</label><input type="date" id="ah-de" value="${de}"></div>
+      <div class="campo"><label>Até</label><input type="date" id="ah-ate" value="${hoje}"></div>
+      <div class="campo"><label>Combustível</label>
+        <select id="ah-tipo"><option value="">todos</option>
+          ${TIPOS_COMBUSTIVEL.map(t => `<option value="${t}">${ROTULO_COMBUSTIVEL[t]}</option>`).join('')}</select></div>
+      <div class="campo" style="flex:1;min-width:180px;"><label>Buscar</label>
+        <input id="ah-busca" placeholder="placa, tag ou pessoa"></div>
+      <button class="btn" id="ah-buscar">Buscar</button>
+    </div>
+    <div id="ah-lista"></div>`
+
+  const buscar = async () => {
+    const { data, error } = await db.from('abastecimento').select(`
+      id, tipo, litros, data_abastecimento, horimetro_odometro,
+      veiculo:veiculo_id ( placa, descricao ), equipamento:equipamento_id ( tag, descricao ),
+      bombista:bombista_id ( nome ), operador:operador_id ( nome ), setor:setor_destino_id ( nome )
+    `).gte('data_abastecimento', $('#ah-de').value)
+      .lte('data_abastecimento', $('#ah-ate').value + 'T23:59:59')
+      .order('data_abastecimento', { ascending: false }).limit(500)
+
+    if (error) { $('#ah-lista').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+    let lista = $('#ah-tipo').value ? data.filter(a => a.tipo === $('#ah-tipo').value) : data
+    const termo = $('#ah-busca').value.trim().toLowerCase()
+    if (termo) lista = lista.filter(a =>
+      `${a.veiculo?.placa ?? ''} ${a.equipamento?.tag ?? ''} ${a.bombista?.nome ?? ''} ${a.operador?.nome ?? ''}`
+        .toLowerCase().includes(termo))
+
+    const total = lista.reduce((s, a) => s + Number(a.litros || 0), 0)
+    $('#kpis').innerHTML = kpi('Abastecimentos', lista.length) + kpi('Total de litros', fmtNum(total) + ' L')
+
+    $('#ah-lista').innerHTML = `
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr>
+          <th>Quando</th><th>Combustível</th><th>Veículo / equipamento</th>
+          <th class="num">Litros</th><th class="num">Horímetro/odôm.</th>
+          <th>Bombista</th><th>Operador</th><th>Setor</th>${editavel ? '<th></th>' : ''}
+        </tr></thead><tbody>
+          ${lista.map(a => `<tr>
+            <td>${fmtQuando(a.data_abastecimento) ?? '—'}</td>
+            <td><span class="chip">${esc(ROTULO_COMBUSTIVEL[a.tipo] ?? a.tipo)}</span></td>
+            <td>${esc(nomeAlvoAbastecimento(a))}</td>
+            <td class="num">${fmtNum(a.litros)}</td>
+            <td class="num texto-dim">${a.horimetro_odometro ? fmtNum(a.horimetro_odometro) : '—'}</td>
+            <td class="texto-dim">${esc(a.bombista?.nome ?? '—')}</td>
+            <td class="texto-dim">${esc(a.operador?.nome ?? '—')}</td>
+            <td class="texto-dim">${esc(a.setor?.nome ?? '—')}</td>
+            ${editavel ? `<td><button class="btn-secundario mini" data-del-ab="${a.id}">×</button></td>` : ''}
+          </tr>`).join('') || `<tr><td colspan="${editavel ? 9 : 8}" class="vazio">Nenhum abastecimento no filtro.</td></tr>`}
+        </tbody></table>
+      </div></div>`
+
+    if (!editavel) return
+    $('#ah-lista').querySelectorAll('[data-del-ab]').forEach(b => {
+      b.onclick = async () => {
+        if (!confirm('Excluir este abastecimento?')) return
+        const { error } = await db.from('abastecimento').delete().eq('id', b.dataset.delAb)
+        if (error) { alert(error.message); return }
+        buscar()
+      }
+    })
+  }
+
+  $('#ah-buscar').onclick = buscar
+  $('#ah-busca').oninput = buscar
+  $('#ah-tipo').onchange = buscar
+  buscar()
+}
+
+// ----- Registrar entrada (compra de combustível) -----
+// Campos do formulário: Data e Hora da Entrada, Tipo de Combustível, Quantidade (L),
+// Responsável pelo Recebimento, Documento de Referência (NF/OC/link), Observações,
+// Valor total da Nota — mesmos campos do Google Forms usado hoje pela equipe.
+function campoEntradaCombustivel (e) {
+  const agora = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)
+  const dataInicial = e?.data_entrada ? new Date(e.data_entrada.slice(0, 19)).toISOString().slice(0, 16) : agora
+  return `
+    <div class="form-grade">
+      <div class="campo"><label>Data e hora da entrada *</label>
+        <input type="datetime-local" id="en-data" value="${dataInicial}"></div>
+      <div class="campo"><label>Tipo de combustível *</label>
+        <select id="en-tipo">${TIPOS_COMBUSTIVEL.map(t => `<option value="${t}" ${e?.tipo === t ? 'selected' : ''}>${ROTULO_COMBUSTIVEL[t]}</option>`).join('')}</select></div>
+      <div class="campo"><label>Quantidade recebida (litros) *</label>
+        <input id="en-litros" inputmode="decimal" placeholder="Ex: 5000" value="${e?.litros ?? ''}"></div>
+      <div class="campo"><label>Responsável pelo recebimento *</label>
+        <select id="en-recebido">${COMB_CACHE.pessoas.map(p => `<option value="${p.id}" ${(e ? e.recebido_por === p.id : p.id === PERFIL.pessoaId) ? 'selected' : ''}>${esc(p.nome)}</option>`).join('')}</select></div>
+      <div class="campo"><label>Documento de referência</label>
+        <input id="en-nf" placeholder="NF, OC ou link do comprovante" value="${esc(e?.numero_nf ?? '')}"></div>
+      <div class="campo"><label>Valor total da nota (R$)</label>
+        <input id="en-valor" inputmode="decimal" placeholder="opcional" value="${e?.valor_total ?? ''}"></div>
+    </div>
+    <div class="campo" style="margin-top:12px;"><label>Observações</label>
+      <textarea id="en-obs" style="min-height:70px;" placeholder="opcional">${esc(e?.observacoes ?? '')}</textarea></div>`
+}
+
+function lerCampoEntradaCombustivel (raiz = document) {
+  return {
+    tipo: raiz.querySelector('#en-tipo').value,
+    litros: numeroBR(raiz.querySelector('#en-litros').value),
+    data_entrada: raiz.querySelector('#en-data').value ? new Date(raiz.querySelector('#en-data').value).toISOString() : null,
+    recebido_por: raiz.querySelector('#en-recebido').value || null,
+    numero_nf: raiz.querySelector('#en-nf').value.trim() || null,
+    valor_total: numeroBR(raiz.querySelector('#en-valor').value),
+    observacoes: raiz.querySelector('#en-obs').value.trim() || null
+  }
+}
+
+function combEntrada (alvo, editavel) {
+  if (!editavel) { alvo.innerHTML = `<div class="panel" style="padding:22px;">
+    <p class="texto-dim">Você pode consultar, mas não registrar entradas.</p></div>`; return }
+
+  alvo.innerHTML = `
+    <div class="panel" style="padding:20px;max-width:760px;">
+      <h3 style="font-family:var(--serif);font-size:18px;margin:0 0 14px;">Registrar entrada de combustível</h3>
+      ${campoEntradaCombustivel()}
+      <div class="acoes"><button class="btn" id="en-salvar">Salvar entrada</button></div>
+      <div class="recado oculto" id="en-recado"></div>
+    </div>`
+
+  const aviso = (t, alerta = true) => {
+    const el = $('#en-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = alerta ? 'var(--warn-text)' : 'var(--line2)'
+    el.style.color = alerta ? 'var(--warn-text)' : 'var(--dim)'
+  }
+
+  $('#en-salvar').onclick = async () => {
+    const corpo = lerCampoEntradaCombustivel()
+    if (!corpo.litros || corpo.litros <= 0) { aviso('Informe os litros recebidos.'); return }
+    if (!corpo.recebido_por) { aviso('Escolha quem recebeu.'); return }
+
+    const btn = $('#en-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const { error } = await db.from('entrada_combustivel').insert(corpo)
+    btn.disabled = false; btn.textContent = 'Salvar entrada'
+    if (error) { aviso(error.message); return }
+    aviso('Entrada registrada.', false)
+    $('#en-litros').value = ''; $('#en-nf').value = ''; $('#en-valor').value = ''; $('#en-obs').value = ''
+  }
+}
+
+// ----- Editar uma entrada já lançada (não mexe em quem pode excluir) -----
+function editarEntradaCombustivel (e, aoFechar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:700px;">
+    <h3>Editar entrada de combustível</h3>
+    ${campoEntradaCombustivel(e)}
+    <div class="acoes"><button class="btn" id="ee-salvar">Salvar alterações</button>
+      <button class="btn-secundario" id="ee-cancelar">Cancelar</button></div>
+    <div class="recado oculto" id="ee-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#ee-cancelar').onclick = fechar
+  fundo.onclick = ev => { if (ev.target === fundo) fechar() }
+
+  const aviso = t => {
+    const el = fundo.querySelector('#ee-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  fundo.querySelector('#ee-salvar').onclick = async () => {
+    const corpo = lerCampoEntradaCombustivel(fundo)
+    if (!corpo.litros || corpo.litros <= 0) { aviso('Informe os litros recebidos.'); return }
+    if (!corpo.recebido_por) { aviso('Escolha quem recebeu.'); return }
+    const { error } = await db.from('entrada_combustivel').update(corpo).eq('id', e.id)
+    if (error) { aviso(error.message); return }
+    fechar(); aoFechar()
+  }
+}
+
+// ----- Entradas (histórico) — editar é de quem lança; excluir é só do Administrador -----
+async function combEntradas (alvo, editavel) {
+  const hoje = new Date().toISOString().slice(0, 10)
+  const de = new Date(Date.now() - 90 * 864e5).toISOString().slice(0, 10)
+  const podeExcluir = ehAdminSistema()
+
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>De</label><input type="date" id="eh-de" value="${de}"></div>
+      <div class="campo"><label>Até</label><input type="date" id="eh-ate" value="${hoje}"></div>
+      <div class="campo"><label>Combustível</label>
+        <select id="eh-tipo"><option value="">todos</option>
+          ${TIPOS_COMBUSTIVEL.map(t => `<option value="${t}">${ROTULO_COMBUSTIVEL[t]}</option>`).join('')}</select></div>
+      <button class="btn" id="eh-buscar">Buscar</button>
+    </div>
+    <div id="eh-lista"></div>`
+
+  const buscar = async () => {
+    let q = db.from('entrada_combustivel').select(`
+      id, tipo, litros, data_entrada, numero_nf, valor_total, observacoes,
+      quem:recebido_por ( nome )
+    `).gte('data_entrada', $('#eh-de').value).lte('data_entrada', $('#eh-ate').value + 'T23:59:59')
+      .order('data_entrada', { ascending: false }).limit(500)
+    if ($('#eh-tipo').value) q = q.eq('tipo', $('#eh-tipo').value)
+
+    const { data, error } = await q
+    if (error) { $('#eh-lista').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+    const litros = (data || []).reduce((s, e) => s + Number(e.litros || 0), 0)
+    const valor = (data || []).reduce((s, e) => s + Number(e.valor_total || 0), 0)
+    $('#kpis').innerHTML = kpi('Entradas', data.length) + kpi('Litros', fmtNum(litros)) +
+      kpi('Valor total', 'R$ ' + fmtNum(valor)) +
+      kpi('Custo médio', litros ? 'R$ ' + fmtNum(valor / litros, 3) + '/L' : '—')
+
+    const nCols = 7 + (editavel ? 1 : 0) + (podeExcluir ? 1 : 0)
+    $('#eh-lista').innerHTML = `
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr>
+          <th>Data</th><th>Combustível</th><th class="num">Litros</th>
+          <th>Documento</th><th class="num">Valor</th><th>Recebido por</th><th>Observações</th>
+          ${editavel ? '<th></th>' : ''}${podeExcluir ? '<th></th>' : ''}
+        </tr></thead><tbody>
+          ${(data || []).map(e => `<tr>
+            <td>${fmtQuando(e.data_entrada) ?? '—'}</td>
+            <td><span class="chip">${esc(ROTULO_COMBUSTIVEL[e.tipo] ?? e.tipo)}</span></td>
+            <td class="num">${fmtNum(e.litros)}</td>
+            <td class="texto-dim2">${esc(e.numero_nf ?? '—')}</td>
+            <td class="num">${e.valor_total ? 'R$ ' + fmtNum(e.valor_total) : '—'}</td>
+            <td class="texto-dim">${esc(e.quem?.nome ?? '—')}</td>
+            <td class="texto-dim2" style="font-size:12px;max-width:220px;">${esc((e.observacoes ?? '').slice(0, 80))}</td>
+            ${editavel ? `<td><button class="btn-secundario mini" data-edit-en="${e.id}">editar</button></td>` : ''}
+            ${podeExcluir ? `<td><button class="btn-secundario mini" data-del-en="${e.id}">excluir</button></td>` : ''}
+          </tr>`).join('') || `<tr><td colspan="${nCols}" class="vazio">Nenhuma entrada no filtro.</td></tr>`}
+        </tbody></table>
+      </div></div>`
+
+    if (editavel) {
+      $('#eh-lista').querySelectorAll('[data-edit-en]').forEach(b => {
+        b.onclick = () => {
+          const e = data.find(x => x.id === b.dataset.editEn)
+          if (e) editarEntradaCombustivel(e, buscar)
+        }
+      })
+    }
+
+    if (podeExcluir) {
+      $('#eh-lista').querySelectorAll('[data-del-en]').forEach(b => {
+        b.onclick = async () => {
+          if (!confirm('Excluir esta entrada? Essa ação é só do administrador e não tem volta.')) return
+          const { error } = await db.from('entrada_combustivel').delete().eq('id', b.dataset.delEn)
+          if (error) { alert(error.message); return }
+          buscar()
+        }
+      })
+    }
+  }
+
+  $('#eh-buscar').onclick = buscar
+  $('#eh-tipo').onchange = buscar
+  buscar()
+}
+
+// ----- Frota (cadastro de veículos) -----
+function combVeiculos (alvo, editavel) {
+  alvo.innerHTML = `
+    <div class="panel" style="padding:0;margin-bottom:16px;">
+      <div style="padding:16px 18px;">
+        <h3 style="font-family:var(--serif);font-size:17px;margin:0 0 4px;">Frota cadastrada</h3>
+        <p class="texto-dim" style="font-size:12.5px;margin:0;">
+          Mesmo cadastro de veículo usado na Expedição para vincular carregamentos.</p>
+      </div>
+      <table><thead><tr><th>Placa</th><th>Descrição</th><th>Tipo</th>${editavel ? '<th></th>' : ''}</tr></thead><tbody>
+        ${COMB_CACHE.veiculos.map(v => `<tr>
+          <td><b>${esc(v.placa)}</b></td>
+          <td class="texto-dim">${esc(v.descricao ?? '—')}</td>
+          <td>${v.eh_proprio ? '<span class="badge-bom">próprio</span>' : '<span class="chip">terceiro</span>'}</td>
+          ${editavel ? `<td style="text-align:right;"><button class="btn-secundario mini" data-del-veic="${v.id}">remover</button></td>` : ''}
+        </tr>`).join('') || `<tr><td colspan="${editavel ? 4 : 3}" class="vazio">Nenhum veículo cadastrado.</td></tr>`}
+      </tbody></table>
+    </div>
+
+    ${editavel ? `<div class="panel" style="padding:20px;max-width:640px;">
+      <h3 style="font-family:var(--serif);font-size:17px;margin:0 0 12px;">Adicionar veículo</h3>
+      <div class="form-grade">
+        <div class="campo"><label>Placa *</label><input id="vc-placa" placeholder="Ex: ABC1D23" style="text-transform:uppercase;"></div>
+        <div class="campo"><label>Descrição</label><input id="vc-desc" placeholder="Ex: caminhão truck"></div>
+        <div class="campo"><label>Tipo</label>
+          <select id="vc-proprio"><option value="true">Próprio</option><option value="false">Terceiro</option></select></div>
+      </div>
+      <div class="acoes"><button class="btn" id="vc-add">Adicionar veículo</button></div>
+      <div class="recado oculto" id="vc-recado"></div>
+    </div>` : ''}`
+
+  if (!editavel) return
+
+  const aviso = t => {
+    const el = $('#vc-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  $('#vc-add').onclick = async () => {
+    const placa = $('#vc-placa').value.trim().toUpperCase()
+    if (!placa) { aviso('Informe a placa.'); return }
+    const { error } = await db.from('veiculo').insert({
+      placa, descricao: $('#vc-desc').value.trim() || null,
+      eh_proprio: $('#vc-proprio').value === 'true'
+    })
+    if (error) { aviso(error.message); return }
+    paginaCombustivel()
+  }
+
+  alvo.querySelectorAll('[data-del-veic]').forEach(b => {
+    b.onclick = async () => {
+      if (!confirm('Remover este veículo? Só funciona se ele não tiver carregamentos ou abastecimentos ligados.')) return
+      const { error } = await db.from('veiculo').delete().eq('id', b.dataset.delVeic)
+      if (error) { alert(error.message); return }
+      paginaCombustivel()
+    }
+  })
+}
+
+// ----- Relatório -----
+function combRelatorio (alvo) {
+  const hoje = new Date().toISOString().slice(0, 10)
+  const inicio = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10)
+
+  alvo.innerHTML = `
+    <div class="panel" style="padding:20px;max-width:720px;">
+      <h3 style="font-family:var(--serif);font-size:18px;margin:0 0 6px;">Gerar relatório</h3>
+      <p class="texto-dim" style="font-size:13px;margin-top:0;">Escolha o período e gere um relatório pronto para imprimir ou salvar em PDF.</p>
+      <div class="form-grade">
+        <div class="campo"><label>De</label><input type="date" id="cr-de" value="${inicio}"></div>
+        <div class="campo"><label>Até</label><input type="date" id="cr-ate" value="${hoje}"></div>
+      </div>
+      <div class="acoes"><button class="btn" id="cr-gerar">Gerar relatório</button></div>
+    </div>`
+
+  $('#cr-gerar').onclick = async () => {
+    const de = $('#cr-de').value, ate = $('#cr-ate').value
+    const [{ data: entradas }, { data: saidas }] = await Promise.all([
+      db.from('entrada_combustivel').select('tipo,litros,valor_total,data_entrada,fornecedor:fornecedor_id(nome)')
+        .gte('data_entrada', de).lte('data_entrada', ate + 'T23:59:59'),
+      db.from('abastecimento').select('tipo,litros,data_abastecimento,veiculo:veiculo_id(placa),equipamento:equipamento_id(tag)')
+        .gte('data_abastecimento', de).lte('data_abastecimento', ate + 'T23:59:59')
+    ])
+
+    const porTipo = {}
+    TIPOS_COMBUSTIVEL.forEach(t => { porTipo[t] = { entrou: 0, saiu: 0, custo: 0 } })
+    ;(entradas || []).forEach(e => { porTipo[e.tipo].entrou += Number(e.litros || 0); porTipo[e.tipo].custo += Number(e.valor_total || 0) })
+    ;(saidas || []).forEach(s => { porTipo[s.tipo].saiu += Number(s.litros || 0) })
+
+    const porVeiculo = {}
+    ;(saidas || []).forEach(s => {
+      const k = s.veiculo?.placa || s.equipamento?.tag || '—'
+      porVeiculo[k] = (porVeiculo[k] || 0) + Number(s.litros || 0)
+    })
+
+    const custoTotal = Object.values(porTipo).reduce((s, v) => s + v.custo, 0)
+    const litrosTotal = Object.values(porTipo).reduce((s, v) => s + v.entrou, 0)
+
+    const corpo = `
+      <div class="doc-linha">
+        ${docBloco('Período', docLinha('De', fmtData(de)) + docLinha('Até', fmtData(ate)) + docLinha('Emitido por', PERFIL.nome))}
+        ${docBloco('Resumo', docLinha('Litros comprados', fmtNum(litrosTotal)) + docLinha('Gasto total', 'R$ ' + fmtNum(custoTotal)))}
+      </div>
+
+      ${docBloco('Movimento por combustível', `
+        <table><thead><tr><th>Combustível</th><th class="num">Entradas (L)</th>
+          <th class="num">Abastecido (L)</th><th class="num">Gasto (R$)</th></tr></thead><tbody>
+          ${TIPOS_COMBUSTIVEL.map(t => `<tr>
+            <td>${esc(ROTULO_COMBUSTIVEL[t])}</td>
+            <td class="num">${fmtNum(porTipo[t].entrou)}</td>
+            <td class="num">${fmtNum(porTipo[t].saiu)}</td>
+            <td class="num">${fmtNum(porTipo[t].custo)}</td>
+          </tr>`).join('')}
+        </tbody></table>`)}
+
+      ${docBloco('Consumo por veículo/equipamento', `
+        <table><thead><tr><th>Veículo / equipamento</th><th class="num">Litros</th></tr></thead><tbody>
+          ${Object.entries(porVeiculo).sort((a, b) => b[1] - a[1]).map(([n, l]) => `<tr>
+            <td>${esc(n)}</td><td class="num">${fmtNum(l)}</td></tr>`).join('') ||
+            `<tr><td colspan="2" class="vazio">Sem abastecimentos no período.</td></tr>`}
+        </tbody></table>`)}
+
+      ${docAssinaturas([['Emitido por', PERFIL.nome], ['Frota', ''], ['Diretoria', '']])}`
+
+    const fundo = document.createElement('div')
+    fundo.className = 'modal-fundo'
+    fundo.innerHTML = documentoPDF({
+      titulo: 'RELATÓRIO DE COMBUSTÍVEL',
+      subtitulo: `${fmtData(de)} a ${fmtData(ate)}`, corpo,
+      acoes: `<button class="btn" id="crp-imprimir">Gerar PDF</button>
+        <button class="btn-secundario" id="crp-fechar">Fechar</button>`
+    })
+    document.body.appendChild(fundo)
+    fundo.querySelector('#crp-fechar').onclick = () => fundo.remove()
+    fundo.querySelector('#crp-imprimir').onclick = () => window.print()
+    fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+  }
+}
+
+// ---------------------------------------------------------------
+// Página: Manutenção  (módulo 'manutencao')
+// Sub-abas: Ordens de serviço · Abrir chamado · Equipamentos · Relatório.
+// Qualquer pessoa autenticada pode ABRIR uma OS (RLS libera insert
+// geral); só ADMIN/DIRETORIA/MANUTENCAO decidem status, materiais e
+// cadastro de equipamento — por isso "editavel" só trava essas partes.
+// ---------------------------------------------------------------
+const STATUS_OS = ['ABERTA', 'EM_PROGRAMACAO', 'EM_EXECUCAO', 'CONCLUIDA', 'CANCELADA']
+const ROTULO_STATUS_OS = { ABERTA: 'Aberta', EM_PROGRAMACAO: 'Em programação', EM_EXECUCAO: 'Em execução',
+                            CONCLUIDA: 'Concluída', CANCELADA: 'Cancelada' }
+const PRIORIDADE_OS = ['BAIXA', 'MEDIA', 'ALTA', 'CRITICA']
+const ROTULO_PRIORIDADE_OS = { BAIXA: 'Baixa', MEDIA: 'Média', ALTA: 'Alta', CRITICA: 'Crítica' }
+
+let MANUT_CACHE = { equipamentos: [], veiculos: [], pessoas: [], setores: [] }
+
+function corStatusOS (s) {
+  if (s === 'CONCLUIDA') return 'badge-bom'
+  if (s === 'CANCELADA') return 'texto-dim2'
+  if (s === 'ABERTA') return 'badge-alerta'
+  return 'chip'
+}
+
+async function paginaManutencao () {
+  if (!podeVer('manutencao')) { areaLivre().innerHTML =
+    `<div class="panel" style="padding:22px;"><p class="texto-dim">
+     Você não tem acesso à Manutenção.</p></div>`; return }
+
+  const editavel = podeEditar('manutencao')
+  $('#subtitulo-pagina').textContent = 'Ordens de serviço e equipamentos'
+  const area = areaLivre()
+  area.innerHTML = `<p class="texto-dim2">carregando...</p>`
+
+  const [{ data: equipamentos }, { data: veiculos }, { data: pessoas }, { data: setores }] = await Promise.all([
+    db.from('equipamento').select('id,tag,descricao,setor_id,veiculo_id,status').order('tag'),
+    db.from('veiculo').select('id,placa,descricao').order('placa'),
+    db.from('pessoa').select('id,nome').eq('status', 'ATIVO').order('nome'),
+    db.from('setor').select('id,nome').order('nome')
+  ])
+  MANUT_CACHE = { equipamentos: equipamentos || [], veiculos: veiculos || [], pessoas: pessoas || [], setores: setores || [] }
+
+  const abas = [['os', 'Ordens de serviço'], ['nova', 'Abrir chamado'],
+                ['equipamentos', 'Equipamentos'], ['relatorio', 'Relatório']]
+
+  area.innerHTML = `
+    <div class="subabas">
+      ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
+    </div>
+    <div id="sub-manutencao"></div>`
+
+  area.querySelectorAll('.subabas button').forEach(b => {
+    b.onclick = () => {
+      area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
+      abrirManutencao(b.dataset.sub, editavel)
+    }
+  })
+  abrirManutencao('os', editavel)
+}
+
+function abrirManutencao (sub, editavel) {
+  const alvo = $('#sub-manutencao')
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  $('#kpis').innerHTML = ''
+  if (sub === 'os') manutOS(alvo, editavel)
+  if (sub === 'nova') manutNova(alvo)
+  if (sub === 'equipamentos') manutEquipamentos(alvo, editavel)
+  if (sub === 'relatorio') manutRelatorio(alvo)
+}
+
+// ----- Ordens de serviço (lista + detalhe) -----
+async function manutOS (alvo, editavel) {
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>Status</label>
+        <select id="mo-status"><option value="">todos</option>
+          ${STATUS_OS.map(s => `<option value="${s}">${ROTULO_STATUS_OS[s]}</option>`).join('')}</select></div>
+      <div class="campo"><label>Prioridade</label>
+        <select id="mo-prioridade"><option value="">todas</option>
+          ${PRIORIDADE_OS.map(p => `<option value="${p}">${ROTULO_PRIORIDADE_OS[p]}</option>`).join('')}</select></div>
+      <div class="campo" style="flex:1;min-width:180px;"><label>Buscar</label>
+        <input id="mo-busca" placeholder="código, equipamento ou problema"></div>
+      <button class="btn" id="mo-buscar">Buscar</button>
+    </div>
+    <div id="mo-lista"></div>`
+
+  let cache = []
+
+  const buscar = async () => {
+    let q = db.from('ordem_servico').select(`
+      id, codigo, data_solicitacao, tipo, prioridade, status, descricao_problema,
+      data_limite, data_conclusao, valor_pecas, valor_terceiros, valor_total,
+      setor:setor_id ( nome ), equipamento:equipamento_id ( tag, descricao ),
+      solicitante:solicitante_id ( nome ), responsavel:responsavel_id ( nome )
+    `).order('data_solicitacao', { ascending: false }).limit(500)
+    if ($('#mo-status').value) q = q.eq('status', $('#mo-status').value)
+    if ($('#mo-prioridade').value) q = q.eq('prioridade', $('#mo-prioridade').value)
+
+    const { data, error } = await q
+    if (error) { $('#mo-lista').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+    cache = data || []
+
+    const termo = $('#mo-busca').value.trim().toLowerCase()
+    const lista = termo ? cache.filter(o =>
+      `${o.codigo} ${o.equipamento?.tag ?? ''} ${o.descricao_problema ?? ''}`.toLowerCase().includes(termo)) : cache
+
+    const abertas = cache.filter(o => !['CONCLUIDA', 'CANCELADA'].includes(o.status)).length
+    const criticas = cache.filter(o => o.prioridade === 'CRITICA' && !['CONCLUIDA', 'CANCELADA'].includes(o.status)).length
+    const valorAberto = cache.filter(o => !['CONCLUIDA', 'CANCELADA'].includes(o.status))
+      .reduce((s, o) => s + Number(o.valor_total || 0), 0)
+    $('#kpis').innerHTML = kpi('OS listadas', cache.length) + kpi('Em aberto', abertas) +
+      kpi('Críticas em aberto', criticas) + kpi('Valor em aberto', 'R$ ' + fmtNum(valorAberto))
+
+    $('#mo-lista').innerHTML = `
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr>
+          <th>Código</th><th>Aberta em</th><th>Equipamento</th><th>Problema</th>
+          <th>Prioridade</th><th>Status</th><th>Responsável</th><th class="num">Valor</th>
+        </tr></thead><tbody>
+          ${lista.map(o => `<tr style="cursor:pointer;" data-abrir-os="${o.id}">
+            <td><b>${esc(o.codigo)}</b></td>
+            <td class="texto-dim">${fmtQuando(o.data_solicitacao) ?? '—'}</td>
+            <td>${esc(o.equipamento?.tag ?? o.setor?.nome ?? '—')}</td>
+            <td class="texto-dim2" style="max-width:280px;">${esc((o.descricao_problema ?? '').slice(0, 70))}</td>
+            <td><span class="chip">${esc(ROTULO_PRIORIDADE_OS[o.prioridade] ?? '—')}</span></td>
+            <td><span class="${corStatusOS(o.status)}">${esc(ROTULO_STATUS_OS[o.status] ?? o.status)}</span></td>
+            <td class="texto-dim">${esc(o.responsavel?.nome ?? '—')}</td>
+            <td class="num">${o.valor_total ? 'R$ ' + fmtNum(o.valor_total) : '—'}</td>
+          </tr>`).join('') || `<tr><td colspan="8" class="vazio">Nenhuma ordem de serviço no filtro.</td></tr>`}
+        </tbody></table>
+      </div></div>
+      <p class="texto-dim2" style="font-size:12px;margin-top:8px;">${lista.length} ordem(ns) de serviço</p>`
+
+    $('#mo-lista').querySelectorAll('[data-abrir-os]').forEach(tr => {
+      tr.onclick = () => {
+        const os = cache.find(o => o.id === tr.dataset.abrirOs)
+        if (os) detalheOS(os, editavel, buscar)
+      }
+    })
+  }
+
+  $('#mo-buscar').onclick = buscar
+  $('#mo-busca').oninput = buscar
+  $('#mo-status').onchange = buscar
+  $('#mo-prioridade').onchange = buscar
+  buscar()
+}
+
+// ----- Detalhe / edição de uma OS -----
+async function detalheOS (os, editavel, aoFechar) {
+  const { data: materiais } = await db.from('os_material')
+    .select('id,descricao,quantidade,unidade,retirado_por_nome,criado_em')
+    .eq('ordem_servico_id', os.id).order('criado_em')
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal" style="max-width:760px;">
+      <div class="cabeca-secao">
+        <h3>${esc(os.codigo)}</h3>
+        <span class="${corStatusOS(os.status)}">${esc(ROTULO_STATUS_OS[os.status] ?? os.status)}</span>
+      </div>
+      <p class="texto-dim2" style="font-size:12px;margin:-8px 0 14px;">
+        Aberta em ${fmtQuando(os.data_solicitacao) ?? '—'} por ${esc(os.solicitante?.nome ?? '—')}
+        · ${esc(os.setor?.nome ?? 'sem setor')} · ${esc(os.equipamento?.tag ?? 'sem equipamento vinculado')}</p>
+
+      <div class="caixa-texto" style="margin-bottom:12px;">
+        <div class="rot">Problema relatado</div>
+        <p>${esc(os.descricao_problema ?? 'não informado')}</p>
+      </div>
+
+      ${editavel ? `
+        <div class="form-grade">
+          <div class="campo"><label>Status</label>
+            <select id="do-status">${STATUS_OS.map(s => `<option value="${s}" ${s === os.status ? 'selected' : ''}>${ROTULO_STATUS_OS[s]}</option>`).join('')}</select></div>
+          <div class="campo"><label>Prioridade</label>
+            <select id="do-prioridade">${PRIORIDADE_OS.map(p => `<option value="${p}" ${p === os.prioridade ? 'selected' : ''}>${ROTULO_PRIORIDADE_OS[p]}</option>`).join('')}</select></div>
+          <div class="campo"><label>Responsável</label>
+            <select id="do-responsavel"><option value="">—</option>
+              ${MANUT_CACHE.pessoas.map(p => `<option value="${p.id}" ${p.nome === os.responsavel?.nome ? 'selected' : ''}>${esc(p.nome)}</option>`).join('')}</select></div>
+          <div class="campo"><label>Prazo</label><input type="date" id="do-prazo" value="${os.data_limite ?? ''}"></div>
+          <div class="campo"><label>Concluída em</label><input type="date" id="do-conclusao" value="${os.data_conclusao ?? ''}"></div>
+          <div class="campo"><label>Valor peças (R$)</label><input id="do-pecas" inputmode="decimal" value="${os.valor_pecas ?? ''}"></div>
+          <div class="campo"><label>Valor terceiros (R$)</label><input id="do-terceiros" inputmode="decimal" value="${os.valor_terceiros ?? ''}"></div>
+        </div>
+        <div class="campo" style="margin-top:10px;"><label>Diagnóstico</label>
+          <textarea id="do-diagnostico" style="min-height:70px;">${esc(os.diagnostico ?? '')}</textarea></div>
+        <div class="acoes"><button class="btn" id="do-salvar">Salvar alterações</button></div>
+        <div class="recado oculto" id="do-recado"></div>
+      ` : os.diagnostico ? `<div class="caixa-texto"><div class="rot">Diagnóstico</div><p>${esc(os.diagnostico)}</p></div>` : ''}
+
+      <div class="cabeca-secao" style="margin-top:18px;">
+        <h3 style="font-family:var(--serif);font-size:16px;">Materiais utilizados</h3>
+      </div>
+      <div id="do-materiais">
+        ${(materiais || []).map(m => `<div class="passo">
+          <span class="quando">${fmtQuando(m.criado_em) ?? '—'}</span>
+          <span><b>${esc(m.descricao)}</b> — ${fmtNum(m.quantidade ?? 0, 2)} ${esc(m.unidade ?? '')}
+            ${m.retirado_por_nome ? `<br><span class="texto-dim2" style="font-size:11.5px;">retirado por ${esc(m.retirado_por_nome)}</span>` : ''}</span>
+        </div>`).join('') || `<p class="texto-dim2" style="font-size:12.5px;">Nenhum material lançado.</p>`}
+      </div>
+
+      ${editavel ? `<div class="form-grade" style="margin-top:10px;">
+        <div class="campo"><label>Material / peça</label><input id="do-mat-desc" placeholder="Ex: filtro de óleo"></div>
+        <div class="campo"><label>Quantidade</label><input id="do-mat-qtd" inputmode="decimal" placeholder="Ex: 1"></div>
+        <div class="campo"><label>Unidade</label><input id="do-mat-un" placeholder="un, L, kg..."></div>
+        <div class="campo"><label>Retirado por</label><input id="do-mat-quem" placeholder="opcional" value="${esc(PERFIL.nome)}"></div>
+      </div>
+      <div class="acoes"><button class="btn-secundario" id="do-mat-add">Lançar material</button></div>` : ''}
+
+      <div class="acoes" style="margin-top:18px;">
+        ${editavel ? `<button class="btn-secundario" id="do-excluir">Excluir OS</button>` : ''}
+        <button class="btn-secundario" id="do-fechar">Fechar</button>
+      </div>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#do-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  if (!editavel) return
+
+  const aviso = t => {
+    const el = fundo.querySelector('#do-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  fundo.querySelector('#do-salvar').onclick = async () => {
+    const corpo = {
+      status: fundo.querySelector('#do-status').value,
+      prioridade: fundo.querySelector('#do-prioridade').value,
+      responsavel_id: fundo.querySelector('#do-responsavel').value || null,
+      data_limite: fundo.querySelector('#do-prazo').value || null,
+      data_conclusao: fundo.querySelector('#do-conclusao').value || null,
+      valor_pecas: numeroBR(fundo.querySelector('#do-pecas').value),
+      valor_terceiros: numeroBR(fundo.querySelector('#do-terceiros').value),
+      diagnostico: fundo.querySelector('#do-diagnostico').value.trim() || null
+    }
+    const { error } = await db.from('ordem_servico').update(corpo).eq('id', os.id)
+    if (error) { aviso(error.message); return }
+    fechar(); aoFechar()
+  }
+
+  fundo.querySelector('#do-mat-add').onclick = async () => {
+    const descricao = fundo.querySelector('#do-mat-desc').value.trim()
+    if (!descricao) { aviso('Descreva o material.'); return }
+    const { error } = await db.from('os_material').insert({
+      ordem_servico_id: os.id,
+      descricao,
+      quantidade: numeroBR(fundo.querySelector('#do-mat-qtd').value),
+      unidade: fundo.querySelector('#do-mat-un').value.trim() || null,
+      retirado_por_id: PERFIL.pessoaId,
+      retirado_por_nome: fundo.querySelector('#do-mat-quem').value.trim() || null
+    })
+    if (error) { aviso(error.message); return }
+    fechar(); detalheOS(os, editavel, aoFechar)
+  }
+
+  const bx = fundo.querySelector('#do-excluir')
+  if (bx) bx.onclick = async () => {
+    if (!confirm('Excluir esta ordem de serviço? Os materiais lançados também somem.')) return
+    const { error } = await db.from('ordem_servico').delete().eq('id', os.id)
+    if (error) { alert(error.message); return }
+    fechar(); aoFechar()
+  }
+}
+
+// ----- Abrir chamado (qualquer pessoa liberada para o módulo) -----
+function manutNova (alvo) {
+  alvo.innerHTML = `
+    <div class="panel" style="padding:20px;max-width:760px;">
+      <h3 style="font-family:var(--serif);font-size:18px;margin:0 0 14px;">Abrir chamado de manutenção</h3>
+      <div class="form-grade">
+        <div class="campo"><label>Setor</label>
+          <select id="mn-setor"><option value="">—</option>
+            ${MANUT_CACHE.setores.map(s => `<option value="${s.id}">${esc(s.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Equipamento</label>
+          <select id="mn-equip"><option value="">nenhum específico</option>
+            ${MANUT_CACHE.equipamentos.map(e => `<option value="${e.id}">${esc(e.tag)}${e.descricao ? ' — ' + esc(e.descricao) : ''}</option>`).join('')}</select></div>
+        <div class="campo"><label>Local (se não houver equipamento)</label>
+          <input id="mn-local" placeholder="Ex: pátio de expedição"></div>
+        <div class="campo"><label>Tipo de problema</label>
+          <select id="mn-tipo">${['Elétrica', 'Mecânica', 'Hidráulica', 'Estrutural', 'Outro'].map(t => `<option>${t}</option>`).join('')}</select></div>
+        <div class="campo"><label>Prioridade</label>
+          <select id="mn-prioridade">${PRIORIDADE_OS.map(p => `<option value="${p}" ${p === 'MEDIA' ? 'selected' : ''}>${ROTULO_PRIORIDADE_OS[p]}</option>`).join('')}</select></div>
+        <div class="campo"><label>Prazo desejado</label><input type="date" id="mn-prazo"></div>
+      </div>
+      <div class="campo" style="margin-top:12px;"><label>Descreva o problema *</label>
+        <textarea id="mn-descricao" style="min-height:90px;" placeholder="O que está acontecendo, desde quando, e qualquer detalhe que ajude a diagnosticar"></textarea></div>
+      <div class="acoes"><button class="btn" id="mn-salvar">Abrir chamado</button></div>
+      <div class="recado oculto" id="mn-recado"></div>
+    </div>`
+
+  const aviso = (t, alerta = true) => {
+    const el = $('#mn-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = alerta ? 'var(--warn-text)' : 'var(--line2)'
+    el.style.color = alerta ? 'var(--warn-text)' : 'var(--dim)'
+  }
+
+  $('#mn-salvar').onclick = async () => {
+    const descricao = $('#mn-descricao').value.trim()
+    if (!descricao) { aviso('Descreva o problema.'); return }
+
+    const btn = $('#mn-salvar'); btn.disabled = true; btn.textContent = 'Enviando...'
+    const { error } = await db.from('ordem_servico').insert({
+      solicitante_id: PERFIL.pessoaId,
+      setor_id: $('#mn-setor').value || null,
+      equipamento_id: $('#mn-equip').value || null,
+      local_descricao: $('#mn-local').value.trim() || null,
+      tipo: $('#mn-tipo').value,
+      prioridade: $('#mn-prioridade').value,
+      descricao_problema: descricao,
+      data_solicitacao: new Date().toISOString(),
+      data_limite: $('#mn-prazo').value || null,
+      status: 'ABERTA'
+    })
+    btn.disabled = false; btn.textContent = 'Abrir chamado'
+    if (error) { aviso(error.message); return }
+    aviso('Chamado aberto. A manutenção foi avisada.', false)
+    $('#mn-descricao').value = ''; $('#mn-local').value = ''; $('#mn-prazo').value = ''
+  }
+}
+
+// ----- Equipamentos -----
+function manutEquipamentos (alvo, editavel) {
+  alvo.innerHTML = `
+    <div class="panel" style="padding:0;margin-bottom:16px;">
+      <div style="padding:16px 18px;">
+        <h3 style="font-family:var(--serif);font-size:17px;margin:0 0 4px;">Equipamentos cadastrados</h3>
+        <p class="texto-dim" style="font-size:12.5px;margin:0;">
+          Usados para abrir chamados e registrar abastecimentos ligados a máquinas (não a veículos com placa).</p>
+      </div>
+      <table><thead><tr><th>Tag</th><th>Descrição</th><th>Setor</th><th>Veículo vinculado</th><th>Status</th>
+        ${editavel ? '<th></th>' : ''}</tr></thead><tbody>
+        ${MANUT_CACHE.equipamentos.map(e => `<tr style="${e.status !== 'ATIVO' ? 'opacity:.55;' : ''}">
+          <td><b>${esc(e.tag)}</b></td>
+          <td class="texto-dim">${esc(e.descricao ?? '—')}</td>
+          <td class="texto-dim2">${esc(MANUT_CACHE.setores.find(s => s.id === e.setor_id)?.nome ?? '—')}</td>
+          <td class="texto-dim2">${esc(MANUT_CACHE.veiculos.find(v => v.id === e.veiculo_id)?.placa ?? '—')}</td>
+          <td>${e.status === 'ATIVO' ? '<span class="badge-bom">ativo</span>' : '<span class="badge-alerta">inativo</span>'}</td>
+          ${editavel ? `<td style="text-align:right;"><button class="btn-secundario mini" data-del-equip="${e.id}">remover</button></td>` : ''}
+        </tr>`).join('') || `<tr><td colspan="${editavel ? 6 : 5}" class="vazio">Nenhum equipamento cadastrado.</td></tr>`}
+      </tbody></table>
+    </div>
+
+    ${editavel ? `<div class="panel" style="padding:20px;max-width:680px;">
+      <h3 style="font-family:var(--serif);font-size:17px;margin:0 0 12px;">Adicionar equipamento</h3>
+      <div class="form-grade">
+        <div class="campo"><label>Tag *</label><input id="eq-tag" placeholder="Ex: BRIT-01"></div>
+        <div class="campo"><label>Descrição *</label><input id="eq-desc" placeholder="Ex: britador primário"></div>
+        <div class="campo"><label>Setor</label>
+          <select id="eq-setor"><option value="">—</option>${MANUT_CACHE.setores.map(s => `<option value="${s.id}">${esc(s.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Veículo vinculado</label>
+          <select id="eq-veiculo"><option value="">nenhum</option>${MANUT_CACHE.veiculos.map(v => `<option value="${v.id}">${esc(v.placa)}</option>`).join('')}</select></div>
+      </div>
+      <div class="acoes"><button class="btn" id="eq-add">Adicionar equipamento</button></div>
+      <div class="recado oculto" id="eq-recado"></div>
+    </div>` : ''}`
+
+  if (!editavel) return
+
+  const aviso = t => {
+    const el = $('#eq-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  $('#eq-add').onclick = async () => {
+    const tag = $('#eq-tag').value.trim()
+    const descricao = $('#eq-desc').value.trim()
+    if (!tag || !descricao) { aviso('Preencha tag e descrição.'); return }
+    const { error } = await db.from('equipamento').insert({
+      tag, descricao, setor_id: $('#eq-setor').value || null, veiculo_id: $('#eq-veiculo').value || null
+    })
+    if (error) { aviso(error.message); return }
+    paginaManutencao()
+  }
+
+  alvo.querySelectorAll('[data-del-equip]').forEach(b => {
+    b.onclick = async () => {
+      if (!confirm('Remover este equipamento?')) return
+      const { error } = await db.from('equipamento').delete().eq('id', b.dataset.delEquip)
+      if (error) { alert(error.message); return }
+      paginaManutencao()
+    }
+  })
+}
+
+// ----- Relatório -----
+function manutRelatorio (alvo) {
+  const hoje = new Date().toISOString().slice(0, 10)
+  const inicio = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10)
+
+  alvo.innerHTML = `
+    <div class="panel" style="padding:20px;max-width:720px;">
+      <h3 style="font-family:var(--serif);font-size:18px;margin:0 0 6px;">Gerar relatório</h3>
+      <p class="texto-dim" style="font-size:13px;margin-top:0;">Escolha o período e gere um relatório pronto para imprimir ou salvar em PDF.</p>
+      <div class="form-grade">
+        <div class="campo"><label>De</label><input type="date" id="mr-de" value="${inicio}"></div>
+        <div class="campo"><label>Até</label><input type="date" id="mr-ate" value="${hoje}"></div>
+      </div>
+      <div class="acoes"><button class="btn" id="mr-gerar">Gerar relatório</button></div>
+    </div>`
+
+  $('#mr-gerar').onclick = async () => {
+    const de = $('#mr-de').value, ate = $('#mr-ate').value
+    const { data: os } = await db.from('ordem_servico').select(`
+      codigo, status, prioridade, data_solicitacao, data_conclusao, valor_pecas, valor_terceiros, valor_total,
+      setor:setor_id(nome), equipamento:equipamento_id(tag)
+    `).gte('data_solicitacao', de).lte('data_solicitacao', ate + 'T23:59:59').order('data_solicitacao')
+
+    const lista = os || []
+    const concluidas = lista.filter(o => o.status === 'CONCLUIDA').length
+    const abertas = lista.filter(o => !['CONCLUIDA', 'CANCELADA'].includes(o.status)).length
+    const valorTotal = lista.reduce((s, o) => s + Number(o.valor_total || 0), 0)
+
+    const porSetor = {}
+    lista.forEach(o => {
+      const k = o.setor?.nome ?? 'sem setor'
+      porSetor[k] = porSetor[k] || { qtd: 0, valor: 0 }
+      porSetor[k].qtd++; porSetor[k].valor += Number(o.valor_total || 0)
+    })
+
+    const corpo = `
+      <div class="doc-linha">
+        ${docBloco('Período', docLinha('De', fmtData(de)) + docLinha('Até', fmtData(ate)) + docLinha('Emitido por', PERFIL.nome))}
+        ${docBloco('Resumo', docLinha('OS no período', String(lista.length)) + docLinha('Concluídas', String(concluidas)) +
+          docLinha('Em aberto', String(abertas)) + docLinha('Valor total', 'R$ ' + fmtNum(valorTotal)))}
+      </div>
+
+      ${docBloco('Por setor', `
+        <table><thead><tr><th>Setor</th><th class="num">OS</th><th class="num">Valor</th></tr></thead><tbody>
+          ${Object.entries(porSetor).map(([n, v]) => `<tr>
+            <td>${esc(n)}</td><td class="num">${v.qtd}</td><td class="num">R$ ${fmtNum(v.valor)}</td></tr>`).join('') ||
+            `<tr><td colspan="3" class="vazio">Sem ordens de serviço no período.</td></tr>`}
+        </tbody></table>`)}
+
+      ${docBloco('Ordens de serviço', `
+        <table><thead><tr><th>Código</th><th>Equipamento</th><th>Status</th>
+          <th>Prioridade</th><th class="num">Valor</th></tr></thead><tbody>
+          ${lista.map(o => `<tr>
+            <td>${esc(o.codigo)}</td><td>${esc(o.equipamento?.tag ?? '—')}</td>
+            <td>${esc(ROTULO_STATUS_OS[o.status] ?? o.status)}</td>
+            <td>${esc(ROTULO_PRIORIDADE_OS[o.prioridade] ?? '—')}</td>
+            <td class="num">${o.valor_total ? 'R$ ' + fmtNum(o.valor_total) : '—'}</td>
+          </tr>`).join('')}
+        </tbody></table>`)}
+
+      ${docAssinaturas([['Emitido por', PERFIL.nome], ['Manutenção', ''], ['Diretoria', '']])}`
+
+    const fundo = document.createElement('div')
+    fundo.className = 'modal-fundo'
+    fundo.innerHTML = documentoPDF({
+      titulo: 'RELATÓRIO DE MANUTENÇÃO',
+      subtitulo: `${fmtData(de)} a ${fmtData(ate)}`, corpo,
+      acoes: `<button class="btn" id="mrp-imprimir">Gerar PDF</button>
+        <button class="btn-secundario" id="mrp-fechar">Fechar</button>`
+    })
+    document.body.appendChild(fundo)
+    fundo.querySelector('#mrp-fechar').onclick = () => fundo.remove()
+    fundo.querySelector('#mrp-imprimir').onclick = () => window.print()
+    fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+  }
+}
 
 // ---------------------------------------------------------------
 // Página: Projetos  (módulo 'projetos')
