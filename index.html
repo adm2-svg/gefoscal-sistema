@@ -212,6 +212,39 @@ tbody tr:hover { background: var(--hover-bg); }
 .carreg-disponivel:hover { border-color:var(--rust); }
 .carreg-disponivel.selecionado { border-color:var(--rust); background:rgba(var(--rust-rgb),.08); }
 
+
+/* ---- Agenda e bloco de notas ---- */
+.grade-trabalho { display:grid; grid-template-columns:1.15fr .85fr; gap:16px; margin-bottom:18px; }
+@media (max-width: 980px) { .grade-trabalho { grid-template-columns:1fr; } }
+.tarefa { display:flex; gap:11px; align-items:flex-start; padding:9px 2px;
+          border-bottom:1px solid var(--line); }
+.tarefa:last-child { border-bottom:none; }
+.tarefa input[type=checkbox] { margin-top:3px; flex:none; width:16px; height:16px; cursor:pointer; }
+.tarefa .txt { flex:1; min-width:0; font-size:13.5px; line-height:1.45; }
+.tarefa .txt small { display:block; color:var(--dim2); font-size:11.5px; margin-top:2px; }
+.tarefa.feita .txt { text-decoration:line-through; opacity:.5; }
+.tarefa .prazo { font-size:11px; padding:2px 8px; border-radius:20px; flex:none;
+                 border:1px solid var(--line2); color:var(--dim2); white-space:nowrap; }
+.tarefa .prazo.hoje { border-color:var(--rust); color:var(--rust); }
+.tarefa .prazo.atrasada { border-color:var(--warn-text); color:var(--warn-text); }
+.tarefa .apagar { background:none; border:none; color:var(--dim2); cursor:pointer;
+                  font-size:15px; line-height:1; padding:2px 4px; opacity:0; flex:none; }
+.tarefa:hover .apagar { opacity:1; }
+.nota { border:1px solid var(--line); border-radius:8px; padding:11px 13px; margin-bottom:8px;
+        cursor:pointer; transition:border-color .15s ease; }
+.nota:hover { border-color:var(--line2); }
+.nota.fixa { border-left:3px solid var(--rust); }
+.nota .tit { font-size:13.5px; margin-bottom:3px; display:flex; align-items:center; gap:7px; }
+.nota .prev { color:var(--dim2); font-size:12px; line-height:1.5;
+              display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.nota .marca { font-size:10px; padding:2px 7px; border-radius:20px;
+               border:1px solid var(--line2); color:var(--dim2); text-transform:uppercase;
+               letter-spacing:.4px; flex:none; }
+.oculto-senha { filter: blur(4px); transition: filter .15s ease; }
+.oculto-senha:hover, .oculto-senha:focus { filter:none; }
+.linha-add { display:flex; gap:7px; margin-bottom:12px; }
+.linha-add input { flex:1; }
+
 @page { size: A4; margin: 8mm; }
 
 @media print {
@@ -735,6 +768,8 @@ async function paginaVisaoGeral () {
   }
 
   // painel do financeiro, para quem trabalha nele
+  await areaDeTrabalho(area)
+
   if (podeVer('financeiro')) await painelFinanceiro(area)
 
   const { data, error } = await db.from('visao_geral_pessoa')
@@ -1178,13 +1213,249 @@ async function subVisao (alvo, editavel) {
 }
 
 // ---------------------------------------------------------------
+// Agenda e bloco de notas — área de trabalho pessoal
+// Cada pessoa só enxerga as próprias notas e tarefas: a RLS filtra
+// pelo pessoa_id do perfil, não pelo que o navegador manda.
+// ---------------------------------------------------------------
+async function areaDeTrabalho (area) {
+  const hoje = new Date().toISOString().slice(0, 10)
+
+  const [{ data: tarefas }, { data: notas }] = await Promise.all([
+    db.from('tarefa').select('*').order('concluida_em', { nullsFirst: true })
+      .order('prazo', { nullsFirst: false }).limit(60),
+    db.from('nota_pessoal').select('*')
+      .order('fixada', { ascending: false }).order('atualizado_em', { ascending: false })
+  ])
+
+  const abertas = (tarefas || []).filter(t => !t.concluida_em)
+  const feitas = (tarefas || []).filter(t => t.concluida_em)
+  const feitasHoje = feitas.filter(t => t.concluida_em.slice(0, 10) === hoje)
+  const atrasadas = abertas.filter(t => t.prazo && t.prazo < hoje)
+
+  const bloco = document.createElement('div')
+  bloco.className = 'grade-trabalho'
+  bloco.innerHTML = `
+    <div class="panel" style="padding:18px;">
+      <div class="cabeca-secao">
+        <h3 style="font-family:var(--serif);font-size:17px;">Minha agenda</h3>
+        <span class="texto-dim2" style="font-size:12px;">
+          ${abertas.length} aberta(s)${atrasadas.length ? ` · ${atrasadas.length} atrasada(s)` : ''}
+          ${feitasHoje.length ? ` · ${feitasHoje.length} concluída(s) hoje` : ''}</span>
+      </div>
+
+      <div class="linha-add">
+        <input id="tf-nova" placeholder="O que precisa ser feito?">
+        <input type="date" id="tf-prazo" style="flex:none;width:145px;">
+        <button class="btn mini" id="tf-add">Adicionar</button>
+      </div>
+
+      <div id="tf-lista"></div>
+
+      ${feitas.length ? `<div style="margin-top:14px;">
+        <button class="btn-secundario mini" id="tf-ver-feitas">
+          ver ${feitas.length} concluída(s)</button>
+        <div id="tf-feitas" class="oculto" style="margin-top:8px;"></div>
+      </div>` : ''}
+    </div>
+
+    <div class="panel" style="padding:18px;">
+      <div class="cabeca-secao">
+        <h3 style="font-family:var(--serif);font-size:17px;">Bloco de notas</h3>
+        <button class="btn-secundario mini" id="nt-nova">+ nota</button>
+      </div>
+      <div id="nt-lista"></div>
+      <p class="aviso">Só você enxerga estas notas. Ainda assim, evite guardar aqui
+      senha de banco ou de sistema crítico — para isso o certo é um cofre de senhas.</p>
+    </div>`
+
+  area.appendChild(bloco)
+
+  // ---- tarefas ----
+  const marcaPrazo = t => {
+    if (!t.prazo) return ''
+    const classe = t.prazo < hoje ? 'atrasada' : t.prazo === hoje ? 'hoje' : ''
+    const texto = t.prazo === hoje ? 'hoje' : fmtData(t.prazo)
+    return `<span class="prazo ${classe}">${texto}</span>`
+  }
+
+  const linhaTarefa = t => `
+    <div class="tarefa ${t.concluida_em ? 'feita' : ''}">
+      <input type="checkbox" data-check="${t.id}" ${t.concluida_em ? 'checked' : ''}>
+      <div class="txt">${esc(t.titulo)}
+        ${t.detalhe ? `<small>${esc(t.detalhe)}</small>` : ''}
+        ${t.concluida_em ? `<small>concluída em ${fmtQuando(t.concluida_em)}</small>` : ''}
+      </div>
+      ${t.concluida_em ? '' : marcaPrazo(t)}
+      <button class="apagar" data-apagar="${t.id}" title="apagar">×</button>
+    </div>`
+
+  $('#tf-lista').innerHTML = abertas.map(linhaTarefa).join('') ||
+    `<p class="texto-dim2" style="font-size:13px;padding:10px 0;">
+      Nada pendente. Escreva acima o que precisa fazer.</p>`
+
+  if (feitas.length) {
+    $('#tf-feitas').innerHTML = feitas.map(linhaTarefa).join('')
+    $('#tf-ver-feitas').onclick = () => {
+      const el = $('#tf-feitas')
+      el.classList.toggle('oculto')
+      $('#tf-ver-feitas').textContent = el.classList.contains('oculto')
+        ? `ver ${feitas.length} concluída(s)` : 'esconder concluídas'
+    }
+  }
+
+  const recarregar = () => irPara('visao_geral')
+
+  bloco.querySelectorAll('[data-check]').forEach(c => {
+    c.onchange = async () => {
+      await db.from('tarefa').update({
+        concluida_em: c.checked ? new Date().toISOString() : null
+      }).eq('id', c.dataset.check)
+      recarregar()
+    }
+  })
+  bloco.querySelectorAll('[data-apagar]').forEach(b => {
+    b.onclick = async () => {
+      await db.from('tarefa').delete().eq('id', b.dataset.apagar)
+      recarregar()
+    }
+  })
+
+  const adicionar = async () => {
+    const titulo = $('#tf-nova').value.trim()
+    if (!titulo) return
+    await db.from('tarefa').insert({
+      pessoa_id: PERFIL.pessoaId, titulo,
+      prazo: $('#tf-prazo').value || null
+    })
+    recarregar()
+  }
+  $('#tf-add').onclick = adicionar
+  $('#tf-nova').onkeydown = e => { if (e.key === 'Enter') adicionar() }
+
+  // ---- notas ----
+  $('#nt-lista').innerHTML = (notas || []).map(n => `
+    <div class="nota ${n.fixada ? 'fixa' : ''}" data-nota="${n.id}">
+      <div class="tit">${esc(n.titulo)}
+        ${n.categoria && n.categoria !== 'geral'
+          ? `<span class="marca">${esc(n.categoria)}</span>` : ''}</div>
+      <div class="prev ${n.categoria === 'senha' ? 'oculto-senha' : ''}">${esc(n.conteudo ?? '')}</div>
+    </div>`).join('') ||
+    `<p class="texto-dim2" style="font-size:13px;padding:10px 0;">
+      Nenhuma nota ainda. Use para guardar procedimentos, contatos e lembretes.</p>`
+
+  bloco.querySelectorAll('[data-nota]').forEach(el => {
+    el.onclick = () => formNota((notas || []).find(n => n.id === el.dataset.nota))
+  })
+  $('#nt-nova').onclick = () => formNota(null)
+}
+
+function formNota (n) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal">
+      <h3>${n ? 'Editar nota' : 'Nova nota'}</h3>
+      <div class="form-grade">
+        <div class="campo" style="grid-column:1/-1;"><label>Título *</label>
+          <input id="nt-titulo" value="${esc(n?.titulo ?? '')}"></div>
+        <div class="campo"><label>Categoria</label>
+          <select id="nt-cat">
+            ${['geral','senha','procedimento','contato','lembrete'].map(c =>
+              `<option ${n?.categoria === c ? 'selected' : ''}>${c}</option>`).join('')}
+          </select></div>
+        <div class="campo"><label>Destaque</label>
+          <select id="nt-fixa">
+            <option value="nao" ${!n?.fixada ? 'selected' : ''}>normal</option>
+            <option value="sim" ${n?.fixada ? 'selected' : ''}>fixar no topo</option>
+          </select></div>
+      </div>
+      <div class="campo" style="margin-top:12px;"><label>Conteúdo</label>
+        <textarea id="nt-conteudo" style="min-height:180px;">${esc(n?.conteudo ?? '')}</textarea></div>
+      <div class="acoes">
+        <button class="btn" id="nt-salvar">Salvar</button>
+        ${n ? '<button class="btn-secundario" id="nt-excluir">Excluir</button>' : ''}
+        <button class="btn-secundario" id="nt-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="nt-recado"></div>
+      <p class="aviso">Categoria "senha" deixa o texto borrado na lista — só aparece
+      ao passar o mouse. É proteção contra olhar por cima do ombro, não criptografia.</p>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#nt-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  q('#nt-salvar').onclick = async () => {
+    const titulo = q('#nt-titulo').value.trim()
+    if (!titulo) {
+      const el = q('#nt-recado'); el.textContent = 'Escreva o título.'
+      el.classList.remove('oculto'); el.style.color = 'var(--warn-text)'
+      el.style.borderColor = 'var(--warn-text)'; return
+    }
+    const corpo = {
+      pessoa_id: PERFIL.pessoaId, titulo,
+      conteudo: q('#nt-conteudo').value,
+      categoria: q('#nt-cat').value,
+      fixada: q('#nt-fixa').value === 'sim',
+      atualizado_em: new Date().toISOString()
+    }
+    const { error } = n
+      ? await db.from('nota_pessoal').update(corpo).eq('id', n.id)
+      : await db.from('nota_pessoal').insert(corpo)
+    if (error) {
+      const el = q('#nt-recado'); el.textContent = error.message
+      el.classList.remove('oculto'); el.style.color = 'var(--warn-text)'
+      el.style.borderColor = 'var(--warn-text)'; return
+    }
+    fechar(); irPara('visao_geral')
+  }
+
+  const bx = q('#nt-excluir')
+  if (bx) bx.onclick = async () => {
+    if (!confirm('Excluir esta nota?')) return
+    await db.from('nota_pessoal').delete().eq('id', n.id)
+    fechar(); irPara('visao_geral')
+  }
+}
+
+// mês corrente dentro da série de compras
+function mesAtual (serie) {
+  const hoje = new Date().toISOString().slice(0, 7)
+  return (serie || []).find(x => x.competencia === hoje)
+}
+
+// barras horizontais simples: proporção ao maior mês da série
+function barrasMes (serie) {
+  const lista = (serie || []).slice().sort((a, b) => a.competencia.localeCompare(b.competencia))
+  const maior = Math.max(...lista.map(x => Number(x.valor)), 1)
+  const nomeMes = c => {
+    const [a, m] = c.split('-')
+    return ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'][+m - 1]
+      + '/' + a.slice(2)
+  }
+  return lista.map(x => `
+    <div class="row" style="display:grid;grid-template-columns:64px 1fr auto;
+         gap:12px;align-items:center;padding:5px 0;">
+      <span class="texto-dim2" style="font-size:12px;">${nomeMes(x.competencia)}</span>
+      <span style="background:var(--hover-bg);border-radius:20px;height:9px;display:block;">
+        <i style="display:block;height:100%;border-radius:20px;background:var(--rust);
+           width:${(Number(x.valor) / maior * 100).toFixed(1)}%;"></i></span>
+      <span style="font-size:12.5px;font-variant-numeric:tabular-nums;">
+        R$ ${fmtNum(x.valor)} <span class="texto-dim2">· ${x.quantidade}</span></span>
+    </div>`).join('')
+}
+
+// ---------------------------------------------------------------
 // Painel do financeiro — o que precisa de ação hoje
 // ---------------------------------------------------------------
 async function painelFinanceiro (area) {
   const hoje = new Date().toISOString().slice(0, 10)
   const em7 = new Date(Date.now() + 7 * 864e5).toISOString().slice(0, 10)
 
-  const [{ data: p }, { data: compras }, { data: titulos }, { data: emails }, { data: sync }] =
+  const [{ data: p }, { data: compras }, { data: titulos }, { data: emails }, { data: sync },
+         { data: porMes }] =
     await Promise.all([
       db.from('painel_financeiro').select('*').maybeSingle(),
       db.from('solicitacao_compra')
@@ -1196,7 +1467,8 @@ async function painelFinanceiro (area) {
       db.from('email_financeiro').select('id,conta,remetente,assunto,recebido_em,tem_anexo,link')
         .is('tratado_em', null).order('recebido_em', { ascending: false }).limit(6),
       db.from('email_sincronizacao').select('conta,quando,novos,erro')
-        .order('quando', { ascending: false }).limit(3)
+        .order('quando', { ascending: false }).limit(3),
+      db.from('compras_por_mes').select('*').order('competencia', { ascending: false }).limit(6)
     ])
 
   const n = p || {}
@@ -1232,6 +1504,16 @@ async function painelFinanceiro (area) {
             `${n.compras_a_pagar ?? 0} aguardando baixa`)}
       ${kpi('Saldo em contas', 'R$ ' + fmtNum(n.saldo_contas))}
     </div>
+
+    ${(porMes || []).length ? `
+    <div class="panel" style="padding:16px 18px;margin-bottom:14px;">
+      <div class="cabeca-secao" style="margin-bottom:10px;">
+        <h3 style="font-family:var(--serif);font-size:17px;">Compras aprovadas por mês</h3>
+        <span class="texto-dim2" style="font-size:12px;">
+          ${mesAtual(porMes) ? 'este mês R$ ' + fmtNum(mesAtual(porMes).valor) : 'nada aprovado este mês'}</span>
+      </div>
+      ${barrasMes(porMes)}
+    </div>` : ''}
 
     ${tarefas.length ? `
     <div class="panel" style="padding:16px 18px;margin-bottom:14px;">
