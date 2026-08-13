@@ -321,6 +321,22 @@ tr.detalhe .conteudo { padding:16px 18px; }
 .sem-doc { border:1px dashed var(--line2); border-radius:8px; padding:12px 14px;
            font-size:12.5px; color:var(--dim2); margin:12px 0 4px; }
 
+
+/* ---- Card recolhível com resumo na barra ---- */
+.card-gaveta { border:1px solid var(--line); border-radius:10px; overflow:hidden;
+               margin-bottom:16px; background:var(--panel); }
+.card-gaveta > .barra { padding:14px 18px; cursor:pointer; display:flex;
+                        align-items:center; gap:12px; }
+.card-gaveta > .barra:hover { background:var(--hover-bg); }
+.card-gaveta > .barra .seta-card { color:var(--dim2); font-size:11px;
+                                   transition:transform .18s ease; }
+.card-gaveta.aberto > .barra .seta-card { transform:rotate(90deg); color:var(--rust); }
+.card-gaveta > .barra .titulo-card { font-family:var(--serif); font-size:16px; flex:1; }
+.card-gaveta > .barra .resumo-card { font-size:12.5px; color:var(--dim2); text-align:right; }
+.card-gaveta > .barra .resumo-card b { color:var(--txt); font-weight:500; }
+.card-gaveta > .miolo { border-top:1px solid var(--line); padding:16px 18px; }
+.card-gaveta:not(.aberto) > .miolo { display:none; }
+
 @page { size: A4; margin: 8mm; }
 
 @media print {
@@ -5383,19 +5399,31 @@ async function finCompras (alvo, editavel) {
       <div style="margin-top:10px;">${barrasMes(porMes)}</div>
     </div>` : ''}
 
-    <div class="filtros" style="margin-bottom:14px;">
-      <div class="campo" style="flex:1;min-width:240px;">
-        <label>Buscar na fila</label>
-        <input id="fc-busca" placeholder="item, número do pedido, valor ou data">
+    <div class="card-gaveta" id="fc-card">
+      <div class="barra">
+        <span class="seta-card">▶</span>
+        <span class="titulo-card">Buscar na fila</span>
+        <span class="resumo-card">
+          <b>${lista.length}</b> compra(s) · <b>R$ ${fmtNum(soma(lista))}</b><br>
+          <span style="font-size:11.5px;">clique para ver e pesquisar</span>
+        </span>
       </div>
-      <div class="campo"><label>Ordenar por</label>
-        <select id="fc-ordem">
-          <option value="venc">vencimento</option>
-          <option value="valor">maior valor</option>
-          <option value="item">item</option>
-        </select></div>
-    </div>
-    <div id="fc-tabela"></div>`
+      <div class="miolo">
+        <div class="filtros" style="margin-bottom:14px;">
+          <div class="campo" style="flex:1;min-width:240px;">
+            <label>Buscar</label>
+            <input id="fc-busca" placeholder="item, número do pedido, valor ou data">
+          </div>
+          <div class="campo"><label>Ordenar por</label>
+            <select id="fc-ordem">
+              <option value="venc">vencimento</option>
+              <option value="valor">maior valor</option>
+              <option value="item">item</option>
+            </select></div>
+        </div>
+        <div id="fc-tabela"></div>
+      </div>
+    </div>`
 
   const pintar = () => {
     const termo = ($('#fc-busca').value || '').trim().toLowerCase()
@@ -5469,6 +5497,12 @@ async function finCompras (alvo, editavel) {
   $('#fc-busca').oninput = pintarELigar
   $('#fc-ordem').onchange = pintarELigar
   pintarELigar()
+
+  const card = $('#fc-card')
+  card.querySelector('.barra').onclick = () => {
+    card.classList.toggle('aberto')
+    if (card.classList.contains('aberto')) $('#fc-busca').focus()
+  }
 
   // a fila com a baixa continua abaixo, inteira
   const caixaFila = document.createElement('div')
