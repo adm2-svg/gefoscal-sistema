@@ -61,7 +61,14 @@ tbody tr:hover { background: var(--hover-bg); }
 
 /* ---- Marca ---- */
 .logo-login { display:block; height:64px; width:auto; margin:0 auto 14px; }
-.logo-nav { display:block; height:34px; width:auto; margin-bottom:14px; }
+.logo-nav { display:block; height:52px; width:auto; margin-bottom:20px; }
+.perfil-nav { display:flex; align-items:center; gap:10px; margin-bottom:20px;
+              padding-bottom:16px; border-bottom:1px solid var(--line); }
+.perfil-nav .inicial { width:36px; height:36px; font-size:13px; }
+.perfil-nav-dados { min-width:0; }
+.perfil-nav-dados .nome { font-size:13.5px; color:var(--txt); font-weight:600;
+                           white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.perfil-nav-dados .papeis { display:flex; gap:4px; flex-wrap:wrap; margin-top:5px; }
 /* ---- Documento do pedido: cores fixas da marca, para sair igual no papel ---- */
 .doc { --verde:#1c5632; --verde-claro:#eef5f0; --ouro:#c8a11a; --borda:#d7e3da;
        background:#fff; color:#1b1b1b; border-radius:10px; overflow:hidden; }
@@ -407,6 +414,8 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
                  border:1px solid var(--line); border-radius:8px; background:var(--panel);
                  transition:border-color .15s ease; }
 .cartao-pessoa:hover { border-color:var(--line2); }
+.numero-pessoa { flex:none; width:34px; text-align:center; font-family:var(--serif);
+                 font-size:12px; color:var(--dim2); letter-spacing:.5px; }
 .inicial { width:38px; height:38px; border-radius:50%; flex:none; display:grid; place-items:center;
            background:var(--hover-bg); font-family:var(--serif); font-size:15px; }
 .cartao-pessoa .dados { flex:1; min-width:0; }
@@ -509,7 +518,13 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
 <div id="tela-app" class="app oculto">
   <nav class="nav">
     <img class="logo-nav" id="logo-nav" alt="Grupo Gefoscal">
-    <div class="sub" id="quem-sou"></div>
+    <div class="perfil-nav" id="quem-sou">
+      <div class="inicial" id="quem-sou-avatar"></div>
+      <div class="perfil-nav-dados">
+        <div class="nome" id="quem-sou-nome"></div>
+        <div class="papeis" id="quem-sou-papeis"></div>
+      </div>
+    </div>
     <div id="menu"></div>
     <div class="linha-divisoria" style="margin:18px 0 12px;"></div>
     <button class="btn-secundario" style="width:100%;" onclick="sair()">Sair</button>
@@ -605,6 +620,7 @@ const fmtNum = (n, d = 2) => (n ?? 0).toLocaleString('pt-BR', { minimumFractionD
 const fmtData = d => d ? d.split('-').reverse().join('/') : '—'
 const fmtQuando = t => t ? new Date(t).toLocaleDateString('pt-BR') : null
 const esc = t => String(t ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
+const iniciais = n => String(n ?? '').split(' ').filter(Boolean).slice(0, 2).map(x => x[0]).join('').toUpperCase()
 // usada em Crédito e Cobrança (aging) e Projetos/Kanban (SLA e prazo vencido) —
 // estava sendo chamada em vários lugares sem nunca ter sido definida.
 const hojeISO = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') }
@@ -736,7 +752,10 @@ async function abrirApp () {
     (p.pessoa_id && p.pessoa_id === PERFIL.pessoaId) ||
     (p.setor_id && p.setor_id === PERFIL.setorId))
 
-  $('#quem-sou').textContent = PERFIL.nome + ' · ' + PERFIL.papeis.join(', ')
+  $('#quem-sou-avatar').textContent = iniciais(PERFIL.nome)
+  $('#quem-sou-nome').textContent = PERFIL.nome
+  $('#quem-sou-papeis').innerHTML = PERFIL.papeis
+    .map((p, i) => `<span class="selo ${i === 0 ? 'forte' : ''}">${esc(p)}</span>`).join('')
   montarMenu()
   $('#tela-login').classList.add('oculto')
   $('#tela-app').classList.remove('oculto')
@@ -948,7 +967,7 @@ function abrirSub (sub, editavel) {
 async function subUsuarios (alvo, editavel) {
   const [{ data: pessoas }, { data: cargos, error: erroCargo },
          { data: setores }, { data: pre }, { data: perms }] = await Promise.all([
-    db.from('pessoa').select('id,nome,email,cargo_id,setor_id,status').order('nome'),
+    db.from('pessoa').select('id,nome,email,cargo_id,setor_id,status,criado_em').order('nome'),
     db.from('cargo').select('id,nome').order('nome'),
     db.from('setor').select('id,nome').order('nome'),
     db.from('usuario_precadastro').select('email,papeis,pessoa_id,usado_em,convite_enviado_em'),
@@ -1055,8 +1074,11 @@ async function subUsuarios (alvo, editavel) {
     el.style.color = alerta ? 'var(--warn-text)' : 'var(--dim)'
   }
 
-  // lista em cartões
-  const iniciais = n => n.split(' ').filter(Boolean).slice(0, 2).map(x => x[0]).join('').toUpperCase()
+  // lista em cartões — o número acompanha a ordem de cadastro (criado_em),
+  // não a ordem alfabética exibida, pra funcionar como uma matrícula estável
+  const numeroPessoa = {}
+  ;[...(pessoas || [])].sort((a, b) => new Date(a.criado_em) - new Date(b.criado_em))
+    .forEach((p, i) => { numeroPessoa[p.id] = i + 1 })
 
   $('#u-lista').innerHTML = (pessoas || []).map(p => {
     const pc = preDe(p.email)
@@ -1065,6 +1087,7 @@ async function subUsuarios (alvo, editavel) {
       : pc.usado_em ? 'último acesso em ' + fmtQuando(pc.usado_em)
       : 'cadastrado, aguardando primeiro acesso'
     return `<div class="cartao-pessoa">
+      <div class="numero-pessoa">${String(numeroPessoa[p.id]).padStart(3, '0')}</div>
       <div class="inicial">${esc(iniciais(p.nome))}</div>
       <div class="dados">
         <div class="nome">${esc(p.nome)}</div>
@@ -9062,11 +9085,12 @@ const ROTULO_STATUS_OS = { ABERTA: 'Aberta', EM_PROGRAMACAO: 'Em programação',
                             CONCLUIDA: 'Concluída', CANCELADA: 'Cancelada' }
 const PRIORIDADE_OS = ['BAIXA', 'MEDIA', 'ALTA', 'CRITICA']
 const ROTULO_PRIORIDADE_OS = { BAIXA: 'Baixa', MEDIA: 'Média', ALTA: 'Alta', CRITICA: 'Crítica' }
-const AREAS_OS = ['INDUSTRIA_PLANTA', 'PATIO_ESTOQUE_CARREGAMENTO', 'EXTRACAO_MINA', 'OUTRO']
+const AREAS_OS = ['INDUSTRIA_PLANTA', 'PATIO_ESTOQUE_CARREGAMENTO', 'EXTRACAO_MINA', 'ADMINISTRATIVO_COMERCIAL', 'OUTRO']
 const ROTULO_AREA_OS = { INDUSTRIA_PLANTA: 'Indústria / Planta', PATIO_ESTOQUE_CARREGAMENTO: 'Pátio / Estoque / Carregamento',
+                          ADMINISTRATIVO_COMERCIAL: 'Administrativo / Comercial (carros fora da indústria)',
                           EXTRACAO_MINA: 'Extração / Mina', OUTRO: 'Outro' }
 
-let MANUT_CACHE = { equipamentos: [], veiculos: [], pessoas: [], setores: [] }
+let MANUT_CACHE = { equipamentos: [], veiculos: [], pessoas: [], setores: [], fornecedores: [] }
 
 function corStatusOS (s) {
   if (s === 'CONCLUIDA') return 'badge-bom'
@@ -9102,10 +9126,13 @@ async function paginaManutencao () {
     db.from('pessoa').select('id,nome').eq('status', 'ATIVO').order('nome'),
     db.from('setor').select('id,nome').order('nome')
   ])
-  MANUT_CACHE = { equipamentos: equipamentos || [], veiculos: veiculos || [], pessoas: pessoas || [], setores: setores || [] }
+  const { data: fornecedores } = await db.from('fornecedor').select('id,nome,cnpj_cpf,contato,status').order('nome')
+  MANUT_CACHE = { equipamentos: equipamentos || [], veiculos: veiculos || [], pessoas: pessoas || [],
+                   setores: setores || [], fornecedores: fornecedores || [] }
 
   const abas = [['painel', 'Painel'], ['lancar', 'Lançar manutenção'], ['os', 'Ordens de serviço'],
-                ['nova', 'Abrir chamado'], ['equipamentos', 'Equipamentos'], ['relatorio', 'Relatório']]
+                ['nova', 'Abrir chamado'], ['terceiros', 'Terceiros'], ['custos', 'Custos'],
+                ['equipamentos', 'Equipamentos'], ['relatorio', 'Relatório']]
 
   area.innerHTML = `
     <div class="subabas">
@@ -9130,6 +9157,8 @@ function abrirManutencao (sub, editavel) {
   if (sub === 'lancar') manutLancar(alvo, editavel)
   if (sub === 'os') manutOS(alvo, editavel)
   if (sub === 'nova') manutNova(alvo)
+  if (sub === 'terceiros') manutTerceiros(alvo, editavel)
+  if (sub === 'custos') manutCustos(alvo, editavel)
   if (sub === 'equipamentos') manutEquipamentos(alvo, editavel)
   if (sub === 'relatorio') manutRelatorio(alvo)
 }
@@ -9302,6 +9331,8 @@ function manutLancar (alvo, editavel) {
           <select id="ml-prioridade">${PRIORIDADE_OS.map(p => `<option value="${p}" ${p === 'MEDIA' ? 'selected' : ''}>${ROTULO_PRIORIDADE_OS[p]}</option>`).join('')}</select></div>
         <div class="campo"><label>Status</label>
           <select id="ml-status">${STATUS_OS.filter(s => s !== 'CANCELADA').map(s => `<option value="${s}">${ROTULO_STATUS_OS[s]}</option>`).join('')}</select></div>
+        <div class="campo oculto" id="ml-campo-fornecedor"><label>Terceiro / fornecedor</label>
+          <select id="ml-fornecedor"><option value="">—</option>${MANUT_CACHE.fornecedores.map(f => `<option value="${f.id}">${esc(f.nome)}</option>`).join('')}</select></div>
         <div class="campo"><label>Data/hora *</label><input type="datetime-local" id="ml-data" value="${agora}"></div>
         <div class="campo"><label>Prazo</label><input type="date" id="ml-prazo"></div>
         <div class="campo"><label>Data de conclusão</label><input type="date" id="ml-conclusao"></div>
@@ -9326,6 +9357,10 @@ function manutLancar (alvo, editavel) {
     el.style.color = alerta ? 'var(--warn-text)' : 'var(--dim)'
   }
 
+  const alternarFornecedor = () => $('#ml-campo-fornecedor').classList.toggle('oculto', $('#ml-status').value !== 'SERVICO_TERCEIRO')
+  $('#ml-status').onchange = alternarFornecedor
+  alternarFornecedor()
+
   $('#ml-salvar').onclick = async () => {
     const alvoVal = $('#ml-alvo').value
     const problema = $('#ml-problema').value.trim()
@@ -9341,6 +9376,7 @@ function manutLancar (alvo, editavel) {
       tipo: $('#ml-tipo').value,
       prioridade: $('#ml-prioridade').value,
       status: $('#ml-status').value,
+      fornecedor_id: $('#ml-fornecedor').value || null,
       descricao_problema: problema,
       diagnostico: $('#ml-diagnostico').value.trim() || null,
       data_solicitacao: new Date($('#ml-data').value).toISOString(),
@@ -9440,20 +9476,23 @@ async function manutOS (alvo, editavel) {
 // ----- Detalhe / edição de uma OS -----
 async function detalheOS (os, editavel, aoFechar) {
   const { data: materiais } = await db.from('os_material')
-    .select('id,descricao,quantidade,unidade,retirado_por_nome,criado_em')
+    .select('id,descricao,quantidade,unidade,retirado_por_nome,criado_em,solicitacao_compra_id,solicitacao:solicitacao_compra_id(numero,status)')
     .eq('ordem_servico_id', os.id).order('criado_em')
+
+  const nomeFornecedor = os.fornecedor?.nome ?? MANUT_CACHE.fornecedores.find(f => f.id === os.fornecedor_id)?.nome ?? null
 
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
   fundo.innerHTML = `
-    <div class="modal" style="max-width:760px;">
+    <div class="modal" style="max-width:780px;">
       <div class="cabeca-secao">
         <h3>${esc(os.codigo)}</h3>
         <span class="${corStatusOS(os.status)}">${esc(ROTULO_STATUS_OS[os.status] ?? os.status)}</span>
       </div>
       <p class="texto-dim2" style="font-size:12px;margin:-8px 0 14px;">
         Aberta em ${fmtQuando(os.data_solicitacao) ?? '—'} por ${esc(os.solicitante?.nome ?? '—')}
-        · ${esc(os.area ? ROTULO_AREA_OS[os.area] : (os.setor?.nome ?? 'sem área'))} · ${esc(nomeAlvoOS(os))}</p>
+        · ${esc(os.area ? ROTULO_AREA_OS[os.area] : 'sem área')} · ${esc(nomeAlvoOS(os))}
+        ${nomeFornecedor ? ` · terceiro: ${esc(nomeFornecedor)}` : ''}</p>
 
       <div class="caixa-texto" style="margin-bottom:12px;">
         <div class="rot">Problema relatado</div>
@@ -9464,21 +9503,33 @@ async function detalheOS (os, editavel, aoFechar) {
         <div class="form-grade">
           <div class="campo"><label>Status</label>
             <select id="do-status">${STATUS_OS.map(s => `<option value="${s}" ${s === os.status ? 'selected' : ''}>${ROTULO_STATUS_OS[s]}</option>`).join('')}</select></div>
+          <div class="campo"><label>Área</label>
+            <select id="do-area"><option value="">—</option>${AREAS_OS.map(a => `<option value="${a}" ${a === os.area ? 'selected' : ''}>${ROTULO_AREA_OS[a]}</option>`).join('')}</select></div>
           <div class="campo"><label>Prioridade</label>
             <select id="do-prioridade">${PRIORIDADE_OS.map(p => `<option value="${p}" ${p === os.prioridade ? 'selected' : ''}>${ROTULO_PRIORIDADE_OS[p]}</option>`).join('')}</select></div>
           <div class="campo"><label>Responsável</label>
             <select id="do-responsavel"><option value="">—</option>
               ${MANUT_CACHE.pessoas.map(p => `<option value="${p.id}" ${p.nome === os.responsavel?.nome ? 'selected' : ''}>${esc(p.nome)}</option>`).join('')}</select></div>
+          <div class="campo"><label>Terceiro / fornecedor</label>
+            <select id="do-fornecedor"><option value="">—</option>
+              ${MANUT_CACHE.fornecedores.map(f => `<option value="${f.id}" ${f.id === os.fornecedor_id ? 'selected' : ''}>${esc(f.nome)}</option>`).join('')}</select></div>
           <div class="campo"><label>Prazo</label><input type="date" id="do-prazo" value="${os.data_limite ?? ''}"></div>
           <div class="campo"><label>Concluída em</label><input type="date" id="do-conclusao" value="${os.data_conclusao ?? ''}"></div>
           <div class="campo"><label>Valor peças (R$)</label><input id="do-pecas" inputmode="decimal" value="${os.valor_pecas ?? ''}"></div>
           <div class="campo"><label>Valor terceiros (R$)</label><input id="do-terceiros" inputmode="decimal" value="${os.valor_terceiros ?? ''}"></div>
         </div>
-        <div class="campo" style="margin-top:10px;"><label>Diagnóstico</label>
+        <div class="campo" style="margin-top:10px;"><label>Diagnóstico / o que foi feito</label>
           <textarea id="do-diagnostico" style="min-height:70px;">${esc(os.diagnostico ?? '')}</textarea></div>
-        <div class="acoes"><button class="btn" id="do-salvar">Salvar alterações</button></div>
+        <div class="acoes"><button class="btn" id="do-salvar">Salvar alterações</button>
+          ${!os.lancamento_id ? `<button class="btn-secundario" id="do-financeiro">Gerar lançamento financeiro</button>` :
+            `<span class="badge-bom" style="align-self:center;">lançamento financeiro já gerado</span>`}</div>
         <div class="recado oculto" id="do-recado"></div>
-      ` : os.diagnostico ? `<div class="caixa-texto"><div class="rot">Diagnóstico</div><p>${esc(os.diagnostico)}</p></div>` : ''}
+      ` : `
+        ${os.diagnostico ? `<div class="caixa-texto"><div class="rot">Diagnóstico / o que foi feito</div><p>${esc(os.diagnostico)}</p></div>` : ''}
+        <p class="texto-dim2" style="font-size:12px;">Responsável: ${esc(os.responsavel?.nome ?? '—')}
+          ${os.data_limite ? ` · Prazo: ${fmtData(os.data_limite)}` : ''}
+          ${os.data_conclusao ? ` · Concluída em: ${fmtData(os.data_conclusao)}` : ''}</p>
+      `}
 
       <div class="cabeca-secao" style="margin-top:18px;">
         <h3 style="font-family:var(--serif);font-size:16px;">Materiais utilizados</h3>
@@ -9487,7 +9538,8 @@ async function detalheOS (os, editavel, aoFechar) {
         ${(materiais || []).map(m => `<div class="passo">
           <span class="quando">${fmtQuando(m.criado_em) ?? '—'}</span>
           <span><b>${esc(m.descricao)}</b> — ${fmtNum(m.quantidade ?? 0, 2)} ${esc(m.unidade ?? '')}
-            ${m.retirado_por_nome ? `<br><span class="texto-dim2" style="font-size:11.5px;">retirado por ${esc(m.retirado_por_nome)}</span>` : ''}</span>
+            ${m.retirado_por_nome ? `<br><span class="texto-dim2" style="font-size:11.5px;">retirado por ${esc(m.retirado_por_nome)}</span>` : ''}
+            ${m.solicitacao ? `<br><span class="chip" style="font-size:10.5px;">pedido Compras ${esc(m.solicitacao.numero ?? '')} · ${esc(m.solicitacao.status ?? '')}</span>` : ''}</span>
         </div>`).join('') || `<p class="texto-dim2" style="font-size:12.5px;">Nenhum material lançado.</p>`}
       </div>
 
@@ -9497,7 +9549,12 @@ async function detalheOS (os, editavel, aoFechar) {
         <div class="campo"><label>Unidade</label><input id="do-mat-un" placeholder="un, L, kg..."></div>
         <div class="campo"><label>Retirado por</label><input id="do-mat-quem" placeholder="opcional" value="${esc(PERFIL.nome)}"></div>
       </div>
-      <div class="acoes"><button class="btn-secundario" id="do-mat-add">Lançar material</button></div>` : ''}
+      <div class="acoes">
+        <button class="btn-secundario" id="do-mat-add">Lançar material (já usado)</button>
+        <button class="btn-secundario" id="do-mat-pedir">Pedir peça pro Compras</button>
+      </div>
+      <p class="aviso">"Lançar material" registra algo que já foi usado. "Pedir peça pro Compras" cria uma
+        solicitação de compra vinculada a esta OS — quando ela for atendida, a peça já fica marcada aqui.</p>` : ''}
 
       <div class="acoes" style="margin-top:18px;">
         ${editavel ? `<button class="btn-secundario" id="do-excluir">Excluir OS</button>` : ''}
@@ -9520,8 +9577,10 @@ async function detalheOS (os, editavel, aoFechar) {
   fundo.querySelector('#do-salvar').onclick = async () => {
     const corpo = {
       status: fundo.querySelector('#do-status').value,
+      area: fundo.querySelector('#do-area').value || null,
       prioridade: fundo.querySelector('#do-prioridade').value,
       responsavel_id: fundo.querySelector('#do-responsavel').value || null,
+      fornecedor_id: fundo.querySelector('#do-fornecedor').value || null,
       data_limite: fundo.querySelector('#do-prazo').value || null,
       data_conclusao: fundo.querySelector('#do-conclusao').value || null,
       valor_pecas: numeroBR(fundo.querySelector('#do-pecas').value),
@@ -9546,6 +9605,50 @@ async function detalheOS (os, editavel, aoFechar) {
     })
     if (error) { aviso(error.message); return }
     fechar(); detalheOS(os, editavel, aoFechar)
+  }
+
+  fundo.querySelector('#do-mat-pedir').onclick = async () => {
+    const descricao = fundo.querySelector('#do-mat-desc').value.trim()
+    if (!descricao) { aviso('Descreva a peça que precisa pedir.'); return }
+    const qtd = numeroBR(fundo.querySelector('#do-mat-qtd').value)
+    const { data: novaSolic, error: erroSolic } = await db.from('solicitacao_compra').insert({
+      solicitante_id: PERFIL.pessoaId,
+      tipo_solicitacao: 'Peça de manutenção',
+      produto_servico: descricao,
+      quantidade: qtd ? String(qtd) : null,
+      unidade: fundo.querySelector('#do-mat-un').value.trim() || null,
+      finalidade: `Manutenção — OS ${os.codigo}${os.equipamento?.tag ? ' · ' + os.equipamento.tag : os.veiculo?.placa ? ' · ' + os.veiculo.placa : ''}`,
+      urgencia: 'NAO_URGENTE_5D'
+    }).select('id').single()
+    if (erroSolic) { aviso(erroSolic.message); return }
+
+    const { error: erroMat } = await db.from('os_material').insert({
+      ordem_servico_id: os.id,
+      descricao,
+      quantidade: qtd,
+      unidade: fundo.querySelector('#do-mat-un').value.trim() || null,
+      solicitacao_compra_id: novaSolic.id
+    })
+    if (erroMat) { aviso(erroMat.message); return }
+    fechar(); detalheOS(os, editavel, aoFechar)
+  }
+
+  const btnFin = fundo.querySelector('#do-financeiro')
+  if (btnFin) btnFin.onclick = async () => {
+    const valor = Number(os.valor_total || 0)
+    if (!valor) { aviso('Essa OS ainda não tem valor de peças ou terceiros lançado.'); return }
+    const { data: cat } = await db.from('categoria_financeira').select('id').eq('nome', 'Manutenção').maybeSingle()
+    const { data: novo, error } = await db.from('lancamento_financeiro').insert({
+      tipo: 'SAIDA',
+      descricao: `Manutenção ${os.codigo} — ${nomeAlvoOS(os)}`,
+      valor,
+      data_lancamento: os.data_conclusao || hojeISO(),
+      categoria_id: cat?.id || null,
+      registrado_por: PERFIL.pessoaId
+    }).select('id').single()
+    if (error) { aviso(error.message); return }
+    await db.from('ordem_servico').update({ lancamento_id: novo.id }).eq('id', os.id)
+    fechar(); aoFechar()
   }
 
   const bx = fundo.querySelector('#do-excluir')
@@ -9611,6 +9714,168 @@ function manutNova (alvo) {
     aviso('Chamado aberto. A manutenção foi avisada.', false)
     $('#mn-descricao').value = ''; $('#mn-local').value = ''; $('#mn-prazo').value = ''
   }
+}
+
+// ----- Terceiros (fornecedores usados em serviços de manutenção) -----
+// Reaproveita a tabela `fornecedor` (mesma de Compras) — um terceiro que
+// conserta uma máquina é a mesma entidade que vende peça pra Compras.
+function manutTerceiros (alvo, editavel) {
+  alvo.innerHTML = `
+    <div class="panel" style="padding:0;margin-bottom:16px;">
+      <div style="padding:16px 18px;">
+        <h3 style="font-family:var(--serif);font-size:17px;margin:0 0 4px;">Terceiros cadastrados</h3>
+        <p class="texto-dim" style="font-size:12.5px;margin:0;">
+          Mesmo cadastro usado em Compras. Quem tem acesso de edição aqui em Manutenção
+          também pode cadastrar um terceiro novo na hora de fechar uma OS.</p>
+      </div>
+      <table><thead><tr><th>Nome</th><th>CNPJ/CPF</th><th>Contato</th><th>Status</th></tr></thead><tbody>
+        ${MANUT_CACHE.fornecedores.map(f => `<tr style="${f.status !== 'ATIVO' ? 'opacity:.55;' : ''}">
+          <td><b>${esc(f.nome)}</b></td>
+          <td class="texto-dim2">${esc(f.cnpj_cpf ?? '—')}</td>
+          <td class="texto-dim2">${esc(f.contato ?? '—')}</td>
+          <td>${f.status === 'ATIVO' ? '<span class="badge-bom">ativo</span>' : '<span class="badge-alerta">inativo</span>'}</td>
+        </tr>`).join('') || `<tr><td colspan="4" class="vazio">Nenhum terceiro cadastrado ainda.</td></tr>`}
+      </tbody></table>
+    </div>
+
+    ${editavel ? `<div class="panel" style="padding:20px;max-width:640px;margin-bottom:16px;">
+      <h3 style="font-family:var(--serif);font-size:17px;margin:0 0 12px;">Adicionar terceiro</h3>
+      <div class="form-grade">
+        <div class="campo" style="grid-column:1/-1;"><label>Nome *</label>
+          <input id="tc-nome" placeholder="Ex: Rota Auto Elétrica"></div>
+        <div class="campo"><label>CNPJ/CPF</label><input id="tc-doc" placeholder="opcional"></div>
+        <div class="campo"><label>Contato</label><input id="tc-contato" placeholder="telefone, e-mail..."></div>
+      </div>
+      <div class="acoes"><button class="btn" id="tc-add">Adicionar terceiro</button></div>
+      <div class="recado oculto" id="tc-recado"></div>
+    </div>` : ''}
+    <div id="tc-servicos"><p class="texto-dim2">carregando serviços de terceiros...</p></div>`
+
+  if (editavel) {
+    const aviso = t => {
+      const el = $('#tc-recado'); el.textContent = t; el.classList.remove('oculto')
+      el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+    }
+    $('#tc-add').onclick = async () => {
+      const nome = $('#tc-nome').value.trim()
+      if (!nome) { aviso('Escreva o nome do terceiro.'); return }
+      const { error } = await db.from('fornecedor').insert({
+        nome, cnpj_cpf: $('#tc-doc').value.trim() || null, contato: $('#tc-contato').value.trim() || null,
+        criado_por: PERFIL.pessoaId
+      })
+      if (error) { aviso(error.message); return }
+      paginaManutencao()
+    }
+  }
+
+  ;(async () => {
+    const { data } = await db.from('ordem_servico').select(`
+      id, codigo, data_solicitacao, status, valor_terceiros, valor_total,
+      fornecedor:fornecedor_id ( nome ), equipamento:equipamento_id ( tag, descricao ), veiculo:veiculo_id ( placa, descricao )
+    `).eq('status', 'SERVICO_TERCEIRO').order('data_solicitacao', { ascending: false }).limit(200)
+    const lista = data || []
+    $('#tc-servicos').innerHTML = `
+      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">OS em serviço de terceiro</h3>
+        <span class="texto-dim2" style="font-size:12px;">${lista.length} em aberto</span></div>
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr><th>Código</th><th>Equipamento/veículo</th><th>Terceiro</th><th class="num">Valor</th></tr></thead><tbody>
+          ${lista.map(os => `<tr style="cursor:pointer;" data-abrir-os="${os.id}">
+            <td><b>${esc(os.codigo)}</b></td>
+            <td>${esc(nomeAlvoOS(os))}</td>
+            <td class="texto-dim">${esc(os.fornecedor?.nome ?? '—')}</td>
+            <td class="num">${os.valor_total ? 'R$ ' + fmtNum(os.valor_total) : '—'}</td>
+          </tr>`).join('') || `<tr><td colspan="4" class="vazio">Nenhuma OS em serviço de terceiro no momento.</td></tr>`}
+        </tbody></table>
+      </div></div>`
+    $('#tc-servicos').querySelectorAll('[data-abrir-os]').forEach(tr => {
+      tr.onclick = () => {
+        const os = lista.find(x => x.id === tr.dataset.abrirOs)
+        if (os) detalheOS(os, editavel, () => abrirManutencao('terceiros', editavel))
+      }
+    })
+  })()
+}
+
+// ----- Custos (onde a manutenção mais gasta) -----
+async function manutCustos (alvo, editavel) {
+  const hoje = new Date().toISOString().slice(0, 10)
+  const inicioAno = `${new Date().getFullYear()}-01-01`
+
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:16px;">
+      <div class="campo"><label>De</label><input type="date" id="mc-de" value="${inicioAno}"></div>
+      <div class="campo"><label>Até</label><input type="date" id="mc-ate" value="${hoje}"></div>
+      <div class="campo"><label>Área</label>
+        <select id="mc-area"><option value="">todas</option>${AREAS_OS.map(a => `<option value="${a}">${ROTULO_AREA_OS[a]}</option>`).join('')}</select></div>
+      <button class="btn" id="mc-buscar">Buscar</button>
+    </div>
+    <div id="mc-conteudo"><p class="texto-dim2">carregando...</p></div>`
+
+  const buscar = async () => {
+    let q = db.from('ordem_servico').select(`
+      id, codigo, area, valor_pecas, valor_terceiros, valor_total, data_solicitacao,
+      equipamento:equipamento_id ( tag, descricao ), veiculo:veiculo_id ( placa, descricao )
+    `).gte('data_solicitacao', $('#mc-de').value).lte('data_solicitacao', $('#mc-ate').value + 'T23:59:59').limit(2000)
+    if ($('#mc-area').value) q = q.eq('area', $('#mc-area').value)
+
+    const { data, error } = await q
+    if (faltaMigracao(error) || error) { $('#mc-conteudo').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+    const lista = (data || []).filter(os => Number(os.valor_total || 0) > 0)
+
+    const total = lista.reduce((s, os) => s + Number(os.valor_total || 0), 0)
+    const totalPecas = lista.reduce((s, os) => s + Number(os.valor_pecas || 0), 0)
+    const totalTerc = lista.reduce((s, os) => s + Number(os.valor_terceiros || 0), 0)
+
+    $('#kpis').innerHTML = kpi('Gasto total', 'R$ ' + fmtNum(total)) +
+      kpi('Peças', 'R$ ' + fmtNum(totalPecas)) + kpi('Terceiros', 'R$ ' + fmtNum(totalTerc)) +
+      kpi('OS com custo', lista.length)
+
+    const porAlvo = {}
+    lista.forEach(os => { const k = nomeAlvoOS(os); porAlvo[k] = (porAlvo[k] || 0) + Number(os.valor_total || 0) })
+    const topAlvo = Object.entries(porAlvo).sort((a, b) => b[1] - a[1]).slice(0, 12).map(([rotulo, valor]) => ({ rotulo, valor }))
+
+    const porArea = {}
+    AREAS_OS.forEach(a => { porArea[a] = 0 })
+    lista.forEach(os => { if (os.area) porArea[os.area] = (porArea[os.area] || 0) + Number(os.valor_total || 0) })
+    const barrasArea = AREAS_OS.filter(a => porArea[a] > 0).map(a => ({ rotulo: ROTULO_AREA_OS[a], valor: porArea[a] }))
+
+    $('#mc-conteudo').innerHTML = `
+      <div class="panel" style="padding:18px;margin-bottom:16px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Maior gasto por equipamento/veículo</h3>
+        ${barrasHorizontais(topAlvo, { unidade: 'R$', casas: 2 })}
+      </div>
+      <div class="panel" style="padding:18px;margin-bottom:16px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Gasto por área</h3>
+        ${barrasVerticais(barrasArea)}
+      </div>
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr>
+          <th>Código</th><th>Data</th><th>Equipamento/veículo</th><th>Área</th>
+          <th class="num">Peças</th><th class="num">Terceiros</th><th class="num">Total</th>
+        </tr></thead><tbody>
+          ${lista.sort((a, b) => Number(b.valor_total || 0) - Number(a.valor_total || 0)).map(os => `<tr style="cursor:pointer;" data-abrir-os="${os.id}">
+            <td><b>${esc(os.codigo)}</b></td>
+            <td class="texto-dim">${fmtData(os.data_solicitacao?.slice(0, 10))}</td>
+            <td>${esc(nomeAlvoOS(os))}</td>
+            <td class="texto-dim2">${esc(os.area ? ROTULO_AREA_OS[os.area] : '—')}</td>
+            <td class="num">${os.valor_pecas ? 'R$ ' + fmtNum(os.valor_pecas) : '—'}</td>
+            <td class="num">${os.valor_terceiros ? 'R$ ' + fmtNum(os.valor_terceiros) : '—'}</td>
+            <td class="num"><b>R$ ${fmtNum(os.valor_total)}</b></td>
+          </tr>`).join('') || `<tr><td colspan="7" class="vazio">Nenhuma OS com custo no filtro.</td></tr>`}
+        </tbody></table>
+      </div></div>`
+
+    $('#mc-conteudo').querySelectorAll('[data-abrir-os]').forEach(tr => {
+      tr.onclick = () => {
+        const os = lista.find(x => x.id === tr.dataset.abrirOs)
+        if (os) detalheOS(os, editavel, buscar)
+      }
+    })
+  }
+
+  $('#mc-buscar').onclick = buscar
+  $('#mc-area').onchange = buscar
+  buscar()
 }
 
 // ----- Equipamentos -----
