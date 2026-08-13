@@ -600,6 +600,9 @@ const fmtNum = (n, d = 2) => (n ?? 0).toLocaleString('pt-BR', { minimumFractionD
 const fmtData = d => d ? d.split('-').reverse().join('/') : '—'
 const fmtQuando = t => t ? new Date(t).toLocaleDateString('pt-BR') : null
 const esc = t => String(t ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
+// usada em Crédito e Cobrança (aging) e Projetos/Kanban (SLA e prazo vencido) —
+// estava sendo chamada em vários lugares sem nunca ter sido definida.
+const hojeISO = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') }
 
 const ORDEM_SKINS = ['sofisticado', 'plataforma', 'daylight']
 const ICONES_SKIN = {
@@ -7121,7 +7124,7 @@ async function paginaEstoque () {
   area.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
   const [{ data: prods }, { data: locais }] = await Promise.all([
-    db.from('produto').select('id,nome,unidade,chave,preco_ref,status').eq('status','ATIVO').order('nome'),
+    db.from('produto').select('id,nome,codigo,unidade,chave,local_estoque,preco_ref,status').order('nome'),
     db.from('local_estoque').select('id,nome,tipo').eq('status','ATIVO').order('nome')
   ])
   EST_CACHE = { produtos: prods || [], locais: locais || [] }
@@ -7209,7 +7212,7 @@ function estLancar (alvo, editavel) {
       <h3 style="font-family:var(--serif);font-size:18px;margin:0 0 14px;">Novo lançamento</h3>
       <div class="form-grade">
         <div class="campo" style="grid-column:1/-1;"><label>Produto *</label>
-          <select id="el-produto">${EST_CACHE.produtos.map(p =>
+          <select id="el-produto">${EST_CACHE.produtos.filter(p => p.status === 'ATIVO').map(p =>
             `<option value="${p.id}" data-un="${p.unidade}">${esc(p.nome)} (${p.unidade})</option>`).join('')}</select></div>
         <div class="campo"><label>Local / setor</label>
           <select id="el-local"><option value="">—</option>
@@ -7490,16 +7493,20 @@ async function estProdutos (alvo, editavel) {
         <h3 style="font-family:var(--serif);font-size:17px;margin:0 0 4px;">Produtos cadastrados</h3>
         <p class="texto-dim" style="font-size:12.5px;margin:0;">
           A unidade só muda enquanto o produto não tem lançamento — depois disso,
-          trocar bagunçaria o saldo somado.</p>
+          trocar bagunçaria o saldo somado. O resto (nome, código, local padrão,
+          preço de referência, status) pode ser editado a qualquer momento.</p>
       </div>
-      <table><thead><tr><th>Nome</th><th>Código</th><th>Unidade</th>
+      <table><thead><tr><th>Nome</th><th>Código</th><th>Unidade</th><th>Local padrão</th><th>Status</th>
         ${editavel ? '<th></th>' : ''}</tr></thead><tbody>
-        ${EST_CACHE.produtos.map(p => `<tr>
+        ${EST_CACHE.produtos.map(p => `<tr style="${p.status !== 'ATIVO' ? 'opacity:.55;' : ''}">
           <td>${esc(p.nome)}</td>
-          <td class="texto-dim2">${esc(p.chave ?? '—')}</td>
+          <td class="texto-dim2">${esc(p.codigo ?? '—')}</td>
           <td>${esc(p.unidade)} ${comLancamento.has(p.id)
             ? '<span class="texto-dim2">(fixa — já tem lançamentos)</span>' : ''}</td>
-          ${editavel ? `<td style="text-align:right;">
+          <td class="texto-dim2">${esc(p.local_estoque ?? '—')}</td>
+          <td>${p.status === 'ATIVO' ? '<span class="badge-bom">ativo</span>' : '<span class="badge-alerta">inativo</span>'}</td>
+          ${editavel ? `<td style="text-align:right;white-space:nowrap;">
+            <button class="btn-secundario mini" data-edit-prod="${p.id}">editar</button>
             ${comLancamento.has(p.id) ? ''
               : `<button class="btn-secundario mini" data-del-prod="${p.id}">remover</button>`}
           </td>` : ''}
@@ -7540,6 +7547,13 @@ async function estProdutos (alvo, editavel) {
     paginaEstoque()
   }
 
+  alvo.querySelectorAll('[data-edit-prod]').forEach(b => {
+    b.onclick = () => {
+      const p = EST_CACHE.produtos.find(x => x.id === b.dataset.editProd)
+      if (p) formProduto(p, comLancamento.has(p.id))
+    }
+  })
+
   alvo.querySelectorAll('[data-del-prod]').forEach(b => {
     b.onclick = async () => {
       if (!confirm('Remover este produto? Só é possível porque ele não tem lançamento.')) return
@@ -7548,6 +7562,59 @@ async function estProdutos (alvo, editavel) {
       paginaEstoque()
     }
   })
+}
+
+function formProduto (p, unidadeFixa) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>Editar produto</h3>
+    <div class="form-grade">
+      <div class="campo" style="grid-column:1/-1;"><label>Nome *</label>
+        <input id="ed-nome" value="${esc(p.nome)}"></div>
+      <div class="campo"><label>Código</label><input id="ed-cod" value="${esc(p.codigo ?? '')}"></div>
+      <div class="campo"><label>Unidade${unidadeFixa ? ' (fixa)' : ' *'}</label>
+        <select id="ed-un" ${unidadeFixa ? 'disabled' : ''}>
+          ${['t','kg','L','un'].map(u => `<option ${p.unidade === u ? 'selected' : ''}>${u}</option>`).join('')}
+        </select></div>
+      <div class="campo"><label>Local de estoque padrão</label>
+        <input id="ed-local" list="ed-locais-lista" value="${esc(p.local_estoque ?? '')}" placeholder="opcional">
+        <datalist id="ed-locais-lista">${EST_CACHE.locais.map(l => `<option value="${esc(l.nome)}">`).join('')}</datalist></div>
+      <div class="campo"><label>Preço de referência</label>
+        <input id="ed-preco" type="number" step="0.01" value="${p.preco_ref ?? ''}"></div>
+      <div class="campo"><label>Status</label><select id="ed-status">
+        <option value="ATIVO" ${p.status === 'ATIVO' ? 'selected' : ''}>ativo</option>
+        <option value="INATIVO" ${p.status === 'INATIVO' ? 'selected' : ''}>inativo</option>
+      </select></div>
+    </div>
+    <div class="acoes"><button class="btn" id="ed-salvar">Salvar</button><button class="btn-secundario" id="ed-cancelar">Cancelar</button></div>
+    <div class="recado oculto" id="ed-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#ed-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  fundo.querySelector('#ed-salvar').onclick = async () => {
+    const nome = fundo.querySelector('#ed-nome').value.trim()
+    const el = fundo.querySelector('#ed-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    if (!nome) { aviso('Escreva o nome do produto.'); return }
+
+    const corpo = {
+      nome,
+      codigo: fundo.querySelector('#ed-cod').value.trim() || null,
+      local_estoque: fundo.querySelector('#ed-local').value.trim() || null,
+      preco_ref: fundo.querySelector('#ed-preco').value ? Number(fundo.querySelector('#ed-preco').value) : null,
+      status: fundo.querySelector('#ed-status').value
+    }
+    if (!unidadeFixa) corpo.unidade = fundo.querySelector('#ed-un').value
+
+    const { error } = await db.from('produto').update(corpo).eq('id', p.id)
+    if (error) { aviso(error.message); return }
+    fechar()
+    paginaEstoque()
+  }
 }
 
 
