@@ -2718,7 +2718,8 @@ async function cobPedidos (alvo, editavel) {
     db.from('pedido').select(`
       id, numero, quantidade_t, unidade, preco_unitario, valor_total,
       forma_pagamento, condicao_pagamento, data_pedido, status, observacoes,
-      local_entrega, situacao_pagamento,
+      local_entrega, situacao_pagamento, cancelado_em, motivo_cancelamento,
+      cliente_id, produto_id, vendedor_id, observacao_cobranca,
       cliente:cliente_id ( razao_social, cnpj_cpf, inscricao_estadual, endereco,
                            bairro, municipio, uf, cep, telefone ),
       vendedor:vendedor_id ( nome ), produto:produto_id ( nome )
@@ -2732,13 +2733,14 @@ async function cobPedidos (alvo, editavel) {
     porPedido[p.pedido_id].push(p)
   })
 
-  const total = (pedidos || []).reduce((s, p) => s + Number(p.valor_total || 0), 0)
+  const total = (pedidos || []).filter(p => !p.cancelado_em)
+    .reduce((s, p) => s + Number(p.valor_total || 0), 0)
 
   alvo.innerHTML = `
     <div class="kpis" style="margin-bottom:14px;">
       ${kpi('Pedidos', (pedidos || []).length)}
       ${kpi('Valor total', 'R$ ' + fmtNum(total))}
-      ${kpi('Próximo número', 'a partir de 2500', 'gerado pelo sistema')}
+      ${kpi('Cancelados', (pedidos || []).filter(x => x.cancelado_em).length, 'fora da carteira')}
     </div>
     ${editavel ? `<div class="acoes" style="margin:0 0 14px;">
       <button class="btn" id="pv-novo">Novo pedido de venda</button></div>` : ''}
@@ -2747,13 +2749,21 @@ async function cobPedidos (alvo, editavel) {
   $('#pv-lista').innerHTML = (pedidos || []).map(p => {
     const par = porPedido[p.id] || []
     const abertas = par.filter(x => x.situacao !== 'PAGA').length
-    return `<div class="cartao-sol">
+    return `<div class="cartao-sol" ${p.cancelado_em ? 'style="opacity:.55;"' : ''}>
       <div class="linha1">
         <span class="titulo">Pedido ${esc(p.numero)} — ${esc(p.cliente?.razao_social ?? 'sem cliente')}</span>
-        <span class="chip">${esc(p.produto?.nome ?? '—')}</span>
+        ${p.cancelado_em ? '<span class="status reprovada">cancelado</span>'
+          : `<span class="chip">${esc(p.produto?.nome ?? '—')}</span>`}
+        ${p.observacao_cobranca?.startsWith('CONFERIR')
+          ? '<span class="urgente">● conferir valor</span>' : ''}
         <div class="botoes">
           <button class="btn-secundario mini" data-pdf="${p.id}">PDF</button>
-          ${editavel ? `<button class="btn-secundario mini" data-edit="${p.id}">editar</button>` : ''}
+          <button class="btn-secundario mini" data-hist="${p.id}">histórico</button>
+          ${editavel && !p.cancelado_em
+            ? `<button class="btn-secundario mini" data-edit="${p.id}">editar</button>
+               <button class="btn-secundario mini" data-cancel="${p.id}">cancelar</button>` : ''}
+          ${editavel && p.cancelado_em
+            ? `<button class="btn-secundario mini" data-reativar="${p.id}">reativar</button>` : ''}
         </div>
       </div>
       <div class="meta">
@@ -2762,6 +2772,8 @@ async function cobPedidos (alvo, editavel) {
         = <b>R$ ${fmtNum(p.valor_total)}</b>
         ${p.data_pedido ? ' · ' + fmtData(p.data_pedido) : ''}
         ${par.length ? ` · ${par.length} parcela(s)${abertas ? `, ${abertas} em aberto` : ', quitado'}` : ' · sem parcelas'}
+        ${p.cancelado_em ? `<br><span class="urgente">cancelado em ${fmtQuando(p.cancelado_em)} — ${esc(p.motivo_cancelamento ?? 'sem motivo')}</span>` : ''}
+        ${p.observacao_cobranca ? `<br><span class="texto-dim2">${esc(p.observacao_cobranca)}</span>` : ''}
       </div>
     </div>`
   }).join('') || `<p class="vazio">Nenhum pedido de venda emitido ainda.</p>`
@@ -2770,9 +2782,18 @@ async function cobPedidos (alvo, editavel) {
     b.onclick = () => pdfPedidoVenda((pedidos || []).find(x => x.id === b.dataset.pdf),
                                      porPedido[b.dataset.pdf] || [])
   })
+  alvo.querySelectorAll('[data-hist]').forEach(b => {
+    b.onclick = () => historicoPedido((pedidos || []).find(x => x.id === b.dataset.hist))
+  })
   if (!editavel) return
   alvo.querySelectorAll('[data-edit]').forEach(b => {
     b.onclick = () => formPedidoVenda((pedidos || []).find(x => x.id === b.dataset.edit))
+  })
+  alvo.querySelectorAll('[data-cancel]').forEach(b => {
+    b.onclick = () => justificar((pedidos || []).find(x => x.id === b.dataset.cancel), 'CANCELAMENTO')
+  })
+  alvo.querySelectorAll('[data-reativar]').forEach(b => {
+    b.onclick = () => justificar((pedidos || []).find(x => x.id === b.dataset.reativar), 'REATIVACAO')
   })
   $('#pv-novo').onclick = () => formPedidoVenda(null)
 }
@@ -2790,6 +2811,7 @@ async function formPedidoVenda (p) {
       .select('numero,vencimento,valor').eq('pedido_id', p.id).order('numero')
     parcelas = (data || []).map(x => ({ vencimento: x.vencimento, valor: Number(x.valor) }))
   }
+  const parcelasAntes = parcelas.length
 
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
@@ -2845,6 +2867,11 @@ async function formPedidoVenda (p) {
 
       <div class="campo" style="margin-top:12px;"><label>Observações</label>
         <textarea id="pv-obs" style="min-height:64px;">${esc(p?.observacoes ?? '')}</textarea></div>
+
+      ${p ? `<div class="campo" style="margin-top:12px;">
+        <label>Por que está alterando este pedido *</label>
+        <textarea id="pv-justif" style="min-height:70px;"
+          placeholder="Fica registrado no histórico com seu nome e a data."></textarea></div>` : ''}
 
       <div class="acoes">
         <button class="btn" id="pv-salvar">${p ? 'Salvar' : 'Emitir pedido'}</button>
@@ -2959,6 +2986,11 @@ async function formPedidoVenda (p) {
       aviso('Toda parcela precisa de vencimento e valor.'); return
     }
 
+    const justif = p ? (q('#pv-justif')?.value.trim() ?? '') : ''
+    if (p && justif.length < 10) {
+      aviso('Escreva por que está alterando — pelo menos uma frase.'); return
+    }
+
     const btn = q('#pv-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
     const corpo = {
       cliente_id,
@@ -2978,6 +3010,24 @@ async function formPedidoVenda (p) {
     if (p) {
       const { error } = await db.from('pedido').update(corpo).eq('id', p.id)
       if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Salvar'; return }
+      await db.from('pedido_historico').insert({
+        pedido_id: p.id, acao: 'EDICAO', justificativa: justif,
+        antes: {
+          cliente_id: p.cliente_id, quantidade_t: p.quantidade_t,
+          preco_unitario: p.preco_unitario, valor_total: p.valor_total,
+          forma_pagamento: p.forma_pagamento, data_pedido: p.data_pedido,
+          local_entrega: p.local_entrega, observacoes: p.observacoes,
+          parcelas: parcelasAntes
+        },
+        depois: {
+          cliente_id: corpo.cliente_id, quantidade_t: corpo.quantidade_t,
+          preco_unitario: corpo.preco_unitario, valor_total: corpo.valor_total,
+          forma_pagamento: corpo.forma_pagamento, data_pedido: corpo.data_pedido,
+          local_entrega: corpo.local_entrega, observacoes: corpo.observacoes,
+          parcelas: parcelas.length
+        },
+        pessoa_id: PERFIL.pessoaId
+      })
     } else {
       const { data, error } = await db.from('pedido').insert(corpo).select('id,numero').single()
       if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Emitir pedido'; return }
@@ -2994,6 +3044,172 @@ async function formPedidoVenda (p) {
 
     fechar(); abrirCobranca('pedidos')
   }
+}
+
+// ----- Cancelar, reativar ou excluir pedido: sempre com justificativa -----
+function justificar (p, acao) {
+  if (!p) return
+
+  const texto = {
+    CANCELAMENTO: {
+      titulo: 'Cancelar pedido ' + p.numero,
+      explica: 'O pedido sai da carteira e das cobranças, mas continua no sistema com o histórico. '
+             + 'Nada é apagado.',
+      botao: 'Confirmar cancelamento',
+      rotulo: 'Por que está cancelando *'
+    },
+    REATIVACAO: {
+      titulo: 'Reativar pedido ' + p.numero,
+      explica: 'O pedido volta para a carteira e as parcelas voltam a ser cobradas.',
+      botao: 'Confirmar reativação',
+      rotulo: 'Por que está reativando *'
+    },
+    EXCLUSAO: {
+      titulo: 'Excluir pedido ' + p.numero + ' em definitivo',
+      explica: 'Isto apaga o pedido e as parcelas do banco. Não há como desfazer. '
+             + 'Use apenas para pedido lançado por engano — para pedido real que não vai acontecer, cancele.',
+      botao: 'Excluir em definitivo',
+      rotulo: 'Por que está excluindo *'
+    }
+  }[acao]
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal">
+      <h3>${esc(texto.titulo)}</h3>
+      <div class="ficha" style="margin-bottom:14px;">
+        <div class="item"><div class="rot">Cliente</div>
+          <div class="val">${esc(p.cliente?.razao_social ?? '—')}</div></div>
+        <div class="item"><div class="rot">Valor</div>
+          <div class="val">R$ ${fmtNum(p.valor_total)}</div></div>
+        <div class="item"><div class="rot">Emitido em</div>
+          <div class="val">${fmtData(p.data_pedido)}</div></div>
+      </div>
+      <p class="aviso" style="margin-top:0;">${esc(texto.explica)}</p>
+      <div class="campo"><label>${esc(texto.rotulo)}</label>
+        <textarea id="j-motivo" style="min-height:90px;"
+          placeholder="Escreva o que aconteceu. Fica registrado com seu nome e a data."></textarea></div>
+      <div class="acoes">
+        <button class="btn" id="j-ok">${esc(texto.botao)}</button>
+        <button class="btn-secundario" id="j-cancelar">Voltar</button>
+      </div>
+      <div class="recado oculto" id="j-recado"></div>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#j-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const aviso = t => {
+    const el = q('#j-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  q('#j-ok').onclick = async () => {
+    const motivo = q('#j-motivo').value.trim()
+    if (motivo.length < 10) { aviso('Escreva a justificativa — pelo menos uma frase.'); return }
+
+    const btn = q('#j-ok'); btn.disabled = true; btn.textContent = 'Registrando...'
+
+    // o histórico entra primeiro: se a ação falhar depois, fica o registro da tentativa
+    await db.from('pedido_historico').insert({
+      pedido_id: p.id, acao, justificativa: motivo,
+      antes: { numero: p.numero, valor_total: p.valor_total,
+               cancelado_em: p.cancelado_em ?? null },
+      pessoa_id: PERFIL.pessoaId
+    })
+
+    let erro = null
+    if (acao === 'CANCELAMENTO') {
+      const { error } = await db.from('pedido').update({
+        cancelado_em: new Date().toISOString(),
+        cancelado_por: PERFIL.pessoaId,
+        motivo_cancelamento: motivo,
+        status: 'CANCELADO'
+      }).eq('id', p.id)
+      erro = error
+      if (!error) await db.from('pedido_parcela')
+        .update({ situacao: 'CANCELADA' }).eq('pedido_id', p.id).neq('situacao', 'PAGA')
+    }
+    if (acao === 'REATIVACAO') {
+      const { error } = await db.from('pedido').update({
+        cancelado_em: null, cancelado_por: null,
+        motivo_cancelamento: null, status: 'EMITIDO'
+      }).eq('id', p.id)
+      erro = error
+      if (!error) await db.from('pedido_parcela')
+        .update({ situacao: 'ABERTA' }).eq('pedido_id', p.id).eq('situacao', 'CANCELADA')
+    }
+    if (acao === 'EXCLUSAO') {
+      const { error } = await db.from('pedido').delete().eq('id', p.id)
+      erro = error
+    }
+
+    btn.disabled = false; btn.textContent = texto.botao
+    if (erro) { aviso(erro.message); return }
+    fechar(); abrirCobranca('pedidos')
+  }
+}
+
+// ----- Histórico de alterações do pedido -----
+async function historicoPedido (p) {
+  if (!p) return
+  const { data } = await db.from('pedido_historico')
+    .select('acao,justificativa,quando,antes,depois,pessoa:pessoa_id(nome)')
+    .eq('pedido_id', p.id).order('quando', { ascending: false })
+
+  const rotulo = { EDICAO: 'Editado', CANCELAMENTO: 'Cancelado',
+                   REATIVACAO: 'Reativado', EXCLUSAO: 'Excluído' }
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal">
+      <div class="cabeca-secao">
+        <h3>Histórico do pedido ${esc(p.numero)}</h3>
+        <span class="texto-dim2" style="font-size:12px;">${(data || []).length} registro(s)</span>
+      </div>
+      ${(data || []).map(x => `
+        <div class="passo">
+          <span class="quando">${fmtQuando(x.quando) ?? '—'}</span>
+          <span><b>${esc(rotulo[x.acao] ?? x.acao)}</b> por ${esc(x.pessoa?.nome ?? '—')}<br>
+            ${esc(x.justificativa)}
+            ${x.antes && x.depois ? `<br><span class="texto-dim2" style="font-size:11.5px;">${
+              esc(diferencas(x.antes, x.depois))}</span>` : ''}
+          </span>
+        </div>`).join('') || `<p class="vazio">
+          Nenhuma alteração registrada. O pedido está como foi emitido.</p>`}
+      <div class="acoes">
+        ${podeEditar('cobranca') ? `<button class="btn-secundario" id="h-excluir">Excluir pedido</button>` : ''}
+        <button class="btn-secundario" id="h-fechar">Fechar</button>
+      </div>
+    </div>`
+
+  document.body.appendChild(fundo)
+  fundo.querySelector('#h-fechar').onclick = () => fundo.remove()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+  const bx = fundo.querySelector('#h-excluir')
+  if (bx) bx.onclick = () => { fundo.remove(); justificar(p, 'EXCLUSAO') }
+}
+
+// resume o que mudou entre dois estados, para o histórico ficar legível
+function diferencas (antes, depois) {
+  const nomes = {
+    valor_total: 'valor', quantidade_t: 'quantidade', preco_unitario: 'preço unitário',
+    forma_pagamento: 'forma de pagamento', data_pedido: 'data', cliente_id: 'cliente',
+    local_entrega: 'entrega', observacoes: 'observações', parcelas: 'parcelas'
+  }
+  const mudou = []
+  Object.keys({ ...antes, ...depois }).forEach(k => {
+    const a = antes?.[k], d = depois?.[k]
+    if (String(a ?? '') !== String(d ?? '')) {
+      mudou.push(`${nomes[k] ?? k}: ${a ?? '—'} → ${d ?? '—'}`)
+    }
+  })
+  return mudou.join(' · ')
 }
 
 // ----- PDF do pedido de venda, no padrão dos documentos Gefoscal -----
