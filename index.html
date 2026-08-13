@@ -245,6 +245,26 @@ tbody tr:hover { background: var(--hover-bg); }
 .linha-add { display:flex; gap:7px; margin-bottom:12px; }
 .linha-add input { flex:1; }
 
+
+/* ---- Compras: separação entre em análise e encerradas ---- */
+.gaveta { border:1px solid var(--line); border-radius:8px; margin-top:16px; overflow:hidden; }
+.gaveta > summary { padding:12px 15px; cursor:pointer; font-size:13.5px; color:var(--dim);
+                    background:var(--panel); list-style:none; display:flex;
+                    align-items:center; gap:10px; }
+.gaveta > summary::-webkit-details-marker { display:none; }
+.gaveta > summary::before { content:'▸'; font-size:11px; color:var(--dim2); }
+.gaveta[open] > summary::before { content:'▾'; }
+.gaveta > summary:hover { color:var(--txt); }
+.gaveta .corpo { padding:6px 15px 15px; border-top:1px solid var(--line); }
+.gaveta .conta { margin-left:auto; font-size:12px; color:var(--dim2); }
+.faixa-etapa { display:flex; gap:2px; margin:0 0 16px; border-radius:20px; overflow:hidden;
+               background:var(--hover-bg); }
+.faixa-etapa button { flex:1; background:none; border:none; padding:9px 8px; cursor:pointer;
+                      color:var(--dim2); font-size:12.5px; }
+.faixa-etapa button:hover { color:var(--txt); }
+.faixa-etapa button.ativo { background:var(--rust); color:#fff; }
+.faixa-etapa button .n { display:block; font-size:16px; font-family:var(--serif); }
+
 @page { size: A4; margin: 8mm; }
 
 @media print {
@@ -1357,26 +1377,26 @@ function formNota (n) {
       <h3>${n ? 'Editar nota' : 'Nova nota'}</h3>
       <div class="form-grade">
         <div class="campo" style="grid-column:1/-1;"><label>Título *</label>
-          <input id="nt-titulo" value="${esc(n?.titulo ?? '')}"></div>
+          <input id="nota-titulo" value="${esc(n?.titulo ?? '')}"></div>
         <div class="campo"><label>Categoria</label>
-          <select id="nt-cat">
+          <select id="nota-cat">
             ${['geral','senha','procedimento','contato','lembrete'].map(c =>
               `<option ${n?.categoria === c ? 'selected' : ''}>${c}</option>`).join('')}
           </select></div>
         <div class="campo"><label>Destaque</label>
-          <select id="nt-fixa">
+          <select id="nota-fixa">
             <option value="nao" ${!n?.fixada ? 'selected' : ''}>normal</option>
             <option value="sim" ${n?.fixada ? 'selected' : ''}>fixar no topo</option>
           </select></div>
       </div>
       <div class="campo" style="margin-top:12px;"><label>Conteúdo</label>
-        <textarea id="nt-conteudo" style="min-height:180px;">${esc(n?.conteudo ?? '')}</textarea></div>
+        <textarea id="nota-conteudo" style="min-height:180px;">${esc(n?.conteudo ?? '')}</textarea></div>
       <div class="acoes">
-        <button class="btn" id="nt-salvar">Salvar</button>
-        ${n ? '<button class="btn-secundario" id="nt-excluir">Excluir</button>' : ''}
-        <button class="btn-secundario" id="nt-cancelar">Cancelar</button>
+        <button class="btn" id="nota-salvar">Salvar</button>
+        ${n ? '<button class="btn-secundario" id="nota-excluir">Excluir</button>' : ''}
+        <button class="btn-secundario" id="nota-cancelar">Cancelar</button>
       </div>
-      <div class="recado oculto" id="nt-recado"></div>
+      <div class="recado oculto" id="nota-recado"></div>
       <p class="aviso">Categoria "senha" deixa o texto borrado na lista — só aparece
       ao passar o mouse. É proteção contra olhar por cima do ombro, não criptografia.</p>
     </div>`
@@ -1384,35 +1404,35 @@ function formNota (n) {
   document.body.appendChild(fundo)
   const q = id => fundo.querySelector(id)
   const fechar = () => fundo.remove()
-  q('#nt-cancelar').onclick = fechar
+  q('#nota-cancelar').onclick = fechar
   fundo.onclick = e => { if (e.target === fundo) fechar() }
 
-  q('#nt-salvar').onclick = async () => {
-    const titulo = q('#nt-titulo').value.trim()
+  q('#nota-salvar').onclick = async () => {
+    const titulo = q('#nota-titulo').value.trim()
     if (!titulo) {
-      const el = q('#nt-recado'); el.textContent = 'Escreva o título.'
+      const el = q('#nota-recado'); el.textContent = 'Escreva o título.'
       el.classList.remove('oculto'); el.style.color = 'var(--warn-text)'
       el.style.borderColor = 'var(--warn-text)'; return
     }
     const corpo = {
       pessoa_id: PERFIL.pessoaId, titulo,
-      conteudo: q('#nt-conteudo').value,
-      categoria: q('#nt-cat').value,
-      fixada: q('#nt-fixa').value === 'sim',
+      conteudo: q('#nota-conteudo').value,
+      categoria: q('#nota-cat').value,
+      fixada: q('#nota-fixa').value === 'sim',
       atualizado_em: new Date().toISOString()
     }
     const { error } = n
       ? await db.from('nota_pessoal').update(corpo).eq('id', n.id)
       : await db.from('nota_pessoal').insert(corpo)
     if (error) {
-      const el = q('#nt-recado'); el.textContent = error.message
+      const el = q('#nota-recado'); el.textContent = error.message
       el.classList.remove('oculto'); el.style.color = 'var(--warn-text)'
       el.style.borderColor = 'var(--warn-text)'; return
     }
     fechar(); irPara('visao_geral')
   }
 
-  const bx = q('#nt-excluir')
+  const bx = q('#nota-excluir')
   if (bx) bx.onclick = async () => {
     if (!confirm('Excluir esta nota?')) return
     await db.from('nota_pessoal').delete().eq('id', n.id)
@@ -1730,96 +1750,309 @@ const selSolicitacao = `
 // ----- Compras › Solicitações -----
 async function comprasSolicitacoes (alvo, editavel) {
   const { data, error } = await db.from('solicitacao_compra')
-    .select(selSolicitacao).order('data_solicitacao', { ascending: false }).limit(300)
+    .select(selSolicitacao).order('data_solicitacao', { ascending: false }).limit(600)
 
   if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
 
+  // Em análise é o que ainda anda. Encerrada é o que já teve desfecho —
+  // fica guardado numa gaveta, para não competir com o que precisa de ação.
+  const ANDANDO = ['AGUARDANDO_COORD', 'AGUARDANDO_COTACAO', 'AGUARDANDO_APROVACAO']
+  const ENCERRADA = ['APROVADA', 'REPROVADA', 'DEVOLVIDA', 'PAGA', 'RECEBIDA', 'CANCELADA']
+
+  const todas = data || []
+  const analise = todas.filter(s => ANDANDO.includes(s.status))
+  const encerradas = todas.filter(s => ENCERRADA.includes(s.status))
+  const aprovadas = encerradas.filter(s => ['APROVADA', 'PAGA', 'RECEBIDA'].includes(s.status))
+  const reprovadas = encerradas.filter(s => ['REPROVADA', 'DEVOLVIDA', 'CANCELADA'].includes(s.status))
+
+  const soma = l => l.reduce((t, s) => t + Number(s.valor_aprovado ?? s.valor_estimado ?? 0), 0)
+
   alvo.innerHTML = `
     ${editavel ? `<div class="acoes" style="margin:0 0 16px;">
-      <button class="btn" id="c-nova">Nova solicitação</button></div>` : ''}
-    <div class="panel" id="c-resumo" style="padding:16px 18px;margin-bottom:16px;"></div>
+      <button class="btn" id="c-nova">Nova solicitação</button>
+      <button class="btn-secundario" id="c-importar">Importar da planilha</button>
+    </div>` : ''}
+
+    <div class="faixa-etapa" id="c-faixa">
+      <button data-etapa="AGUARDANDO_COORD"><span class="n">${
+        analise.filter(s => s.status === 'AGUARDANDO_COORD').length}</span>coordenação</button>
+      <button data-etapa="AGUARDANDO_COTACAO"><span class="n">${
+        analise.filter(s => s.status === 'AGUARDANDO_COTACAO').length}</span>cotação</button>
+      <button data-etapa="AGUARDANDO_APROVACAO"><span class="n">${
+        analise.filter(s => s.status === 'AGUARDANDO_APROVACAO').length}</span>aprovação</button>
+      <button data-etapa=""><span class="n">${analise.length}</span>todas em análise</button>
+    </div>
+
     <div class="filtros" style="margin-bottom:14px;">
-      <div class="campo"><label>Status</label>
-        <select id="c-f-status"><option value="">todos</option>
-          ${Object.entries(STATUS_COMPRA).map(([k, v]) =>
-            `<option value="${k}">${esc(v.rotulo)}</option>`).join('')}
+      <div class="campo"><label>Setor</label>
+        <select id="c-f-setor"><option value="">todos</option>
+          ${[...new Set(todas.map(s => s.setor?.nome).filter(Boolean))].sort()
+            .map(x => `<option>${esc(x)}</option>`).join('')}
         </select></div>
       <div class="campo"><label>Buscar</label>
-        <input id="c-f-texto" placeholder="produto, serviço ou finalidade"></div>
+        <input id="c-f-texto" placeholder="produto, número ou solicitante"></div>
     </div>
-    <div id="c-lista"></div>`
 
-  // Concluída = recebida. Em andamento = ainda vai andar.
-  // Encerrada sem compra = reprovada, devolvida ou cancelada: saiu da fila,
-  // então não entra na conta do que "falta concluir".
-  const CONCLUIDAS = ['PAGA', 'RECEBIDA']
-  const PARADAS = ['REPROVADA', 'CANCELADA', 'DEVOLVIDA']
+    <div id="c-lista"></div>
 
-  const resumir = lista => {
-    const feito = lista.filter(s => CONCLUIDAS.includes(s.status)).length
-    const parado = lista.filter(s => PARADAS.includes(s.status)).length
-    const andamento = lista.length - feito - parado
-    const base = feito + andamento              // o que precisa chegar ao fim
-    const pct = base ? Math.round((feito / base) * 100) : 0
+    <details class="gaveta">
+      <summary>Aprovadas e concluídas
+        <span class="conta">${aprovadas.length} · R$ ${fmtNum(soma(aprovadas))}</span></summary>
+      <div class="corpo" id="c-aprovadas"></div>
+    </details>
 
-    $('#c-resumo').innerHTML = `
-      <div class="cabeca-secao" style="margin-bottom:2px;">
-        <h3 style="font-family:var(--serif);font-size:17px;">
-          ${base ? pct + '% concluído' : 'Nenhuma solicitação em curso'}</h3>
-        <span class="texto-dim2" style="font-size:12px;">
-          ${andamento ? `faltam ${andamento} de ${base}` : base ? 'tudo recebido' : ''}</span>
-      </div>
-      ${lista.length ? `
-      <div class="progresso">
-        ${feito ? `<span class="feito" style="width:${(feito / lista.length) * 100}%"></span>` : ''}
-        ${andamento ? `<span class="andamento" style="width:${(andamento / lista.length) * 100}%"></span>` : ''}
-        ${parado ? `<span class="parado" style="width:${(parado / lista.length) * 100}%"></span>` : ''}
-      </div>
-      <div class="legenda">
-        <span class="feito"><i></i>${feito} recebida${feito === 1 ? '' : 's'}</span>
-        <span class="andamento"><i></i>${andamento} em andamento</span>
-        ${parado ? `<span class="parado"><i></i>${parado} encerrada${parado === 1 ? '' : 's'} sem compra</span>` : ''}
-      </div>` : ''}`
-  }
+    <details class="gaveta">
+      <summary>Reprovadas, devolvidas e canceladas
+        <span class="conta">${reprovadas.length}</span></summary>
+      <div class="corpo" id="c-reprovadas"></div>
+    </details>`
 
-  const desenhar = () => {
-    const st = $('#c-f-status').value
-    const txt = $('#c-f-texto').value.trim().toLowerCase()
-    const lista = (data || []).filter(s =>
-      (!st || s.status === st) &&
-      (!txt || `${s.produto_servico} ${s.finalidade ?? ''}`.toLowerCase().includes(txt)))
+  let etapa = ''
 
-    resumir(lista)
-    $('#c-lista').innerHTML = lista.map(s => `
-      <div class="cartao-sol">
-        <div class="linha1">
-          <span class="titulo">${esc(s.produto_servico)}</span>
-          ${s.urgencia === 'URGENTE_4H' ? '<span class="urgente">● urgente</span>' : ''}
-          ${selo(s.status)}
-          <div class="botoes">
-            <button class="btn-secundario mini" data-ficha="${s.id}">ficha</button>
-          </div>
+  const cartao = (s, apagado = false) => `
+    <div class="cartao-sol" ${apagado ? 'style="opacity:.72;"' : ''}>
+      <div class="linha1">
+        <span class="titulo">${esc(s.produto_servico ?? '—')}</span>
+        ${s.urgencia === 'URGENTE_4H' && !apagado ? '<span class="urgente">● urgente</span>' : ''}
+        ${selo(s.status)}
+        <div class="botoes">
+          <button class="btn-secundario mini" data-ficha="${s.id}">ficha</button>
         </div>
-        <div class="meta">
-          ${esc(s.solicitante?.nome ?? 'sem solicitante')}
-          ${s.setor?.nome ? '· ' + esc(s.setor.nome) : ''}
-          · ${fmtQuando(s.data_solicitacao) ?? '—'}
-          ${s.quantidade ? `· ${esc(s.quantidade)} ${esc(s.unidade ?? '')}` : ''}
-          ${s.valor_estimado ? `· estimado R$ ${fmtNum(s.valor_estimado)}` : ''}
-        </div>
-      </div>`).join('') ||
-      `<p class="vazio">Nenhuma solicitação${(data || []).length ? ' com esse filtro' : ' registrada ainda'}.</p>`
+      </div>
+      <div class="meta">
+        ${esc(s.numero ?? s.origem_id ?? '')}
+        · ${esc(s.solicitante?.nome ?? s.solicitante_nome ?? 'sem solicitante')}
+        ${s.setor?.nome ? '· ' + esc(s.setor.nome) : ''}
+        · ${fmtQuando(s.data_solicitacao) ?? '—'}
+        ${s.quantidade ? `· ${esc(s.quantidade)} ${esc(s.unidade ?? '')}` : ''}
+        ${s.valor_aprovado ? `· aprovado R$ ${fmtNum(s.valor_aprovado)}`
+          : s.valor_estimado ? `· estimado R$ ${fmtNum(s.valor_estimado)}` : ''}
+        ${s.origem_id ? '· <span class="texto-dim2">da planilha</span>' : ''}
+      </div>
+    </div>`
 
-    $('#c-lista').querySelectorAll('[data-ficha]').forEach(b => {
-      b.onclick = () => { abrirFicha(data.find(x => x.id === b.dataset.ficha), editavel).catch(e => console.error(e)) }
+  const ligarFichas = escopo => {
+    escopo.querySelectorAll('[data-ficha]').forEach(b => {
+      b.onclick = () => { abrirFicha(todas.find(x => x.id === b.dataset.ficha), editavel)
+        .catch(e => console.error(e)) }
     })
   }
 
-  $('#c-f-status').onchange = desenhar
+  const desenhar = () => {
+    const setor = $('#c-f-setor').value
+    const txt = $('#c-f-texto').value.trim().toLowerCase()
+    const casa = s => (!setor || s.setor?.nome === setor) &&
+      (!txt || `${s.produto_servico ?? ''} ${s.numero ?? ''} ${s.origem_id ?? ''} ${s.solicitante?.nome ?? ''} ${s.solicitante_nome ?? ''}`
+        .toLowerCase().includes(txt))
+
+    const lista = analise.filter(s => (!etapa || s.status === etapa) && casa(s))
+    $('#c-lista').innerHTML = lista.map(s => cartao(s)).join('') ||
+      `<p class="vazio">${analise.length
+        ? 'Nada em análise com esse filtro.'
+        : 'Nenhuma solicitação em análise. Tudo que existe já teve desfecho — veja nas gavetas abaixo.'}</p>`
+
+    $('#c-aprovadas').innerHTML = aprovadas.filter(casa).map(s => cartao(s, true)).join('')
+      || '<p class="texto-dim2" style="font-size:13px;">Nada aqui com esse filtro.</p>'
+    $('#c-reprovadas').innerHTML = reprovadas.filter(casa).map(s => cartao(s, true)).join('')
+      || '<p class="texto-dim2" style="font-size:13px;">Nada aqui com esse filtro.</p>'
+
+    ligarFichas(alvo)
+  }
+
+  $('#c-faixa').querySelectorAll('[data-etapa]').forEach(b => {
+    b.onclick = () => {
+      etapa = b.dataset.etapa
+      $('#c-faixa').querySelectorAll('button').forEach(x => x.classList.toggle('ativo', x === b))
+      desenhar()
+    }
+  })
+  $('#c-f-setor').onchange = desenhar
   $('#c-f-texto').oninput = desenhar
   desenhar()
 
-  if (editavel) $('#c-nova').onclick = () => formSolicitacao()
+  if (!editavel) return
+  $('#c-nova').onclick = () => formSolicitacao()
+  $('#c-importar').onclick = () => telaImportarCompras()
+}
+
+// ----- Importar a planilha de compras -----
+// Lê a aba de controle (a que tem ID, Status e FluxoEtapa), não a das
+// respostas cruas. O ID da planilha vira origem_id, então reimportar
+// o arquivo inteiro atualiza em vez de duplicar.
+function telaImportarCompras () {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal" style="max-width:820px;">
+      <h3>Importar solicitações da planilha</h3>
+      <p class="aviso" style="margin-top:0;">
+        No Google Sheets, abra a <b>aba de controle</b> — a que tem as colunas ID, Status e
+        FluxoEtapa. Selecione tudo, incluindo a linha de títulos, copie e cole abaixo.
+        O sistema encontra as colunas pelo nome, então a ordem não importa.
+        Linhas já importadas são atualizadas, não duplicadas.</p>
+      <textarea id="ic-dados" style="min-height:190px;"
+        placeholder="Cole aqui (Ctrl+V)"></textarea>
+      <div class="acoes">
+        <button class="btn" id="ic-conferir">Conferir</button>
+        <button class="btn-secundario" id="ic-importar" disabled>Importar</button>
+        <button class="btn-secundario" id="ic-cancelar">Fechar</button>
+      </div>
+      <div class="recado oculto" id="ic-recado"></div>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#ic-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const dizer = (t, alerta = false) => {
+    const el = q('#ic-recado'); el.innerHTML = t; el.classList.remove('oculto')
+    el.style.borderColor = alerta ? 'var(--warn-text)' : 'var(--line2)'
+    el.style.color = alerta ? 'var(--warn-text)' : 'var(--dim)'
+  }
+
+  // normaliza cabeçalho: sem acento, minúsculo, sem espaço
+  const chave = s => String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]/g, '')
+
+  let prontas = []
+
+  const ler = () => {
+    const linhas = q('#ic-dados').value.split('\n').filter(l => l.trim())
+    if (linhas.length < 2) return { erro: 'Cole ao menos o cabeçalho e uma linha.' }
+
+    const sep = linhas[0].includes('\t') ? '\t' : ';'
+    const cab = linhas[0].split(sep).map(chave)
+    const col = nome => cab.indexOf(chave(nome))
+
+    const iId = col('ID')
+    if (iId < 0) return { erro: 'Não achei a coluna <b>ID</b>. Você colou a aba de controle?' }
+
+    const idx = {
+      id: iId, nome: col('Nome'), email: col('Email'), setor: col('Setor'),
+      gestor: col('Gestor'), tipo: col('Tipo'), urgencia: col('Urgencia'),
+      justificativa: col('Justificativa'), risco: col('Risco'), descricao: col('Descricao'),
+      quantidade: col('Quantidade'), unidade: col('Unidade'), especificacoes: col('Especificacoes'),
+      finalidade: col('Finalidade'), local: col('Local'), valor: col('Valor'),
+      recorrencia: col('Recorrencia'), status: col('Status'), aprovador: col('Aprovador'),
+      observacao: col('Observacao'), data: col('Data'), ondeMaisBarato: col('LocalMaisBarato'),
+      fornecedorMaisBarato: col('FornecedorMaisBarato'), precoEncontrado: col('PrecoEncontrado'),
+      obsCompras: col('ObsCompras'), produto: col('ProdutoServico'),
+      valorFinal: col('ValorFinal'), formaPagamento: col('FormaPagamento'),
+      fluxo: col('FluxoEtapa'), justCoord: col('JustificativaCoordenador'),
+      arquivo: col('Arquivo'), pdfPedido: col('PdfPedidoUrl'), pdfCotacao: col('PdfCotacaoUrl'),
+      contato: col('ContatoFornecedor')
+    }
+
+    const v = (c, i) => (idx[i] >= 0 ? (c[idx[i]] ?? '').trim() : '')
+    const dataBR = t => {
+      const m = String(t).match(/^(\d{2})\/(\d{2})\/(\d{4})/)
+      if (!m) return null
+      const iso = `${m[3]}-${m[2]}-${m[1]}`
+      const d = new Date(iso + 'T12:00:00')
+      return isNaN(d) ? null : d.toISOString()
+    }
+
+    // Status da planilha vira status do sistema. FluxoEtapa ENCERRADO
+    // significa que o processo acabou, independente do resultado.
+    const traduzir = (status, fluxo) => {
+      const s = chave(status)
+      if (s === 'aprovado') return 'APROVADA'
+      if (s === 'reprovado') return 'REPROVADA'
+      if (s === 'cancelado') return 'CANCELADA'
+      if (chave(fluxo) === 'encerrado') return 'APROVADA'
+      if (!s) return 'AGUARDANDO_COORD'
+      return 'AGUARDANDO_APROVACAO'
+    }
+
+    const itens = [], erros = []
+    linhas.slice(1).forEach((l, i) => {
+      const c = l.split(sep)
+      const origem = v(c, 'id')
+      if (!origem || !/^PC-/i.test(origem)) return          // linha vazia ou fora do padrão
+      const produto = v(c, 'produto') || v(c, 'descricao') || v(c, 'finalidade')
+      if (!produto) { erros.push(`linha ${i + 2}: sem produto ou descrição`); return }
+
+      itens.push({
+        origem_id: origem,
+        produto_servico: produto.slice(0, 500),
+        solicitante_nome: v(c, 'nome') || null,
+        gestor_nome: v(c, 'gestor') || null,
+        aprovador_nome: v(c, 'aprovador') || null,
+        tipo_solicitacao: v(c, 'tipo') || null,
+        urgencia: /4h|urgente/i.test(v(c, 'urgencia')) && !/nao/i.test(chave(v(c, 'urgencia')))
+          ? 'URGENTE_4H' : 'NAO_URGENTE_5D',
+        justificativa: v(c, 'justificativa') || null,
+        tem_risco: /^sim/i.test(v(c, 'risco')),
+        descricao_risco: v(c, 'descricao') || null,
+        quantidade: v(c, 'quantidade') || null,
+        unidade: v(c, 'unidade') || null,
+        especificacoes: v(c, 'especificacoes') || null,
+        finalidade: v(c, 'finalidade') || null,
+        local_entrega: v(c, 'local') || null,
+        valor_estimado: numeroBR(v(c, 'valor').replace(/R\$\s*/gi, '')),
+        valor_aprovado: numeroBR(v(c, 'valorFinal').replace(/R\$\s*/gi, '')),
+        recorrencia: v(c, 'recorrencia') || null,
+        onde_mais_barato: v(c, 'ondeMaisBarato') || null,
+        observacao_compras: v(c, 'obsCompras') || null,
+        parecer_aprovacao: v(c, 'observacao') || null,
+        parecer_coordenacao: v(c, 'justCoord') || null,
+        forma_pagamento: v(c, 'formaPagamento') || null,
+        status_planilha: v(c, 'status') || null,
+        fluxo_etapa: v(c, 'fluxo') || null,
+        pdf_pedido_url: v(c, 'pdfPedido') || null,
+        pdf_cotacao_url: v(c, 'pdfCotacao') || null,
+        arquivo_url: v(c, 'arquivo') || null,
+        contato_fornecedor: v(c, 'contato') || null,
+        status: traduzir(v(c, 'status'), v(c, 'fluxo')),
+        data_solicitacao: dataBR(v(c, 'data')) || new Date().toISOString()
+      })
+    })
+    return { itens, erros }
+  }
+
+  q('#ic-conferir').onclick = () => {
+    const r = ler()
+    if (r.erro) { dizer(r.erro, true); q('#ic-importar').disabled = true; return }
+    prontas = r.itens
+    if (!prontas.length) {
+      dizer('Nenhuma linha com ID no formato PC-... foi encontrada.', true)
+      q('#ic-importar').disabled = true; return
+    }
+    const conta = st => prontas.filter(x => x.status === st).length
+    dizer(`<b>${prontas.length}</b> solicitação(ões) lida(s):<br>`
+      + `${conta('APROVADA')} aprovada(s) · ${conta('REPROVADA')} reprovada(s) · `
+      + `${conta('CANCELADA')} cancelada(s) · `
+      + `${prontas.length - conta('APROVADA') - conta('REPROVADA') - conta('CANCELADA')} em análise`
+      + (r.erros.length ? `<br><b>${r.erros.length} linha(s) ignorada(s):</b><br>`
+          + r.erros.slice(0, 5).map(esc).join('<br>') : '')
+      + '<br>Nada foi gravado ainda.', r.erros.length > 0)
+    q('#ic-importar').disabled = false
+  }
+
+  q('#ic-importar').onclick = async () => {
+    if (!prontas.length) return
+    const btn = q('#ic-importar'); btn.disabled = true; btn.textContent = 'Importando...'
+
+    let gravadas = 0, falhas = []
+    // em blocos, para uma linha ruim não derrubar a importação inteira
+    for (let i = 0; i < prontas.length; i += 50) {
+      const bloco = prontas.slice(i, i + 50)
+      const { error } = await db.from('solicitacao_compra')
+        .upsert(bloco, { onConflict: 'origem_id' })
+      if (error) falhas.push(`bloco ${i / 50 + 1}: ${error.message}`)
+      else gravadas += bloco.length
+    }
+
+    btn.disabled = false; btn.textContent = 'Importar'
+    if (falhas.length) {
+      dizer(`${gravadas} gravada(s), mas houve erro:<br>${falhas.map(esc).join('<br>')}`, true)
+      return
+    }
+    dizer(`<b>${gravadas} solicitação(ões)</b> importada(s). Atualizando a tela...`)
+    setTimeout(() => { fechar(); abrirCompras('solicitacoes', true) }, 1600)
+  }
 }
 
 // ----- Ficha da solicitação: documento imprimível -----
@@ -5124,16 +5357,16 @@ async function finCadastros (alvo, editavel) {
       </div>
       ${editavel ? `<div class="form-grade" style="margin-bottom:12px;">
         <div class="campo"><label>Produto</label>
-          <select id="pv-produto">${(produtos || []).map(p =>
+          <select id="preco-produto">${(produtos || []).map(p =>
             `<option value="${p.id}">${esc(p.nome)}</option>`).join('')}</select></div>
         <div class="campo"><label>Preço por tonelada (R$)</label>
-          <input id="pv-preco" inputmode="decimal" placeholder="1.250,00"></div>
+          <input id="preco-valor" inputmode="decimal" placeholder="1.250,00"></div>
         <div class="campo"><label>Vigente a partir de</label>
-          <input type="date" id="pv-data" value="${new Date().toISOString().slice(0, 10)}"></div>
+          <input type="date" id="preco-data" value="${new Date().toISOString().slice(0, 10)}"></div>
       </div>
       <div class="acoes" style="margin-top:0;">
-        <button class="btn" id="pv-salvar">Adicionar preço</button></div>
-      <div class="recado oculto" id="pv-recado"></div>` : ''}
+        <button class="btn" id="preco-salvar">Adicionar preço</button></div>
+      <div class="recado oculto" id="preco-recado"></div>` : ''}
 
       <table style="margin-top:14px;"><thead><tr>
         <th>Produto</th><th>Cliente</th><th class="num">Preço/t</th><th>Vigente de</th>
@@ -5226,17 +5459,17 @@ async function finCadastros (alvo, editavel) {
     setTimeout(() => abrirFinanceiro('cadastros', true), 1800)
   }
 
-  $('#pv-salvar').onclick = async () => {
-    const el = $('#pv-recado')
+  $('#preco-salvar').onclick = async () => {
+    const el = $('#preco-recado')
     const falhar = t => { el.textContent = t; el.classList.remove('oculto')
       el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
-    const preco = numeroBR($('#pv-preco').value)
+    const preco = numeroBR($('#preco-valor').value)
     if (preco === null || preco <= 0) { falhar('Informe o preço por tonelada.'); return }
 
     const { error } = await db.from('preco_venda').insert({
-      produto_id: $('#pv-produto').value,
+      produto_id: $('#preco-produto').value,
       preco,
-      vigente_de: $('#pv-data').value
+      vigente_de: $('#preco-data').value
     })
     if (error) { falhar(error.message); return }
     abrirFinanceiro('cadastros', true)
@@ -6150,24 +6383,24 @@ function formProjeto () {
   fundo.innerHTML = `<div class="modal">
     <h3>Novo projeto</h3>
     <div class="form-grade">
-      <div class="campo"><label>Nome *</label><input id="np-nome"></div>
-      <div class="campo"><label>Setor responsável</label><select id="np-setor">
+      <div class="campo"><label>Nome *</label><input id="proj-nome"></div>
+      <div class="campo"><label>Setor responsável</label><select id="proj-setor">
         <option value="">—</option>${SETORES_CACHE.map(s => `<option value="${s.id}">${esc(s.nome)}</option>`).join('')}</select></div>
     </div>
-    <div class="acoes"><button class="btn" id="np-salvar">Criar</button><button class="btn-secundario" id="np-cancelar">Cancelar</button></div>
-    <div class="recado oculto" id="np-recado"></div>
+    <div class="acoes"><button class="btn" id="proj-salvar">Criar</button><button class="btn-secundario" id="proj-cancelar">Cancelar</button></div>
+    <div class="recado oculto" id="proj-recado"></div>
   </div>`
   document.body.appendChild(fundo)
   const fechar = () => fundo.remove()
-  fundo.querySelector('#np-cancelar').onclick = fechar
+  fundo.querySelector('#proj-cancelar').onclick = fechar
   fundo.onclick = e => { if (e.target === fundo) fechar() }
-  fundo.querySelector('#np-salvar').onclick = async () => {
-    const nome = fundo.querySelector('#np-nome').value.trim()
-    const el = fundo.querySelector('#np-recado')
+  fundo.querySelector('#proj-salvar').onclick = async () => {
+    const nome = fundo.querySelector('#proj-nome').value.trim()
+    const el = fundo.querySelector('#proj-recado')
     const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
     if (!nome) { aviso('Escreva o nome do projeto.'); return }
     const { data: novo, error } = await db.from('projeto').insert({
-      nome, setor_id: fundo.querySelector('#np-setor').value || null, criado_por_id: PERFIL.pessoaId
+      nome, setor_id: fundo.querySelector('#proj-setor').value || null, criado_por_id: PERFIL.pessoaId
     }).select('id').single()
     if (error) { aviso(error.message); return }
     if (novo) await db.from('projeto_membro').insert({ projeto_id: novo.id, pessoa_id: PERFIL.pessoaId })
