@@ -4274,8 +4274,9 @@ function nomeMes (d) {
     'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro']
   return meses[d.getMonth()] + ' de ' + d.getFullYear()
 }
-function opcoesFin (lista, vazio = 'selecione…') {
-  return `<option value="">${vazio}</option>` + lista.map(x => `<option value="${x.id}">${esc(x.nome)}</option>`).join('')
+function opcoesFin (lista, vazio = 'selecione…', atual = null) {
+  return `<option value="">${vazio}</option>` + lista.map(x =>
+    `<option value="${x.id}" ${x.id === atual ? 'selected' : ''}>${esc(x.nome)}</option>`).join('')
 }
 function navMesHtml () {
   return `<div class="filtros" style="margin-bottom:14px;align-items:center;">
@@ -4311,7 +4312,7 @@ async function paginaFinanceiro () {
     : 'Somente leitura — você pode consultar, mas não alterar'
 
   const area = areaLivre()
-  const abas = [['lancamentos', 'Lançamentos'], ['pagar', 'A pagar'], ['fechamento', 'Fechamento'],
+  const abas = [['lancamentos', 'Lançamentos'], ['pagar', 'A pagar'], ['fechamento', 'Fechamento'], ['gastos', 'Gastos por setor'],
     ['orcamento', 'Orçamento'], ['contas', 'Saldo e contas'], ['planos', 'Planos e metas'],
     ['investimentos', 'Investimentos'], ['relatorios', 'Relatórios'], ['cadastros', 'Cadastros']]
   area.innerHTML = `
@@ -4341,7 +4342,8 @@ function abrirFinanceiro (sub, editavel) {
   const alvo = $('#sub-financeiro')
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
   if (sub === 'lancamentos') finLancamentos(alvo, editavel)
-  if (sub === 'pagar') comprasPagar(alvo)
+  if (sub === 'pagar') finAPagar(alvo, editavel)
+  if (sub === 'gastos') finGastos(alvo)
   if (sub === 'fechamento') finFechamento(alvo, editavel)
   if (sub === 'cadastros') finCadastros(alvo, editavel)
   if (sub === 'orcamento') finOrcamento(alvo, editavel)
@@ -4357,8 +4359,10 @@ async function finLancamentos (alvo, editavel) {
   const ate = isoMes(new Date(FIN_MES.getFullYear(), FIN_MES.getMonth() + 1, 1))
 
   const { data, error } = await db.from('lancamento_financeiro')
-    .select(`id, descricao, valor, tipo, situacao, data_lancamento,
-      conta:conta_id ( nome ), categoria:categoria_id ( nome ), centro:centro_custo_id ( nome )`)
+    .select(`id, descricao, valor, tipo, situacao, data_lancamento, observacao,
+      conta_id, categoria_id, centro_custo_id, editado_em,
+      conta:conta_id ( nome ), categoria:categoria_id ( nome ), centro:centro_custo_id ( nome ),
+      editor:editado_por ( nome )`)
     .gte('data_lancamento', de).lt('data_lancamento', ate)
     .order('data_lancamento', { ascending: false })
 
@@ -4368,12 +4372,19 @@ async function finLancamentos (alvo, editavel) {
   const des = (data || []).filter(l => l.tipo === 'SAIDA').reduce((s, l) => s + Number(l.valor), 0)
   const pend = (data || []).filter(l => l.situacao === 'PENDENTE').length
 
+  // compras aprovadas do mesmo mês, para o gasto aparecer mesmo antes de virar lançamento
+  const mesComp = de.slice(0, 7)
+  const { data: comp } = await db.from('compras_por_mes').select('*').eq('competencia', mesComp)
+  const compras = comp?.[0] ?? { quantidade: 0, valor: 0 }
+
   alvo.innerHTML = navMesHtml() + `
     <div class="kpis" style="margin-bottom:16px;">
       ${kpi('Receitas', 'R$ ' + fmtNum(rec))}
       ${kpi('Despesas', 'R$ ' + fmtNum(des))}
       ${kpi('Resultado', 'R$ ' + fmtNum(rec - des))}
       ${kpi('Pendentes', pend, 'a efetivar')}
+      ${kpi('Compras aprovadas', 'R$ ' + fmtNum(compras.valor),
+            `${compras.quantidade} no mês · fora dos lançamentos`)}
     </div>
     ${editavel ? `<div class="secao panel" style="padding:18px;">
       <h3>Novo lançamento</h3>
@@ -4409,7 +4420,12 @@ async function finLancamentos (alvo, editavel) {
           ? '<span class="badge-bom">efetivado</span>'
           : editavel ? `<button class="btn-secundario mini" data-efetivar="${l.id}">efetivar</button>` : '<span class="badge-alerta">pendente</span>'}</td>
         <td class="num ${l.tipo === 'ENTRADA' ? 'badge-bom' : ''}">${l.tipo === 'SAIDA' ? '−' : '+'} ${fmtNum(l.valor)}</td>
-        ${editavel ? `<td class="num"><button class="btn-secundario mini" data-del="${l.id}">×</button></td>` : ''}
+        ${editavel ? `<td style="text-align:right;white-space:nowrap;">
+          <button class="btn-secundario mini" data-edit-l="${l.id}">editar</button>
+          <button class="btn-secundario mini" data-del="${l.id}">excluir</button>
+          ${l.editado_em ? `<div class="texto-dim2" style="font-size:10px;margin-top:2px;">
+            editado ${fmtQuando(l.editado_em)}${l.editor?.nome ? ' · ' + esc(l.editor.nome) : ''}</div>` : ''}
+        </td>` : ''}
       </tr>`).join('') || `<tr><td colspan="${editavel ? 8 : 7}" class="vazio">Nenhum lançamento neste mês.</td></tr>`}
       </tbody></table>
     </div></div>`
@@ -4445,8 +4461,10 @@ async function finLancamentos (alvo, editavel) {
     b.onclick = async () => { await db.from('lancamento_financeiro').update({ situacao: 'EFETIVADO' }).eq('id', b.dataset.efetivar); abrirFinanceiro('lancamentos', true) }
   })
   alvo.querySelectorAll('[data-del]').forEach(b => {
-    b.onclick = async () => { if (!confirm('Excluir este lançamento?')) return
-      await db.from('lancamento_financeiro').delete().eq('id', b.dataset.del); abrirFinanceiro('lancamentos', true) }
+    b.onclick = () => telaLancamento((data || []).find(x => x.id === b.dataset.del), 'EXCLUSAO')
+  })
+  alvo.querySelectorAll('[data-edit-l]').forEach(b => {
+    b.onclick = () => telaLancamento((data || []).find(x => x.id === b.dataset.editL), 'EDICAO')
   })
 }
 
@@ -5072,6 +5090,326 @@ function telaBaixa (s, contas, categorias, centros) {
 
     fechar()
     abrirFinanceiro('pagar', true)
+  }
+}
+
+// ----- Financeiro › A pagar, separado por origem -----
+// O que vem do Compras fica em cima, com a baixa que gera lançamento.
+// Títulos do relatório contábil e lançamentos manuais ficam abaixo.
+async function finAPagar (alvo, editavel) {
+  const hoje = new Date().toISOString().slice(0, 10)
+
+  const { data, error } = await db.from('contas_a_pagar').select('*')
+    .order('vencimento', { nullsFirst: false })
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  const tudo = data || []
+  const porOrigem = o => tudo.filter(x => x.origem === o)
+  const soma = l => l.reduce((s, x) => s + Number(x.valor || 0), 0)
+  const vencidas = tudo.filter(x => x.vencimento && x.vencimento < hoje)
+
+  $('#kpis').innerHTML =
+    kpi('Total a pagar', 'R$ ' + fmtNum(soma(tudo)), `${tudo.length} conta(s)`) +
+    kpi('Vindo do Compras', 'R$ ' + fmtNum(soma(porOrigem('compra'))),
+        `${porOrigem('compra').length} compra(s) aprovada(s)`) +
+    kpi('Títulos e lançamentos', 'R$ ' + fmtNum(soma(porOrigem('título')) + soma(porOrigem('lançamento'))),
+        `${porOrigem('título').length + porOrigem('lançamento').length} conta(s)`) +
+    kpi('Vencidas', vencidas.length, vencidas.length ? 'R$ ' + fmtNum(soma(vencidas)) : 'nada em atraso')
+
+  const tabela = (lista, vazio) => `
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>Vencimento</th><th>Documento</th><th>Descrição</th><th>Setor</th><th class="num">Valor</th>
+      </tr></thead><tbody>
+        ${lista.map(x => {
+          const atrasado = x.vencimento && x.vencimento < hoje
+          return `<tr>
+            <td class="${atrasado ? 'badge-alerta' : ''}">${x.vencimento ? fmtData(x.vencimento) : '—'}
+              ${x.urgencia === 'URGENTE_4H' ? '<br><span class="urgente">urgente</span>' : ''}</td>
+            <td class="texto-dim2">${esc(x.documento ?? '—')}</td>
+            <td>${esc((x.descricao ?? '').slice(0, 60))}</td>
+            <td class="texto-dim">${esc(x.setor ?? '—')}</td>
+            <td class="num">R$ ${fmtNum(x.valor)}</td>
+          </tr>`
+        }).join('') || `<tr><td colspan="5" class="vazio">${vazio}</td></tr>`}
+      </tbody></table>
+    </div></div>`
+
+  alvo.innerHTML = `
+    <div class="cabeca-secao">
+      <h3 style="font-family:var(--serif);font-size:17px;">Do Compras</h3>
+      <span class="texto-dim2" style="font-size:12px;">
+        compras aprovadas esperando pagamento · R$ ${fmtNum(soma(porOrigem('compra')))}</span>
+    </div>
+    <p class="aviso" style="margin-top:0;">
+      A baixa destas é feita na fila abaixo, que registra comprovante e gera o lançamento.</p>
+    <div id="ap-compras"></div>
+
+    <div class="cabeca-secao" style="margin-top:26px;">
+      <h3 style="font-family:var(--serif);font-size:17px;">Títulos do relatório contábil</h3>
+      <span class="texto-dim2" style="font-size:12px;">
+        ${porOrigem('título').length} · R$ ${fmtNum(soma(porOrigem('título')))}</span>
+    </div>
+    ${tabela(porOrigem('título'), 'Nenhum título em aberto. Importe o relatório em Cadastros.')}
+
+    <div class="cabeca-secao" style="margin-top:26px;">
+      <h3 style="font-family:var(--serif);font-size:17px;">Lançamentos pendentes</h3>
+      <span class="texto-dim2" style="font-size:12px;">
+        ${porOrigem('lançamento').length} · R$ ${fmtNum(soma(porOrigem('lançamento')))}</span>
+    </div>
+    ${tabela(porOrigem('lançamento'), 'Nenhum lançamento pendente de efetivação.')}`
+
+  // a fila de compras continua sendo a tela que ja existia, com baixa e anexos
+  await comprasPagar($('#ap-compras'))
+}
+
+// ----- Financeiro › Gastos por setor -----
+async function finGastos (alvo) {
+  const hoje = new Date()
+  const inicio = new Date(hoje.getFullYear(), hoje.getMonth() - 5, 1)
+  const de = `${inicio.getFullYear()}-${String(inicio.getMonth() + 1).padStart(2, '0')}`
+
+  const { data, error } = await db.from('gasto_por_setor').select('*')
+    .gte('competencia', de).order('competencia', { ascending: false })
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  const tudo = data || []
+  const meses = [...new Set(tudo.map(x => x.competencia))].sort().reverse()
+
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>Mês</label>
+        <select id="g-mes"><option value="">últimos 6 meses</option>
+          ${meses.map(m => `<option value="${m}">${m}</option>`).join('')}
+        </select></div>
+      <div class="campo"><label>Origem</label>
+        <select id="g-origem"><option value="">tudo</option>
+          <option value="compras">compras</option>
+          <option value="lançamento">lançamentos</option>
+        </select></div>
+      <button class="btn-secundario" id="g-pdf">Gerar PDF</button>
+    </div>
+    <div id="g-resultado"></div>`
+
+  const desenhar = () => {
+    const mes = $('#g-mes').value, origem = $('#g-origem').value
+    const lista = tudo.filter(x => (!mes || x.competencia === mes) && (!origem || x.origem === origem))
+
+    const porSetor = {}
+    lista.forEach(x => {
+      porSetor[x.setor] = porSetor[x.setor] || { valor: 0, qtd: 0, meses: new Set() }
+      porSetor[x.setor].valor += Number(x.valor)
+      porSetor[x.setor].qtd += Number(x.quantidade)
+      porSetor[x.setor].meses.add(x.competencia)
+    })
+
+    const ordenado = Object.entries(porSetor).sort((a, b) => b[1].valor - a[1].valor)
+    const total = ordenado.reduce((s, [, v]) => s + v.valor, 0)
+    const maior = ordenado[0]
+
+    $('#kpis').innerHTML =
+      kpi('Gasto total', 'R$ ' + fmtNum(total), mes || `${meses.length} meses`) +
+      kpi('Setor que mais gastou', maior ? maior[0] : '—',
+          maior ? 'R$ ' + fmtNum(maior[1].valor) + ` · ${(maior[1].valor / total * 100).toFixed(0)}%` : '') +
+      kpi('Setores', ordenado.length) +
+      kpi('Média por mês', 'R$ ' + fmtNum(total / Math.max(1, mes ? 1 : meses.length)))
+
+    $('#g-resultado').innerHTML = `
+      <div class="panel" style="padding:18px;margin-bottom:14px;">
+        ${ordenado.map(([setor, v]) => `
+          <div style="display:grid;grid-template-columns:150px 1fr auto;gap:12px;
+               align-items:center;padding:7px 0;">
+            <span style="font-size:13.5px;">${esc(setor)}</span>
+            <span style="background:var(--hover-bg);border-radius:20px;height:10px;display:block;">
+              <i style="display:block;height:100%;border-radius:20px;background:var(--rust);
+                 width:${(v.valor / (maior?.[1].valor || 1) * 100).toFixed(1)}%;"></i></span>
+            <span style="font-size:12.5px;font-variant-numeric:tabular-nums;white-space:nowrap;">
+              R$ ${fmtNum(v.valor)}
+              <span class="texto-dim2">· ${(v.valor / total * 100).toFixed(1)}%
+              · média R$ ${fmtNum(v.valor / v.meses.size)}/mês</span></span>
+          </div>`).join('') || '<p class="vazio">Nada no período.</p>'}
+      </div>
+
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr>
+          <th>Mês</th><th>Setor</th><th>Origem</th><th class="num">Itens</th><th class="num">Valor</th>
+        </tr></thead><tbody>
+          ${lista.sort((a, b) => b.competencia.localeCompare(a.competencia) ||
+                                 Number(b.valor) - Number(a.valor)).map(x => `<tr>
+            <td>${esc(x.competencia)}</td>
+            <td>${esc(x.setor)}</td>
+            <td><span class="chip">${esc(x.origem)}</span></td>
+            <td class="num">${x.quantidade}</td>
+            <td class="num">R$ ${fmtNum(x.valor)}</td>
+          </tr>`).join('')}
+        </tbody></table>
+      </div></div>`
+
+    return { ordenado, total, mes, lista }
+  }
+
+  let atual = desenhar()
+  $('#g-mes').onchange = () => { atual = desenhar() }
+  $('#g-origem').onchange = () => { atual = desenhar() }
+
+  $('#g-pdf').onclick = () => {
+    const corpo = `
+      <div class="doc-linha">
+        ${docBloco('Período', docLinha('Referência', atual.mes || `últimos ${meses.length} meses`) +
+          docLinha('Emitido em', fmtQuando(new Date().toISOString())) +
+          docLinha('Emitido por', PERFIL.nome))}
+        ${docBloco('Total', docValor('Gasto no período', 'compras e lançamentos', atual.total, true))}
+      </div>
+      ${docBloco('Por setor', `
+        <table><thead><tr><th>Setor</th><th class="num">Itens</th>
+          <th class="num">Valor</th><th class="num">Participação</th></tr></thead><tbody>
+          ${atual.ordenado.map(([s, v]) => `<tr>
+            <td>${esc(s)}</td><td class="num">${v.qtd}</td>
+            <td class="num">R$ ${fmtNum(v.valor)}</td>
+            <td class="num">${(v.valor / atual.total * 100).toFixed(1)}%</td>
+          </tr>`).join('')}
+        </tbody></table>`)}
+      ${docAssinaturas([['Emitido por', PERFIL.nome], ['Financeiro', ''], ['Diretoria', '']])}`
+
+    const fundo = document.createElement('div')
+    fundo.className = 'modal-fundo'
+    fundo.innerHTML = documentoPDF({
+      titulo: 'GASTOS POR SETOR', subtitulo: atual.mes || 'últimos meses', corpo,
+      acoes: `<button class="btn" id="gp-imprimir">Gerar PDF</button>
+        <button class="btn-secundario" id="gp-fechar">Fechar</button>`
+    })
+    document.body.appendChild(fundo)
+    fundo.querySelector('#gp-fechar').onclick = () => fundo.remove()
+    fundo.querySelector('#gp-imprimir').onclick = () => window.print()
+    fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+  }
+}
+
+// ----- Editar ou excluir lançamento -----
+// Lançamento é dinheiro: toda alteração fica registrada com quem fez,
+// quando e o que mudou. Excluir pede motivo.
+function telaLancamento (l, acao) {
+  if (!l) return
+  const excluindo = acao === 'EXCLUSAO'
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal">
+      <h3>${excluindo ? 'Excluir lançamento' : 'Editar lançamento'}</h3>
+
+      ${excluindo ? `
+        <div class="ficha" style="margin-bottom:14px;">
+          <div class="item"><div class="rot">Descrição</div>
+            <div class="val">${esc(l.descricao)}</div></div>
+          <div class="item"><div class="rot">Valor</div>
+            <div class="val">${l.tipo === 'SAIDA' ? '−' : '+'} R$ ${fmtNum(l.valor)}</div></div>
+          <div class="item"><div class="rot">Data</div>
+            <div class="val">${fmtData(l.data_lancamento)}</div></div>
+        </div>
+        <p class="aviso" style="margin-top:0;">
+          O lançamento some do caixa e dos relatórios. Fica o registro de que existiu,
+          com o motivo, para a conciliação fazer sentido depois.</p>
+        <div class="campo"><label>Por que está excluindo *</label>
+          <textarea id="tl-motivo" style="min-height:80px;"
+            placeholder="lançado em duplicidade, valor errado, teste..."></textarea></div>
+      ` : `
+        <div class="form-grade">
+          <div class="campo" style="grid-column:1/-1;"><label>Descrição *</label>
+            <input id="tl-desc" value="${esc(l.descricao ?? '')}"></div>
+          <div class="campo"><label>Valor (R$) *</label>
+            <input id="tl-valor" inputmode="decimal" value="${l.valor ?? ''}"></div>
+          <div class="campo"><label>Tipo *</label>
+            <select id="tl-tipo">
+              <option value="SAIDA" ${l.tipo === 'SAIDA' ? 'selected' : ''}>saída — despesa</option>
+              <option value="ENTRADA" ${l.tipo === 'ENTRADA' ? 'selected' : ''}>entrada — receita</option>
+            </select></div>
+          <div class="campo"><label>Data</label>
+            <input type="date" id="tl-data" value="${l.data_lancamento ?? ''}"></div>
+          <div class="campo"><label>Conta</label>
+            <select id="tl-conta">${opcoesFin(FIN_CACHE.contas.filter(c => c.tipo !== 'PASSIVO'), 'selecione…', l.conta_id)}</select></div>
+          <div class="campo"><label>Categoria</label>
+            <select id="tl-cat">${opcoesFin(FIN_CACHE.categorias, 'selecione…', l.categoria_id)}</select></div>
+          <div class="campo"><label>Centro de custo</label>
+            <select id="tl-centro">${opcoesFin(FIN_CACHE.centros, 'selecione…', l.centro_custo_id)}</select></div>
+          <div class="campo"><label>Situação</label>
+            <select id="tl-sit">
+              <option value="EFETIVADO" ${l.situacao === 'EFETIVADO' ? 'selected' : ''}>efetivado</option>
+              <option value="PENDENTE" ${l.situacao === 'PENDENTE' ? 'selected' : ''}>pendente</option>
+            </select></div>
+        </div>
+        <div class="campo" style="margin-top:12px;"><label>Observação</label>
+          <input id="tl-obs" value="${esc(l.observacao ?? '')}"></div>
+        <div class="campo" style="margin-top:12px;"><label>Por que está alterando</label>
+          <input id="tl-motivo" placeholder="opcional, mas ajuda na conferência depois"></div>
+        <p class="aviso">Trocar o tipo entre saída e entrada muda o resultado do mês.
+        A categoria não muda sozinha — confira se ela combina com o novo tipo.</p>
+      `}
+
+      <div class="acoes">
+        <button class="btn" id="tl-ok" ${excluindo ? 'style="background:var(--warn-text);"' : ''}>
+          ${excluindo ? 'Excluir' : 'Salvar'}</button>
+        <button class="btn-secundario" id="tl-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="tl-recado"></div>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#tl-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const aviso = t => {
+    const el = q('#tl-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  const antes = {
+    descricao: l.descricao, valor: l.valor, tipo: l.tipo, situacao: l.situacao,
+    data_lancamento: l.data_lancamento, categoria_id: l.categoria_id,
+    conta_id: l.conta_id, centro_custo_id: l.centro_custo_id, observacao: l.observacao
+  }
+
+  q('#tl-ok').onclick = async () => {
+    const motivo = q('#tl-motivo').value.trim()
+    const btn = q('#tl-ok'); btn.disabled = true
+
+    if (excluindo) {
+      if (motivo.length < 5) { aviso('Escreva o motivo da exclusão.'); btn.disabled = false; return }
+      await db.from('lancamento_historico').insert({
+        lancamento_id: l.id, acao: 'EXCLUSAO', antes, motivo, pessoa_id: PERFIL.pessoaId
+      })
+      const { error } = await db.from('lancamento_financeiro').delete().eq('id', l.id)
+      if (error) { aviso(error.message); btn.disabled = false; return }
+      fechar(); abrirFinanceiro('lancamentos', true)
+      return
+    }
+
+    const desc = q('#tl-desc').value.trim()
+    const valor = numeroBR(q('#tl-valor').value)
+    if (!desc) { aviso('Escreva a descrição.'); btn.disabled = false; return }
+    if (valor === null || valor <= 0) { aviso('Informe um valor maior que zero.'); btn.disabled = false; return }
+
+    const depois = {
+      descricao: desc, valor, tipo: q('#tl-tipo').value, situacao: q('#tl-sit').value,
+      data_lancamento: q('#tl-data').value || l.data_lancamento,
+      categoria_id: q('#tl-cat').value || null,
+      conta_id: q('#tl-conta').value || null,
+      centro_custo_id: q('#tl-centro').value || null,
+      observacao: q('#tl-obs').value.trim() || null
+    }
+
+    const { error } = await db.from('lancamento_financeiro')
+      .update({ ...depois, editado_em: new Date().toISOString(), editado_por: PERFIL.pessoaId })
+      .eq('id', l.id)
+    if (error) { aviso(error.message); btn.disabled = false; return }
+
+    await db.from('lancamento_historico').insert({
+      lancamento_id: l.id, acao: 'EDICAO', antes, depois,
+      motivo: motivo || null, pessoa_id: PERFIL.pessoaId
+    })
+    fechar(); abrirFinanceiro('lancamentos', true)
   }
 }
 
