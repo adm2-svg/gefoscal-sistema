@@ -742,15 +742,17 @@ const ehTotal = () => PERFIL.papeis.some(p => PAPEIS_TOTAIS.includes(p))
 
 function moduloPorChave (chave) { return PERFIL.modulos.find(m => m.chave === chave) }
 
-// 'cobranca' é liberado por PAPEL, não por modulo_permissao: a tabela por trás
-// (pedido) já tinha RLS por papel de outra frente de trabalho (vendas), e
-// seguimos o mesmo mecanismo em vez de competir com um segundo sistema de
-// permissão pra mesma tabela.
+// 'cobranca' aceita DOIS caminhos: um dos papéis especiais (ADMIN/DIRETORIA/
+// COMERCIAL/COBRANCA — porque a tabela pedido já tinha RLS por papel de outra
+// frente de trabalho quando chegamos nela) OU o checkbox normal de módulo em
+// Administração (tem_modulo). O RLS no banco já aceita os dois; aqui só
+// espelhamos a mesma regra pra não esconder uma aba que o ADMIN liberou.
 const MODULOS_POR_PAPEL = { cobranca: ['ADMIN', 'DIRETORIA', 'COMERCIAL', 'COBRANCA'] }
 
 function podeVer (chave) {
   if (ehTotal()) return true
-  if (MODULOS_POR_PAPEL[chave]) return PERFIL.papeis.some(p => MODULOS_POR_PAPEL[chave].includes(p))
+  const papeisExtra = MODULOS_POR_PAPEL[chave]
+  if (papeisExtra && PERFIL.papeis.some(p => papeisExtra.includes(p))) return true
   const m = moduloPorChave(chave)
   return !!m && PERFIL.permissoes.some(p => p.modulo_id === m.id)
 }
@@ -758,7 +760,8 @@ function podeVer (chave) {
 // espelha tem_modulo(chave, true) do banco — o RLS é quem manda de verdade
 function podeEditar (chave) {
   if (ehTotal()) return true
-  if (MODULOS_POR_PAPEL[chave]) return PERFIL.papeis.some(p => MODULOS_POR_PAPEL[chave].includes(p))
+  const papeisExtra = MODULOS_POR_PAPEL[chave]
+  if (papeisExtra && PERFIL.papeis.some(p => papeisExtra.includes(p))) return true
   const m = moduloPorChave(chave)
   return !!m && PERFIL.permissoes.some(p => p.modulo_id === m.id && p.pode_editar)
 }
