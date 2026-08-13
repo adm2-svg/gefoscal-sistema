@@ -7104,48 +7104,452 @@ function pintarBanco (alvo, regioes) {
 // ---------------------------------------------------------------
 // Página: Estoque
 // ---------------------------------------------------------------
+// ---------------------------------------------------------------
+// Página: Estoque e Produção
+// Seis telas, no mesmo desenho do controle diário que a equipe já usa.
+// ---------------------------------------------------------------
+let EST_CACHE = { produtos: [], locais: [] }
+
 async function paginaEstoque () {
-  $('#subtitulo-pagina').textContent = 'Saldo e valor por produto e por local'
-  $('#cabecalho').innerHTML = `<tr>
-    <th>Produto</th><th>Local</th><th>Unidade</th>
-    <th class="num">Saldo</th><th class="num">Preço ref.</th><th class="num">Valor</th></tr>`
+  if (!podeVer('estoque')) { areaLivre().innerHTML =
+    `<div class="panel" style="padding:22px;"><p class="texto-dim">
+     Você não tem acesso ao Estoque.</p></div>`; return }
 
-  const [{ data: total }, { data: porLocal }] = await Promise.all([
-    db.from('valor_estoque').select('*').order('nome'),
-    db.from('valor_estoque_por_local').select('*').order('produto')
+  const editavel = podeEditar('estoque')
+  $('#subtitulo-pagina').textContent = 'Controle de estoque diário'
+  const area = areaLivre()
+  area.innerHTML = `<p class="texto-dim2">carregando...</p>`
+
+  const [{ data: prods }, { data: locais }] = await Promise.all([
+    db.from('produto').select('id,nome,unidade,chave,preco_ref,status').eq('status','ATIVO').order('nome'),
+    db.from('local_estoque').select('id,nome,tipo').eq('status','ATIVO').order('nome')
   ])
+  EST_CACHE = { produtos: prods || [], locais: locais || [] }
 
-  const valorTotal = (total || []).reduce((s, p) => s + Number(p.valor || 0), 0)
-  const semPreco = (total || []).filter(p => p.sem_preco && Number(p.saldo) !== 0)
+  const abas = [['atual','Estoque atual'], ['lancar','Lançar'], ['lancamentos','Lançamentos'],
+                ['mensal','Resumo mensal'], ['relatorio','Relatório'], ['produtos','Produtos']]
 
-  $('#kpis').innerHTML =
-    kpi('Valor do estoque', 'R$ ' + fmtNum(valorTotal),
-        semPreco.length ? `${semPreco.length} produto(s) sem preço` : 'saldo × preço de referência') +
-    (total || []).map(p => kpi(p.nome, fmtNum(p.saldo, 3), p.unidade)).join('')
+  area.innerHTML = `
+    <div class="subabas">
+      ${abas.map((a,i) => `<button data-sub="${a[0]}" class="${i===0?'ativo':''}">${a[1]}</button>`).join('')}
+    </div>
+    <div id="sub-estoque"></div>`
 
-  if (semPreco.length) {
-    $('#filtros').innerHTML = `<div class="badge-alerta" style="padding:8px 12px;border-radius:6px;font-size:12.5px;">
-      Sem preço de referência: ${esc(semPreco.map(p => p.nome).join(', '))}.
-      Esses produtos entram como zero no valor total.</div>`
-  }
-
-  if (!porLocal?.length) {
-    $('#corpo').innerHTML = `<tr><td colspan="6" class="vazio">
-      Nenhuma movimentação de estoque carregada ainda.</td></tr>`
-    return
-  }
-
-  $('#corpo').innerHTML = porLocal.map(s => `<tr>
-    <td>${esc(s.produto)}</td><td><span class="chip">${esc(s.local)}</span></td>
-    <td>${esc(s.unidade)}</td>
-    <td class="num">${fmtNum(s.saldo, 3)}</td>
-    <td class="num ${s.sem_preco ? 'texto-dim2' : ''}">${s.sem_preco ? '—' : fmtNum(s.preco_ref)}</td>
-    <td class="num">${s.sem_preco ? '<span class="texto-dim2">—</span>' : 'R$ ' + fmtNum(s.valor)}</td>
-  </tr>`).join('')
-
-  $('#rodape').textContent =
-    `${porLocal.length} linhas · valor total R$ ${fmtNum(valorTotal)}`
+  area.querySelectorAll('.subabas button').forEach(b => {
+    b.onclick = () => {
+      area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x===b))
+      abrirEstoque(b.dataset.sub, editavel)
+    }
+  })
+  abrirEstoque('atual', editavel)
 }
+
+function abrirEstoque (sub, editavel) {
+  const alvo = $('#sub-estoque')
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  $('#kpis').innerHTML = ''
+  if (sub === 'atual') estAtual(alvo, editavel)
+  if (sub === 'lancar') estLancar(alvo, editavel)
+  if (sub === 'lancamentos') estLancamentos(alvo, editavel)
+  if (sub === 'mensal') estMensal(alvo)
+  if (sub === 'relatorio') estRelatorio(alvo)
+  if (sub === 'produtos') estProdutos(alvo, editavel)
+}
+
+// ----- Estoque atual -----
+async function estAtual (alvo, editavel) {
+  const { data, error } = await db.from('saldo_estoque_por_local').select('*')
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  const lista = (data || []).filter(x => Number(x.saldo) !== 0 || true)
+  const bicas = lista.filter(x => /Bica 0/.test(x.produto))
+  const totalBicas = bicas.reduce((s,x) => s + Number(x.saldo||0), 0)
+
+  const card = (rot, val, un, nota, classe) => `
+    <div class="bloco ${classe ?? ''}">
+      <div class="rot">${esc(rot)}</div>
+      <div class="val">${fmtNum(val, 3)} <span style="font-size:15px;color:var(--dim2);">${esc(un)}</span></div>
+      ${nota ? `<div class="nota">${esc(nota)}</div>` : ''}
+    </div>`
+
+  alvo.innerHTML = `
+    <div class="resumo-topo">
+      ${bicas.length ? card('Gefoscal — total nas bicas', totalBicas, 't',
+        bicas.map(b => `${b.local}: ${fmtNum(b.saldo,2)}`).join(' · '), 'destaque') : ''}
+      ${lista.filter(x => !/Bica 0/.test(x.produto))
+        .map(x => card(x.produto, x.saldo, x.unidade, x.local)).join('')}
+    </div>
+
+    <div class="cabeca-secao" style="margin-top:6px;">
+      <h3 style="font-family:var(--serif);font-size:17px;">Por produto e local</h3>
+      <span class="texto-dim2" style="font-size:12px;">${lista.length} linha(s)</span>
+    </div>
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>Produto</th><th>Local</th><th>Unidade</th><th class="num">Saldo</th>
+      </tr></thead><tbody>
+        ${lista.map(x => `<tr>
+          <td>${esc(x.produto)}</td>
+          <td><span class="chip">${esc(x.local ?? '—')}</span></td>
+          <td class="texto-dim">${esc(x.unidade)}</td>
+          <td class="num">${fmtNum(x.saldo, 3)}</td>
+        </tr>`).join('') || `<tr><td colspan="4" class="vazio">Nenhum saldo registrado.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+}
+
+// ----- Lançar -----
+function estLancar (alvo, editavel) {
+  if (!editavel) { alvo.innerHTML = `<div class="panel" style="padding:22px;">
+    <p class="texto-dim">Você pode consultar, mas não lançar.</p></div>`; return }
+
+  const hoje = new Date().toISOString().slice(0,10)
+  alvo.innerHTML = `
+    <div class="panel" style="padding:20px;max-width:760px;">
+      <h3 style="font-family:var(--serif);font-size:18px;margin:0 0 14px;">Novo lançamento</h3>
+      <div class="form-grade">
+        <div class="campo" style="grid-column:1/-1;"><label>Produto *</label>
+          <select id="el-produto">${EST_CACHE.produtos.map(p =>
+            `<option value="${p.id}" data-un="${p.unidade}">${esc(p.nome)} (${p.unidade})</option>`).join('')}</select></div>
+        <div class="campo"><label>Local / setor</label>
+          <select id="el-local"><option value="">—</option>
+            ${EST_CACHE.locais.map(l => `<option value="${l.id}">${esc(l.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Tipo *</label>
+          <select id="el-tipo">
+            <option value="ENTRADA">Entrada</option>
+            <option value="SAIDA">Saída</option>
+            <option value="AJUSTE">Ajuste</option>
+          </select></div>
+        <div class="campo"><label>Quantidade *</label>
+          <input id="el-qtd" inputmode="decimal" placeholder="Ex: 1250,5"></div>
+        <div class="campo"><label>Data *</label><input type="date" id="el-data" value="${hoje}"></div>
+        <div class="campo"><label>Turno</label>
+          <select id="el-turno">
+            ${['Geral','1º turno','2º turno','3º turno'].map(t => `<option>${t}</option>`).join('')}
+          </select></div>
+        <div class="campo"><label>Horas trabalhadas</label>
+          <input id="el-horas" inputmode="decimal" placeholder="Ex: 8"></div>
+      </div>
+      <div class="campo" style="margin-top:12px;"><label>Observação</label>
+        <textarea id="el-obs" style="min-height:70px;"
+          placeholder="Ex: saída referente ao dia 10/03"></textarea></div>
+      <div class="acoes">
+        <button class="btn" id="el-salvar">Salvar lançamento</button>
+      </div>
+      <div class="recado oculto" id="el-recado"></div>
+      <p class="aviso">Ajuste com valor negativo diminui o saldo. Entrada soma, saída subtrai.</p>
+    </div>`
+
+  const aviso = (t, alerta = true) => {
+    const el = $('#el-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = alerta ? 'var(--warn-text)' : 'var(--line2)'
+    el.style.color = alerta ? 'var(--warn-text)' : 'var(--dim)'
+  }
+
+  $('#el-salvar').onclick = async () => {
+    const qtd = numeroBR($('#el-qtd').value)
+    if (qtd === null || qtd === 0) { aviso('Informe a quantidade.'); return }
+    const sel = $('#el-produto').selectedOptions[0]
+
+    const btn = $('#el-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const { error } = await db.from('movimentacao_estoque').insert({
+      produto_id: $('#el-produto').value,
+      tipo: $('#el-tipo').value,
+      quantidade: Math.abs(qtd) * ($('#el-tipo').value === 'AJUSTE' && qtd < 0 ? -1 : 1),
+      unidade: sel.dataset.un,
+      data_mov: $('#el-data').value,
+      local_id: $('#el-local').value || null,
+      local_estoque: $('#el-local').selectedOptions[0]?.textContent.trim() || null,
+      turno: $('#el-turno').value,
+      horas: numeroBR($('#el-horas').value),
+      observacoes: $('#el-obs').value.trim() || null,
+      registrado_por: PERFIL.pessoaId
+    })
+    btn.disabled = false; btn.textContent = 'Salvar lançamento'
+    if (error) { aviso(error.message); return }
+    aviso('Lançamento salvo.', false)
+    $('#el-qtd').value = ''; $('#el-horas').value = ''; $('#el-obs').value = ''
+  }
+}
+
+// ----- Lançamentos -----
+async function estLancamentos (alvo, editavel) {
+  const hoje = new Date().toISOString().slice(0,10)
+  const de = new Date(Date.now() - 30*864e5).toISOString().slice(0,10)
+
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>De</label><input type="date" id="ml-de" value="${de}"></div>
+      <div class="campo"><label>Até</label><input type="date" id="ml-ate" value="${hoje}"></div>
+      <div class="campo"><label>Produto</label>
+        <select id="ml-prod"><option value="">todos</option>
+          ${EST_CACHE.produtos.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')}
+        </select></div>
+      <div class="campo" style="flex:1;min-width:200px;"><label>Buscar</label>
+        <input id="ml-busca" placeholder="local, turno ou observação"></div>
+      <button class="btn" id="ml-buscar">Buscar</button>
+    </div>
+    <div id="ml-lista"></div>`
+
+  const buscar = async () => {
+    let q = db.from('movimentacao_estoque').select(`
+      id, tipo, quantidade, unidade, data_mov, local_estoque, turno, horas, observacoes, criado_em,
+      produto:produto_id ( nome ), quem:registrado_por ( nome )
+    `).gte('data_mov', $('#ml-de').value).lte('data_mov', $('#ml-ate').value)
+      .order('data_mov', { ascending: false }).order('criado_em', { ascending: false }).limit(500)
+
+    if ($('#ml-prod').value) q = q.eq('produto_id', $('#ml-prod').value)
+
+    const { data, error } = await q
+    if (error) { $('#ml-lista').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+    const termo = $('#ml-busca').value.trim().toLowerCase()
+    const lista = (data || []).filter(m => !termo ||
+      `${m.local_estoque ?? ''} ${m.turno ?? ''} ${m.observacoes ?? ''} ${m.quem?.nome ?? ''}`
+        .toLowerCase().includes(termo))
+
+    const cor = t => t === 'ENTRADA' ? 'badge-bom' : t === 'SAIDA' ? 'badge-alerta' : ''
+
+    $('#ml-lista').innerHTML = `
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr>
+          <th>Data</th><th>Produto</th><th>Local</th><th>Tipo</th>
+          <th class="num">Qtd</th><th>Turno</th><th>Horas</th><th>Observação</th>
+          ${editavel ? '<th></th>' : ''}
+        </tr></thead><tbody>
+          ${lista.map(m => `<tr>
+            <td>${fmtData(m.data_mov)}</td>
+            <td>${esc(m.produto?.nome ?? '—')}</td>
+            <td class="texto-dim">${esc(m.local_estoque ?? '—')}</td>
+            <td class="${cor(m.tipo)}">${esc(m.tipo.toLowerCase())}</td>
+            <td class="num">${fmtNum(m.quantidade, 3)} ${esc(m.unidade)}</td>
+            <td class="texto-dim">${esc(m.turno ?? '—')}</td>
+            <td class="num texto-dim">${m.horas ? fmtNum(m.horas, 2) : '—'}</td>
+            <td class="texto-dim2" style="font-size:12px;">${esc((m.observacoes ?? '').slice(0,60))}
+              ${m.quem?.nome ? `<br>${esc(m.quem.nome)}` : ''}</td>
+            ${editavel ? `<td><button class="btn-secundario mini" data-del-mov="${m.id}">×</button></td>` : ''}
+          </tr>`).join('') || `<tr><td colspan="${editavel?9:8}" class="vazio">
+            Nenhum lançamento no período.</td></tr>`}
+        </tbody></table>
+      </div></div>
+      <p class="texto-dim2" style="font-size:12px;margin-top:8px;">${lista.length} lançamento(s)</p>`
+
+    if (!editavel) return
+    $('#ml-lista').querySelectorAll('[data-del-mov]').forEach(b => {
+      b.onclick = async () => {
+        if (!confirm('Excluir este lançamento? O saldo é recalculado na hora.')) return
+        await db.from('movimentacao_estoque').delete().eq('id', b.dataset.delMov)
+        buscar()
+      }
+    })
+  }
+
+  $('#ml-buscar').onclick = buscar
+  $('#ml-busca').oninput = buscar
+  buscar()
+}
+
+// ----- Resumo mensal -----
+async function estMensal (alvo) {
+  const base = new Date()
+  const mes = `${base.getFullYear()}-${String(base.getMonth()+1).padStart(2,'0')}`
+
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>Mês</label><input type="month" id="mm-mes" value="${mes}"></div>
+    </div>
+    <div id="mm-res"></div>`
+
+  const carregar = async () => {
+    const m = $('#mm-mes').value
+    const [a, mm] = m.split('-').map(Number)
+    const de = `${m}-01`
+    const ate = new Date(Date.UTC(a, mm, 1)).toISOString().slice(0,10)
+
+    const { data } = await db.from('movimentacao_estoque')
+      .select('tipo,quantidade,unidade,horas,produto:produto_id(nome)')
+      .gte('data_mov', de).lt('data_mov', ate)
+
+    const porProduto = {}
+    let horas = 0
+    ;(data || []).forEach(x => {
+      const k = x.produto?.nome ?? '—'
+      porProduto[k] = porProduto[k] || { un: x.unidade, ENTRADA: 0, SAIDA: 0, AJUSTE: 0 }
+      porProduto[k][x.tipo] += Number(x.quantidade || 0)
+      horas += Number(x.horas || 0)
+    })
+
+    $('#mm-res').innerHTML = `
+      <p class="texto-dim2" style="font-size:12.5px;margin:0 0 10px;">
+        Total de horas lançadas no mês: ${fmtNum(horas, 2)}</p>
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr>
+          <th>Produto</th><th>Unidade</th><th class="num">Entradas</th>
+          <th class="num">Saídas</th><th class="num">Ajustes</th>
+        </tr></thead><tbody>
+          ${Object.entries(porProduto).sort().map(([nome,v]) => `<tr>
+            <td>${esc(nome)}</td><td class="texto-dim">${esc(v.un)}</td>
+            <td class="num">${fmtNum(v.ENTRADA, 3)}</td>
+            <td class="num">${fmtNum(v.SAIDA, 3)}</td>
+            <td class="num">${fmtNum(v.AJUSTE, 3)}</td>
+          </tr>`).join('') || `<tr><td colspan="5" class="vazio">Nada lançado neste mês.</td></tr>`}
+        </tbody></table>
+      </div></div>`
+  }
+  $('#mm-mes').onchange = carregar
+  carregar()
+}
+
+// ----- Relatório -----
+async function estRelatorio (alvo) {
+  const hoje = new Date().toISOString().slice(0,10)
+  const inicio = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0,10)
+
+  alvo.innerHTML = `
+    <div class="panel" style="padding:20px;max-width:720px;">
+      <h3 style="font-family:var(--serif);font-size:18px;margin:0 0 6px;">Gerar relatório</h3>
+      <p class="texto-dim" style="font-size:13px;margin-top:0;">
+        Escolha o período e gere um relatório pronto para imprimir ou salvar em PDF.</p>
+      <div class="form-grade">
+        <div class="campo"><label>De</label><input type="date" id="er-de" value="${inicio}"></div>
+        <div class="campo"><label>Até</label><input type="date" id="er-ate" value="${hoje}"></div>
+      </div>
+      <div class="acoes"><button class="btn" id="er-gerar">Gerar relatório</button></div>
+    </div>`
+
+  $('#er-gerar').onclick = async () => {
+    const de = $('#er-de').value, ate = $('#er-ate').value
+    const [{ data: movs }, { data: saldos }] = await Promise.all([
+      db.from('movimentacao_estoque').select('tipo,quantidade,unidade,horas,data_mov,local_estoque,produto:produto_id(nome)')
+        .gte('data_mov', de).lte('data_mov', ate).order('data_mov'),
+      db.from('saldo_estoque_por_local').select('*')
+    ])
+
+    const porProduto = {}
+    let horas = 0
+    ;(movs || []).forEach(x => {
+      const k = x.produto?.nome ?? '—'
+      porProduto[k] = porProduto[k] || { un: x.unidade, ENTRADA: 0, SAIDA: 0, AJUSTE: 0 }
+      porProduto[k][x.tipo] += Number(x.quantidade || 0)
+      horas += Number(x.horas || 0)
+    })
+
+    const corpo = `
+      <div class="doc-linha">
+        ${docBloco('Período', docLinha('De', fmtData(de)) + docLinha('Até', fmtData(ate)) +
+          docLinha('Emitido por', PERFIL.nome))}
+        ${docBloco('Movimento', docLinha('Lançamentos', String((movs||[]).length)) +
+          docLinha('Horas trabalhadas', fmtNum(horas, 2)))}
+      </div>
+
+      ${docBloco('Movimentação no período', `
+        <table><thead><tr><th>Produto</th><th>Un.</th><th class="num">Entradas</th>
+          <th class="num">Saídas</th><th class="num">Ajustes</th></tr></thead><tbody>
+          ${Object.entries(porProduto).sort().map(([n,v]) => `<tr>
+            <td>${esc(n)}</td><td>${esc(v.un)}</td>
+            <td class="num">${fmtNum(v.ENTRADA,3)}</td>
+            <td class="num">${fmtNum(v.SAIDA,3)}</td>
+            <td class="num">${fmtNum(v.AJUSTE,3)}</td>
+          </tr>`).join('')}
+        </tbody></table>`)}
+
+      ${docBloco('Saldo atual por local', `
+        <table><thead><tr><th>Produto</th><th>Local</th><th>Un.</th>
+          <th class="num">Saldo</th></tr></thead><tbody>
+          ${(saldos || []).map(s => `<tr>
+            <td>${esc(s.produto)}</td><td>${esc(s.local ?? '—')}</td>
+            <td>${esc(s.unidade)}</td><td class="num">${fmtNum(s.saldo,3)}</td>
+          </tr>`).join('')}
+        </tbody></table>`)}
+
+      ${docAssinaturas([['Emitido por', PERFIL.nome], ['Produção', ''], ['Diretoria', '']])}`
+
+    const fundo = document.createElement('div')
+    fundo.className = 'modal-fundo'
+    fundo.innerHTML = documentoPDF({
+      titulo: 'RELATÓRIO DE ESTOQUE E PRODUÇÃO',
+      subtitulo: `${fmtData(de)} a ${fmtData(ate)}`, corpo,
+      acoes: `<button class="btn" id="erp-imprimir">Gerar PDF</button>
+        <button class="btn-secundario" id="erp-fechar">Fechar</button>`
+    })
+    document.body.appendChild(fundo)
+    fundo.querySelector('#erp-fechar').onclick = () => fundo.remove()
+    fundo.querySelector('#erp-imprimir').onclick = () => window.print()
+    fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+  }
+}
+
+// ----- Produtos -----
+async function estProdutos (alvo, editavel) {
+  const { data: usados } = await db.from('movimentacao_estoque').select('produto_id')
+  const comLancamento = new Set((usados || []).map(x => x.produto_id))
+
+  alvo.innerHTML = `
+    <div class="panel" style="padding:0;margin-bottom:16px;">
+      <div style="padding:16px 18px;">
+        <h3 style="font-family:var(--serif);font-size:17px;margin:0 0 4px;">Produtos cadastrados</h3>
+        <p class="texto-dim" style="font-size:12.5px;margin:0;">
+          A unidade só muda enquanto o produto não tem lançamento — depois disso,
+          trocar bagunçaria o saldo somado.</p>
+      </div>
+      <table><thead><tr><th>Nome</th><th>Código</th><th>Unidade</th>
+        ${editavel ? '<th></th>' : ''}</tr></thead><tbody>
+        ${EST_CACHE.produtos.map(p => `<tr>
+          <td>${esc(p.nome)}</td>
+          <td class="texto-dim2">${esc(p.chave ?? '—')}</td>
+          <td>${esc(p.unidade)} ${comLancamento.has(p.id)
+            ? '<span class="texto-dim2">(fixa — já tem lançamentos)</span>' : ''}</td>
+          ${editavel ? `<td style="text-align:right;">
+            ${comLancamento.has(p.id) ? ''
+              : `<button class="btn-secundario mini" data-del-prod="${p.id}">remover</button>`}
+          </td>` : ''}
+        </tr>`).join('')}
+      </tbody></table>
+    </div>
+
+    ${editavel ? `<div class="panel" style="padding:20px;max-width:640px;">
+      <h3 style="font-family:var(--serif);font-size:17px;margin:0 0 12px;">Adicionar produto</h3>
+      <div class="form-grade">
+        <div class="campo" style="grid-column:1/-1;"><label>Nome *</label>
+          <input id="ep-nome" placeholder="Ex: Fosfato Natural 12%"></div>
+        <div class="campo"><label>Unidade *</label>
+          <select id="ep-un">${['t','kg','L','un'].map(u => `<option>${u}</option>`).join('')}</select></div>
+        <div class="campo"><label>Código</label><input id="ep-cod" placeholder="opcional"></div>
+      </div>
+      <div class="acoes"><button class="btn" id="ep-add">Adicionar produto</button></div>
+      <div class="recado oculto" id="ep-recado"></div>
+    </div>` : ''}`
+
+  if (!editavel) return
+
+  const dizer = t => {
+    const el = $('#ep-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  $('#ep-add').onclick = async () => {
+    const nome = $('#ep-nome').value.trim()
+    if (!nome) { dizer('Escreva o nome do produto.'); return }
+    const chave = (($('#ep-cod').value.trim() || nome).toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'_')).slice(0,40)
+    const { error } = await db.from('produto').insert({
+      nome, unidade: $('#ep-un').value, codigo: chave.toUpperCase().slice(0,10),
+      chave, status: 'ATIVO'
+    })
+    if (error) { dizer(error.message); return }
+    paginaEstoque()
+  }
+
+  alvo.querySelectorAll('[data-del-prod]').forEach(b => {
+    b.onclick = async () => {
+      if (!confirm('Remover este produto? Só é possível porque ele não tem lançamento.')) return
+      const { error } = await db.from('produto').delete().eq('id', b.dataset.delProd)
+      if (error) { alert(error.message); return }
+      paginaEstoque()
+    }
+  })
+}
+
 
 
 // ---------------------------------------------------------------
