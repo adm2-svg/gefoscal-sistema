@@ -3816,7 +3816,7 @@ async function paginaFinanceiro () {
     : 'Somente leitura — você pode consultar, mas não alterar'
 
   const area = areaLivre()
-  const abas = [['lancamentos', 'Lançamentos'], ['pagar', 'A pagar'],
+  const abas = [['lancamentos', 'Lançamentos'], ['pagar', 'A pagar'], ['fechamento', 'Fechamento'],
     ['orcamento', 'Orçamento'], ['contas', 'Saldo e contas'], ['planos', 'Planos e metas'],
     ['investimentos', 'Investimentos'], ['relatorios', 'Relatórios'], ['cadastros', 'Cadastros']]
   area.innerHTML = `
@@ -3847,6 +3847,7 @@ function abrirFinanceiro (sub, editavel) {
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
   if (sub === 'lancamentos') finLancamentos(alvo, editavel)
   if (sub === 'pagar') comprasPagar(alvo)
+  if (sub === 'fechamento') finFechamento(alvo, editavel)
   if (sub === 'cadastros') finCadastros(alvo, editavel)
   if (sub === 'orcamento') finOrcamento(alvo, editavel)
   if (sub === 'contas') finContas(alvo, editavel)
@@ -4465,6 +4466,8 @@ function telaBaixa (s, contas, categorias, centros) {
           <select id="b-centro"><option value="">—</option>
             ${centros.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('')}</select></div>
         <div class="campo"><label>Comprovante (link)</label><input id="b-comp" placeholder="https://..."></div>
+        ${campoArquivo('b-arq-comprovante', 'Anexar comprovante')}
+        ${campoArquivo('b-arq-boleto', 'Anexar boleto')}
       </div>
 
       <label class="linha-modulo" style="margin-top:12px;">
@@ -4527,6 +4530,32 @@ function telaBaixa (s, contas, categorias, centros) {
     }).eq('id', s.id)
 
     if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Confirmar baixa'; return }
+
+    // boleto e comprovante entram no fechamento do mes
+    const competencia = (q('#b-data').value || new Date().toISOString().slice(0, 10)).slice(0, 7)
+    try {
+      const docs = []
+      const comprovante = await enviarArquivo(q('#b-arq-comprovante').files[0], competencia)
+      if (comprovante) docs.push({
+        tipo: 'COMPROVANTE', descricao: s.produto_servico,
+        valor, pago_em: q('#b-data').value || null, competencia,
+        arquivo_caminho: comprovante.caminho, arquivo_nome: comprovante.nome,
+        solicitacao_id: s.id, lancamento_id: lancamentoId, criado_por: PERFIL.pessoaId
+      })
+      const boleto = await enviarArquivo(q('#b-arq-boleto').files[0], competencia)
+      if (boleto) docs.push({
+        tipo: 'BOLETO', descricao: s.produto_servico,
+        valor, vencimento: s.vencimento ?? null, competencia,
+        arquivo_caminho: boleto.caminho, arquivo_nome: boleto.nome,
+        solicitacao_id: s.id, lancamento_id: lancamentoId, criado_por: PERFIL.pessoaId
+      })
+      if (docs.length) await db.from('documento_pagamento').insert(docs)
+    } catch (e) {
+      // a baixa já foi dada: avisa mas não desfaz
+      aviso('Baixa registrada, mas o anexo falhou: ' + String(e.message ?? e))
+      setTimeout(() => { fechar(); abrirFinanceiro('pagar', true) }, 2500)
+      return
+    }
 
     // avisa o solicitante
     if (s.solicitante?.nome) {
@@ -4695,6 +4724,350 @@ function telaFaturar (c) {
     fechar()
     abrirCobranca('faturar')
   }
+}
+
+// ---------------------------------------------------------------
+// Boletos e comprovantes
+// Os arquivos ficam num bucket privado. O link de leitura é gerado
+// na hora e expira, então documento financeiro não fica em URL aberta.
+// ---------------------------------------------------------------
+async function enviarArquivo (arquivo, pasta) {
+  if (!arquivo) return null
+  const limpo = arquivo.name.replace(/[^\w.\-]/g, '_').slice(-80)
+  const caminho = `${pasta}/${Date.now()}_${limpo}`
+  const { error } = await db.storage.from('documentos')
+    .upload(caminho, arquivo, { upsert: false })
+  if (error) throw new Error('Não deu para enviar o arquivo: ' + error.message)
+  return { caminho, nome: arquivo.name }
+}
+
+async function abrirArquivo (caminho) {
+  if (!caminho) return
+  const { data, error } = await db.storage.from('documentos')
+    .createSignedUrl(caminho, 300)          // vale 5 minutos
+  if (error) { alert('Não deu para abrir: ' + error.message); return }
+  window.open(data.signedUrl, '_blank', 'noopener')
+}
+
+// campo de arquivo reaproveitado nas telas
+const campoArquivo = (id, rotulo) => `
+  <div class="campo"><label>${esc(rotulo)}</label>
+    <input type="file" id="${id}" accept=".pdf,.jpg,.jpeg,.png,.xml,.xlsx">
+    <span class="texto-dim2" style="font-size:11px;">PDF, imagem ou XML, até 10 MB</span>
+  </div>`
+
+// ---------------------------------------------------------------
+// Financeiro › Fechamento do mês
+// Junta boleto com comprovante e monta o pacote da contabilidade.
+// ---------------------------------------------------------------
+async function finFechamento (alvo, editavel) {
+  // FIN_MES é um Date; a competência é o texto AAAA-MM
+  const base = FIN_MES instanceof Date ? FIN_MES : new Date()
+  const mes = `${base.getFullYear()}-${String(base.getMonth() + 1).padStart(2, '0')}`
+
+  const [{ data: docs }, { data: resumo }] = await Promise.all([
+    db.from('documento_pagamento').select(`
+      id, tipo, descricao, valor, vencimento, pago_em, competencia,
+      arquivo_caminho, arquivo_nome, enviado_contabilidade_em,
+      lancamento:lancamento_id ( descricao, valor ),
+      solicitacao:solicitacao_id ( numero, produto_servico )
+    `).eq('competencia', mes).order('vencimento', { nullsFirst: false }),
+    db.from('fechamento_mensal').select('*').order('competencia', { ascending: false }).limit(12)
+  ])
+
+  const lista = docs || []
+  const boletos = lista.filter(d => d.tipo === 'BOLETO')
+  const comprovantes = lista.filter(d => d.tipo === 'COMPROVANTE')
+
+  // casa boleto com comprovante pelo lançamento ou pela solicitação
+  const chave = d => d.lancamento?.descricao ?? d.solicitacao?.numero ?? ('avulso:' + d.id)
+  const porChave = {}
+  lista.forEach(d => {
+    const k = chave(d)
+    porChave[k] = porChave[k] || { boleto: null, comprovante: null, itens: [] }
+    if (d.tipo === 'BOLETO') porChave[k].boleto = d
+    if (d.tipo === 'COMPROVANTE') porChave[k].comprovante = d
+    porChave[k].itens.push(d)
+  })
+
+  const pares = Object.entries(porChave)
+  const completos = pares.filter(([, v]) => v.boleto && v.comprovante)
+  const soBoleto = pares.filter(([, v]) => v.boleto && !v.comprovante)
+  const soComprovante = pares.filter(([, v]) => !v.boleto && v.comprovante)
+
+  const totalPago = comprovantes.reduce((s, d) => s + Number(d.valor || 0), 0)
+
+  $('#kpis').innerHTML =
+    kpi('Documentos no mês', lista.length, `${boletos.length} boleto(s), ${comprovantes.length} comprovante(s)`) +
+    kpi('Total comprovado', 'R$ ' + fmtNum(totalPago)) +
+    kpi('Pares completos', completos.length, 'boleto com comprovante') +
+    kpi('Faltando par', soBoleto.length + soComprovante.length,
+        soBoleto.length ? `${soBoleto.length} sem comprovante` : 'tudo pareado')
+
+  const linha = d => `
+    <tr>
+      <td>${esc({ BOLETO: 'boleto', COMPROVANTE: 'comprovante', NOTA: 'nota', OUTRO: 'outro' }[d.tipo])}</td>
+      <td>${esc(d.descricao || d.lancamento?.descricao || d.solicitacao?.produto_servico || '—')}</td>
+      <td>${d.vencimento ? fmtData(d.vencimento) : d.pago_em ? fmtData(d.pago_em) : '—'}</td>
+      <td class="num">${d.valor ? 'R$ ' + fmtNum(d.valor) : '—'}</td>
+      <td style="text-align:right;white-space:nowrap;">
+        ${d.arquivo_caminho
+          ? `<button class="btn-secundario mini" data-ver="${esc(d.arquivo_caminho)}">abrir</button>` : ''}
+        ${editavel ? `<button class="btn-secundario mini" data-del-doc="${d.id}">×</button>` : ''}
+      </td>
+    </tr>`
+
+  alvo.innerHTML = `
+    ${navMesHtml()}
+
+    ${(soBoleto.length || soComprovante.length) ? `
+    <div class="panel" style="padding:16px 18px;margin-bottom:14px;border-color:var(--warn-text);">
+      <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;">
+        Falta parear antes de fechar o mês</div>
+      ${soBoleto.map(([k, v]) => `<div class="passo">
+        <span class="quando">sem comprovante</span>
+        <span>${esc(v.boleto.descricao || k)}${v.boleto.valor ? ' — R$ ' + fmtNum(v.boleto.valor) : ''}</span>
+      </div>`).join('')}
+      ${soComprovante.map(([k, v]) => `<div class="passo">
+        <span class="quando">sem boleto</span>
+        <span>${esc(v.comprovante.descricao || k)}${v.comprovante.valor ? ' — R$ ' + fmtNum(v.comprovante.valor) : ''}</span>
+      </div>`).join('')}
+    </div>` : ''}
+
+    ${editavel ? `<div class="acoes" style="margin:0 0 14px;">
+      <button class="btn" id="fe-novo">Adicionar documento</button>
+      <button class="btn-secundario" id="fe-pacote">Gerar pacote da contabilidade</button>
+      <button class="btn-secundario" id="fe-capa">Capa para conferência</button>
+    </div>
+    <div class="recado oculto" id="fe-recado"></div>` : ''}
+
+    <div class="panel" style="padding:0;margin-top:14px;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>Tipo</th><th>Referente a</th><th>Data</th><th class="num">Valor</th><th></th>
+      </tr></thead><tbody>
+        ${lista.map(linha).join('') || `<tr><td colspan="5" class="vazio">
+          Nenhum documento neste mês. Os boletos e comprovantes anexados na baixa
+          aparecem aqui automaticamente.</td></tr>`}
+      </tbody></table>
+    </div></div>
+
+    ${(resumo || []).length ? `
+    <div class="cabeca-secao" style="margin-top:22px;">
+      <h3 style="font-family:var(--serif);font-size:17px;">Meses anteriores</h3></div>
+    <div class="panel" style="padding:0;"><table><tbody>
+      ${(resumo || []).map(r => `<tr>
+        <td>${esc(r.competencia)}</td>
+        <td class="texto-dim">${r.boletos} boleto(s) · ${r.comprovantes} comprovante(s)</td>
+        <td class="num">R$ ${fmtNum(r.valor_pago)}</td>
+        <td>${r.ja_enviados === r.total && r.total > 0
+          ? '<span class="status aprovada">enviado</span>'
+          : `<span class="texto-dim2">${r.ja_enviados}/${r.total} enviados</span>`}</td>
+      </tr>`).join('')}
+    </tbody></table></div>` : ''}`
+
+  ligarNavMes('fechamento', editavel)
+
+  alvo.querySelectorAll('[data-ver]').forEach(b => {
+    b.onclick = () => abrirArquivo(b.dataset.ver)
+  })
+
+  if (!editavel) return
+
+  const aviso = (t, alerta = false) => {
+    const el = $('#fe-recado'); el.innerHTML = t; el.classList.remove('oculto')
+    el.style.borderColor = alerta ? 'var(--warn-text)' : 'var(--line2)'
+    el.style.color = alerta ? 'var(--warn-text)' : 'var(--dim)'
+  }
+
+  alvo.querySelectorAll('[data-del-doc]').forEach(b => {
+    b.onclick = async () => {
+      if (!confirm('Remover este documento do fechamento?')) return
+      const d = lista.find(x => x.id === b.dataset.delDoc)
+      if (d?.arquivo_caminho) await db.storage.from('documentos').remove([d.arquivo_caminho])
+      await db.from('documento_pagamento').delete().eq('id', b.dataset.delDoc)
+      abrirFinanceiro('fechamento', true)
+    }
+  })
+
+  $('#fe-novo').onclick = () => formDocumento(mes)
+  $('#fe-capa').onclick = () => capaFechamento(mes, lista, completos, soBoleto, soComprovante)
+
+  $('#fe-pacote').onclick = async () => {
+    const comArquivo = lista.filter(d => d.arquivo_caminho)
+    if (!comArquivo.length) { aviso('Nenhum documento com arquivo anexado neste mês.', true); return }
+
+    const btn = $('#fe-pacote'); btn.disabled = true
+    aviso(`Montando o pacote com ${comArquivo.length} arquivo(s)...`)
+
+    try {
+      const { default: JSZip } = await import('https://esm.sh/jszip@3.10.1')
+      const zip = new JSZip()
+      const pastas = { BOLETO: 'boletos', COMPROVANTE: 'comprovantes', NOTA: 'notas', OUTRO: 'outros' }
+
+      for (let i = 0; i < comArquivo.length; i++) {
+        const d = comArquivo[i]
+        btn.textContent = `baixando ${i + 1} de ${comArquivo.length}...`
+        const { data, error } = await db.storage.from('documentos').download(d.arquivo_caminho)
+        if (error) continue
+        const nome = (d.arquivo_nome || d.arquivo_caminho.split('/').pop())
+        zip.folder(pastas[d.tipo] ?? 'outros').file(nome, data)
+      }
+
+      // índice do pacote, para a contabilidade conferir
+      zip.file('indice.txt',
+        `GRUPO GEFOSCAL — documentos de ${mes}\n` +
+        `Gerado em ${new Date().toLocaleString('pt-BR')} por ${PERFIL.nome}\n\n` +
+        comArquivo.map(d =>
+          `[${d.tipo}] ${d.descricao || d.lancamento?.descricao || '—'} · ` +
+          `${d.valor ? 'R$ ' + fmtNum(d.valor) : 'sem valor'} · ` +
+          `${d.vencimento ? 'venc ' + fmtData(d.vencimento) : ''}` +
+          `${d.pago_em ? ' pago ' + fmtData(d.pago_em) : ''}`
+        ).join('\n') +
+        `\n\nTotal comprovado: R$ ${fmtNum(totalPago)}\n`)
+
+      btn.textContent = 'compactando...'
+      const blob = await zip.generateAsync({ type: 'blob' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = `gefoscal_${mes}_contabilidade.zip`
+      a.click(); URL.revokeObjectURL(url)
+
+      await db.from('documento_pagamento')
+        .update({ enviado_contabilidade_em: new Date().toISOString() })
+        .eq('competencia', mes).is('enviado_contabilidade_em', null)
+
+      aviso(`Pacote com ${comArquivo.length} arquivo(s) baixado. Os documentos foram marcados como enviados.`)
+    } catch (e) {
+      aviso('Não deu para montar o pacote: ' + esc(String(e.message ?? e)), true)
+    }
+    btn.disabled = false; btn.textContent = 'Gerar pacote da contabilidade'
+  }
+}
+
+// ----- Documento avulso -----
+function formDocumento (mes, vinculo = {}) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal">
+      <h3>Adicionar documento</h3>
+      <div class="form-grade">
+        <div class="campo"><label>Tipo *</label>
+          <select id="dc-tipo">
+            <option value="BOLETO">boleto</option>
+            <option value="COMPROVANTE">comprovante</option>
+            <option value="NOTA">nota fiscal</option>
+            <option value="OUTRO">outro</option>
+          </select></div>
+        <div class="campo"><label>Valor (R$)</label><input id="dc-valor" inputmode="decimal"></div>
+        <div class="campo"><label>Vencimento</label><input type="date" id="dc-venc"></div>
+        <div class="campo"><label>Pago em</label><input type="date" id="dc-pago"></div>
+        <div class="campo" style="grid-column:1/-1;"><label>Descrição *</label>
+          <input id="dc-desc" placeholder="a que se refere este documento"></div>
+        ${campoArquivo('dc-arquivo', 'Arquivo')}
+      </div>
+      <div class="acoes">
+        <button class="btn" id="dc-salvar">Salvar</button>
+        <button class="btn-secundario" id="dc-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="dc-recado"></div>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#dc-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const aviso = t => {
+    const el = q('#dc-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  q('#dc-salvar').onclick = async () => {
+    const desc = q('#dc-desc').value.trim()
+    if (!desc) { aviso('Escreva a descrição.'); return }
+
+    const btn = q('#dc-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    try {
+      const arq = await enviarArquivo(q('#dc-arquivo').files[0], mes)
+      const { error } = await db.from('documento_pagamento').insert({
+        tipo: q('#dc-tipo').value,
+        descricao: desc,
+        valor: numeroBR(q('#dc-valor').value),
+        vencimento: q('#dc-venc').value || null,
+        pago_em: q('#dc-pago').value || null,
+        competencia: mes,
+        arquivo_caminho: arq?.caminho ?? null,
+        arquivo_nome: arq?.nome ?? null,
+        criado_por: PERFIL.pessoaId,
+        ...vinculo
+      })
+      if (error) throw new Error(error.message)
+      fechar(); abrirFinanceiro('fechamento', true)
+    } catch (e) {
+      aviso(String(e.message ?? e))
+      btn.disabled = false; btn.textContent = 'Salvar'
+    }
+  }
+}
+
+// ----- Capa imprimível do fechamento -----
+function capaFechamento (mes, lista, completos, soBoleto, soComprovante) {
+  const soma = t => lista.filter(d => d.tipo === t)
+    .reduce((s, d) => s + Number(d.valor || 0), 0)
+
+  const corpo = `
+    <div class="doc-linha">
+      ${docBloco('Competência',
+        docLinha('Mês', mes) +
+        docLinha('Gerado em', fmtQuando(new Date().toISOString())) +
+        docLinha('Responsável', PERFIL.nome))}
+      ${docBloco('Documentos',
+        docLinha('Boletos', String(lista.filter(d => d.tipo === 'BOLETO').length)) +
+        docLinha('Comprovantes', String(lista.filter(d => d.tipo === 'COMPROVANTE').length)) +
+        docLinha('Notas fiscais', String(lista.filter(d => d.tipo === 'NOTA').length)))}
+      ${docBloco('Conferência',
+        docLinha('Pares completos', String(completos.length)) +
+        docLinha('Sem comprovante', String(soBoleto.length)) +
+        docLinha('Sem boleto', String(soComprovante.length)))}
+    </div>
+
+    ${docBloco('Relação de documentos', `
+      <table><thead><tr>
+        <th>Tipo</th><th>Referente a</th><th>Vencimento</th><th>Pago em</th><th class="num">Valor</th>
+      </tr></thead><tbody>
+        ${lista.map(d => `<tr>
+          <td>${esc(d.tipo.toLowerCase())}</td>
+          <td>${esc(d.descricao || d.lancamento?.descricao || '—')}</td>
+          <td>${d.vencimento ? fmtData(d.vencimento) : '—'}</td>
+          <td>${d.pago_em ? fmtData(d.pago_em) : '—'}</td>
+          <td class="num">${d.valor ? 'R$ ' + fmtNum(d.valor) : '—'}</td>
+        </tr>`).join('')}
+      </tbody></table>
+      ${docValor('Total comprovado', 'soma dos comprovantes do mês', soma('COMPROVANTE'), true)}`)}
+
+    ${(soBoleto.length || soComprovante.length)
+      ? docTexto('Pendências',
+          [...soBoleto.map(([k, v]) => 'sem comprovante: ' + (v.boleto.descricao || k)),
+           ...soComprovante.map(([k, v]) => 'sem boleto: ' + (v.comprovante.descricao || k))].join('\n'))
+      : ''}
+
+    ${docAssinaturas([['Conferido por', PERFIL.nome], ['Financeiro', ''], ['Contabilidade', '']])}`
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = documentoPDF({
+    titulo: 'FECHAMENTO MENSAL',
+    subtitulo: 'documentos para a contabilidade · ' + mes,
+    corpo,
+    acoes: `<button class="btn" id="cf-imprimir">Gerar PDF</button>
+      <button class="btn-secundario" id="cf-fechar">Fechar</button>`
+  })
+  document.body.appendChild(fundo)
+  fundo.querySelector('#cf-fechar').onclick = () => fundo.remove()
+  fundo.querySelector('#cf-imprimir').onclick = () => window.print()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
 }
 
 // ----- Financeiro › Categorias, centros e preços -----
