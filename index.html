@@ -788,6 +788,7 @@ async function paginaVisaoGeral () {
   }
 
   // painel do financeiro, para quem trabalha nele
+  await minhasCompras(area)
   await areaDeTrabalho(area)
 
   if (podeVer('financeiro')) await painelFinanceiro(area)
@@ -1467,6 +1468,68 @@ function barrasMes (serie) {
     </div>`).join('')
 }
 
+// ----- Minhas solicitações de compra, no painel pessoal -----
+// Cada um acompanha o que pediu, e vê o motivo de cada decisão.
+async function minhasCompras (area) {
+  if (!PERFIL.pessoaId || !podeVer('compras')) return
+
+  const { data } = await db.from('solicitacao_compra')
+    .select(`id,numero,produto_servico,status,data_solicitacao,valor_estimado,valor_aprovado,
+             parecer_aprovacao,parecer_coordenacao,parecer_cotacao,motivo_cancelamento,decidido_em,
+             setor:setor_id(nome)`)
+    .eq('solicitante_id', PERFIL.pessoaId)
+    .order('data_solicitacao', { ascending: false }).limit(40)
+
+  if (!data?.length) return
+
+  const andando = data.filter(s => !ENCERRADOS.includes(s.status))
+  const decididas = data.filter(s => ENCERRADOS.includes(s.status))
+  const recentes = decididas.filter(s =>
+    new Date(s.decidido_em ?? s.data_solicitacao) > new Date(Date.now() - 30 * 864e5))
+
+  const motivo = s =>
+    ['REPROVADA', 'CANCELADA'].includes(s.status)
+      ? (s.motivo_cancelamento || s.parecer_aprovacao || 'sem motivo registrado')
+      : (s.parecer_aprovacao || s.parecer_cotacao || s.parecer_coordenacao || '')
+
+  const linha = s => `
+    <div class="passo">
+      <span class="quando">${fmtQuando(s.decidido_em ?? s.data_solicitacao) ?? '—'}</span>
+      <span>
+        <b>${esc(s.produto_servico ?? '')}</b> ${selo(s.status)}
+        <br><span class="texto-dim2" style="font-size:11.5px;">
+          ${esc(s.numero ?? '')}
+          ${s.valor_aprovado ? '· aprovado R$ ' + fmtNum(s.valor_aprovado)
+            : s.valor_estimado ? '· estimado R$ ' + fmtNum(s.valor_estimado) : ''}
+        </span>
+        ${motivo(s) ? `<br><span style="font-size:12.5px;">${esc(motivo(s))}</span>` : ''}
+      </span>
+    </div>`
+
+  const bloco = document.createElement('div')
+  bloco.className = 'panel'
+  bloco.style.cssText = 'padding:18px;margin-bottom:18px;'
+  bloco.innerHTML = `
+    <div class="cabeca-secao">
+      <h3 style="font-family:var(--serif);font-size:17px;">Minhas compras</h3>
+      <span class="texto-dim2" style="font-size:12px;">
+        ${andando.length ? `${andando.length} em andamento` : 'nada em andamento'}</span>
+    </div>
+    ${andando.length ? andando.map(linha).join('')
+      : '<p class="texto-dim2" style="font-size:13px;">Nenhuma solicitação sua em andamento.</p>'}
+    ${recentes.length ? `
+      <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;
+           letter-spacing:.4px;margin-top:14px;">Decididas nos últimos 30 dias</div>
+      ${recentes.map(linha).join('')}` : ''}
+    ${decididas.length > recentes.length ? `
+      <details class="gaveta" style="margin-top:12px;">
+        <summary>Todas as anteriores<span class="conta">${decididas.length - recentes.length}</span></summary>
+        <div class="corpo">${decididas.filter(s => !recentes.includes(s)).map(linha).join('')}</div>
+      </details>` : ''}`
+
+  area.appendChild(bloco)
+}
+
 // ---------------------------------------------------------------
 // Painel do financeiro — o que precisa de ação hoje
 // ---------------------------------------------------------------
@@ -1674,6 +1737,19 @@ const podePagar     = () => podeEditar('financeiro') || ehAdminSistema()
 // coordenação depende do setor: só aparece para quem gerencia algum
 const podeCoordenar = () => COMPRAS_CACHE.meusSetores.length > 0 || ehAdminSistema()
 
+// Quem pode mexer numa solicitação específica. O banco aplica a mesma
+// regra na RLS — aqui é só para não mostrar botão que vai falhar.
+const ENCERRADOS = ['APROVADA', 'REPROVADA', 'PAGA', 'RECEBIDA', 'CANCELADA']
+function podeEditarSolicitacao (s) {
+  if (ehAdminSistema()) return true
+  if (!s || ENCERRADOS.includes(s.status)) return false
+  if (s.solicitante_id && s.solicitante_id === PERFIL.pessoaId) return true
+  if (COMPRAS_CACHE.meusSetores.some(x => x.id === s.setor_id)) return true
+  if (s.status === 'AGUARDANDO_COTACAO' && podeCotar()) return true
+  if (s.status === 'AGUARDANDO_APROVACAO' && podeAprovar()) return true
+  return false
+}
+
 let COMPRAS_CACHE = { fornecedores: [], setores: [], pessoas: [], meusSetores: [] }
 
 async function paginaCompras () {
@@ -1704,7 +1780,8 @@ async function paginaCompras () {
     { chave: 'coordenar',    nome: 'Coordenação',  mostrar: podeCoordenar() },
     { chave: 'cotar',        nome: 'Cotação',      mostrar: podeCotar() },
     { chave: 'aprovar',      nome: 'Aprovação',    mostrar: podeAprovar() },
-    { chave: 'fornecedores', nome: 'Fornecedores', mostrar: true }
+    { chave: 'fornecedores', nome: 'Fornecedores', mostrar: true },
+    { chave: 'relatorio',    nome: 'Relatório',    mostrar: true }
   ].filter(a => a.mostrar)
 
   area.innerHTML = `
@@ -1731,13 +1808,14 @@ function abrirCompras (sub, editavel) {
   if (sub === 'cotar') comprasCotar(alvo)
   if (sub === 'aprovar') comprasDecidir(alvo, 'aprovacao')
   if (sub === 'fornecedores') comprasFornecedores(alvo, editavel)
+  if (sub === 'relatorio') comprasRelatorio(alvo)
 }
 
 const selSolicitacao = `
   id, status, urgencia, tipo_solicitacao, justificativa, tem_risco, descricao_risco,
   produto_servico, quantidade, unidade, especificacoes, finalidade, local_entrega,
   valor_estimado, recorrencia, data_solicitacao, setor_id,
-  numero, valor_aprovado, onde_mais_barato, observacao_compras,
+  numero, valor_aprovado, onde_mais_barato, observacao_compras, solicitante_id,
   parecer_coordenacao, coordenado_em, parecer_aprovacao, decidido_em,
   parecer_cotacao, cotado_em, forma_pagamento, condicao_pagamento,
   parcelas, vencimento, dados_pagamento, orcamento_escolhido_id,
@@ -1771,7 +1849,6 @@ async function comprasSolicitacoes (alvo, editavel) {
   alvo.innerHTML = `
     ${editavel ? `<div class="acoes" style="margin:0 0 16px;">
       <button class="btn" id="c-nova">Nova solicitação</button>
-      <button class="btn-secundario" id="c-importar">Importar da planilha</button>
     </div>` : ''}
 
     <div class="faixa-etapa" id="c-faixa">
@@ -1818,6 +1895,8 @@ async function comprasSolicitacoes (alvo, editavel) {
         ${selo(s.status)}
         <div class="botoes">
           <button class="btn-secundario mini" data-ficha="${s.id}">ficha</button>
+          ${podeEditarSolicitacao(s)
+            ? `<button class="btn-secundario mini" data-editar="${s.id}">editar</button>` : ''}
         </div>
       </div>
       <div class="meta">
@@ -1858,6 +1937,9 @@ async function comprasSolicitacoes (alvo, editavel) {
       || '<p class="texto-dim2" style="font-size:13px;">Nada aqui com esse filtro.</p>'
 
     ligarFichas(alvo)
+    alvo.querySelectorAll('[data-editar]').forEach(b => {
+      b.onclick = () => formSolicitacao(todas.find(x => x.id === b.dataset.editar))
+    })
   }
 
   $('#c-faixa').querySelectorAll('[data-etapa]').forEach(b => {
@@ -1873,7 +1955,182 @@ async function comprasSolicitacoes (alvo, editavel) {
 
   if (!editavel) return
   $('#c-nova').onclick = () => formSolicitacao()
-  $('#c-importar').onclick = () => telaImportarCompras()
+}
+
+// ----- Compras › Relatório -----
+// Busca em tudo, inclusive no que já foi encerrado, e fecha o mês.
+async function comprasRelatorio (alvo) {
+  const hoje = new Date()
+  const mesPadrao = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}`
+
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>De</label><input type="month" id="r-de" value="${mesPadrao}"></div>
+      <div class="campo"><label>Até</label><input type="month" id="r-ate" value="${mesPadrao}"></div>
+      <div class="campo"><label>Situação</label>
+        <select id="r-status"><option value="">todas</option>
+          ${Object.entries(STATUS_COMPRA).map(([k, v]) =>
+            `<option value="${k}">${esc(v.rotulo)}</option>`).join('')}
+        </select></div>
+      <div class="campo"><label>Setor</label>
+        <select id="r-setor"><option value="">todos</option>
+          ${COMPRAS_CACHE.setores.map(s => `<option value="${s.id}">${esc(s.nome)}</option>`).join('')}
+        </select></div>
+      <div class="campo" style="flex:1;min-width:200px;">
+        <label>Buscar</label>
+        <input id="r-busca" placeholder="produto, número, solicitante ou fornecedor"></div>
+      <button class="btn" id="r-buscar">Buscar</button>
+    </div>
+    <div id="r-resultado"><p class="texto-dim2" style="font-size:13px;">
+      Escolha o período e clique em Buscar. A busca por texto ignora o período,
+      para você achar um pedido antigo sem saber a data.</p></div>`
+
+  const buscar = async () => {
+    const texto = $('#r-busca').value.trim()
+    const de = $('#r-de').value, ate = $('#r-ate').value
+
+    let q = db.from('solicitacao_compra').select(selSolicitacao).limit(1000)
+
+    // com texto, procura em tudo. sem texto, respeita o período.
+    if (texto) {
+      q = q.or([
+        `produto_servico.ilike.%${texto}%`,
+        `numero.ilike.%${texto}%`,
+        `origem_id.ilike.%${texto}%`,
+        `solicitante_nome.ilike.%${texto}%`,
+        `finalidade.ilike.%${texto}%`
+      ].join(','))
+    } else {
+      if (de) q = q.gte('data_solicitacao', de + '-01')
+      if (ate) {
+        const [a, m] = ate.split('-').map(Number)
+        q = q.lt('data_solicitacao', new Date(Date.UTC(a, m, 1)).toISOString())
+      }
+    }
+    if ($('#r-status').value) q = q.eq('status', $('#r-status').value)
+    if ($('#r-setor').value) q = q.eq('setor_id', $('#r-setor').value)
+
+    $('#r-resultado').innerHTML = `<p class="texto-dim2">buscando...</p>`
+    const { data, error } = await q.order('data_solicitacao', { ascending: false })
+    if (error) { $('#r-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+    const lista = data || []
+    const valor = s => Number(s.valor_pago ?? s.valor_aprovado ?? s.valor_estimado ?? 0)
+    const total = lista.reduce((t, s) => t + valor(s), 0)
+    const pagas = lista.filter(s => s.status === 'PAGA')
+    const aPagar = lista.filter(s => s.status === 'APROVADA')
+
+    // agrupa por setor, que é o corte mais útil no fim do mês
+    const porSetor = {}
+    lista.forEach(s => {
+      const k = s.setor?.nome ?? 'sem setor'
+      porSetor[k] = porSetor[k] || { n: 0, v: 0 }
+      porSetor[k].n++; porSetor[k].v += valor(s)
+    })
+
+    $('#r-resultado').innerHTML = `
+      <div class="kpis" style="margin-bottom:14px;">
+        ${kpi('Solicitações', lista.length, texto ? 'busca em todo o histórico' : `${de} a ${ate}`)}
+        ${kpi('Valor total', 'R$ ' + fmtNum(total))}
+        ${kpi('Já pagas', pagas.length, 'R$ ' + fmtNum(pagas.reduce((t, s) => t + valor(s), 0)))}
+        ${kpi('A pagar', aPagar.length, 'R$ ' + fmtNum(aPagar.reduce((t, s) => t + valor(s), 0)))}
+      </div>
+
+      ${Object.keys(porSetor).length > 1 ? `
+      <div class="panel" style="padding:16px 18px;margin-bottom:14px;">
+        <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;">
+          Por setor</div>
+        ${Object.entries(porSetor).sort((a, b) => b[1].v - a[1].v).map(([k, v]) => `
+          <div class="passo">
+            <span class="quando">R$ ${fmtNum(v.v)}</span>
+            <span>${esc(k)} <span class="texto-dim2">· ${v.n} solicitação(ões)</span></span>
+          </div>`).join('')}
+      </div>` : ''}
+
+      <div class="acoes" style="margin:0 0 12px;">
+        <button class="btn-secundario" id="r-pdf">Gerar relatório em PDF</button>
+        <span class="texto-dim2" style="font-size:12px;">${lista.length} resultado(s)</span>
+      </div>
+
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr>
+          <th>Número</th><th>Data</th><th>Item</th><th>Setor</th>
+          <th>Solicitante</th><th class="num">Valor</th><th>Situação</th><th></th>
+        </tr></thead><tbody>
+          ${lista.map(s => `<tr>
+            <td class="texto-dim2">${esc(s.numero ?? s.origem_id ?? '—')}</td>
+            <td>${fmtQuando(s.data_solicitacao) ?? '—'}</td>
+            <td>${esc((s.produto_servico ?? '').slice(0, 60))}</td>
+            <td>${esc(s.setor?.nome ?? '—')}</td>
+            <td class="texto-dim">${esc(s.solicitante?.nome ?? s.solicitante_nome ?? '—')}</td>
+            <td class="num">R$ ${fmtNum(valor(s))}</td>
+            <td>${selo(s.status)}</td>
+            <td><button class="btn-secundario mini" data-ficha="${s.id}">ver</button></td>
+          </tr>`).join('') || `<tr><td colspan="8" class="vazio">Nada encontrado.</td></tr>`}
+        </tbody></table>
+      </div></div>`
+
+    $('#r-resultado').querySelectorAll('[data-ficha]').forEach(b => {
+      b.onclick = () => { abrirFicha(lista.find(x => x.id === b.dataset.ficha), false)
+        .catch(e => console.error(e)) }
+    })
+    $('#r-pdf').onclick = () => pdfRelatorioCompras(lista, texto ? 'busca: ' + texto : `${de} a ${ate}`,
+      { total, porSetor, pagas: pagas.length, aPagar: aPagar.length })
+  }
+
+  $('#r-buscar').onclick = buscar
+  $('#r-busca').onkeydown = e => { if (e.key === 'Enter') buscar() }
+  buscar()
+}
+
+function pdfRelatorioCompras (lista, periodo, resumo) {
+  const valor = s => Number(s.valor_pago ?? s.valor_aprovado ?? s.valor_estimado ?? 0)
+  const corpo = `
+    <div class="doc-linha">
+      ${docBloco('Período', docLinha('Referência', periodo) +
+        docLinha('Emitido em', fmtQuando(new Date().toISOString())) +
+        docLinha('Emitido por', PERFIL.nome))}
+      ${docBloco('Totais', docLinha('Solicitações', String(lista.length)) +
+        docLinha('Já pagas', String(resumo.pagas)) +
+        docLinha('A pagar', String(resumo.aPagar)))}
+      ${docBloco('Valor', docValor('Total do período', 'todas as situações', resumo.total, true))}
+    </div>
+
+    ${docBloco('Por setor', `
+      <table><thead><tr><th>Setor</th><th class="num">Solicitações</th><th class="num">Valor</th>
+      </tr></thead><tbody>
+        ${Object.entries(resumo.porSetor).sort((a, b) => b[1].v - a[1].v).map(([k, v]) => `<tr>
+          <td>${esc(k)}</td><td class="num">${v.n}</td><td class="num">R$ ${fmtNum(v.v)}</td>
+        </tr>`).join('')}
+      </tbody></table>`)}
+
+    ${docBloco('Detalhamento', `
+      <table><thead><tr>
+        <th>Número</th><th>Data</th><th>Item</th><th>Setor</th><th class="num">Valor</th><th>Situação</th>
+      </tr></thead><tbody>
+        ${lista.map(s => `<tr>
+          <td>${esc(s.numero ?? s.origem_id ?? '—')}</td>
+          <td>${fmtQuando(s.data_solicitacao) ?? '—'}</td>
+          <td>${esc((s.produto_servico ?? '').slice(0, 45))}</td>
+          <td>${esc(s.setor?.nome ?? '—')}</td>
+          <td class="num">R$ ${fmtNum(valor(s))}</td>
+          <td>${esc((STATUS_COMPRA[s.status] || {}).rotulo ?? s.status)}</td>
+        </tr>`).join('')}
+      </tbody></table>`)}
+
+    ${docAssinaturas([['Emitido por', PERFIL.nome], ['Financeiro', ''], ['Diretoria', '']])}`
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = documentoPDF({
+    titulo: 'RELATÓRIO DE COMPRAS', subtitulo: periodo, corpo,
+    acoes: `<button class="btn" id="rc-imprimir">Gerar PDF</button>
+      <button class="btn-secundario" id="rc-fechar">Fechar</button>`
+  })
+  document.body.appendChild(fundo)
+  fundo.querySelector('#rc-fechar').onclick = () => fundo.remove()
+  fundo.querySelector('#rc-imprimir').onclick = () => window.print()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
 }
 
 // ----- Importar a planilha de compras -----
@@ -2823,7 +3080,7 @@ function telaDecisao (s, nomeEtapa) {
 // ----- Compras › Fornecedores -----
 async function comprasFornecedores (alvo, editavel) {
   const { data, error } = await db.from('fornecedor')
-    .select('id,nome,cnpj_cpf,contato,status').order('nome')
+    .select('id,nome,cnpj_cpf,contato,status,criado_em,criado:criado_por(nome)').order('nome')
   if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
 
   alvo.innerHTML = `
@@ -2839,13 +3096,16 @@ async function comprasFornecedores (alvo, editavel) {
     </div>` : ''}
 
     <div class="panel" style="padding:0;"><div class="tabela-scroll">
-      <table><thead><tr><th>Nome</th><th>CNPJ / CPF</th><th>Contato</th><th>Situação</th></tr></thead>
+      <table><thead><tr><th>Nome</th><th>CNPJ / CPF</th><th>Contato</th>
+        <th>Cadastrado por</th><th>Situação</th></tr></thead>
       <tbody>${(data || []).map(f => `<tr>
         <td>${esc(f.nome)}</td>
         <td class="texto-dim">${esc(f.cnpj_cpf ?? '—')}</td>
         <td>${esc(f.contato ?? '—')}</td>
+        <td class="texto-dim2">${esc(f.criado?.nome ?? '—')}
+          ${f.criado_em ? '<br>' + fmtQuando(f.criado_em) : ''}</td>
         <td><span class="chip">${esc(f.status)}</span></td>
-      </tr>`).join('') || `<tr><td colspan="4" class="vazio">Nenhum fornecedor cadastrado.</td></tr>`}
+      </tr>`).join('') || `<tr><td colspan="5" class="vazio">Nenhum fornecedor cadastrado.</td></tr>`}
       </tbody></table>
     </div></div>`
 
@@ -2862,7 +3122,8 @@ async function comprasFornecedores (alvo, editavel) {
     const { error } = await db.from('fornecedor').insert({
       nome,
       cnpj_cpf: $('#fo-doc').value.trim() || null,
-      contato: $('#fo-contato').value.trim() || null
+      contato: $('#fo-contato').value.trim() || null,
+      criado_por: PERFIL.pessoaId
     })
     if (error) {
       el.textContent = error.message; el.classList.remove('oculto')
