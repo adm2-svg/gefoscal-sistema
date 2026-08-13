@@ -1893,13 +1893,23 @@ async function comprasSolicitacoes (alvo, editavel) {
     <details class="gaveta">
       <summary>Aprovadas e concluídas
         <span class="conta">${aprovadas.length} · R$ ${fmtNum(soma(aprovadas))}</span></summary>
-      <div class="corpo" id="c-aprovadas"></div>
+      <div class="corpo">
+        <div class="linha-add" style="margin-bottom:10px;">
+          <input id="c-busca-ap" placeholder="buscar por item, número, solicitante ou valor">
+        </div>
+        <div id="c-aprovadas"></div>
+      </div>
     </details>
 
     <details class="gaveta">
       <summary>Reprovadas, devolvidas e canceladas
         <span class="conta">${reprovadas.length}</span></summary>
-      <div class="corpo" id="c-reprovadas"></div>
+      <div class="corpo">
+        <div class="linha-add" style="margin-bottom:10px;">
+          <input id="c-busca-rep" placeholder="buscar por item, número, solicitante ou valor">
+        </div>
+        <div id="c-reprovadas"></div>
+      </div>
     </details>`
 
   let etapa = ''
@@ -1937,6 +1947,36 @@ async function comprasSolicitacoes (alvo, editavel) {
     })
   }
 
+  // busca solta: casa com texto em qualquer campo, ou com o valor
+  const combina = (s, termo) => {
+    if (!termo) return true
+    const t = termo.trim().toLowerCase()
+    const alvo = `${s.produto_servico ?? ''} ${s.numero ?? ''} ${s.origem_id ?? ''} `
+      + `${s.solicitante?.nome ?? s.solicitante_nome ?? ''} ${s.setor?.nome ?? ''} `
+      + `${s.finalidade ?? ''} ${fmtData((s.data_solicitacao ?? '').slice(0, 10))}`
+    if (alvo.toLowerCase().includes(t)) return true
+    // número digitado procura também no valor, com tolerância de centavos
+    const n = numeroBR(t)
+    if (n !== null) {
+      const v = Number(s.valor_aprovado ?? s.valor_estimado ?? 0)
+      if (Math.abs(v - n) < 0.01) return true
+    }
+    return false
+  }
+
+  const desenharGaveta = (idBusca, idLista, lista) => {
+    const pintar = () => {
+      const termo = $(idBusca)?.value ?? ''
+      const filtrada = lista.filter(s => combina(s, termo))
+      $(idLista).innerHTML = filtrada.map(s => cartao(s, true)).join('')
+        || `<p class="texto-dim2" style="font-size:13px;">
+             ${termo ? 'Nada encontrado com esse termo.' : 'Nada aqui.'}</p>`
+      ligarFichas($(idLista))
+    }
+    if ($(idBusca)) $(idBusca).oninput = pintar
+    pintar()
+  }
+
   const desenhar = () => {
     const setor = $('#c-f-setor').value
     const txt = $('#c-f-texto').value.trim().toLowerCase()
@@ -1950,10 +1990,8 @@ async function comprasSolicitacoes (alvo, editavel) {
         ? 'Nada em análise com esse filtro.'
         : 'Nenhuma solicitação em análise. Tudo que existe já teve desfecho — veja nas gavetas abaixo.'}</p>`
 
-    $('#c-aprovadas').innerHTML = aprovadas.filter(casa).map(s => cartao(s, true)).join('')
-      || '<p class="texto-dim2" style="font-size:13px;">Nada aqui com esse filtro.</p>'
-    $('#c-reprovadas').innerHTML = reprovadas.filter(casa).map(s => cartao(s, true)).join('')
-      || '<p class="texto-dim2" style="font-size:13px;">Nada aqui com esse filtro.</p>'
+    desenharGaveta('#c-busca-ap', '#c-aprovadas', aprovadas)
+    desenharGaveta('#c-busca-rep', '#c-reprovadas', reprovadas)
 
     ligarFichas(alvo)
     alvo.querySelectorAll('[data-editar]').forEach(b => {
@@ -5305,9 +5343,75 @@ async function finCompras (alvo, editavel) {
         Aprovado por mês</div>
       <div style="margin-top:10px;">${barrasMes(porMes)}</div>
     </div>` : ''}
-    <div id="fc-fila"></div>`
 
-  await comprasPagar($('#fc-fila'))
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo" style="flex:1;min-width:240px;">
+        <label>Buscar na fila</label>
+        <input id="fc-busca" placeholder="item, número do pedido, valor ou data">
+      </div>
+      <div class="campo"><label>Ordenar por</label>
+        <select id="fc-ordem">
+          <option value="venc">vencimento</option>
+          <option value="valor">maior valor</option>
+          <option value="item">item</option>
+        </select></div>
+    </div>
+    <div id="fc-tabela"></div>`
+
+  const pintar = () => {
+    const termo = ($('#fc-busca').value || '').trim().toLowerCase()
+    const n = numeroBR(termo)
+
+    let filtrada = lista.filter(x => {
+      if (!termo) return true
+      const alvo = `${x.descricao ?? ''} ${x.documento ?? ''} ${x.setor ?? ''} `
+        + `${x.vencimento ? fmtData(x.vencimento) : ''}`
+      if (alvo.toLowerCase().includes(termo)) return true
+      if (n !== null && Math.abs(Number(x.valor || 0) - n) < 0.01) return true
+      return false
+    })
+
+    const ordem = $('#fc-ordem').value
+    filtrada = filtrada.slice().sort((a, b) =>
+      ordem === 'valor' ? Number(b.valor) - Number(a.valor)
+      : ordem === 'item' ? String(a.descricao ?? '').localeCompare(String(b.descricao ?? ''))
+      : String(a.vencimento ?? '9999').localeCompare(String(b.vencimento ?? '9999')))
+
+    $('#fc-tabela').innerHTML = `
+      <div class="panel" style="padding:0;margin-bottom:16px;"><div class="tabela-scroll">
+        <table><thead><tr>
+          <th>Vencimento</th><th>Pedido</th><th>Item</th><th>Setor</th><th class="num">Valor</th>
+        </tr></thead><tbody>
+          ${filtrada.map(x => {
+            const atrasado = x.vencimento && x.vencimento < hoje
+            return `<tr>
+              <td class="${atrasado ? 'badge-alerta' : ''}">
+                ${x.vencimento ? fmtData(x.vencimento) : '<span class="texto-dim2">sem data</span>'}
+                ${x.urgencia === 'URGENTE_4H' ? '<br><span class="urgente">urgente</span>' : ''}</td>
+              <td class="texto-dim2">${esc(x.documento ?? '—')}</td>
+              <td>${esc((x.descricao ?? '').slice(0, 55))}</td>
+              <td class="texto-dim">${esc(x.setor ?? '—')}</td>
+              <td class="num">R$ ${fmtNum(x.valor)}</td>
+            </tr>`
+          }).join('') || `<tr><td colspan="5" class="vazio">
+            ${termo ? 'Nada encontrado com esse termo.' : 'Nenhuma compra aguardando pagamento.'}</td></tr>`}
+        </tbody></table>
+      </div>
+      ${termo ? `<div style="padding:9px 14px;border-top:1px solid var(--line);">
+        <span class="texto-dim2" style="font-size:12px;">${filtrada.length} de ${lista.length}
+        · R$ ${fmtNum(filtrada.reduce((s, x) => s + Number(x.valor || 0), 0))}</span></div>` : ''}
+      </div>`
+  }
+
+  $('#fc-busca').oninput = pintar
+  $('#fc-ordem').onchange = pintar
+  pintar()
+
+  // a fila com a baixa continua abaixo, inteira
+  const caixaFila = document.createElement('div')
+  caixaFila.id = 'fc-fila'
+  alvo.appendChild(caixaFila)
+  await comprasPagar(caixaFila)
 }
 
 // ----- Financeiro › Gastos por setor -----
@@ -5494,7 +5598,7 @@ function telaLancamento (l, acao) {
         <div class="campo" style="margin-top:12px;"><label>Observação</label>
           <input id="tl-obs" value="${esc(l.observacao ?? '')}"></div>
         <div class="campo" style="margin-top:12px;"><label>Por que está alterando</label>
-          <input id="tl-motivo" placeholder="opcional, mas ajuda na conferência depois"></div>
+          <input id="tl-motivo-edit" placeholder="opcional, mas ajuda na conferência depois"></div>
         <p class="aviso">Trocar o tipo entre saída e entrada muda o resultado do mês.
         A categoria não muda sozinha — confira se ela combina com o novo tipo.</p>
       `}
@@ -5525,7 +5629,7 @@ function telaLancamento (l, acao) {
   }
 
   q('#tl-ok').onclick = async () => {
-    const motivo = q('#tl-motivo').value.trim()
+    const motivo = (q('#tl-motivo') ?? q('#tl-motivo-edit')).value.trim()
     const btn = q('#tl-ok'); btn.disabled = true
 
     if (excluindo) {
