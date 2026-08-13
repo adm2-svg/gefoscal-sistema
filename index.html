@@ -2475,7 +2475,31 @@ async function paginaCobranca () {
   if (error) { area.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
   CRED_CACHE = { pedidos: pedidos || [], clientes: clientes || [] }
 
-  renderCobranca(area)
+  const abas = [['carteira', 'Carteira'], ['pedidos', 'Pedidos de venda'],
+                ['faturar', 'Faturamento de NF'], ['clientes', 'Clientes']]
+  area.innerHTML = `
+    <div class="subabas">
+      ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
+    </div>
+    <div id="sub-cobranca"></div>`
+
+  area.querySelectorAll('.subabas button').forEach(b => {
+    b.onclick = () => {
+      area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
+      abrirCobranca(b.dataset.sub)
+    }
+  })
+  abrirCobranca('carteira')
+}
+
+function abrirCobranca (sub) {
+  const alvo = $('#sub-cobranca')
+  const editavel = podeEditar('cobranca')
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  if (sub === 'carteira') renderCobranca(alvo)
+  if (sub === 'pedidos') cobPedidos(alvo, editavel)
+  if (sub === 'faturar') finFaturar(alvo, editavel)
+  if (sub === 'clientes') cobClientes(alvo, editavel)
 }
 
 function renderCobranca (area) {
@@ -2685,6 +2709,540 @@ function abrirBaixa (p) {
 }
 
 
+
+// ----- Cobrança › Pedidos de venda -----
+// Numeração vem do banco (sequência a partir de 2500), para dois usuários
+// não gerarem o mesmo número ao mesmo tempo.
+async function cobPedidos (alvo, editavel) {
+  const [{ data: pedidos }, { data: parcelas }] = await Promise.all([
+    db.from('pedido').select(`
+      id, numero, quantidade_t, unidade, preco_unitario, valor_total,
+      forma_pagamento, condicao_pagamento, data_pedido, status, observacoes,
+      local_entrega, situacao_pagamento,
+      cliente:cliente_id ( razao_social, cnpj_cpf, inscricao_estadual, endereco,
+                           bairro, municipio, uf, cep, telefone ),
+      vendedor:vendedor_id ( nome ), produto:produto_id ( nome )
+    `).order('numero', { ascending: false }).limit(200),
+    db.from('pedido_parcela').select('pedido_id,numero,vencimento,valor,situacao')
+  ])
+
+  const porPedido = {}
+  ;(parcelas || []).forEach(p => {
+    porPedido[p.pedido_id] = porPedido[p.pedido_id] || []
+    porPedido[p.pedido_id].push(p)
+  })
+
+  const total = (pedidos || []).reduce((s, p) => s + Number(p.valor_total || 0), 0)
+
+  alvo.innerHTML = `
+    <div class="kpis" style="margin-bottom:14px;">
+      ${kpi('Pedidos', (pedidos || []).length)}
+      ${kpi('Valor total', 'R$ ' + fmtNum(total))}
+      ${kpi('Próximo número', 'a partir de 2500', 'gerado pelo sistema')}
+    </div>
+    ${editavel ? `<div class="acoes" style="margin:0 0 14px;">
+      <button class="btn" id="pv-novo">Novo pedido de venda</button></div>` : ''}
+    <div id="pv-lista"></div>`
+
+  $('#pv-lista').innerHTML = (pedidos || []).map(p => {
+    const par = porPedido[p.id] || []
+    const abertas = par.filter(x => x.situacao !== 'PAGA').length
+    return `<div class="cartao-sol">
+      <div class="linha1">
+        <span class="titulo">Pedido ${esc(p.numero)} — ${esc(p.cliente?.razao_social ?? 'sem cliente')}</span>
+        <span class="chip">${esc(p.produto?.nome ?? '—')}</span>
+        <div class="botoes">
+          <button class="btn-secundario mini" data-pdf="${p.id}">PDF</button>
+          ${editavel ? `<button class="btn-secundario mini" data-edit="${p.id}">editar</button>` : ''}
+        </div>
+      </div>
+      <div class="meta">
+        ${p.quantidade_t ? fmtNum(p.quantidade_t, 2) + ' ' + esc(p.unidade ?? 'TL') : '—'}
+        ${p.preco_unitario ? ' × R$ ' + fmtNum(p.preco_unitario) : ''}
+        = <b>R$ ${fmtNum(p.valor_total)}</b>
+        ${p.data_pedido ? ' · ' + fmtData(p.data_pedido) : ''}
+        ${par.length ? ` · ${par.length} parcela(s)${abertas ? `, ${abertas} em aberto` : ', quitado'}` : ' · sem parcelas'}
+      </div>
+    </div>`
+  }).join('') || `<p class="vazio">Nenhum pedido de venda emitido ainda.</p>`
+
+  alvo.querySelectorAll('[data-pdf]').forEach(b => {
+    b.onclick = () => pdfPedidoVenda((pedidos || []).find(x => x.id === b.dataset.pdf),
+                                     porPedido[b.dataset.pdf] || [])
+  })
+  if (!editavel) return
+  alvo.querySelectorAll('[data-edit]').forEach(b => {
+    b.onclick = () => formPedidoVenda((pedidos || []).find(x => x.id === b.dataset.edit))
+  })
+  $('#pv-novo').onclick = () => formPedidoVenda(null)
+}
+
+async function formPedidoVenda (p) {
+  const [{ data: clientes }, { data: produtos }, { data: vendedores }] = await Promise.all([
+    db.from('cliente').select('id,razao_social,cnpj_cpf,conferir_dados').eq('status','ATIVO').order('razao_social'),
+    db.from('produto').select('id,nome').order('nome'),
+    db.from('pessoa').select('id,nome').eq('eh_vendedor', true).order('nome')
+  ])
+
+  let parcelas = []
+  if (p) {
+    const { data } = await db.from('pedido_parcela')
+      .select('numero,vencimento,valor').eq('pedido_id', p.id).order('numero')
+    parcelas = (data || []).map(x => ({ vencimento: x.vencimento, valor: Number(x.valor) }))
+  }
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  const opc = (l, atual, rot) => '<option value="">—</option>' +
+    l.map(i => `<option value="${i.id}" ${i.id === atual ? 'selected' : ''}>${esc(i[rot])}</option>`).join('')
+
+  fundo.innerHTML = `
+    <div class="modal" style="max-width:780px;">
+      <h3>${p ? 'Editar pedido ' + esc(p.numero) : 'Novo pedido de venda'}</h3>
+      <div class="form-grade">
+        <div class="campo" style="grid-column:1/-1;"><label>Cliente *</label>
+          <select id="pv-cliente">${opc(clientes || [], p?.cliente_id, 'razao_social')}</select>
+          <span class="texto-dim2" id="pv-aviso-cli" style="font-size:11px;"></span></div>
+        <div class="campo"><label>Produto</label>
+          <select id="pv-produto">${opc(produtos || [], p?.produto_id, 'nome')}</select></div>
+        <div class="campo"><label>Vendedor</label>
+          <select id="pv-vendedor">${opc(vendedores || [], p?.vendedor_id, 'nome')}</select></div>
+        <div class="campo"><label>Quantidade *</label>
+          <input id="pv-qtd" inputmode="decimal" value="${p?.quantidade_t ?? ''}"></div>
+        <div class="campo"><label>Unidade</label>
+          <select id="pv-unid">
+            <option value="TL" ${p?.unidade !== 'KG' ? 'selected' : ''}>TL — tonelada</option>
+            <option value="KG" ${p?.unidade === 'KG' ? 'selected' : ''}>KG</option>
+          </select></div>
+        <div class="campo"><label>Valor unitário (R$) *</label>
+          <input id="pv-preco" inputmode="decimal" value="${p?.preco_unitario ?? ''}"></div>
+        <div class="campo"><label>Valor total (R$)</label>
+          <input id="pv-total" inputmode="decimal" value="${p?.valor_total ?? ''}" readonly
+            style="opacity:.75;"></div>
+        <div class="campo"><label>Data do pedido</label>
+          <input type="date" id="pv-data" value="${p?.data_pedido ?? new Date().toISOString().slice(0,10)}"></div>
+        <div class="campo"><label>Forma de pagamento</label>
+          <select id="pv-forma">
+            ${['Boleto','PIX','Transferência','Dinheiro','Cartão','Barter','Permuta','A combinar']
+              .map(f => `<option ${p?.forma_pagamento === f ? 'selected' : ''}>${f}</option>`).join('')}
+          </select></div>
+        <div class="campo" style="grid-column:1/-1;"><label>Local de entrega</label>
+          <input id="pv-local" value="${esc(p?.local_entrega ?? '')}"
+            placeholder="o pedido será retirado pelo cliente"></div>
+      </div>
+
+      <div class="secao" style="margin-top:16px;">
+        <div class="cabeca-secao">
+          <h3 style="font-size:15px;">Parcelas</h3>
+          <button class="btn-secundario mini" id="pv-add-parcela">+ parcela</button>
+        </div>
+        <div id="pv-parcelas"></div>
+        <div class="acoes" style="margin-top:8px;">
+          <button class="btn-secundario mini" id="pv-dividir">dividir o total em parcelas iguais</button>
+          <span class="texto-dim2" id="pv-soma" style="font-size:12px;"></span>
+        </div>
+      </div>
+
+      <div class="campo" style="margin-top:12px;"><label>Observações</label>
+        <textarea id="pv-obs" style="min-height:64px;">${esc(p?.observacoes ?? '')}</textarea></div>
+
+      <div class="acoes">
+        <button class="btn" id="pv-salvar">${p ? 'Salvar' : 'Emitir pedido'}</button>
+        <button class="btn-secundario" id="pv-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="pv-recado"></div>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#pv-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const aviso = t => {
+    const el = q('#pv-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  // cliente sem CPF/CNPJ ou com nome a conferir: avisa antes de emitir
+  q('#pv-cliente').onchange = () => {
+    const c = (clientes || []).find(x => x.id === q('#pv-cliente').value)
+    const el = q('#pv-aviso-cli')
+    el.textContent = !c ? ''
+      : !c.cnpj_cpf ? 'Este cliente está sem CPF/CNPJ. Complete o cadastro antes de emitir.'
+      : c.conferir_dados ? 'O nome deste cliente difere do que saiu na NF. Confira antes de emitir.'
+      : ''
+    el.style.color = el.textContent ? 'var(--warn-text)' : 'var(--dim2)'
+  }
+  q('#pv-cliente').onchange()
+
+  const totalCalc = () => {
+    const t = (numeroBR(q('#pv-qtd').value) ?? 0) * (numeroBR(q('#pv-preco').value) ?? 0)
+    q('#pv-total').value = t ? t.toFixed(2).replace('.', ',') : ''
+    return t
+  }
+  q('#pv-qtd').oninput = totalCalc
+  q('#pv-preco').oninput = totalCalc
+
+  const desenharParcelas = () => {
+    q('#pv-parcelas').innerHTML = parcelas.map((x, i) => `
+      <div class="linha-modulo" style="gap:8px;">
+        <span class="texto-dim2" style="width:22px;">${i + 1}</span>
+        <input type="date" data-venc="${i}" value="${x.vencimento ?? ''}" style="flex:1;">
+        <input inputmode="decimal" data-valor="${i}" value="${x.valor ? String(x.valor).replace('.', ',') : ''}"
+          placeholder="valor" style="flex:1;">
+        <button class="btn-secundario mini" data-remove="${i}">×</button>
+      </div>`).join('') || `<p class="texto-dim2" style="font-size:12.5px;">
+        Nenhuma parcela. Use "+ parcela" ou divida o total.</p>`
+
+    const soma = parcelas.reduce((s, x) => s + (x.valor || 0), 0)
+    const t = numeroBR(q('#pv-total').value) ?? 0
+    const dif = t - soma
+    q('#pv-soma').textContent = parcelas.length
+      ? `soma das parcelas R$ ${fmtNum(soma)}` + (Math.abs(dif) > 0.01 ? ` · faltam R$ ${fmtNum(dif)}` : ' · confere')
+      : ''
+    q('#pv-soma').style.color = parcelas.length && Math.abs(dif) > 0.01 ? 'var(--warn-text)' : 'var(--dim2)'
+
+    q('#pv-parcelas').querySelectorAll('[data-venc]').forEach(el => {
+      el.onchange = () => { parcelas[+el.dataset.venc].vencimento = el.value; desenharParcelas() }
+    })
+    q('#pv-parcelas').querySelectorAll('[data-valor]').forEach(el => {
+      el.onchange = () => { parcelas[+el.dataset.valor].valor = numeroBR(el.value) ?? 0; desenharParcelas() }
+    })
+    q('#pv-parcelas').querySelectorAll('[data-remove]').forEach(el => {
+      el.onclick = () => { parcelas.splice(+el.dataset.remove, 1); desenharParcelas() }
+    })
+  }
+
+  q('#pv-add-parcela').onclick = () => {
+    const ultima = parcelas[parcelas.length - 1]
+    const base = ultima?.vencimento ? new Date(ultima.vencimento) : new Date()
+    base.setMonth(base.getMonth() + 1)
+    parcelas.push({ vencimento: base.toISOString().slice(0, 10), valor: 0 })
+    desenharParcelas()
+  }
+
+  q('#pv-dividir').onclick = () => {
+    const t = totalCalc()
+    if (!t) { aviso('Preencha quantidade e valor unitário primeiro.'); return }
+    const n = Number(prompt('Dividir em quantas parcelas?', '3'))
+    if (!n || n < 1) return
+    // a última parcela absorve a sobra dos centavos
+    const base = Math.floor((t / n) * 100) / 100
+    const d = new Date(q('#pv-data').value || Date.now())
+    parcelas = Array.from({ length: n }, (_, i) => {
+      const v = new Date(d); v.setMonth(v.getMonth() + i + 1)
+      return {
+        vencimento: v.toISOString().slice(0, 10),
+        valor: i === n - 1 ? Number((t - base * (n - 1)).toFixed(2)) : base
+      }
+    })
+    desenharParcelas()
+  }
+
+  totalCalc(); desenharParcelas()
+
+  q('#pv-salvar').onclick = async () => {
+    const cliente_id = q('#pv-cliente').value
+    if (!cliente_id) { aviso('Escolha o cliente.'); return }
+    const qtd = numeroBR(q('#pv-qtd').value)
+    const preco = numeroBR(q('#pv-preco').value)
+    if (!qtd || !preco) { aviso('Informe quantidade e valor unitário.'); return }
+
+    const total = Number((qtd * preco).toFixed(2))
+    const soma = parcelas.reduce((s, x) => s + (x.valor || 0), 0)
+    if (parcelas.length && Math.abs(total - soma) > 0.01) {
+      aviso(`A soma das parcelas (R$ ${fmtNum(soma)}) não bate com o total (R$ ${fmtNum(total)}).`)
+      return
+    }
+    if (parcelas.some(x => !x.vencimento || !x.valor)) {
+      aviso('Toda parcela precisa de vencimento e valor.'); return
+    }
+
+    const btn = q('#pv-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const corpo = {
+      cliente_id,
+      produto_id: q('#pv-produto').value || null,
+      vendedor_id: q('#pv-vendedor').value || null,
+      quantidade_t: qtd, unidade: q('#pv-unid').value,
+      preco_unitario: preco, valor_total: total,
+      data_pedido: q('#pv-data').value || null,
+      forma_pagamento: q('#pv-forma').value,
+      local_entrega: q('#pv-local').value.trim() || null,
+      observacoes: q('#pv-obs').value.trim() || null,
+      vencimento: parcelas.length ? parcelas[parcelas.length - 1].vencimento : null,
+      emitido_por: PERFIL.pessoaId
+    }
+
+    let pedidoId = p?.id
+    if (p) {
+      const { error } = await db.from('pedido').update(corpo).eq('id', p.id)
+      if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Salvar'; return }
+    } else {
+      const { data, error } = await db.from('pedido').insert(corpo).select('id,numero').single()
+      if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Emitir pedido'; return }
+      pedidoId = data.id
+    }
+
+    await db.from('pedido_parcela').delete().eq('pedido_id', pedidoId)
+    if (parcelas.length) {
+      await db.from('pedido_parcela').insert(parcelas.map((x, i) => ({
+        pedido_id: pedidoId, numero: i + 1,
+        vencimento: x.vencimento, valor: x.valor
+      })))
+    }
+
+    fechar(); abrirCobranca('pedidos')
+  }
+}
+
+// ----- PDF do pedido de venda, no padrão dos documentos Gefoscal -----
+function pdfPedidoVenda (p, parcelas) {
+  if (!p) return
+  const c = p.cliente || {}
+  const par = (parcelas || []).slice().sort((a, b) => a.numero - b.numero)
+
+  const corpo = `
+    <div class="doc-linha">
+      ${docBloco('Cliente',
+        docLinha('Nome', c.razao_social) +
+        docLinha('CPF / CNPJ', c.cnpj_cpf) +
+        docLinha('Inscrição estadual', c.inscricao_estadual) +
+        docLinha('Telefone', c.telefone))}
+
+      ${docBloco('Endereço',
+        docLinha('Logradouro', c.endereco) +
+        docLinha('Bairro', c.bairro) +
+        docLinha('Município', c.municipio ? `${c.municipio}/${c.uf ?? ''}` : null) +
+        docLinha('CEP', c.cep))}
+
+      ${docBloco('Controle',
+        docLinha('Pedido nº', p.numero) +
+        docLinha('Data', fmtData(p.data_pedido)) +
+        docLinha('Vendedor', p.vendedor?.nome) +
+        docLinha('Entrega', p.local_entrega || 'retirada pelo cliente'))}
+    </div>
+
+    ${docBloco('Produto', `
+      <table><thead><tr>
+        <th>Descrição</th><th class="num">Qtde.</th><th>Un.</th>
+        <th class="num">Valor unitário</th><th class="num">Valor total</th>
+      </tr></thead><tbody><tr>
+        <td>${esc(p.produto?.nome ?? '—')}</td>
+        <td class="num">${fmtNum(p.quantidade_t, 2)}</td>
+        <td>${esc(p.unidade ?? 'TL')}</td>
+        <td class="num">R$ ${fmtNum(p.preco_unitario)}</td>
+        <td class="num">R$ ${fmtNum(p.valor_total)}</td>
+      </tr></tbody></table>
+      ${docValor('Valor total do pedido', esc(p.forma_pagamento ?? 'forma a combinar'), p.valor_total, true)}`)}
+
+    ${par.length ? docBloco('Condições de pagamento', `
+      <table><thead><tr>
+        <th>Parcela</th><th>Vencimento</th><th class="num">Valor</th>
+      </tr></thead><tbody>
+        ${par.map(x => `<tr>
+          <td>${x.numero}</td>
+          <td>${fmtData(x.vencimento)}</td>
+          <td class="num">R$ ${fmtNum(x.valor)}</td>
+        </tr>`).join('')}
+      </tbody></table>
+      ${docLinha('Forma de pagamento', p.forma_pagamento)}`)
+      : docBloco('Condições de pagamento',
+          docLinha('Forma de pagamento', p.forma_pagamento) +
+          docLinha('Condição', p.condicao_pagamento))}
+
+    ${p.observacoes ? docTexto('Observações', p.observacoes) : ''}
+
+    ${docAssinaturas([['Vendedor', p.vendedor?.nome],
+                      ['Gefoscal', ''],
+                      ['Cliente', c.razao_social]])}`
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = documentoPDF({
+    titulo: 'PEDIDO DE VENDA',
+    subtitulo: 'nº ' + esc(p.numero),
+    corpo,
+    acoes: `<button class="btn" id="pv-imprimir">Gerar PDF do pedido</button>
+      <button class="btn-secundario" id="pv-fechar">Fechar</button>`
+  })
+  document.body.appendChild(fundo)
+  fundo.querySelector('#pv-fechar').onclick = () => fundo.remove()
+  fundo.querySelector('#pv-imprimir').onclick = () => window.print()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+}
+
+// ----- Cobrança › Clientes -----
+// Boa parte dos dados veio das DANFEs. O que estiver marcado para conferir
+// mostra alerta: nome do cadastro diferente do nome que saiu na nota.
+async function cobClientes (alvo, editavel) {
+  const { data, error } = await db.from('cliente')
+    .select('id,razao_social,nome_fantasia,cnpj_cpf,inscricao_estadual,endereco,bairro,municipio,uf,cep,telefone,email,status,observacoes,dados_nf_origem,conferir_dados,vendedor_id')
+    .order('razao_social')
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  const semDados = (data || []).filter(c => !c.cnpj_cpf).length
+  const conferir = (data || []).filter(c => c.conferir_dados).length
+
+  alvo.innerHTML = `
+    <div class="kpis" style="margin-bottom:14px;">
+      ${kpi('Clientes', (data || []).length)}
+      ${kpi('Sem CPF ou CNPJ', semDados, semDados ? 'não dá para emitir pedido' : 'todos completos')}
+      ${kpi('A conferir', conferir, conferir ? 'nome difere da NF' : 'nenhuma divergência')}
+    </div>
+
+    ${editavel ? `<div class="acoes" style="margin:0 0 14px;">
+      <button class="btn" id="cl-novo">Novo cliente</button></div>` : ''}
+
+    <div class="filtros" style="margin-bottom:12px;">
+      <div class="campo"><label>Buscar</label>
+        <input id="cl-busca" placeholder="nome, CPF/CNPJ ou município"></div>
+    </div>
+    <div class="lista-pessoas" id="cl-lista"></div>`
+
+  const desenhar = () => {
+    const q = $('#cl-busca').value.trim().toLowerCase()
+    const lista = (data || []).filter(c => !q ||
+      `${c.razao_social} ${c.nome_fantasia ?? ''} ${c.cnpj_cpf ?? ''} ${c.municipio ?? ''}`
+        .toLowerCase().includes(q))
+
+    $('#cl-lista').innerHTML = lista.map(c => `
+      <div class="cartao-pessoa">
+        <div class="inicial">${esc((c.razao_social || '?').trim()[0].toUpperCase())}</div>
+        <div class="dados">
+          <div class="nome">${esc(c.razao_social)}
+            ${c.conferir_dados ? '<span class="urgente">● conferir nome</span>' : ''}</div>
+          <div class="sub">
+            ${c.cnpj_cpf ? esc(c.cnpj_cpf) : '<span class="badge-alerta">sem CPF/CNPJ</span>'}
+            ${c.inscricao_estadual ? ' · IE ' + esc(c.inscricao_estadual) : ''}
+            ${c.municipio ? ' · ' + esc(c.municipio) + '/' + esc(c.uf ?? '') : ''}
+            ${c.dados_nf_origem ? ' · da ' + esc(c.dados_nf_origem) : ''}
+          </div>
+        </div>
+        <div class="selos">
+          <span class="selo ${c.status === 'ATIVO' ? '' : 'forte'}">${esc(c.status)}</span>
+        </div>
+        <div class="botoes">
+          ${editavel ? `<button class="btn-secundario mini" data-editar="${c.id}">editar</button>` : ''}
+        </div>
+      </div>`).join('') || `<p class="vazio">Nenhum cliente encontrado.</p>`
+
+    if (!editavel) return
+    $('#cl-lista').querySelectorAll('[data-editar]').forEach(b => {
+      b.onclick = () => formCliente(data.find(x => x.id === b.dataset.editar))
+    })
+  }
+
+  $('#cl-busca').oninput = desenhar
+  desenhar()
+  if (editavel) $('#cl-novo').onclick = () => formCliente(null)
+}
+
+function formCliente (c) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  const v = k => esc(c?.[k] ?? '')
+
+  fundo.innerHTML = `
+    <div class="modal">
+      <h3>${c ? 'Editar cliente' : 'Novo cliente'}</h3>
+      ${c?.conferir_dados ? `<div class="recado" style="border-color:var(--warn-text);color:var(--warn-text);margin:0 0 12px;">
+        O nome deste cadastro difere do que saiu na ${esc(c.dados_nf_origem ?? 'NF')}.
+        Confirme qual é o correto antes de emitir pedido.</div>` : ''}
+      <div class="form-grade">
+        <div class="campo" style="grid-column:1/-1;"><label>Razão social ou nome *</label>
+          <input id="cl-razao" value="${v('razao_social')}"></div>
+        <div class="campo"><label>Nome fantasia</label><input id="cl-fantasia" value="${v('nome_fantasia')}"></div>
+        <div class="campo"><label>CPF ou CNPJ</label><input id="cl-doc" value="${v('cnpj_cpf')}"></div>
+        <div class="campo"><label>Inscrição estadual</label><input id="cl-ie" value="${v('inscricao_estadual')}"></div>
+        <div class="campo" style="grid-column:1/-1;"><label>Endereço</label>
+          <input id="cl-end" value="${v('endereco')}"></div>
+        <div class="campo"><label>Bairro</label><input id="cl-bairro" value="${v('bairro')}"></div>
+        <div class="campo"><label>Município</label><input id="cl-mun" value="${v('municipio')}"></div>
+        <div class="campo"><label>UF</label><input id="cl-uf" maxlength="2" value="${v('uf')}"></div>
+        <div class="campo"><label>CEP</label><input id="cl-cep" value="${v('cep')}"></div>
+        <div class="campo"><label>Telefone</label><input id="cl-tel" value="${v('telefone')}"></div>
+        <div class="campo"><label>E-mail</label><input id="cl-email" type="email" value="${v('email')}"></div>
+        <div class="campo"><label>Situação</label>
+          <select id="cl-status">
+            <option value="ATIVO" ${c?.status !== 'INATIVO' ? 'selected' : ''}>ativo</option>
+            <option value="INATIVO" ${c?.status === 'INATIVO' ? 'selected' : ''}>inativo</option>
+          </select></div>
+      </div>
+      <div class="campo" style="margin-top:12px;"><label>Observações</label>
+        <textarea id="cl-obs" style="min-height:64px;">${v('observacoes')}</textarea></div>
+      ${c?.conferir_dados ? `<label class="linha-modulo" style="margin-top:10px;">
+        <input type="checkbox" id="cl-conferido">
+        <span class="nome">Já conferi: o nome acima está correto</span></label>` : ''}
+
+      <div class="acoes">
+        <button class="btn" id="cl-salvar">Salvar</button>
+        ${c ? '<button class="btn-secundario" id="cl-excluir">Excluir</button>' : ''}
+        <button class="btn-secundario" id="cl-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="cl-recado"></div>
+      ${c?.dados_nf_origem ? `<p class="aviso">Dados fiscais extraídos da ${esc(c.dados_nf_origem)}.</p>` : ''}
+    </div>`
+
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#cl-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const aviso = t => {
+    const el = q('#cl-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  q('#cl-salvar').onclick = async () => {
+    const razao = q('#cl-razao').value.trim()
+    if (!razao) { aviso('Escreva a razão social ou o nome.'); return }
+
+    const corpo = {
+      razao_social: razao,
+      nome_fantasia: q('#cl-fantasia').value.trim() || null,
+      cnpj_cpf: q('#cl-doc').value.trim() || null,
+      inscricao_estadual: q('#cl-ie').value.trim() || null,
+      endereco: q('#cl-end').value.trim() || null,
+      bairro: q('#cl-bairro').value.trim() || null,
+      municipio: q('#cl-mun').value.trim() || null,
+      uf: q('#cl-uf').value.trim().toUpperCase() || null,
+      cep: q('#cl-cep').value.trim() || null,
+      telefone: q('#cl-tel').value.trim() || null,
+      email: q('#cl-email').value.trim() || null,
+      status: q('#cl-status').value,
+      observacoes: q('#cl-obs').value.trim() || null
+    }
+    if (q('#cl-conferido')?.checked) corpo.conferir_dados = false
+
+    const { error } = c
+      ? await db.from('cliente').update(corpo).eq('id', c.id)
+      : await db.from('cliente').insert(corpo)
+    if (error) { aviso(error.message); return }
+    fechar(); abrirCobranca('clientes')
+  }
+
+  const bx = q('#cl-excluir')
+  if (bx) bx.onclick = async () => {
+    // não apaga cliente com histórico: inativa, para não quebrar NF e pedido
+    const [{ count: nCarr }, { count: nPed }] = await Promise.all([
+      db.from('carregamento').select('id', { count: 'exact', head: true }).eq('cliente_id', c.id),
+      db.from('pedido').select('id', { count: 'exact', head: true }).eq('cliente_id', c.id)
+    ])
+    if ((nCarr || 0) + (nPed || 0) > 0) {
+      if (!confirm(`Este cliente tem ${nCarr || 0} carregamento(s) e ${nPed || 0} pedido(s).\n`
+        + 'Apagar quebraria esse histórico, então ele será apenas inativado. Continuar?')) return
+      await db.from('cliente').update({ status: 'INATIVO' }).eq('id', c.id)
+    } else {
+      if (!confirm('Excluir este cliente em definitivo?')) return
+      const { error } = await db.from('cliente').delete().eq('id', c.id)
+      if (error) { aviso(error.message); return }
+    }
+    fechar(); abrirCobranca('clientes')
+  }
+}
+
 // ---------------------------------------------------------------
 // Página: Financeiro
 // Sub-abas: Lançamentos · Orçamento · Saldo e contas · Planos e metas ·
@@ -2738,7 +3296,7 @@ async function paginaFinanceiro () {
     : 'Somente leitura — você pode consultar, mas não alterar'
 
   const area = areaLivre()
-  const abas = [['lancamentos', 'Lançamentos'], ['pagar', 'A pagar'], ['faturar', 'Faturamento de NF'],
+  const abas = [['lancamentos', 'Lançamentos'], ['pagar', 'A pagar'],
     ['orcamento', 'Orçamento'], ['contas', 'Saldo e contas'], ['planos', 'Planos e metas'],
     ['investimentos', 'Investimentos'], ['relatorios', 'Relatórios'], ['cadastros', 'Cadastros']]
   area.innerHTML = `
@@ -2769,7 +3327,6 @@ function abrirFinanceiro (sub, editavel) {
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
   if (sub === 'lancamentos') finLancamentos(alvo, editavel)
   if (sub === 'pagar') comprasPagar(alvo)
-  if (sub === 'faturar') finFaturar(alvo, editavel)
   if (sub === 'cadastros') finCadastros(alvo, editavel)
   if (sub === 'orcamento') finOrcamento(alvo, editavel)
   if (sub === 'contas') finContas(alvo, editavel)
@@ -3616,7 +4173,7 @@ function telaFaturar (c) {
 
     if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Gerar recebimento'; return }
     fechar()
-    abrirFinanceiro('faturar', true)
+    abrirCobranca('faturar')
   }
 }
 
