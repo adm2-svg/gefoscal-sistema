@@ -789,6 +789,7 @@ function podeEditar (chave) {
 
 const PAGINAS = {
   visao_geral: { nome: 'Visão geral', render: paginaVisaoGeral, sempre: true },
+  solicitacoes: { nome: 'Solicitações', render: paginaSolicitacoes, sempre: true },
   expedicao:   { nome: 'Expedição', render: paginaExpedicao },
   compras:     { nome: 'Compras e Recebimento', render: paginaCompras },
   cobranca:    { nome: 'Crédito e Cobrança', render: paginaCobranca },
@@ -804,7 +805,7 @@ const PAGINAS = {
 }
 
 function montarMenu () {
-  const fixos = `<a data-chave="visao_geral">Visão geral</a>`
+  const fixos = `<a data-chave="visao_geral">Visão geral</a><a data-chave="solicitacoes">Solicitações</a>`
   const doBanco = PERFIL.modulos.map(m => {
     const temPagina = !!PAGINAS[m.chave]
     const liberado = podeVer(m.chave)
@@ -891,6 +892,7 @@ async function paginaVisaoGeral () {
   }
 
   // painel do financeiro, para quem trabalha nele
+  await minhasSolicitacoes(area)
   await minhasCompras(area)
   await areaDeTrabalho(area)
 
@@ -922,6 +924,308 @@ async function paginaVisaoGeral () {
   quadro.srcdoc = data.html_conteudo
   area.appendChild(quadro)
   $('#rodape').textContent = 'Atualizado em ' + (fmtQuando(data.atualizado_em) || '—')
+}
+
+// ---------------------------------------------------------------
+// Página: Solicitações — helpdesk interno entre setores. Qualquer
+// pessoa loga e pode pedir algo pra qualquer setor, com urgência.
+// Quem tem pessoa.setor_id igual ao setor de destino vê a solicitação
+// tanto aqui quanto num resumo na própria Visão Geral. Sem trava de
+// módulo — é igual "Visão geral", todo mundo enxerga (o controle real
+// é o bom senso de cada setor tratar o que é dele).
+// ---------------------------------------------------------------
+const URGENCIAS_SOLICITACAO = ['BAIXA', 'MEDIA', 'ALTA', 'URGENTE']
+const ROTULO_URGENCIA_SOLICITACAO = { BAIXA: 'Baixa', MEDIA: 'Média', ALTA: 'Alta', URGENTE: 'Urgente' }
+const STATUS_SOLICITACAO = ['ABERTA', 'EM_ANDAMENTO', 'CONCLUIDA', 'CANCELADA']
+const ROTULO_STATUS_SOLICITACAO = { ABERTA: 'Aberta', EM_ANDAMENTO: 'Em andamento', CONCLUIDA: 'Concluída', CANCELADA: 'Cancelada' }
+
+let SOLIC_CACHE = { setores: [], pessoas: [] }
+
+function corUrgenciaSolicitacao (u) {
+  if (u === 'URGENTE') return 'badge-alerta'
+  if (u === 'ALTA') return 'chip'
+  return 'texto-dim2'
+}
+function corStatusSolicitacao (s) {
+  if (s === 'CONCLUIDA') return 'badge-bom'
+  if (s === 'CANCELADA') return 'texto-dim2'
+  if (s === 'ABERTA') return 'badge-alerta'
+  return 'chip'
+}
+
+async function paginaSolicitacoes () {
+  $('#subtitulo-pagina').textContent = 'Peça algo pra qualquer setor da Gefoscal'
+  const area = areaLivre()
+  area.innerHTML = `<p class="texto-dim2">carregando...</p>`
+
+  const [{ data: setores }, { data: pessoas }] = await Promise.all([
+    db.from('setor').select('id,nome').order('nome'),
+    db.from('pessoa').select('id,nome,setor_id').eq('status', 'ATIVO').order('nome')
+  ])
+  SOLIC_CACHE = { setores: setores || [], pessoas: pessoas || [] }
+
+  const abas = [['painel', 'Painel'], ['nova', 'Nova solicitação'], ['meu-setor', 'Meu setor'], ['todas', 'Todas']]
+  area.innerHTML = `
+    <div class="subabas">
+      ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
+    </div>
+    <div id="sub-solicitacoes"></div>`
+
+  area.querySelectorAll('.subabas button').forEach(b => {
+    b.onclick = () => {
+      area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
+      abrirSolicitacoes(b.dataset.sub)
+    }
+  })
+  abrirSolicitacoes(PERFIL.setorId ? 'meu-setor' : 'painel')
+  area.querySelectorAll('.subabas button').forEach(b =>
+    b.classList.toggle('ativo', b.dataset.sub === (PERFIL.setorId ? 'meu-setor' : 'painel')))
+}
+
+function abrirSolicitacoes (sub) {
+  const alvo = $('#sub-solicitacoes')
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  $('#kpis').innerHTML = ''
+  if (sub === 'painel') solicPainel(alvo)
+  if (sub === 'nova') solicNova(alvo)
+  if (sub === 'meu-setor') solicLista(alvo, { meuSetor: true })
+  if (sub === 'todas') solicLista(alvo, { meuSetor: false })
+}
+
+// ----- Painel -----
+async function solicPainel (alvo) {
+  const { data, error } = await db.from('solicitacao_interna').select(`
+    id, codigo, urgencia, status, data_solicitacao, data_limite,
+    setor:setor_destino_id ( nome ), solicitante:solicitante_id ( nome )
+  `).order('data_solicitacao', { ascending: false }).limit(1000)
+
+  if (faltaMigracao(error)) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  const lista = data || []
+  const hoje = hojeISO()
+
+  const abertas = lista.filter(s => !['CONCLUIDA', 'CANCELADA'].includes(s.status))
+  const urgentes = abertas.filter(s => s.urgencia === 'URGENTE')
+  const atrasadas = abertas.filter(s => s.data_limite && s.data_limite < hoje)
+
+  const porSetor = {}
+  abertas.forEach(s => { const n = s.setor?.nome ?? '—'; porSetor[n] = (porSetor[n] || 0) + 1 })
+  const barrasSetor = Object.entries(porSetor).sort((a, b) => b[1] - a[1]).map(([rotulo, valor]) => ({ rotulo, valor }))
+
+  const donutStatus = STATUS_SOLICITACAO.map(s => ({ rotulo: ROTULO_STATUS_SOLICITACAO[s], valor: lista.filter(x => x.status === s).length }))
+
+  alvo.innerHTML = `
+    <div class="resumo-topo" style="margin-bottom:16px;">
+      ${[['Em aberto', abertas.length, ''], ['Urgentes', urgentes.length, 'badge-alerta'], ['Atrasadas', atrasadas.length, ''], ['Total histórico', lista.length, '']]
+        .map(([rot, val]) => `<div class="bloco"><div class="rot">${rot}</div><div class="val">${val}</div></div>`).join('')}
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;" class="grade-painel-comb">
+      <div class="panel" style="padding:18px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Solicitações em aberto por setor</h3>
+        ${barrasHorizontais(barrasSetor, { unidade: '', casas: 0 })}
+      </div>
+      <div class="panel" style="padding:18px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Por status (histórico)</h3>
+        ${svgDonut(donutStatus)}
+      </div>
+    </div>`
+}
+
+// ----- Nova solicitação -----
+function solicNova (alvo) {
+  alvo.innerHTML = `
+    <div class="panel" style="padding:20px;max-width:760px;">
+      <h3 style="font-family:var(--serif);font-size:18px;margin:0 0 14px;">Nova solicitação</h3>
+      <div class="form-grade">
+        <div class="campo" style="grid-column:1/-1;"><label>Setor de destino *</label>
+          <select id="sn-setor">${SOLIC_CACHE.setores.map(s => `<option value="${s.id}">${esc(s.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Urgência</label>
+          <select id="sn-urgencia">${URGENCIAS_SOLICITACAO.map(u => `<option value="${u}" ${u === 'MEDIA' ? 'selected' : ''}>${ROTULO_URGENCIA_SOLICITACAO[u]}</option>`).join('')}</select></div>
+        <div class="campo"><label>Prazo desejado</label><input type="date" id="sn-prazo"></div>
+      </div>
+      <div class="campo" style="margin-top:12px;"><label>Título *</label>
+        <input id="sn-titulo" placeholder="Resuma em uma linha o que você precisa"></div>
+      <div class="campo" style="margin-top:10px;"><label>Descrição</label>
+        <textarea id="sn-descricao" style="min-height:90px;" placeholder="Detalhe o que precisa ser feito"></textarea></div>
+      <div class="acoes"><button class="btn" id="sn-salvar">Enviar solicitação</button></div>
+      <div class="recado oculto" id="sn-recado"></div>
+    </div>`
+
+  const aviso = (t, alerta = true) => {
+    const el = $('#sn-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = alerta ? 'var(--warn-text)' : 'var(--line2)'
+    el.style.color = alerta ? 'var(--warn-text)' : 'var(--dim)'
+  }
+
+  $('#sn-salvar').onclick = async () => {
+    const titulo = $('#sn-titulo').value.trim()
+    if (!titulo) { aviso('Escreva um título.'); return }
+    const btn = $('#sn-salvar'); btn.disabled = true; btn.textContent = 'Enviando...'
+    const { error } = await db.from('solicitacao_interna').insert({
+      solicitante_id: PERFIL.pessoaId,
+      setor_destino_id: $('#sn-setor').value,
+      titulo, descricao: $('#sn-descricao').value.trim() || null,
+      urgencia: $('#sn-urgencia').value,
+      data_limite: $('#sn-prazo').value || null
+    })
+    btn.disabled = false; btn.textContent = 'Enviar solicitação'
+    if (error) { aviso(error.message); return }
+    aviso('Solicitação enviada.', false)
+    $('#sn-titulo').value = ''; $('#sn-descricao').value = ''; $('#sn-prazo').value = ''
+  }
+}
+
+// ----- Lista (meu setor ou todas) -----
+async function solicLista (alvo, { meuSetor }) {
+  if (meuSetor && !PERFIL.setorId) {
+    alvo.innerHTML = `<div class="panel" style="padding:22px;"><p class="texto-dim">
+      Seu cadastro ainda não tem um setor definido — fale com o administrador
+      pra ligar isso em Administração → Usuários. Enquanto isso, veja a aba "Todas".</p></div>`
+    return
+  }
+
+  const hoje = new Date().toISOString().slice(0, 10)
+  const de = new Date(Date.now() - 90 * 864e5).toISOString().slice(0, 10)
+
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>De</label><input type="date" id="sl-de" value="${de}"></div>
+      <div class="campo"><label>Até</label><input type="date" id="sl-ate" value="${hoje}"></div>
+      ${!meuSetor ? `<div class="campo"><label>Setor</label>
+        <select id="sl-setor"><option value="">Todos</option>${SOLIC_CACHE.setores.map(s => `<option value="${s.id}">${esc(s.nome)}</option>`).join('')}</select></div>` : ''}
+      <div class="campo"><label>Status</label>
+        <select id="sl-status"><option value="">Todos</option>${STATUS_SOLICITACAO.map(s => `<option value="${s}">${ROTULO_STATUS_SOLICITACAO[s]}</option>`).join('')}</select></div>
+      <button class="btn" id="sl-buscar">Buscar</button>
+    </div>
+    <div id="sl-conteudo"></div>`
+
+  const buscar = async () => {
+    let q = db.from('solicitacao_interna').select(`
+      id, codigo, titulo, descricao, urgencia, status, data_solicitacao, data_limite, data_conclusao, resposta,
+      setor:setor_destino_id ( id, nome ), solicitante:solicitante_id ( nome ), responsavel:responsavel_id ( nome )
+    `).gte('data_solicitacao', $('#sl-de').value).lte('data_solicitacao', $('#sl-ate').value + 'T23:59:59')
+      .order('data_solicitacao', { ascending: false }).limit(500)
+    if (meuSetor) q = q.eq('setor_destino_id', PERFIL.setorId)
+    else if ($('#sl-setor').value) q = q.eq('setor_destino_id', $('#sl-setor').value)
+    if ($('#sl-status').value) q = q.eq('status', $('#sl-status').value)
+
+    const { data, error } = await q
+    if (error) { $('#sl-conteudo').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+    const lista = data || []
+
+    $('#kpis').innerHTML = kpi('Solicitações', lista.length) +
+      kpi('Em aberto', lista.filter(s => s.status === 'ABERTA').length) +
+      kpi('Urgentes', lista.filter(s => s.urgencia === 'URGENTE' && !['CONCLUIDA', 'CANCELADA'].includes(s.status)).length)
+
+    $('#sl-conteudo').innerHTML = `
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr>
+          <th>Código</th><th>Quando</th>${meuSetor ? '' : '<th>Setor</th>'}<th>Título</th>
+          <th>Urgência</th><th>Status</th><th>Solicitante</th><th>Responsável</th>
+        </tr></thead><tbody>
+          ${lista.map(s => `<tr style="cursor:pointer;" data-abrir="${s.id}">
+            <td><b>${esc(s.codigo)}</b></td>
+            <td class="texto-dim">${fmtQuando(s.data_solicitacao) ?? '—'}</td>
+            ${meuSetor ? '' : `<td class="texto-dim2">${esc(s.setor?.nome ?? '—')}</td>`}
+            <td>${esc(s.titulo)}</td>
+            <td><span class="${corUrgenciaSolicitacao(s.urgencia)}">${esc(ROTULO_URGENCIA_SOLICITACAO[s.urgencia])}</span></td>
+            <td><span class="${corStatusSolicitacao(s.status)}">${esc(ROTULO_STATUS_SOLICITACAO[s.status])}</span></td>
+            <td class="texto-dim">${esc(s.solicitante?.nome ?? '—')}</td>
+            <td class="texto-dim">${esc(s.responsavel?.nome ?? '—')}</td>
+          </tr>`).join('') || `<tr><td colspan="${meuSetor ? 7 : 8}" class="vazio">Nenhuma solicitação no filtro.</td></tr>`}
+        </tbody></table>
+      </div></div>`
+
+    $('#sl-conteudo').querySelectorAll('[data-abrir]').forEach(tr => {
+      tr.onclick = () => {
+        const s = lista.find(x => x.id === tr.dataset.abrir)
+        if (s) detalheSolicitacao(s, buscar)
+      }
+    })
+  }
+
+  $('#sl-buscar').onclick = buscar
+  $('#sl-status').onchange = buscar
+  if (!meuSetor) $('#sl-setor').onchange = buscar
+  buscar()
+}
+
+// ----- Detalhe / responder -----
+function detalheSolicitacao (s, aoFechar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <div class="cabeca-secao">
+      <h3>${esc(s.codigo)}</h3>
+      <span class="${corStatusSolicitacao(s.status)}">${esc(ROTULO_STATUS_SOLICITACAO[s.status])}</span>
+    </div>
+    <p class="texto-dim2" style="font-size:12px;margin:-8px 0 14px;">
+      ${esc(s.setor?.nome ?? '—')} · aberta por ${esc(s.solicitante?.nome ?? '—')} em ${fmtQuando(s.data_solicitacao) ?? '—'}
+      ${s.data_limite ? ` · prazo ${fmtData(s.data_limite)}` : ''}</p>
+
+    <div class="caixa-texto" style="margin-bottom:12px;">
+      <div class="rot">${esc(s.titulo)}</div>
+      <p>${esc(s.descricao ?? 'sem descrição adicional')}</p>
+    </div>
+
+    <div class="form-grade">
+      <div class="campo"><label>Status</label>
+        <select id="ds-status">${STATUS_SOLICITACAO.map(st => `<option value="${st}" ${st === s.status ? 'selected' : ''}>${ROTULO_STATUS_SOLICITACAO[st]}</option>`).join('')}</select></div>
+      <div class="campo"><label>Responsável</label>
+        <select id="ds-resp"><option value="">—</option>${SOLIC_CACHE.pessoas.map(p => `<option value="${p.id}" ${p.nome === s.responsavel?.nome ? 'selected' : ''}>${esc(p.nome)}</option>`).join('')}</select></div>
+    </div>
+    <div class="campo" style="margin-top:10px;"><label>Resposta / retorno</label>
+      <textarea id="ds-resposta" style="min-height:70px;">${esc(s.resposta ?? '')}</textarea></div>
+    <div class="acoes"><button class="btn" id="ds-salvar">Salvar</button>
+      <button class="btn-secundario" id="ds-fechar">Fechar</button></div>
+    <div class="recado oculto" id="ds-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#ds-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const aviso = t => {
+    const el = fundo.querySelector('#ds-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  fundo.querySelector('#ds-salvar').onclick = async () => {
+    const status = fundo.querySelector('#ds-status').value
+    const { error } = await db.from('solicitacao_interna').update({
+      status,
+      responsavel_id: fundo.querySelector('#ds-resp').value || null,
+      resposta: fundo.querySelector('#ds-resposta').value.trim() || null,
+      data_conclusao: status === 'CONCLUIDA' ? new Date().toISOString() : null
+    }).eq('id', s.id)
+    if (error) { aviso(error.message); return }
+    fechar(); aoFechar()
+  }
+}
+
+// ----- Widget resumido na Visão Geral -----
+async function minhasSolicitacoes (area) {
+  if (!PERFIL.setorId) return
+  const { data, error } = await db.from('solicitacao_interna').select(`
+    id, codigo, titulo, urgencia, status, data_solicitacao
+  `).eq('setor_destino_id', PERFIL.setorId).in('status', ['ABERTA', 'EM_ANDAMENTO'])
+    .order('urgencia', { ascending: false }).order('data_solicitacao').limit(20)
+  if (faltaMigracao(error) || error || !data?.length) return
+
+  const bloco = document.createElement('div')
+  bloco.className = 'panel'
+  bloco.style.cssText = 'padding:18px;margin-bottom:16px;'
+  bloco.innerHTML = `
+    <div class="cabeca-secao">
+      <h3 style="font-family:var(--serif);font-size:17px;">
+        ${data.length} solicitação${data.length > 1 ? 'ões' : ''} pro seu setor</h3>
+      <button class="btn-secundario mini" id="ms-ver-todas">ver todas</button>
+    </div>
+    ${data.map(s => `<div class="passo">
+      <span class="quando"><span class="${corUrgenciaSolicitacao(s.urgencia)}" style="font-size:10px;">${esc(ROTULO_URGENCIA_SOLICITACAO[s.urgencia])}</span></span>
+      <span><b>${esc(s.codigo)}</b> — ${esc(s.titulo)}</span>
+    </div>`).join('')}`
+  area.appendChild(bloco)
+  bloco.querySelector('#ms-ver-todas').onclick = () => irPara('solicitacoes')
 }
 
 // ---------------------------------------------------------------
@@ -1345,6 +1649,8 @@ async function subVisao (alvo, editavel) {
 // Cada pessoa só enxerga as próprias notas e tarefas: a RLS filtra
 // pelo pessoa_id do perfil, não pelo que o navegador manda.
 // ---------------------------------------------------------------
+const ROTULO_RECORRENCIA_TAREFA = { diaria: 'diária', semanal: 'semanal', mensal: 'mensal' }
+
 async function areaDeTrabalho (area) {
   const hoje = new Date().toISOString().slice(0, 10)
 
@@ -1374,6 +1680,12 @@ async function areaDeTrabalho (area) {
       <div class="linha-add">
         <input id="tf-nova" placeholder="O que precisa ser feito?">
         <input type="date" id="tf-prazo" style="flex:none;width:145px;">
+        <select id="tf-recorrencia" style="flex:none;width:130px;">
+          <option value="">Não repete</option>
+          <option value="diaria">Todo dia</option>
+          <option value="semanal">Toda semana</option>
+          <option value="mensal">Todo mês</option>
+        </select>
         <button class="btn mini" id="tf-add">Adicionar</button>
       </div>
 
@@ -1410,6 +1722,7 @@ async function areaDeTrabalho (area) {
     <div class="tarefa ${t.concluida_em ? 'feita' : ''}">
       <input type="checkbox" data-check="${t.id}" ${t.concluida_em ? 'checked' : ''}>
       <div class="txt">${esc(t.titulo)}
+        ${t.recorrencia ? `<span class="chip" style="font-size:9.5px;margin-left:4px;">🔁 ${ROTULO_RECORRENCIA_TAREFA[t.recorrencia] || t.recorrencia}</span>` : ''}
         ${t.detalhe ? `<small>${esc(t.detalhe)}</small>` : ''}
         ${t.concluida_em ? `<small>concluída em ${fmtQuando(t.concluida_em)}</small>` : ''}
       </div>
@@ -1433,11 +1746,28 @@ async function areaDeTrabalho (area) {
 
   const recarregar = () => irPara('visao_geral')
 
+  const proximaData = (prazo, recorrencia) => {
+    const base = prazo ? new Date(prazo + 'T00:00:00') : new Date()
+    if (recorrencia === 'diaria') base.setDate(base.getDate() + 1)
+    else if (recorrencia === 'semanal') base.setDate(base.getDate() + 7)
+    else if (recorrencia === 'mensal') base.setMonth(base.getMonth() + 1)
+    return base.toISOString().slice(0, 10)
+  }
+
   bloco.querySelectorAll('[data-check]').forEach(c => {
     c.onchange = async () => {
+      const t = (tarefas || []).find(x => x.id === c.dataset.check)
       await db.from('tarefa').update({
         concluida_em: c.checked ? new Date().toISOString() : null
       }).eq('id', c.dataset.check)
+      // tarefa recorrente: ao concluir, já nasce a próxima ocorrência
+      if (c.checked && t?.recorrencia) {
+        await db.from('tarefa').insert({
+          pessoa_id: PERFIL.pessoaId, titulo: t.titulo, detalhe: t.detalhe,
+          recorrencia: t.recorrencia, prioridade: t.prioridade,
+          prazo: proximaData(t.prazo, t.recorrencia)
+        })
+      }
       recarregar()
     }
   })
@@ -1453,7 +1783,8 @@ async function areaDeTrabalho (area) {
     if (!titulo) return
     await db.from('tarefa').insert({
       pessoa_id: PERFIL.pessoaId, titulo,
-      prazo: $('#tf-prazo').value || null
+      prazo: $('#tf-prazo').value || null,
+      recorrencia: $('#tf-recorrencia').value || null
     })
     recarregar()
   }
@@ -1857,7 +2188,7 @@ function podeEditarSolicitacao (s) {
   return false
 }
 
-let COMPRAS_CACHE = { fornecedores: [], setores: [], pessoas: [], meusSetores: [] }
+let COMPRAS_CACHE = { fornecedores: [], setores: [], pessoas: [], meusSetores: [], veiculos: [] }
 
 async function paginaCompras () {
   if (!podeVer('compras')) { areaLivre().innerHTML =
@@ -1870,16 +2201,18 @@ async function paginaCompras () {
   area.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
   // carrega antes de montar as abas: quem coordena depende dos setores
-  const [{ data: forn }, { data: setores }, { data: pessoas }] = await Promise.all([
+  const [{ data: forn }, { data: setores }, { data: pessoas }, { data: veiculos }] = await Promise.all([
     db.from('fornecedor').select('id,nome,cnpj_cpf,contato,status').order('nome'),
     db.from('setor').select('id,nome,gestor_id').order('nome'),
-    db.from('pessoa').select('id,nome').order('nome')
+    db.from('pessoa').select('id,nome').order('nome'),
+    db.from('veiculo').select('id,placa,descricao').order('placa')
   ])
   COMPRAS_CACHE = {
     fornecedores: forn || [],
     setores: setores || [],
     pessoas: pessoas || [],
-    meusSetores: (setores || []).filter(s => s.gestor_id && s.gestor_id === PERFIL.pessoaId)
+    meusSetores: (setores || []).filter(s => s.gestor_id && s.gestor_id === PERFIL.pessoaId),
+    veiculos: veiculos || []
   }
 
   const abas = [
@@ -1921,7 +2254,7 @@ function abrirCompras (sub, editavel) {
 const selSolicitacao = `
   id, status, urgencia, tipo_solicitacao, justificativa, tem_risco, descricao_risco,
   produto_servico, quantidade, unidade, especificacoes, finalidade, local_entrega,
-  valor_estimado, recorrencia, data_solicitacao, setor_id,
+  valor_estimado, recorrencia, data_solicitacao, setor_id, veiculo_id,
   numero, valor_aprovado, onde_mais_barato, observacao_compras, solicitante_id,
   parecer_coordenacao, coordenado_em, parecer_aprovacao, decidido_em,
   parecer_cotacao, cotado_em, forma_pagamento, condicao_pagamento,
@@ -1931,7 +2264,8 @@ const selSolicitacao = `
   analista:analista_id ( nome ),
   aprovador:aprovador_id ( nome ),
   setor:setor_id ( nome ),
-  fornecedor:fornecedor_id ( nome )`
+  fornecedor:fornecedor_id ( nome ),
+  veiculo:veiculo_id ( placa, descricao )`
 
 // ----- Compras › Solicitações -----
 async function comprasSolicitacoes (alvo, editavel) {
@@ -2008,6 +2342,7 @@ async function comprasSolicitacoes (alvo, editavel) {
     <div class="cartao-sol" ${apagado ? 'style="opacity:.72;"' : ''}>
       <div class="linha1">
         <span class="titulo">${esc(s.produto_servico ?? '—')}</span>
+        ${s.veiculo?.placa ? `<span class="chip">🚗 ${esc(s.veiculo.placa)}</span>` : ''}
         ${s.urgencia === 'URGENTE_4H' && !apagado ? '<span class="urgente">● urgente</span>' : ''}
         ${selo(s.status)}
         <div class="botoes">
@@ -2280,7 +2615,7 @@ async function comprasRelatorio (alvo) {
           ${lista.map(s => `<tr>
             <td class="texto-dim2">${esc(s.numero ?? s.origem_id ?? '—')}</td>
             <td>${fmtQuando(s.data_solicitacao) ?? '—'}</td>
-            <td>${esc((s.produto_servico ?? '').slice(0, 60))}</td>
+            <td>${esc((s.produto_servico ?? '').slice(0, 60))}${s.veiculo?.placa ? ` <span class="texto-dim2">(${esc(s.veiculo.placa)})</span>` : ''}</td>
             <td>${esc(s.setor?.nome ?? '—')}</td>
             <td class="texto-dim">${esc(s.solicitante?.nome ?? s.solicitante_nome ?? '—')}</td>
             <td class="num">R$ ${fmtNum(valor(s))}</td>
@@ -2581,6 +2916,7 @@ async function abrirFicha (s, editavel) {
     <div class="doc-linha" style="grid-template-columns:1fr 1fr;">
       ${docBloco('Detalhamento',
         docLinha('Produto ou serviço', s.produto_servico) +
+        docLinha('Placa do veículo', s.veiculo ? `${s.veiculo.placa}${s.veiculo.descricao ? ' — ' + s.veiculo.descricao : ''}` : null) +
         docLinha('Quantidade', s.quantidade ? `${s.quantidade} ${s.unidade ?? ''}` : null) +
         docLinha('Especificações', s.especificacoes) +
         docLinha('Finalidade', s.finalidade))}
@@ -2680,6 +3016,8 @@ function formSolicitacao (s = null) {
           </select></div>
         <div class="campo"><label>Tipo</label>
           <select id="s-tipo">${opcTexto(TIPOS, s?.tipo_solicitacao)}</select></div>
+        <div class="campo oculto" id="s-linha-placa"><label>Placa do veículo *</label>
+          <select id="s-veiculo"><option value="">—</option>${COMPRAS_CACHE.veiculos.map(v => `<option value="${v.id}" ${v.id === s?.veiculo_id ? 'selected' : ''}>${esc(v.placa)}${v.descricao ? ' — ' + esc(v.descricao) : ''}</option>`).join('')}</select></div>
         <div class="campo"><label>Setor</label>
           <select id="s-setor">${opc(COMPRAS_CACHE.setores, s?.setor_id)}</select></div>
         <div class="campo"><label>Valor estimado (R$)</label>
@@ -2721,6 +3059,10 @@ function formSolicitacao (s = null) {
   const q = id => fundo.querySelector(id)
   q('#s-risco').onchange = () => q('#s-linha-risco').classList.toggle('oculto', !q('#s-risco').checked)
 
+  const alternarPlaca = () => q('#s-linha-placa').classList.toggle('oculto', q('#s-tipo').value !== 'Peça de reposição')
+  q('#s-tipo').onchange = alternarPlaca
+  alternarPlaca()
+
   const aviso = (t, alerta = false) => {
     const el = q('#s-recado'); el.textContent = t; el.classList.remove('oculto')
     el.style.borderColor = alerta ? 'var(--warn-text)' : 'var(--line2)'
@@ -2730,6 +3072,9 @@ function formSolicitacao (s = null) {
   q('#s-salvar').onclick = async () => {
     const produto = q('#s-produto').value.trim()
     if (!produto) { aviso('Escreva o produto ou serviço.', true); return }
+    if (q('#s-tipo').value === 'Peça de reposição' && !q('#s-veiculo').value) {
+      aviso('Peça de reposição precisa estar vinculada à placa do veículo.', true); return
+    }
 
     const btn = q('#s-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
     const corpo = {
@@ -2738,6 +3083,7 @@ function formSolicitacao (s = null) {
       unidade: q('#s-unid').value || null,
       urgencia: q('#s-urg').value,
       tipo_solicitacao: q('#s-tipo').value || null,
+      veiculo_id: q('#s-tipo').value === 'Peça de reposição' ? (q('#s-veiculo').value || null) : null,
       setor_id: q('#s-setor').value || null,
       valor_estimado: (() => {
         let b = q('#s-valor').value.trim()
@@ -5492,6 +5838,21 @@ function telaBaixa (s, contas, categorias, centros) {
     }).eq('id', s.id)
 
     if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Confirmar baixa'; return }
+
+    // se essa peça foi pedida de dentro de uma OS de manutenção ("Pedir peça
+    // pro Compras"), o valor pago soma no valor_pecas daquela OS — dali o
+    // valor_total (gerado automático) já reflete em Manutenção e em Frota.
+    const { data: materiaisLigados } = await db.from('os_material')
+      .select('ordem_servico_id').eq('solicitacao_compra_id', s.id)
+    if (materiaisLigados?.length) {
+      const osIds = [...new Set(materiaisLigados.map(m => m.ordem_servico_id))]
+      for (const osId of osIds) {
+        const { data: osAtual } = await db.from('ordem_servico').select('valor_pecas').eq('id', osId).single()
+        await db.from('ordem_servico').update({
+          valor_pecas: Number(osAtual?.valor_pecas || 0) + valor
+        }).eq('id', osId)
+      }
+    }
 
     // boleto e comprovante entram no fechamento do mes
     const competencia = (q('#b-data').value || new Date().toISOString().slice(0, 10)).slice(0, 7)
@@ -10717,18 +11078,46 @@ function abrirFrota (sub, editavel) {
   if (sub === 'calc') frotaCalculadora(alvo)
 }
 
-function custoTotalFrota (item, custosDoc, custosManut) {
+function custoTotalFrota (item, custosDoc, custosManut, custosComb, custosPecas) {
   const doc = (custosDoc || []).filter(c => c.veiculo_id === item.id).reduce((s, c) => s + Number(c.valor), 0)
   const manut = (custosManut || []).filter(o => o.veiculo_id === item.id).reduce((s, o) => s + Number(o.valor_total || 0), 0)
-  return doc + manut
+  const comb = (custosComb || []).filter(c => c.veiculo_id === item.id).reduce((s, c) => s + Number(c.valor || 0), 0)
+  const pecas = (custosPecas || []).filter(c => c.veiculo_id === item.id).reduce((s, c) => s + Number(c.valor || 0), 0)
+  return doc + manut + comb + pecas
 }
-function resultadoFrota (item, custosDoc, custosManut) {
+function resultadoFrota (item, custosDoc, custosManut, custosComb, custosPecas) {
   if (item.valor_venda == null || item.valor_entrada == null) return null
   const dif = Number(item.valor_venda) - Number(item.valor_entrada)
-  const custos = custoTotalFrota(item, custosDoc, custosManut)
+  const custos = custoTotalFrota(item, custosDoc, custosManut, custosComb, custosPecas)
   const liquido = dif - custos
   const pct = Number(item.valor_entrada) ? (dif / Number(item.valor_entrada)) * 100 : null
   return { dif, custos, liquido, pct }
+}
+// soma o valor estimado de abastecimento por veículo (litros × preço configurado
+// em Combustível), no mesmo formato {veiculo_id, valor} usado pros outros custos
+async function custosCombustivelPorVeiculo () {
+  const [{ data: abastec }, { data: precos }] = await Promise.all([
+    db.from('abastecimento').select('veiculo_id,litros,tipo').not('veiculo_id', 'is', null),
+    db.from('preco_combustivel').select('tipo,preco')
+  ])
+  const mapaPreco = {}
+  ;(precos || []).forEach(p => { mapaPreco[p.tipo] = Number(p.preco || 0) })
+  const porVeiculo = {}
+  ;(abastec || []).forEach(a => {
+    const v = Number(a.litros || 0) * (mapaPreco[a.tipo] ?? 0)
+    porVeiculo[a.veiculo_id] = (porVeiculo[a.veiculo_id] || 0) + v
+  })
+  return Object.entries(porVeiculo).map(([veiculo_id, valor]) => ({ veiculo_id, valor }))
+}
+// peças de Compras pedidas direto pra uma placa (fora de uma OS) e já pagas —
+// as pedidas de dentro de uma OS via "Pedir peça pro Compras" já entram no
+// valor_pecas da própria OS quando a baixa é dada, então essas não se repetem aqui.
+async function custosPecasPorVeiculo () {
+  const { data } = await db.from('solicitacao_compra').select('veiculo_id,valor_pago')
+    .not('veiculo_id', 'is', null).eq('status', 'PAGA')
+  const porVeiculo = {}
+  ;(data || []).forEach(p => { porVeiculo[p.veiculo_id] = (porVeiculo[p.veiculo_id] || 0) + Number(p.valor_pago || 0) })
+  return Object.entries(porVeiculo).map(([veiculo_id, valor]) => ({ veiculo_id, valor }))
 }
 function nomeProcessoFrota (proc) {
   if (!proc) return null
@@ -10784,12 +11173,14 @@ async function frotaPainel (alvo, editavel) {
 
 // ----- Frota › Itens -----
 async function frotaItens (alvo, editavel) {
-  const [{ data, error }, { data: custosDoc }, { data: custosManut }] = await Promise.all([
+  const [{ data, error }, { data: custosDoc }, { data: custosManut }, custosComb, custosPecas] = await Promise.all([
     db.from('veiculo').select(`id,placa,descricao,eh_proprio,ano_modelo,renavam,chassi,contraparte,
       valor_entrada,data_entrada,status_frota,valor_venda,data_venda,comprador,processo_id,observacoes,responsavel_id,
       ipva_vencimento, responsavel:responsavel_id ( nome )`).order('data_entrada', { ascending: false, nullsFirst: false }),
     db.from('veiculo_custo').select('veiculo_id,valor'),
-    db.from('ordem_servico').select('veiculo_id,valor_total').not('veiculo_id', 'is', null)
+    db.from('ordem_servico').select('veiculo_id,valor_total').not('veiculo_id', 'is', null),
+    custosCombustivelPorVeiculo(),
+    custosPecasPorVeiculo()
   ])
 
   if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
@@ -10798,7 +11189,7 @@ async function frotaItens (alvo, editavel) {
   const disponiveis = lista.filter(i => i.status_frota === 'DISPONIVEL_VENDA')
   const vendidos = lista.filter(i => i.status_frota === 'VENDIDO')
   const valorDisponivel = disponiveis.reduce((s, i) => s + Number(i.valor_entrada || 0), 0)
-  const resultadoAcumulado = vendidos.reduce((s, i) => { const r = resultadoFrota(i, custosDoc, custosManut); return s + (r ? r.liquido : 0) }, 0)
+  const resultadoAcumulado = vendidos.reduce((s, i) => { const r = resultadoFrota(i, custosDoc, custosManut, custosComb, custosPecas); return s + (r ? r.liquido : 0) }, 0)
 
   // fotos: uma busca só pra todos os veículos, com URL assinada em lote
   const ids = lista.map(i => i.id)
@@ -10850,8 +11241,10 @@ async function frotaItens (alvo, editavel) {
     $('#fr-conteudo').innerHTML = `
       <div class="grade-cartoes" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;">
         ${lista.map(i => {
-          const gasto = custoTotalFrota(i, custosDoc, custosManut)
+          const gasto = custoTotalFrota(i, custosDoc, custosManut, custosComb, custosPecas)
           const gastoManut = (custosManut || []).filter(o => o.veiculo_id === i.id).reduce((s, o) => s + Number(o.valor_total || 0), 0)
+          const gastoComb = (custosComb || []).filter(c => c.veiculo_id === i.id).reduce((s, c) => s + Number(c.valor || 0), 0)
+          const gastoPecas = (custosPecas || []).filter(c => c.veiculo_id === i.id).reduce((s, c) => s + Number(c.valor || 0), 0)
           const preco = i.status_frota === 'VENDIDO' ? i.valor_venda : (i.valor_venda ?? i.valor_entrada)
           const rotuloPreco = i.status_frota === 'VENDIDO' ? 'vendido por' : i.valor_venda != null ? 'à venda por' : 'valor de entrada'
           const dias = diasAteVencimento(i.ipva_vencimento)
@@ -10874,9 +11267,11 @@ async function frotaItens (alvo, editavel) {
                 <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;">${rotuloPreco}</div>
                 <div style="font-family:var(--serif);font-size:19px;color:var(--rust);">${preco != null ? 'R$ ' + fmtNum(preco) : '—'}</div>
               </div>
-              <div style="display:flex;gap:14px;margin-top:10px;font-size:11.5px;" class="texto-dim">
+              <div style="display:flex;gap:12px;margin-top:10px;font-size:11.5px;flex-wrap:wrap;" class="texto-dim">
                 <span>gasto total<br><b class="texto-dim2">R$ ${fmtNum(gasto)}</b></span>
                 <span>manutenção<br><b class="texto-dim2">R$ ${fmtNum(gastoManut)}</b></span>
+                <span>combustível<br><b class="texto-dim2">R$ ${fmtNum(gastoComb)}</b></span>
+                ${gastoPecas ? `<span>peças<br><b class="texto-dim2">R$ ${fmtNum(gastoPecas)}</b></span>` : ''}
               </div>
               ${dias !== null && dias <= 10 ? `<div class="badge-alerta" style="margin-top:10px;display:inline-block;">
                 ${dias < 0 ? `IPVA vencido há ${Math.abs(dias)}d` : dias === 0 ? 'IPVA vence hoje' : `IPVA vence em ${dias}d`}</div>` : ''}
@@ -10900,7 +11295,7 @@ async function frotaItens (alvo, editavel) {
       ${lista.map(i => {
         const proc = FROTA_CACHE.processos.find(p => p.id === i.processo_id)
         const ident = [i.placa, i.renavam ? 'renavam ' + i.renavam : null].filter(Boolean).join(' · ')
-        const r = resultadoFrota(i, custosDoc, custosManut)
+        const r = resultadoFrota(i, custosDoc, custosManut, custosComb, custosPecas)
         return `<tr>
         <td><b>${esc(i.descricao)}</b>${i.ano_modelo ? ` <span class="texto-dim2">(${esc(i.ano_modelo)})</span>` : ''}
           ${ident ? `<br><span class="texto-dim2" style="font-size:11px;">${esc(ident)}</span>` : ''}</td>
@@ -10925,7 +11320,7 @@ async function frotaItens (alvo, editavel) {
     </div></div>`
 
     $('#fr-conteudo').querySelectorAll('[data-custos]').forEach(b => {
-      b.onclick = () => formCustosVeiculo(lista.find(x => x.id === b.dataset.custos), custosManut, editavel)
+      b.onclick = () => formCustosVeiculo(lista.find(x => x.id === b.dataset.custos), custosManut, editavel, custosComb, custosPecas)
     })
     if (!editavel) return
     $('#fr-conteudo').querySelectorAll('[data-editar]').forEach(b => {
@@ -11181,15 +11576,18 @@ function formFrotaVenda (item, custosDoc, custosManut) {
 }
 
 // custos de documento/imposto por veículo + total de manutenção (só leitura, vem de ordem_servico)
-function formCustosVeiculo (item, custosManut, editavel) {
+function formCustosVeiculo (item, custosManut, editavel, custosComb, custosPecas) {
   if (!item) return
   const totalManut = (custosManut || []).filter(o => o.veiculo_id === item.id).reduce((s, o) => s + Number(o.valor_total || 0), 0)
+  const totalComb = (custosComb || []).filter(c => c.veiculo_id === item.id).reduce((s, c) => s + Number(c.valor || 0), 0)
 
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
   fundo.innerHTML = `<div class="modal">
     <h3>Custos — ${esc(item.descricao)}</h3>
-    <div class="mini-kv" style="margin-bottom:12px;"><span>Manutenção (Ordens de Serviço vinculadas)</span><span>R$ ${fmtNum(totalManut)}</span></div>
+    <div class="mini-kv" style="margin-bottom:6px;"><span>Manutenção (Ordens de Serviço vinculadas)</span><span>R$ ${fmtNum(totalManut)}</span></div>
+    <div class="mini-kv" style="margin-bottom:12px;"><span>Combustível (abastecimentos vinculados)</span><span>R$ ${fmtNum(totalComb)}</span></div>
+    <div id="cv-pecas"><p class="texto-dim2" style="font-size:12px;">carregando peças de Compras...</p></div>
     <div id="cv-lista"><p class="texto-dim2" style="font-size:12px;">carregando...</p></div>
     ${editavel ? `<div class="secao" style="margin-top:16px;">
       <h3 style="font-size:15px;">Novo custo de documento/imposto</h3>
@@ -11209,6 +11607,21 @@ function formCustosVeiculo (item, custosManut, editavel) {
   document.body.appendChild(fundo)
   fundo.querySelector('#cv-fechar').onclick = () => fundo.remove()
   fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+
+  ;(async () => {
+    const { data: pecas, error: erroPecas } = await db.from('solicitacao_compra')
+      .select('id,produto_servico,quantidade,unidade,status,valor_pago,valor_aprovado,valor_estimado,data_solicitacao')
+      .eq('veiculo_id', item.id).order('data_solicitacao', { ascending: false })
+    if (faltaMigracao(erroPecas)) return
+    const totalPecas = (pecas || []).reduce((s, p) => s + Number(p.valor_pago ?? p.valor_aprovado ?? p.valor_estimado ?? 0), 0)
+    fundo.querySelector('#cv-pecas').innerHTML = `
+      <div class="mini-kv" style="margin-bottom:6px;"><span>Peças pedidas em Compras pra esta placa</span><span>R$ ${fmtNum(totalPecas)}</span></div>
+      ${(pecas || []).length ? `<div class="panel" style="padding:0;margin-bottom:12px;">
+        ${pecas.map(p => `<div class="conta-linha">
+          <span>${esc(p.produto_servico)}<span class="texto-dim2"> — ${fmtData(p.data_solicitacao?.slice(0, 10))} · ${esc(p.status)}</span></span>
+          <b>R$ ${fmtNum(p.valor_pago ?? p.valor_aprovado ?? p.valor_estimado ?? 0)}</b></div>`).join('')}
+      </div>` : ''}`
+  })()
 
   const carregarLista = async () => {
     const { data } = await db.from('veiculo_custo').select('id,tipo,descricao,valor,data,vencimento')
