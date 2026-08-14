@@ -851,7 +851,7 @@ const PAGINAS = {
   visao_geral: { nome: 'Visão geral', render: paginaVisaoGeral, sempre: true },
   solicitacoes: { nome: 'Solicitações', render: paginaSolicitacoes, sempre: true },
   expedicao:   { nome: 'Expedição', render: paginaExpedicao },
-  compras:     { nome: 'Compras e Recebimento', render: paginaCompras },
+  compras:     { nome: 'Compras e Recebimento', render: paginaCompras, sempre: true },
   cobranca:    { nome: 'Crédito e Cobrança', render: paginaCobranca },
   crm:         { nome: 'CRM Comercial', render: paginaCrm },
   financeiro:  { nome: 'Financeiro', render: paginaFinanceiro },
@@ -891,9 +891,14 @@ const ICONES_MODULO = {
 }
 
 function montarMenu () {
-  const fixos = `<a data-chave="visao_geral" title="Visão geral">${ICONES_MODULO.visao_geral}<span class="rotulo">Visão geral</span></a>
-    <a data-chave="solicitacoes" title="Solicitações">${ICONES_MODULO.solicitacoes}<span class="rotulo">Solicitações</span></a>`
-  const doBanco = PERFIL.modulos.map(m => {
+  // páginas marcadas "sempre" (visão geral, solicitações, compras) aparecem
+  // pra qualquer usuário logado, sem depender de permissão de módulo —
+  // o controle fino de quem edita o quê é feito dentro de cada página
+  const chavesSempre = Object.entries(PAGINAS).filter(([, p]) => p.sempre).map(([chave]) => chave)
+  const fixos = chavesSempre.map(chave =>
+    `<a data-chave="${chave}" title="${esc(PAGINAS[chave].nome)}">${ICONES_MODULO[chave] || ICONES_MODULO._padrao}<span class="rotulo">${esc(PAGINAS[chave].nome)}</span></a>`
+  ).join('')
+  const doBanco = PERFIL.modulos.filter(m => !chavesSempre.includes(m.chave)).map(m => {
     const temPagina = !!PAGINAS[m.chave]
     const liberado = podeVer(m.chave)
     if (!liberado) return ''
@@ -2618,12 +2623,13 @@ function podeEditarSolicitacao (s) {
 let COMPRAS_CACHE = { fornecedores: [], setores: [], pessoas: [], meusSetores: [], veiculos: [] }
 
 async function paginaCompras () {
-  if (!podeVer('compras')) { areaLivre().innerHTML =
-    `<div class="panel" style="padding:22px;"><p class="texto-dim">
-     Você não tem acesso a Compras.</p></div>`; return }
-
   const editavel = podeEditar('compras')
-  $('#subtitulo-pagina').textContent = 'Solicitações, coordenação, cotação e aprovação'
+  // sem edição, sem coordenar/cotar/aprovar: só pode abrir uma solicitação
+  // nova e acompanhar as próprias — não enxerga o resto do fluxo
+  const apenasProprio = !editavel && !podeCoordenar() && !podeCotar() && !podeAprovar()
+  $('#subtitulo-pagina').textContent = apenasProprio
+    ? 'Peça uma compra e acompanhe suas próprias solicitações'
+    : 'Solicitações, coordenação, cotação e aprovação'
   const area = areaLivre()
   area.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
@@ -2647,8 +2653,8 @@ async function paginaCompras () {
     { chave: 'coordenar',    nome: 'Coordenação',  mostrar: podeCoordenar() },
     { chave: 'cotar',        nome: 'Cotação',      mostrar: podeCotar() },
     { chave: 'aprovar',      nome: 'Aprovação',    mostrar: podeAprovar() },
-    { chave: 'fornecedores', nome: 'Fornecedores', mostrar: true },
-    { chave: 'relatorio',    nome: 'Relatório',    mostrar: true }
+    { chave: 'fornecedores', nome: 'Fornecedores', mostrar: editavel },
+    { chave: 'relatorio',    nome: 'Relatório',    mostrar: editavel }
   ].filter(a => a.mostrar)
 
   area.innerHTML = `
@@ -2660,17 +2666,17 @@ async function paginaCompras () {
   area.querySelectorAll('.subabas button').forEach(b => {
     b.onclick = () => {
       area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
-      abrirCompras(b.dataset.sub, editavel)
+      abrirCompras(b.dataset.sub, editavel, apenasProprio)
     }
   })
 
-  abrirCompras('solicitacoes', editavel)
+  abrirCompras('solicitacoes', editavel, apenasProprio)
 }
 
-function abrirCompras (sub, editavel) {
+function abrirCompras (sub, editavel, apenasProprio) {
   const alvo = $('#sub-compras')
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
-  if (sub === 'solicitacoes') comprasSolicitacoes(alvo, editavel)
+  if (sub === 'solicitacoes') comprasSolicitacoes(alvo, editavel, apenasProprio)
   if (sub === 'coordenar') comprasDecidir(alvo, 'coordenacao')
   if (sub === 'cotar') comprasCotar(alvo)
   if (sub === 'aprovar') comprasDecidir(alvo, 'aprovacao')
@@ -2695,9 +2701,12 @@ const selSolicitacao = `
   veiculo:veiculo_id ( placa, descricao )`
 
 // ----- Compras › Solicitações -----
-async function comprasSolicitacoes (alvo, editavel) {
-  const { data, error } = await db.from('solicitacao_compra')
-    .select(selSolicitacao).order('data_solicitacao', { ascending: false }).limit(600)
+async function comprasSolicitacoes (alvo, editavel, apenasProprio) {
+  let q = db.from('solicitacao_compra').select(selSolicitacao).order('data_solicitacao', { ascending: false }).limit(600)
+  // sem edição/coordenação/cotação/aprovação, só enxerga as próprias —
+  // a RLS do banco já libera leitura geral, então o recorte é aqui mesmo
+  if (apenasProprio) q = q.eq('solicitante_id', PERFIL.pessoaId)
+  const { data, error } = await q
 
   if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
 
@@ -2715,9 +2724,11 @@ async function comprasSolicitacoes (alvo, editavel) {
   const soma = l => l.reduce((t, s) => t + Number(s.valor_aprovado ?? s.valor_estimado ?? 0), 0)
 
   alvo.innerHTML = `
-    ${editavel ? `<div class="acoes" style="margin:0 0 16px;">
+    <div class="acoes" style="margin:0 0 16px;">
       <button class="btn" id="c-nova">Nova solicitação</button>
-    </div>` : ''}
+    </div>
+    ${apenasProprio ? `<p class="texto-dim2" style="font-size:12px;margin:-10px 0 14px;">
+      Mostrando só as suas solicitações. Quem coordena, cota ou aprova compras enxerga o restante.</p>` : ''}
 
     <div class="faixa-etapa" id="c-faixa">
       <button data-etapa="AGUARDANDO_COORD"><span class="n">${
@@ -2865,7 +2876,6 @@ async function comprasSolicitacoes (alvo, editavel) {
   $('#c-f-texto').oninput = desenhar
   desenhar()
 
-  if (!editavel) return
   $('#c-nova').onclick = () => formSolicitacao()
 }
 
@@ -4537,7 +4547,6 @@ async function crmCardNovoPedido (alvo, gerencia) {
       <div class="campo"><label>Cliente *</label>
         <select id="npc-cliente"><option value="">selecione...</option>
           ${clientes.map(c => `<option value="${c.id}">${esc(c.nome_fantasia || c.razao_social)}</option>`).join('')}</select></div>
-      <div class="campo"><label>PD</label><input id="npc-numero" placeholder="número do pedido"></div>
       <div class="campo"><label>Vencimento</label><input type="date" id="npc-venc"></div>
       <div class="campo"><label>Toneladas *</label><input type="number" step="0.01" id="npc-ton"></div>
       <div class="campo"><label>R$/t *</label><input type="number" step="0.01" id="npc-preco"></div>
@@ -4587,17 +4596,17 @@ async function crmCardNovoPedido (alvo, gerencia) {
     }).eq('id', clienteId)
     if (e1) { aviso(e1.message); return }
 
-    const { error: e2 } = await db.from('pedido').insert({
-      cliente_id: clienteId, numero: bloco.querySelector('#npc-numero').value.trim() || null,
+    const { data: novoPedido, error: e2 } = await db.from('pedido').insert({
+      cliente_id: clienteId,
       quantidade_t: ton, preco_unitario: preco, valor_total: ton * preco,
       vencimento: bloco.querySelector('#npc-venc').value || null,
       observacao_cobranca: bloco.querySelector('#npc-obs').value.trim() || null,
       data_pedido: new Date().toISOString().slice(0, 10)
-    })
+    }).select('numero').single()
     if (e2) { aviso(e2.message); return }
-    el.textContent = 'Pedido emitido com sucesso.'; el.classList.remove('oculto')
+    el.textContent = `Pedido ${novoPedido?.numero ?? ''} emitido com sucesso.`; el.classList.remove('oculto')
     el.style.borderColor = 'var(--good-text)'; el.style.color = 'var(--good-text)'
-    bloco.querySelector('#npc-numero').value = ''; bloco.querySelector('#npc-venc').value = ''
+    bloco.querySelector('#npc-venc').value = ''
     bloco.querySelector('#npc-ton').value = ''; bloco.querySelector('#npc-preco').value = ''
     bloco.querySelector('#npc-obs').value = ''
   }
@@ -4888,7 +4897,6 @@ function formEmitirPedidoCrm (l) {
   fundo.innerHTML = `<div class="modal">
     <h3>Emitir pedido — ${esc(nomeCli)}</h3>
     <div class="form-grade">
-      <div class="campo"><label>PD</label><input id="ep-numero" placeholder="número do pedido"></div>
       <div class="campo"><label>Vencimento</label><input id="ep-venc" type="date"></div>
       <div class="campo"><label>Toneladas *</label><input id="ep-ton" type="number" step="0.01"></div>
       <div class="campo"><label>R$/t *</label><input id="ep-preco" type="number" step="0.01"></div>
@@ -4897,7 +4905,7 @@ function formEmitirPedidoCrm (l) {
     <div class="acoes" style="margin-top:14px;"><button class="btn" id="ep-salvar">Emitir pedido</button>
       <button class="btn-secundario" id="ep-cancelar">Cancelar</button></div>
     <div class="recado oculto" id="ep-recado"></div>
-    <p class="texto-dim2" style="font-size:11.5px;margin-top:8px;">O valor do pedido é calculado por toneladas × R$/t. Depois de emitido, o pedido aparece normalmente em Crédito e Cobrança.</p>
+    <p class="texto-dim2" style="font-size:11.5px;margin-top:8px;">O número do pedido é gerado automaticamente. O valor é calculado por toneladas × R$/t. Depois de emitido, o pedido aparece normalmente em Crédito e Cobrança.</p>
   </div>`
   document.body.appendChild(fundo)
   const fechar = () => fundo.remove()
@@ -4910,15 +4918,15 @@ function formEmitirPedidoCrm (l) {
     const el = fundo.querySelector('#ep-recado')
     const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
     if (!ton || !preco) { aviso('Preencha toneladas e R$/t.'); return }
-    const { error } = await db.from('pedido').insert({
-      cliente_id: l.cliente_id, numero: fundo.querySelector('#ep-numero').value.trim() || null,
+    const { data: novoPedido, error } = await db.from('pedido').insert({
+      cliente_id: l.cliente_id,
       quantidade_t: ton, preco_unitario: preco, valor_total: ton * preco,
       vencimento: fundo.querySelector('#ep-venc').value || null,
       observacao_cobranca: fundo.querySelector('#ep-obs').value.trim() || null,
       data_pedido: new Date().toISOString().slice(0, 10)
-    })
+    }).select('numero').single()
     if (error) { aviso(error.message); return }
-    el.textContent = 'Pedido emitido com sucesso.'; el.classList.remove('oculto')
+    el.textContent = `Pedido ${novoPedido?.numero ?? ''} emitido com sucesso.`; el.classList.remove('oculto')
     el.style.borderColor = 'var(--good-text)'; el.style.color = 'var(--good-text)'
     setTimeout(fechar, 1400)
   }
@@ -5292,7 +5300,6 @@ function renderCobranca (area) {
           <option value="">selecione…</option>
           ${CRED_CACHE.clientes.map(c => `<option value="${c.id}">${esc(nomeCliente(c))}</option>`).join('')}
         </select></div>
-        <div class="campo"><label>PD</label><input id="np-numero" placeholder="número do pedido"></div>
         <div class="campo"><label>Vencimento</label><input id="np-venc" type="date"></div>
         <div class="campo"><label>Toneladas *</label><input id="np-ton" type="number" step="0.01"></div>
         <div class="campo"><label>R$/t *</label><input id="np-preco" type="number" step="0.01"></div>
@@ -5301,7 +5308,7 @@ function renderCobranca (area) {
       <div class="campo" style="margin-top:10px;"><label>Observação</label><input id="np-obs" placeholder="opcional"></div>
       <div class="acoes"><button class="btn" id="np-salvar">Adicionar</button></div>
       <div class="recado oculto" id="np-recado"></div>
-      <p class="texto-dim2" style="font-size:11.5px;margin-top:8px;">O valor do pedido é calculado por toneladas × R$/t.</p>
+      <p class="texto-dim2" style="font-size:11.5px;margin-top:8px;">O número do pedido é gerado automaticamente. O valor é calculado por toneladas × R$/t.</p>
     </div>` : ''}`
 
   area.querySelectorAll('.chips-cred button').forEach(b => {
@@ -5343,12 +5350,12 @@ function renderCobranca (area) {
     const carregamentoId = selecionado ? selecionado.dataset.carregamento : null
 
     const { data: novo, error } = await db.from('pedido').insert({
-      cliente_id: clienteId, numero: $('#np-numero').value.trim() || null,
+      cliente_id: clienteId,
       quantidade_t: ton, preco_unitario: preco, valor_total: ton * preco,
       vencimento: $('#np-venc').value || null,
       observacao_cobranca: $('#np-obs').value.trim() || null,
       data_pedido: new Date().toISOString().slice(0, 10)
-    }).select('id').single()
+    }).select('id,numero').single()
     if (error) { aviso(error.message); return }
 
     if (novo && carregamentoId) {
@@ -5384,7 +5391,6 @@ async function carregarCarregamentosCliente (clienteId) {
         const c = data.find(x => x.id === el.dataset.carregamento)
         $('#np-ton').value = c.quantidade_t
         $('#np-preco').value = c.preco_unitario || (c.quantidade_t ? (c.valor_nf / c.quantidade_t).toFixed(2) : '')
-        if (!$('#np-numero').value) $('#np-numero').value = c.numero_nf || ''
       }
     }
   })
