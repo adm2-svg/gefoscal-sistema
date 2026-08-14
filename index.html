@@ -103,13 +103,13 @@ tbody tr:hover { background: var(--hover-bg); }
 .doc-topo img { height:40px; width:auto; }
 .doc-corpo { padding:16px; display:grid; gap:12px; }
 .doc-linha { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); }
-.bloco { border:1px solid var(--borda); border-radius:8px; overflow:hidden; background:#fff; }
-.bloco > h4 { margin:0; background:var(--verde-claro); color:var(--verde);
+.doc .bloco { border:1px solid var(--borda); border-radius:8px; overflow:hidden; background:#fff; }
+.doc .bloco > h4 { margin:0; background:var(--verde-claro); color:var(--verde);
               font-size:11px; letter-spacing:.6px; text-transform:uppercase;
               padding:8px 12px; border-bottom:1px solid var(--borda); font-weight:600; }
-.bloco .conteudo { padding:12px; font-size:13px; line-height:1.65; }
-.bloco .conteudo .rot { color:#5b6b60; }
-.bloco .conteudo b { color:#1b1b1b; }
+.doc .bloco .conteudo { padding:12px; font-size:13px; line-height:1.65; }
+.doc .bloco .conteudo .rot { color:#5b6b60; }
+.doc .bloco .conteudo b { color:#1b1b1b; }
 .doc .valor-caixa { display:flex; justify-content:space-between; align-items:center;
                     gap:12px; border:1px solid var(--borda); border-radius:7px;
                     padding:10px 12px; margin-top:8px; }
@@ -340,18 +340,22 @@ tbody tr:hover { background: var(--hover-bg); }
 
 /* ---- Resumo grande do financeiro ---- */
 .resumo-topo { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr));
-               gap:1px; background:var(--line); border:1px solid var(--line);
-               border-radius:10px; overflow:hidden; margin-bottom:20px; }
-.resumo-topo .bloco { background:var(--panel); padding:20px 22px; }
+               gap:12px; margin-bottom:20px; }
+.resumo-topo .bloco { background:var(--panel); padding:19px 22px; border:1px solid var(--line);
+               border-radius:10px; display:flex; flex-direction:column; justify-content:center;
+               transition:border-color .15s ease, box-shadow .15s ease; }
+.resumo-topo .bloco:hover { border-color:var(--dim2); }
 .resumo-topo .rot { color:var(--dim2); font-size:10.5px; text-transform:uppercase;
-                    letter-spacing:.12em; }
+                    letter-spacing:.12em; display:flex; align-items:center; justify-content:space-between; gap:10px; }
 .resumo-topo .val { font-family:var(--serif); font-size:34px; line-height:1.05;
                     margin-top:10px; letter-spacing:-.01em; }
 .resumo-topo .nota { color:var(--dim); font-size:12.5px; margin-top:7px; }
-.resumo-topo .bloco.destaque { box-shadow:inset 4px 0 0 var(--rust); }
-.resumo-topo .bloco.alerta  { box-shadow:inset 4px 0 0 var(--warn-text); }
+.resumo-topo .bloco.destaque { border-color:var(--rust); box-shadow:inset 3px 0 0 var(--rust); }
+.resumo-topo .bloco.alerta  { border-color:var(--warn-text); box-shadow:inset 3px 0 0 var(--warn-text); }
 .resumo-topo .bloco.alerta .val { color:var(--warn-text); }
 .resumo-topo .bloco.bom .val { color:var(--ok-text, var(--rust)); }
+.resumo-topo .bloco .editar-valor { flex:none; padding:4px 6px; line-height:0; opacity:.55; }
+.resumo-topo .bloco .editar-valor:hover { opacity:1; }
 @media (max-width:640px) { .resumo-topo .val { font-size:26px; } }
 
 
@@ -9602,11 +9606,12 @@ async function estAtual (alvo, editavel) {
   // linha exata (produto+local); o "total nas bicas" é soma de duas, não dá
   // pra editar direto (edita cada bica na tabela de baixo, ou pelo próprio card dela)
   const card = (rot, val, un, nota, classe, item) => `
-    <div class="bloco ${classe ?? ''}" style="position:relative;">
-      ${editavel && item ? `<button class="btn-secundario mini" data-editar-saldo='${JSON.stringify(item)}'
-          title="Editar valor" style="position:absolute;top:10px;right:10px;padding:5px;line-height:0;">
-          <span style="width:13px;height:13px;display:block;">${iconeLapis}</span></button>` : ''}
-      <div class="rot">${esc(rot)}</div>
+    <div class="bloco ${classe ?? ''}">
+      <div class="rot">
+        <span>${esc(rot)}</span>
+        ${editavel && item ? `<button class="btn-secundario mini editar-valor" data-editar-saldo='${JSON.stringify(item)}' title="Editar valor">
+            <span style="width:12px;height:12px;display:block;">${iconeLapis}</span></button>` : ''}
+      </div>
       <div class="val">${fmtNum(val, casasPara(un))} <span style="font-size:15px;color:var(--dim2);">${esc(un)}</span></div>
       ${nota ? `<div class="nota">${esc(nota)}</div>` : ''}
     </div>`
