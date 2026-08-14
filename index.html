@@ -957,6 +957,7 @@ async function paginaVisaoGeral () {
   }
 
   // painel do financeiro, para quem trabalha nele
+  await painelGerencial(area)
   await minhasSolicitacoes(area)
   await minhasCompras(area)
   await areaDeTrabalho(area)
@@ -1030,6 +1031,58 @@ const ROTULO_STATUS_SOLICITACAO = { ABERTA: 'Aberta', EM_ANDAMENTO: 'Em andament
 
 let SOLIC_CACHE = { setores: [], pessoas: [] }
 
+// ---------------------------------------------------------------
+// Progresso, agilidade e permissão de quem pode mexer numa solicitação
+// ---------------------------------------------------------------
+// Pontuação de agilidade (0 a 100): 100 = concluiu dentro do prazo/SLA;
+// cai linearmente conforme atrasa, até 0 quando o atraso equivale a
+// mais uma "janela inteira" de prazo (do início até o prazo original).
+// Serve tanto pra pontuar quem já concluiu quanto pra mostrar o "ritmo
+// atual" de quem ainda está com a tarefa em mãos (não é salvo nesse caso).
+function calcularAgilidade (dataSolicitacao, prazoMs, fimMs) {
+  const inicioMs = new Date(dataSolicitacao).getTime()
+  const janelaMs = Math.max(prazoMs - inicioMs, 3600000) // no mínimo 1h de janela
+  const atrasoMs = fimMs - prazoMs
+  if (atrasoMs <= 0) return 100
+  return Math.max(0, Math.round(100 - (atrasoMs / janelaMs) * 100))
+}
+function pontuacaoAgilidadeSolicitacao (s) {
+  if (s.status === 'CANCELADA') return null
+  const prazoMs = prazoSlaSolicitacao(s)
+  if (s.status === 'CONCLUIDA') {
+    if (s.pontuacao_agilidade != null) return s.pontuacao_agilidade
+    if (!s.data_conclusao) return null
+    return calcularAgilidade(s.data_solicitacao, prazoMs, new Date(s.data_conclusao).getTime())
+  }
+  return calcularAgilidade(s.data_solicitacao, prazoMs, Date.now()) // ritmo atual, ainda em aberto
+}
+function corAgilidade (pts) {
+  if (pts == null) return 'texto-dim2'
+  if (pts >= 80) return 'badge-bom'
+  if (pts >= 40) return 'chip'
+  return 'badge-alerta'
+}
+
+// Quem pode atualizar progresso/status/resposta de uma solicitação:
+// o responsável marcado, qualquer pessoa do setor de destino (o setor
+// "dono" da tarefa), ou quem enxerga tudo. A RLS do banco deve espelhar
+// a mesma regra — isto aqui só evita mostrar um controle que vai falhar.
+function podeAtualizarSolicitacao (s) {
+  if (ehTotal()) return true
+  if (s.responsavel_id && s.responsavel_id === PERFIL.pessoaId) return true
+  if (s.setor_destino_id && s.setor_destino_id === PERFIL.setorId) return true
+  return false
+}
+
+function ticksProgressoSolicitacao (valor, editavel) {
+  const passos = [0, 25, 50, 75, 100]
+  return `<div class="ticks ${editavel ? 'editavel' : ''}" id="ds-progresso-ticks">
+    ${passos.map(t => `<div class="seg ${t <= valor ? 'on' : ''}" title="${t}%"
+      style="${t <= valor ? `background:${bandCor(valor)};` : ''}"
+      ${editavel ? `data-progresso-solic="${t}"` : ''}></div>`).join('')}
+    </div>`
+}
+
 function corUrgenciaSolicitacao (u) {
   if (u === 'URGENTE') return 'badge-alerta'
   if (u === 'ALTA') return 'chip'
@@ -1084,7 +1137,8 @@ function abrirSolicitacoes (sub) {
 // ----- Painel -----
 async function solicPainel (alvo) {
   const { data, error } = await db.from('solicitacao_interna').select(`
-    id, codigo, urgencia, status, data_solicitacao, data_limite,
+    id, codigo, urgencia, status, data_solicitacao, data_limite, data_conclusao,
+    progresso_pct, pontuacao_agilidade, setor_destino_id, responsavel_id,
     setor:setor_destino_id ( nome ), solicitante:solicitante_id ( nome )
   `).order('data_solicitacao', { ascending: false }).limit(1000)
 
@@ -1228,7 +1282,9 @@ async function solicLista (alvo, { meuSetor }) {
   const buscar = async () => {
     let q = db.from('solicitacao_interna').select(`
       id, codigo, titulo, descricao, urgencia, status, data_solicitacao, data_limite, data_conclusao, resposta,
-      setor:setor_destino_id ( id, nome ), solicitante:solicitante_id ( nome ), responsavel:responsavel_id ( nome )
+      progresso_pct, pontuacao_agilidade, setor_destino_id, responsavel_id, setor_envolvido_id,
+      setor:setor_destino_id ( id, nome ), solicitante:solicitante_id ( nome ), responsavel:responsavel_id ( nome ),
+      setorEnvolvido:setor_envolvido_id ( nome )
     `).gte('data_solicitacao', $('#sl-de').value).lte('data_solicitacao', $('#sl-ate').value + 'T23:59:59')
       .order('data_solicitacao', { ascending: false }).limit(500)
     if (meuSetor) q = q.eq('setor_destino_id', PERFIL.setorId)
@@ -1248,19 +1304,21 @@ async function solicLista (alvo, { meuSetor }) {
       <div class="panel" style="padding:0;"><div class="tabela-scroll">
         <table><thead><tr>
           <th>Código</th><th>Quando</th>${meuSetor ? '' : '<th>Setor</th>'}<th>Título</th>
-          <th>Urgência</th><th>Prazo</th><th>Status</th><th>Solicitante</th><th>Responsável</th>
+          <th>Urgência</th><th>Prazo</th><th>Progresso</th><th>Status</th><th>Solicitante</th><th>Responsável</th><th>Agilidade</th>
         </tr></thead><tbody>
-          ${lista.map(s => { const prazo = textoPrazoSolicitacao(s); return `<tr style="cursor:pointer;" data-abrir="${s.id}">
-            <td><b>${esc(s.codigo)}</b></td>
+          ${lista.map(s => { const prazo = textoPrazoSolicitacao(s); const pts = pontuacaoAgilidadeSolicitacao(s); return `<tr style="cursor:pointer;" data-abrir="${s.id}">
+            <td><b>${esc(s.codigo)}</b>${s.setor_envolvido_id ? ' <span title="Envolve outro setor">🔗</span>' : ''}</td>
             <td class="texto-dim">${fmtQuando(s.data_solicitacao) ?? '—'}</td>
             ${meuSetor ? '' : `<td class="texto-dim2">${esc(s.setor?.nome ?? '—')}</td>`}
             <td>${esc(s.titulo)}</td>
             <td><span class="${corUrgenciaSolicitacao(s.urgencia)}">${esc(ROTULO_URGENCIA_SOLICITACAO[s.urgencia])}</span></td>
             <td>${prazo ? `<span class="${prazo.atrasada ? 'badge-alerta' : 'texto-dim2'}" style="font-size:11px;">${prazo.texto}</span>` : '<span class="texto-dim2">—</span>'}</td>
+            <td style="min-width:70px;"><span class="texto-dim2" style="font-size:11px;">${s.progresso_pct ?? 0}%</span></td>
             <td><span class="${corStatusSolicitacao(s.status)}">${esc(ROTULO_STATUS_SOLICITACAO[s.status])}</span></td>
             <td class="texto-dim">${esc(s.solicitante?.nome ?? '—')}</td>
             <td class="texto-dim">${esc(s.responsavel?.nome ?? '—')}</td>
-          </tr>`}).join('') || `<tr><td colspan="${meuSetor ? 8 : 9}" class="vazio">Nenhuma solicitação no filtro.</td></tr>`}
+            <td>${pts != null ? `<span class="${corAgilidade(pts)}" style="font-size:11px;">${pts}</span>` : '<span class="texto-dim2">—</span>'}</td>
+          </tr>`}).join('') || `<tr><td colspan="${meuSetor ? 9 : 10}" class="vazio">Nenhuma solicitação no filtro.</td></tr>`}
         </tbody></table>
       </div></div>`
 
@@ -1281,6 +1339,10 @@ async function solicLista (alvo, { meuSetor }) {
 // ----- Detalhe / responder -----
 function detalheSolicitacao (s, aoFechar) {
   const prazo = textoPrazoSolicitacao(s)
+  const editavel = podeAtualizarSolicitacao(s)
+  const pts = pontuacaoAgilidadeSolicitacao(s)
+  let progressoAtual = s.progresso_pct ?? 0
+
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
   fundo.innerHTML = `<div class="modal">
@@ -1292,27 +1354,48 @@ function detalheSolicitacao (s, aoFechar) {
       ${esc(s.setor?.nome ?? '—')} · aberta por ${esc(s.solicitante?.nome ?? '—')} em ${fmtQuando(s.data_solicitacao) ?? '—'}
       · urgência <span class="${corUrgenciaSolicitacao(s.urgencia)}" style="font-size:10px;">${esc(ROTULO_URGENCIA_SOLICITACAO[s.urgencia])}</span>
       ${prazo ? ` · <span class="${prazo.atrasada ? 'badge-alerta' : ''}" style="font-size:11px;">${prazo.texto}</span>` : ''}
-      ${s.data_limite ? ` · prazo manual ${fmtData(s.data_limite)}` : ''}</p>
+      ${s.data_limite ? ` · prazo manual ${fmtData(s.data_limite)}` : ''}
+      ${pts != null ? ` · agilidade <span class="${corAgilidade(pts)}" style="font-size:10px;">${pts} pts${s.status !== 'CONCLUIDA' ? ' (ritmo atual)' : ''}</span>` : ''}
+      ${s.setorEnvolvido?.nome ? ` · também envolve <b>${esc(s.setorEnvolvido.nome)}</b>` : ''}
+      ${!editavel ? ' · <span class="texto-dim2">somente leitura pra você</span>' : ''}</p>
 
     <div class="caixa-texto" style="margin-bottom:12px;">
       <div class="rot">${esc(s.titulo)}</div>
       <p>${esc(s.descricao ?? 'sem descrição adicional')}</p>
     </div>
 
+    <div class="campo" style="margin-bottom:14px;">
+      <label id="ds-progresso-rotulo">Progresso do responsável — ${progressoAtual}%</label>
+      ${ticksProgressoSolicitacao(progressoAtual, editavel)}
+    </div>
+
     <div class="cabeca-secao" style="margin-bottom:6px;"><h3 style="font-family:var(--serif);font-size:15px;">Anexos</h3></div>
     <div id="ds-anexos"><p class="texto-dim2" style="font-size:12px;">carregando...</p></div>
-    <div class="campo" style="margin:8px 0 14px;"><input type="file" id="ds-arquivos" multiple accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx"></div>
-    <div class="acoes" style="margin-bottom:14px;"><button class="btn-secundario" id="ds-anexar">Anexar arquivo(s)</button></div>
+    ${editavel ? `<div class="campo" style="margin:8px 0 14px;"><input type="file" id="ds-arquivos" multiple accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx"></div>
+    <div class="acoes" style="margin-bottom:14px;"><button class="btn-secundario" id="ds-anexar">Anexar arquivo(s)</button></div>` : ''}
 
     <div class="form-grade">
       <div class="campo"><label>Status</label>
-        <select id="ds-status">${STATUS_SOLICITACAO.map(st => `<option value="${st}" ${st === s.status ? 'selected' : ''}>${ROTULO_STATUS_SOLICITACAO[st]}</option>`).join('')}</select></div>
+        <select id="ds-status" ${editavel ? '' : 'disabled'}>${STATUS_SOLICITACAO.map(st => `<option value="${st}" ${st === s.status ? 'selected' : ''}>${ROTULO_STATUS_SOLICITACAO[st]}</option>`).join('')}</select></div>
       <div class="campo"><label>Responsável</label>
-        <select id="ds-resp"><option value="">—</option>${SOLIC_CACHE.pessoas.map(p => `<option value="${p.id}" ${p.nome === s.responsavel?.nome ? 'selected' : ''}>${esc(p.nome)}</option>`).join('')}</select></div>
+        <select id="ds-resp" ${editavel ? '' : 'disabled'}><option value="">—</option>${SOLIC_CACHE.pessoas.map(p => `<option value="${p.id}" ${p.nome === s.responsavel?.nome ? 'selected' : ''}>${esc(p.nome)}</option>`).join('')}</select></div>
     </div>
     <div class="campo" style="margin-top:10px;"><label>Resposta / retorno</label>
-      <textarea id="ds-resposta" style="min-height:70px;">${esc(s.resposta ?? '')}</textarea></div>
-    <div class="acoes"><button class="btn" id="ds-salvar">Salvar</button>
+      <textarea id="ds-resposta" style="min-height:70px;" ${editavel ? '' : 'disabled'}>${esc(s.resposta ?? '')}</textarea></div>
+
+    ${editavel ? `<div class="campo" style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px;">
+      <label>Precisa de outro setor pra resolver isso?</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <select id="ds-setor-envolvido" style="flex:1;min-width:180px;">
+          <option value="">— escolher setor —</option>
+          ${SOLIC_CACHE.setores.filter(st => st.id !== s.setor_destino_id).map(st => `<option value="${st.id}">${esc(st.nome)}</option>`).join('')}
+        </select>
+        <button class="btn-secundario mini" id="ds-chamar-setor" type="button">Chamar setor</button>
+      </div>
+      <span class="texto-dim2" style="font-size:11px;">cria uma solicitação vinculada pro outro setor e marca aqui que o pedido envolve os dois</span>
+    </div>` : ''}
+
+    <div class="acoes" style="margin-top:12px;"><button class="btn" id="ds-salvar" ${editavel ? '' : 'disabled'}>Salvar</button>
       <button class="btn-secundario" id="ds-fechar">Fechar</button></div>
     <div class="recado oculto" id="ds-recado"></div>
   </div>`
@@ -1321,10 +1404,23 @@ function detalheSolicitacao (s, aoFechar) {
   fundo.querySelector('#ds-fechar').onclick = fechar
   fundo.onclick = e => { if (e.target === fundo) fechar() }
 
-  const aviso = t => {
+  const aviso = (t, ok = false) => {
     const el = fundo.querySelector('#ds-recado'); el.textContent = t; el.classList.remove('oculto')
-    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+    el.style.borderColor = ok ? 'var(--good-text)' : 'var(--warn-text)'
+    el.style.color = ok ? 'var(--good-text)' : 'var(--warn-text)'
   }
+
+  const ligarTicksProgresso = () => {
+    fundo.querySelectorAll('[data-progresso-solic]').forEach(seg => {
+      seg.onclick = () => {
+        progressoAtual = Number(seg.dataset.progressoSolic)
+        fundo.querySelector('#ds-progresso-rotulo').textContent = `Progresso do responsável — ${progressoAtual}%`
+        fundo.querySelector('#ds-progresso-ticks').outerHTML = ticksProgressoSolicitacao(progressoAtual, true)
+        ligarTicksProgresso()
+      }
+    })
+  }
+  if (editavel) ligarTicksProgresso()
 
   const carregarAnexos = async () => {
     const { data: anexos } = await db.from('anexo').select('id,nome_arquivo,storage_path')
@@ -1340,7 +1436,7 @@ function detalheSolicitacao (s, aoFechar) {
   }
   carregarAnexos()
 
-  fundo.querySelector('#ds-anexar').onclick = async () => {
+  if (editavel) fundo.querySelector('#ds-anexar').onclick = async () => {
     const arquivos = [...fundo.querySelector('#ds-arquivos').files]
     if (!arquivos.length) { aviso('Escolha pelo menos um arquivo.'); return }
     const btn = fundo.querySelector('#ds-anexar'); btn.disabled = true; btn.textContent = 'Enviando...'
@@ -1355,17 +1451,158 @@ function detalheSolicitacao (s, aoFechar) {
     carregarAnexos()
   }
 
+  if (editavel) fundo.querySelector('#ds-chamar-setor').onclick = async () => {
+    const setorId = fundo.querySelector('#ds-setor-envolvido').value
+    if (!setorId) { aviso('Escolha o setor que precisa entrar no pedido.'); return }
+    const setorNome = SOLIC_CACHE.setores.find(st => st.id === setorId)?.nome ?? '—'
+    const btn = fundo.querySelector('#ds-chamar-setor'); btn.disabled = true; btn.textContent = 'Chamando...'
+    const { error: e1 } = await db.from('solicitacao_interna').update({ setor_envolvido_id: setorId }).eq('id', s.id)
+    const { error: e2 } = await db.from('solicitacao_interna').insert({
+      setor_destino_id: setorId,
+      solicitante_id: PERFIL.pessoaId,
+      urgencia: s.urgencia,
+      titulo: `[vinculada a ${s.codigo}] ${s.titulo}`,
+      descricao: `Solicitação aberta a partir de ${s.codigo} (${s.setor?.nome ?? '—'}), que também depende do setor ${setorNome} pra ser resolvida.\n\n${s.descricao ?? ''}`,
+      solicitacao_pai_id: s.id
+    })
+    btn.disabled = false; btn.textContent = 'Chamar setor'
+    if (e1 || e2) { aviso((e1 || e2).message); return }
+    aviso(`Solicitação vinculada criada para ${setorNome}.`, true)
+    fundo.querySelector('#ds-setor-envolvido').value = ''
+  }
+
   fundo.querySelector('#ds-salvar').onclick = async () => {
     const status = fundo.querySelector('#ds-status').value
+    const dataConclusao = status === 'CONCLUIDA' ? new Date().toISOString() : null
+    const pontuacao = status === 'CONCLUIDA'
+      ? calcularAgilidade(s.data_solicitacao, prazoSlaSolicitacao(s), new Date(dataConclusao).getTime())
+      : null
     const { error } = await db.from('solicitacao_interna').update({
       status,
+      progresso_pct: status === 'CONCLUIDA' ? 100 : progressoAtual,
       responsavel_id: fundo.querySelector('#ds-resp').value || null,
       resposta: fundo.querySelector('#ds-resposta').value.trim() || null,
-      data_conclusao: status === 'CONCLUIDA' ? new Date().toISOString() : null
+      data_conclusao: dataConclusao,
+      pontuacao_agilidade: pontuacao
     }).eq('id', s.id)
     if (error) { aviso(error.message); return }
     fechar(); aoFechar()
   }
+}
+
+// ---------------------------------------------------------------
+// Painel do gestor — aparece na Visão Geral só pra quem é gestor de
+// algum setor (setor.gestor_id = a própria pessoa, mesmo campo já
+// usado em Compras/coordenação e na Avaliação 360). Mostra em kanban
+// as solicitações endereçadas ao(s) setor(es) que a pessoa gerencia,
+// o que foi pedido direto pra ela (em qualquer setor), e um atalho
+// pros módulos que o usuário dela tem liberado.
+// ---------------------------------------------------------------
+async function painelGerencial (area) {
+  if (!PERFIL.pessoaId) return
+  const { data: setoresGeridos } = await db.from('setor').select('id,nome').eq('gestor_id', PERFIL.pessoaId)
+  if (!setoresGeridos?.length) return
+
+  const idsSetor = setoresGeridos.map(s => s.id)
+  const de = new Date(Date.now() - 60 * 864e5).toISOString()
+
+  const selDoSetor = `
+    id, codigo, titulo, urgencia, status, data_solicitacao, data_limite, data_conclusao,
+    progresso_pct, pontuacao_agilidade, setor_destino_id, responsavel_id,
+    responsavel:responsavel_id ( nome )`
+  const selParaMim = `
+    id, codigo, titulo, urgencia, status, data_solicitacao, data_limite, data_conclusao,
+    progresso_pct, pontuacao_agilidade, setor_destino_id, responsavel_id,
+    setor:setor_destino_id ( nome )`
+
+  const [{ data: doSetorRaw, error }, { data: paraMim }] = await Promise.all([
+    db.from('solicitacao_interna').select(selDoSetor)
+      .in('setor_destino_id', idsSetor).gte('data_solicitacao', de)
+      .order('data_solicitacao', { ascending: false }).limit(300),
+    db.from('solicitacao_interna').select(selParaMim)
+      .eq('responsavel_id', PERFIL.pessoaId).in('status', ['ABERTA', 'EM_ANDAMENTO'])
+      .order('urgencia', { ascending: false }).order('data_solicitacao').limit(20)
+  ])
+  if (faltaMigracao(error)) return
+  const lista = doSetorRaw || []
+  const nomesSetores = setoresGeridos.map(s => s.nome).join(', ')
+
+  const cartaoKanban = s => {
+    const prazo = textoPrazoSolicitacao(s)
+    const pts = pontuacaoAgilidadeSolicitacao(s)
+    return `<div class="card-tarefa" data-abrir-solic-gestor="${s.id}">
+      <div>${esc(s.titulo)}</div>
+      <div class="proj">${esc(s.responsavel?.nome ?? 'sem responsável')}</div>
+      <div style="background:var(--surface2);border-radius:4px;height:5px;overflow:hidden;margin:6px 0 4px;">
+        <div style="width:${s.progresso_pct ?? 0}%;height:100%;background:${bandCor(s.progresso_pct ?? 0)};"></div>
+      </div>
+      <div class="rodape-t">
+        <span class="${corUrgenciaSolicitacao(s.urgencia)}" style="font-size:9.5px;">${esc(ROTULO_URGENCIA_SOLICITACAO[s.urgencia])}</span>
+        <span class="texto-dim2" style="font-size:11px;${prazo?.atrasada ? 'color:var(--warn-text);font-weight:600;' : ''}">${prazo ? prazo.texto : (pts != null ? pts + ' pts' : '')}</span>
+      </div></div>`
+  }
+
+  const bloco = document.createElement('div')
+  bloco.className = 'panel'
+  bloco.style.cssText = 'padding:18px;margin-bottom:16px;'
+  bloco.innerHTML = `
+    <div class="cabeca-secao">
+      <h3 style="font-family:var(--serif);font-size:17px;">Painel do gestor — ${esc(nomesSetores)}</h3>
+      <button class="btn-secundario mini" id="pg-ver-todas">ver todas as solicitações</button>
+    </div>
+    <p class="texto-dim2" style="font-size:12px;margin:-6px 0 12px;">
+      Últimos 60 dias endereçados ao seu setor, organizados por andamento. Clique num cartão pra ver detalhes.</p>
+    <div class="kanban">
+      ${STATUS_SOLICITACAO.map(st => `<div class="coluna-kanban"><h4>${ROTULO_STATUS_SOLICITACAO[st]}
+        <span class="texto-dim2">${lista.filter(s => s.status === st).length}</span></h4>
+        ${lista.filter(s => s.status === st).map(cartaoKanban).join('') || '<p class="vazio" style="padding:10px;">vazio</p>'}</div>`).join('')}
+    </div>`
+  area.appendChild(bloco)
+  const reabrir = () => irPara('visao_geral')
+  bloco.querySelector('#pg-ver-todas').onclick = () => irPara('solicitacoes')
+  bloco.querySelectorAll('[data-abrir-solic-gestor]').forEach(el => {
+    el.onclick = () => {
+      const s = lista.find(x => x.id === el.dataset.abrirSolicGestor)
+      if (s) detalheSolicitacao(s, reabrir)
+    }
+  })
+
+  if (paraMim?.length) {
+    const blocoMim = document.createElement('div')
+    blocoMim.className = 'panel'
+    blocoMim.style.cssText = 'padding:18px;margin-bottom:16px;'
+    blocoMim.innerHTML = `
+      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:17px;">
+        ${paraMim.length} solicitação${paraMim.length > 1 ? 'ões' : ''} pedida${paraMim.length > 1 ? 's' : ''} direto pra você</h3></div>
+      ${paraMim.map(s => { const prazo = textoPrazoSolicitacao(s); return `<div class="passo" data-abrir-mim="${s.id}" style="cursor:pointer;">
+        <span class="quando"><span class="${corUrgenciaSolicitacao(s.urgencia)}" style="font-size:10px;">${esc(ROTULO_URGENCIA_SOLICITACAO[s.urgencia])}</span></span>
+        <span><b>${esc(s.codigo)}</b> — ${esc(s.titulo)} <span class="texto-dim2" style="font-size:10.5px;">(${esc(s.setor?.nome ?? '—')})</span>
+          ${prazo ? `<span class="${prazo.atrasada ? 'badge-alerta' : 'texto-dim2'}" style="font-size:10.5px;margin-left:6px;">${prazo.texto}</span>` : ''}</span>
+      </div>` }).join('')}`
+    area.appendChild(blocoMim)
+    blocoMim.querySelectorAll('[data-abrir-mim]').forEach(el => {
+      el.onclick = () => {
+        const s = paraMim.find(x => x.id === el.dataset.abrirMim)
+        if (s) detalheSolicitacao(s, reabrir)
+      }
+    })
+  }
+
+  // Seus acessos — só os módulos que o usuário realmente enxerga, pra
+  // não virar um menu duplicado de tudo o que existe no sistema
+  const modulosLiberados = PERFIL.modulos.filter(m => PAGINAS[m.chave] && podeVer(m.chave))
+  const blocoAcessos = document.createElement('div')
+  blocoAcessos.className = 'panel'
+  blocoAcessos.style.cssText = 'padding:18px;margin-bottom:16px;'
+  blocoAcessos.innerHTML = `
+    <h3 style="font-family:var(--serif);font-size:17px;margin:0 0 10px;">Seus acessos</h3>
+    <p class="texto-dim2" style="font-size:12px;margin:0 0 10px;">Módulos liberados pro seu usuário — clique pra abrir.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      ${[{ chave: 'solicitacoes', nome: 'Solicitações' }, ...modulosLiberados].map(m => `
+        <button class="chip" data-ir-modulo="${m.chave}" style="cursor:pointer;">${esc(m.nome)}${podeEditar(m.chave) ? '' : ' · leitura'}</button>`).join('')}
+    </div>`
+  area.appendChild(blocoAcessos)
+  blocoAcessos.querySelectorAll('[data-ir-modulo]').forEach(b => { b.onclick = () => irPara(b.dataset.irModulo) })
 }
 
 // ----- Widget resumido na Visão Geral -----
@@ -12929,7 +13166,7 @@ async function paginaDesempenho () {
   ])
   DESEMP_CACHE = { pessoas: pessoas || [], setores: setores || [] }
 
-  const abas = [['painel', 'Painel de conduta'], ['conduta', 'Avaliar conduta'],
+  const abas = [['painel', 'Painel de conduta'], ['agilidade', 'Agilidade e prazos'], ['conduta', 'Avaliar conduta'],
                 ['360', 'Avaliação 360'], ['pdi', 'Planos de desenvolvimento'], ['meu', 'Meu RH']]
   area.innerHTML = `
     <div class="subabas">
@@ -12951,6 +13188,7 @@ function abrirDesempenho (sub, editavel) {
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
   $('#kpis').innerHTML = ''
   if (sub === 'painel') desempPainel(alvo, editavel)
+  if (sub === 'agilidade') desempAgilidade(alvo, editavel)
   if (sub === 'conduta') desempConduta(alvo, editavel)
   if (sub === '360') desemp360(alvo, editavel)
   if (sub === 'pdi') desempPdi(alvo, editavel)
@@ -13015,6 +13253,117 @@ async function desempPainel (alvo, editavel) {
         ${barrasHorizontais(mediasPorPessoa, { unidade: '', casas: 1 })}
         <p class="texto-dim2" style="font-size:11px;margin-top:10px;">Visível só pra quem tem edição do módulo — não é um ranking público.</p>
       </div>` : ''}`
+}
+
+// ----- Agilidade e prazos -----
+// Cruza solicitacao_interna de todos os setores pra medir quem resolve
+// rápido e quem atrasa — RH acompanha isso individualmente (por pessoa)
+// e também por setor, sem depender de módulo específico de cada área.
+async function desempAgilidade (alvo, editavel) {
+  if (!editavel) { alvo.innerHTML = `<div class="panel" style="padding:22px;">
+    <p class="texto-dim">Esse indicador é sensível e só quem edita o módulo de RH enxerga
+    o comparativo entre pessoas/setores. Veja o seu em "Meu RH".</p></div>`; return }
+
+  const hoje = new Date().toISOString().slice(0, 10)
+  const de = new Date(Date.now() - 90 * 864e5).toISOString().slice(0, 10)
+
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>De</label><input type="date" id="ag-de" value="${de}"></div>
+      <div class="campo"><label>Até</label><input type="date" id="ag-ate" value="${hoje}"></div>
+      <button class="btn" id="ag-buscar">Buscar</button>
+    </div>
+    <div id="ag-conteudo"><p class="texto-dim2">carregando...</p></div>`
+
+  const buscar = async () => {
+    const { data, error } = await db.from('solicitacao_interna').select(`
+      id, urgencia, status, data_solicitacao, data_limite, data_conclusao,
+      progresso_pct, pontuacao_agilidade, setor_destino_id, responsavel_id,
+      setor:setor_destino_id ( nome ), responsavel:responsavel_id ( nome )
+    `).gte('data_solicitacao', $('#ag-de').value).lte('data_solicitacao', $('#ag-ate').value + 'T23:59:59')
+      .not('responsavel_id', 'is', null).limit(2000)
+
+    if (faltaMigracao(error)) { $('#ag-conteudo').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+    const lista = data || []
+    const concluidas = lista.filter(s => s.status === 'CONCLUIDA')
+    const emAberto = lista.filter(s => !['CONCLUIDA', 'CANCELADA'].includes(s.status))
+    const atrasadasAgora = emAberto.filter(estaAtrasadaSolicitacao)
+    const noPrazo = concluidas.filter(s => !estaAtrasadaConcluida(s))
+
+    const media = arr => arr.length ? arr.reduce((s, n) => s + n, 0) / arr.length : null
+
+    // agrupa por responsável — só quem tem pelo menos uma concluída entra
+    // na média, pra não penalizar quem só está com tarefa em aberto ainda
+    const porPessoa = {}
+    concluidas.forEach(s => {
+      const nome = s.responsavel?.nome ?? '—'
+      const pts = pontuacaoAgilidadeSolicitacao(s)
+      if (pts == null) return
+      porPessoa[nome] = porPessoa[nome] || { pontos: [], total: 0, noPrazo: 0, setor: s.setor?.nome ?? '—' }
+      porPessoa[nome].pontos.push(pts)
+      porPessoa[nome].total++
+      if (!estaAtrasadaConcluida(s)) porPessoa[nome].noPrazo++
+    })
+    const rankingPessoa = Object.entries(porPessoa).map(([nome, v]) => ({
+      rotulo: nome, valor: Math.round(media(v.pontos)), total: v.total,
+      pctNoPrazo: Math.round((v.noPrazo / v.total) * 100), setor: v.setor
+    })).sort((a, b) => a.valor - b.valor)
+
+    // agrupa por setor de destino, pra RH comparar áreas entre si
+    const porSetor = {}
+    concluidas.forEach(s => {
+      const nome = s.setor?.nome ?? '—'
+      const pts = pontuacaoAgilidadeSolicitacao(s)
+      if (pts == null) return
+      porSetor[nome] = porSetor[nome] || []
+      porSetor[nome].push(pts)
+    })
+    const rankingSetor = Object.entries(porSetor).map(([rotulo, pontos]) => ({ rotulo, valor: Math.round(media(pontos)) }))
+      .sort((a, b) => b.valor - a.valor)
+
+    $('#ag-conteudo').innerHTML = `
+      <div class="resumo-topo" style="margin-bottom:16px;">
+        ${kpi('Solicitações no período', lista.length)}
+        ${kpi('Concluídas', concluidas.length)}
+        ${kpi('Concluídas no prazo', concluidas.length ? Math.round(noPrazo.length / concluidas.length * 100) + '%' : '—')}
+        ${kpi('Em aberto atrasadas agora', atrasadasAgora.length)}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;" class="grade-painel-comb">
+        <div class="panel" style="padding:18px;">
+          <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Agilidade média por setor</h3>
+          ${barrasHorizontais(rankingSetor, { unidade: 'pts', casas: 0 })}
+        </div>
+        <div class="panel" style="padding:18px;">
+          <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Agilidade média por pessoa</h3>
+          ${barrasHorizontais(rankingPessoa, { unidade: 'pts', casas: 0 })}
+        </div>
+      </div>
+      <div class="panel" style="padding:0;margin-top:16px;"><div class="tabela-scroll">
+        <table><thead><tr>
+          <th>Pessoa</th><th>Setor</th><th class="num">Concluídas</th>
+          <th class="num">% no prazo</th><th class="num">Agilidade média</th>
+        </tr></thead><tbody>
+          ${rankingPessoa.map(p => `<tr>
+            <td>${esc(p.rotulo)}</td><td class="texto-dim2">${esc(p.setor)}</td>
+            <td class="num">${p.total}</td>
+            <td class="num"><span class="${p.pctNoPrazo >= 80 ? 'badge-bom' : p.pctNoPrazo >= 50 ? 'chip' : 'badge-alerta'}">${p.pctNoPrazo}%</span></td>
+            <td class="num"><span class="${corAgilidade(p.valor)}">${p.valor}</span></td>
+          </tr>`).join('') || `<tr><td colspan="5" class="vazio">Nenhuma solicitação concluída com responsável definido no período.</td></tr>`}
+        </tbody></table>
+      </div></div>
+      <p class="texto-dim2" style="font-size:11px;margin-top:8px;">
+        Agilidade: 100 pts = concluiu dentro do prazo/SLA da urgência; cai conforme atrasa.
+        Baseado nas solicitações internas (helpdesk entre setores) com responsável definido.</p>`
+  }
+
+  $('#ag-buscar').onclick = buscar
+  buscar()
+}
+
+// checa se uma solicitação já concluída foi entregue atrasada (SLA/prazo)
+function estaAtrasadaConcluida (s) {
+  if (!s.data_conclusao) return false
+  return new Date(s.data_conclusao).getTime() > prazoSlaSolicitacao(s)
 }
 
 // ----- Avaliar conduta -----
