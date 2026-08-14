@@ -9596,8 +9596,16 @@ async function estAtual (alvo, editavel) {
   const bicas = lista.filter(x => /Bica 0/.test(x.produto))
   const totalBicas = bicas.reduce((s,x) => s + Number(x.saldo||0), 0)
 
-  const card = (rot, val, un, nota, classe) => `
-    <div class="bloco ${classe ?? ''}">
+  const iconeLapis = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>`
+
+  // cartão do resumo topo — só tem botão de editar quando representa uma
+  // linha exata (produto+local); o "total nas bicas" é soma de duas, não dá
+  // pra editar direto (edita cada bica na tabela de baixo, ou pelo próprio card dela)
+  const card = (rot, val, un, nota, classe, item) => `
+    <div class="bloco ${classe ?? ''}" style="position:relative;">
+      ${editavel && item ? `<button class="btn-secundario mini" data-editar-saldo='${JSON.stringify(item)}'
+          title="Editar valor" style="position:absolute;top:10px;right:10px;padding:5px;line-height:0;">
+          <span style="width:13px;height:13px;display:block;">${iconeLapis}</span></button>` : ''}
       <div class="rot">${esc(rot)}</div>
       <div class="val">${fmtNum(val, casasPara(un))} <span style="font-size:15px;color:var(--dim2);">${esc(un)}</span></div>
       ${nota ? `<div class="nota">${esc(nota)}</div>` : ''}
@@ -9607,8 +9615,9 @@ async function estAtual (alvo, editavel) {
     <div class="resumo-topo">
       ${bicas.length ? card('Gefoscal — total nas bicas', totalBicas, 't',
         bicas.map(b => `${b.local}: ${fmtNum(b.saldo,2)}`).join(' · '), 'destaque') : ''}
-      ${lista.filter(x => !/Bica 0/.test(x.produto))
-        .map(x => card(x.produto, x.saldo, x.unidade, x.local)).join('')}
+      ${lista.filter(x => !/Bica 0/.test(x.produto)).map(x => card(x.produto, x.saldo, x.unidade, x.local, '', {
+        produtoId: x.produto_id, localId: x.local_id, produto: x.produto, local: x.local, unidade: x.unidade, saldo: Number(x.saldo || 0)
+      })).join('')}
     </div>
 
     <div class="cabeca-secao" style="margin-top:6px;">
@@ -9617,16 +9626,92 @@ async function estAtual (alvo, editavel) {
     </div>
     <div class="panel" style="padding:0;"><div class="tabela-scroll">
       <table><thead><tr>
-        <th>Produto</th><th>Local</th><th>Unidade</th><th class="num">Saldo</th>
+        <th>Produto</th><th>Local</th><th>Unidade</th><th class="num">Saldo</th>${editavel ? '<th></th>' : ''}
       </tr></thead><tbody>
         ${lista.map(x => `<tr>
           <td>${esc(x.produto)}</td>
           <td><span class="chip">${esc(x.local ?? '—')}</span></td>
           <td class="texto-dim">${esc(x.unidade)}</td>
           <td class="num">${fmtNum(x.saldo, casasPara(x.unidade))}</td>
-        </tr>`).join('') || `<tr><td colspan="4" class="vazio">Nenhum saldo registrado.</td></tr>`}
+          ${editavel ? `<td style="text-align:right;"><button class="btn-secundario mini" data-editar-saldo='${JSON.stringify({
+            produtoId: x.produto_id, localId: x.local_id, produto: x.produto, local: x.local, unidade: x.unidade, saldo: Number(x.saldo || 0)
+          })}' title="Editar valor" style="padding:5px;line-height:0;"><span style="width:13px;height:13px;display:block;">${iconeLapis}</span></button></td>` : ''}
+        </tr>`).join('') || `<tr><td colspan="${editavel ? 5 : 4}" class="vazio">Nenhum saldo registrado.</td></tr>`}
       </tbody></table>
     </div></div>`
+
+  if (!editavel) return
+  alvo.querySelectorAll('[data-editar-saldo]').forEach(b => {
+    b.onclick = () => formAjusteEstoque(JSON.parse(b.dataset.editarSaldo), () => estAtual(alvo, editavel))
+  })
+}
+
+// ----- Ajuste manual de saldo (com motivo obrigatório) -----
+// Não escreve direto num "saldo" — o saldo é sempre soma dos lançamentos.
+// Então calculamos a diferença entre o valor novo e o atual e gravamos
+// isso como um lançamento tipo AJUSTE, com o motivo na observação —
+// assim o histórico continua íntegro e dá pra auditar depois.
+function formAjusteEstoque (item, aoSalvar) {
+  const casas = casasPara(item.unidade)
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>Ajustar saldo</h3>
+    <p class="texto-dim2" style="font-size:12.5px;margin:-8px 0 14px;">
+      ${esc(item.produto)} ${item.local ? '· ' + esc(item.local) : ''}</p>
+    <div class="form-grade">
+      <div class="campo"><label>Saldo atual</label>
+        <input value="${fmtNum(item.saldo, casas)} ${esc(item.unidade)}" disabled></div>
+      <div class="campo"><label>Novo saldo *</label>
+        <input id="aj-novo" inputmode="decimal" value="${String(item.saldo).replace('.', ',')}"></div>
+    </div>
+    <div class="campo" style="margin-top:10px;"><label>Motivo do ajuste *</label>
+      <textarea id="aj-motivo" style="min-height:70px;" placeholder="Ex: contagem física encontrou valor diferente do sistema"></textarea></div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="aj-salvar">Salvar ajuste</button>
+      <button class="btn-secundario" id="aj-cancelar">Cancelar</button>
+    </div>
+    <div class="recado oculto" id="aj-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#aj-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  fundo.querySelector('#aj-salvar').onclick = async () => {
+    const el = fundo.querySelector('#aj-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    let novo = numeroBR(fundo.querySelector('#aj-novo').value)
+    const motivo = fundo.querySelector('#aj-motivo').value.trim()
+    if (novo === null) { aviso('Informe o novo saldo.'); return }
+    if (!motivo) { aviso('Escreva o motivo do ajuste.'); return }
+    if (casas === 0) novo = Math.round(novo)
+
+    if (!item.localId) { aviso('Esse produto ainda não tem um local definido — lance pela aba "Lançar" escolhendo o local primeiro.'); return }
+
+    const btn = fundo.querySelector('#aj-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+
+    // busca o saldo mais atual na hora de salvar (não o que ficou na tela
+    // quando o formulário abriu) — assim o valor novo sempre SOBRESCREVE
+    // de vez o que está no banco agora, não soma/subtrai em cima de um
+    // saldo que pode já ter mudado nesse meio-tempo
+    const { data: atual, error: e0 } = await db.from('saldo_estoque_por_local')
+      .select('saldo').eq('produto_id', item.produtoId).eq('local_id', item.localId).maybeSingle()
+    if (e0) { btn.disabled = false; btn.textContent = 'Salvar ajuste'; aviso(e0.message); return }
+    const saldoReal = Number(atual?.saldo ?? 0)
+    const diferenca = novo - saldoReal
+    if (diferenca === 0) { btn.disabled = false; btn.textContent = 'Salvar ajuste'; aviso('O valor novo é igual ao que já está no sistema — nada pra ajustar.'); return }
+
+    const { error } = await db.from('movimentacao_estoque').insert({
+      produto_id: item.produtoId, tipo: 'AJUSTE', quantidade: diferenca, unidade: item.unidade,
+      data_mov: hojeISO(), local_id: item.localId, local_estoque: item.local,
+      observacoes: `Ajuste manual — sobrescreveu para ${fmtNum(novo, casas)} ${item.unidade}: ${motivo}`,
+      registrado_por: PERFIL.pessoaId
+    })
+    btn.disabled = false; btn.textContent = 'Salvar ajuste'
+    if (error) { aviso(error.message); return }
+    fechar(); aoSalvar()
+  }
 }
 
 // ----- Lançar -----
