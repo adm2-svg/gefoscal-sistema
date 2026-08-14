@@ -152,6 +152,35 @@ tbody tr:hover { background: var(--hover-bg); }
 .aviso-bloqueio > div + div { margin-top:6px; padding-top:6px; border-top:1px solid rgba(var(--warn-rgb),.25); }
 .mini-kv { display:flex; justify-content:space-between; font-size:13px; padding:5px 0; }
 
+/* ---- Marketing ---- */
+.grade-calendario { display:grid; grid-template-columns:repeat(7,1fr); gap:4px; margin-top:10px; }
+.dia-cal { position:relative; aspect-ratio:1; display:flex; align-items:center; justify-content:center;
+           border:1px solid var(--line); border-radius:6px; font-size:12px; color:var(--dim); }
+.dia-cal.hoje { border-color:var(--rust); color:var(--rust); font-weight:700; }
+.dia-cal.tem-data { background:rgba(var(--gold-rgb),.1); }
+.dia-cal .marca { position:absolute; bottom:3px; width:5px; height:5px; border-radius:50%; background:var(--gold); }
+.linha-demanda { display:flex; justify-content:space-between; align-items:center; gap:10px;
+                  padding:7px 0; border-bottom:1px solid var(--line); font-size:13px; }
+.linha-demanda:last-child { border-bottom:none; }
+.linha-demanda label { display:flex; align-items:center; gap:8px; cursor:pointer; }
+.grade-postits { display:flex; flex-wrap:wrap; gap:12px; }
+.postit { width:150px; min-height:110px; padding:12px; border-radius:2px; box-shadow:2px 3px 8px rgba(0,0,0,.2);
+          transform:rotate(-1deg); position:relative; color:#241f17; font-size:12.5px; }
+.postit:nth-child(even) { transform:rotate(1deg); }
+.postit .fechar { position:absolute; top:4px; right:6px; background:none; border:none; cursor:pointer;
+                   font-size:14px; color:#241f17; opacity:.5; }
+.postit .fechar:hover { opacity:1; }
+.grade-meses-mkt { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:12px; }
+.cartao-mes-mkt { border:1px solid var(--line); border-radius:8px; padding:10px; background:var(--panel); }
+.cartao-mes-mkt h4 { font-family:var(--serif); font-size:13px; margin:0 0 8px; }
+.cartao-mes-mkt table { width:100%; font-size:11px; }
+.grade-cronograma-mkt { display:grid; grid-template-columns:repeat(5,1fr); gap:10px; }
+@media (max-width:900px) { .grade-cronograma-mkt { grid-template-columns:1fr 1fr; } }
+.coluna-cronograma-mkt { border:1px solid var(--line); border-radius:8px; padding:10px; background:var(--panel); }
+.coluna-cronograma-mkt h4 { font-family:var(--serif); font-size:13px; margin:0 0 8px; text-align:center; }
+.bloco-periodo-mkt { margin-bottom:10px; }
+.bloco-periodo-mkt input, .bloco-periodo-mkt textarea { width:100%; }
+
 @keyframes piscar-amarelo { 0%,100% { background:rgba(var(--gold-rgb),.18); } 50% { background:rgba(var(--gold-rgb),.55); } }
 @keyframes piscar-vermelho { 0%,100% { background:rgba(var(--warn-rgb),.18); } 50% { background:rgba(var(--warn-rgb),.65); } }
 .pisca-alta { animation: piscar-amarelo 1.4s ease-in-out infinite; }
@@ -860,6 +889,7 @@ const PAGINAS = {
   expedicao:   { nome: 'Expedição', render: paginaExpedicao },
   compras:     { nome: 'Compras', render: paginaCompras, sempre: true },
   cobranca:    { nome: 'Crédito e Cobrança', render: paginaCobranca },
+  marketing:   { nome: 'Marketing', render: paginaMarketing },
   crm:         { nome: 'CRM Comercial', render: paginaCrm },
   financeiro:  { nome: 'Financeiro', render: paginaFinanceiro },
   projetos:    { nome: 'Projetos', render: paginaProjetos },
@@ -879,6 +909,7 @@ const PAGINAS = {
 // no modo recolhido (só ícone). Estilo consistente: 24x24, traço fino.
 // ---------------------------------------------------------------
 const ICONES_MODULO = {
+  marketing: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>',
   visao_geral: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5L12 4l9 7.5"/><path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9"/></svg>',
   solicitacoes: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h10M7 13h10M7 17h6"/></svg>',
   expedicao: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="14" height="10"/><path d="M15 8h4l4 4v2h-8z"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/></svg>',
@@ -15165,6 +15196,418 @@ setInterval(async () => {
     definirStatusConexao(!error)
   } catch { definirStatusConexao(false) }
 }, 20000)
+
+// ---------------------------------------------------------------
+// Página: Marketing  (módulo 'marketing')
+// Sub-abas: Visão Geral · Redes Sociais · Mercado · Cronograma · Aniversariantes.
+// Redes sociais começam com entrada manual (mesmo processo que já existe
+// hoje, numa planilha) -- quando as contas Instagram/Google/LinkedIn
+// tiverem API liberada, dá pra trocar o "realizado" de digitado por puxado
+// automático sem mudar o desenho da tela.
+// ---------------------------------------------------------------
+const REDES_MARKETING = { INSTAGRAM: 'Instagram', GOOGLE: 'Google Meu Negócio', LINKEDIN: 'LinkedIn' }
+const CORES_REDE_MARKETING = { INSTAGRAM: '#E1306C', GOOGLE: '#4285F4', LINKEDIN: '#0A66C2' }
+const METRICAS_PADRAO_REDE = {
+  INSTAGRAM: ['Views Reels e Posts', 'Taxa de views não seguidores (%)', 'Novos seguidores', 'Visitas ao perfil', 'Toques no link da bio'],
+  GOOGLE: ['Visualizações do perfil', 'Buscas diretas', 'Buscas por descoberta', 'Ligações', 'Solicitações de rota'],
+  LINKEDIN: ['Impressões', 'Novos seguidores', 'Cliques no site', 'Interações']
+}
+const MESES_MKT = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
+const DIAS_SEMANA_MKT = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta']
+const ROTULO_CATEGORIA_DEMANDA = { A: 'A · urgente e grave', B: 'B · urgente', C: 'C · importante, pode esperar', D: 'D · sem valor imediato' }
+const COR_CATEGORIA_DEMANDA = { A: 'critico', B: 'alerta', C: 'futuro', D: 'ok' }
+
+async function paginaMarketing () {
+  if (!podeVer('marketing')) { areaLivre().innerHTML =
+    `<div class="panel" style="padding:22px;"><p class="texto-dim">Você não tem acesso a Marketing.</p></div>`; return }
+
+  const editavel = podeEditar('marketing')
+  $('#subtitulo-pagina').textContent = 'Redes sociais, conteúdo e mercado'
+  const area = areaLivre()
+  const abas = [['visao', 'Visão Geral'], ['redes', 'Redes Sociais'], ['mercado', 'Mercado'], ['cronograma', 'Cronograma'], ['aniversariantes', 'Aniversariantes']]
+  area.innerHTML = `
+    <div class="subabas">${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}</div>
+    <div id="sub-marketing"></div>`
+  area.querySelectorAll('.subabas button').forEach(b => {
+    b.onclick = () => {
+      area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
+      abrirMarketing(b.dataset.sub, editavel)
+    }
+  })
+  abrirMarketing('visao', editavel)
+}
+
+function abrirMarketing (sub, editavel) {
+  const alvo = $('#sub-marketing')
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  if (sub === 'visao') mktVisaoGeral(alvo, editavel)
+  if (sub === 'redes') mktRedesSociais(alvo, editavel)
+  if (sub === 'mercado') mktMercado(alvo)
+  if (sub === 'cronograma') mktCronograma(alvo, editavel)
+  if (sub === 'aniversariantes') mktAniversariantes(alvo, editavel)
+}
+
+// ----- Visão Geral -----
+async function mktVisaoGeral (alvo, editavel) {
+  const hoje = new Date()
+  const [{ data: demandas }, { data: postits }, { data: datasRelevantes } ] = await Promise.all([
+    db.from('marketing_demanda').select('id,descricao,categoria,prazo,concluida').eq('concluida', false).order('prazo', { ascending: true, nullsFirst: false }),
+    db.from('marketing_postit').select('id,texto,cor,criado_em').order('criado_em', { ascending: false }),
+    db.from('marketing_data_relevante').select('mes,dia,titulo,orientacao').eq('mes', hoje.getMonth() + 1)
+  ])
+
+  const listaDemandas = demandas || []
+  const diasNoMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0).getDate()
+  const datasPorDia = {}
+  ;(datasRelevantes || []).forEach(d => { (datasPorDia[d.dia] = datasPorDia[d.dia] || []).push(d) })
+
+  alvo.innerHTML = `
+    <div class="duas-colunas" style="margin-bottom:16px;align-items:start;">
+      <div class="panel" style="padding:16px 18px;">
+        <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:15px;">Calendário — ${MESES_MKT[hoje.getMonth()]} de ${hoje.getFullYear()}</h3></div>
+        <div class="grade-calendario">
+          ${Array.from({ length: diasNoMes }, (_, i) => i + 1).map(d => `
+            <div class="dia-cal ${d === hoje.getDate() ? 'hoje' : ''} ${datasPorDia[d] ? 'tem-data' : ''}"
+              title="${(datasPorDia[d] || []).map(x => x.titulo).join(', ')}">
+              <span class="num">${d}</span>
+              ${datasPorDia[d] ? `<span class="marca"></span>` : ''}
+            </div>`).join('')}
+        </div>
+        ${Object.keys(datasPorDia).length ? `<div style="margin-top:12px;">
+          ${(datasRelevantes || []).sort((a, b) => a.dia - b.dia).map(d => `<div class="passo">
+            <span class="quando">${String(d.dia).padStart(2, '0')}/${String(d.mes).padStart(2, '0')}</span>
+            <span><b>${esc(d.titulo)}</b>${d.orientacao ? ` <span class="texto-dim2">— ${esc(d.orientacao)}</span>` : ''}</span>
+          </div>`).join('')}
+        </div>` : ''}
+      </div>
+
+      <div class="panel" style="padding:16px 18px;">
+        <div class="cabeca-secao">
+          <h3 style="font-family:var(--serif);font-size:15px;">Demandas</h3>
+          ${editavel ? `<button class="btn-secundario mini" id="mk-nova-demanda">+ nova</button>` : ''}
+        </div>
+        <div id="mk-lista-demandas">
+          ${listaDemandas.map(d => `<div class="linha-demanda">
+            <label><input type="checkbox" data-concluir-demanda="${d.id}" ${editavel ? '' : 'disabled'}>
+              <span class="tag-aging ${COR_CATEGORIA_DEMANDA[d.categoria]}" style="margin-right:6px;">${d.categoria}</span>
+              ${esc(d.descricao)}</label>
+            ${d.prazo ? `<span class="texto-dim2" style="font-size:11px;">${fmtData(d.prazo)}</span>` : ''}
+          </div>`).join('') || '<p class="texto-dim2" style="font-size:12.5px;">nenhuma demanda em aberto.</p>'}
+        </div>
+      </div>
+    </div>
+
+    <div class="cabeca-secao" style="margin-top:4px;">
+      <h3 style="font-family:var(--serif);font-size:15px;">Pendências (metas do dia · urgência · prioridade)</h3>
+    </div>
+    <div class="panel" style="padding:0;margin-bottom:16px;"><div class="tabela-scroll">
+      <table><thead><tr><th>Meta do dia</th><th>Urgência</th><th>Prioridade</th></tr></thead><tbody>
+        ${listaDemandas.map(d => {
+          const dias = d.prazo ? Math.round((new Date(d.prazo) - hoje) / 86400000) : null
+          const urgencia = dias === null ? '<span class="texto-dim2">sem prazo</span>'
+            : dias < 0 ? `<span class="tag-aging critico">venceu há ${-dias}d</span>`
+            : dias === 0 ? `<span class="tag-aging critico">hoje</span>`
+            : dias <= 3 ? `<span class="tag-aging alerta">em ${dias}d</span>`
+            : `<span class="tag-aging ok">em ${dias}d</span>`
+          return `<tr><td>${esc(d.descricao)}</td><td>${urgencia}</td>
+            <td><span class="tag-aging ${COR_CATEGORIA_DEMANDA[d.categoria]}">${ROTULO_CATEGORIA_DEMANDA[d.categoria]}</span></td></tr>`
+        }).join('') || `<tr><td colspan="3" class="vazio">Nada pendente.</td></tr>`}
+      </tbody></table>
+    </div></div>
+
+    <div class="cabeca-secao">
+      <h3 style="font-family:var(--serif);font-size:15px;">Post-its</h3>
+      ${editavel ? `<button class="btn-secundario mini" id="mk-novo-postit">+ adicionar post-it</button>` : ''}
+    </div>
+    <div class="grade-postits" id="mk-postits">
+      ${(postits || []).map(p => `<div class="postit" style="background:${esc(p.cor || '#fef08a')};">
+        <div class="texto">${esc(p.texto)}</div>
+        ${editavel ? `<button class="fechar" data-del-postit="${p.id}">×</button>` : ''}
+      </div>`).join('') || '<p class="texto-dim2" style="font-size:12.5px;">nenhum post-it colado.</p>'}
+    </div>`
+
+  alvo.querySelectorAll('[data-concluir-demanda]').forEach(cb => {
+    cb.onchange = async () => {
+      await db.from('marketing_demanda').update({ concluida: true, concluida_em: new Date().toISOString() }).eq('id', cb.dataset.concluirDemanda)
+      mktVisaoGeral(alvo, editavel)
+    }
+  })
+  if (!editavel) return
+  $('#mk-nova-demanda').onclick = () => formDemandaMkt(alvo, editavel)
+  $('#mk-novo-postit').onclick = async () => {
+    const texto = prompt('Texto do post-it:'); if (!texto) return
+    const cores = ['#fef08a', '#bbf7d0', '#bfdbfe', '#fecaca', '#e9d5ff']
+    await db.from('marketing_postit').insert({ texto: texto.trim(), cor: cores[Math.floor(Math.random() * cores.length)], criado_por: PERFIL.pessoaId })
+    mktVisaoGeral(alvo, editavel)
+  }
+  alvo.querySelectorAll('[data-del-postit]').forEach(b => {
+    b.onclick = async () => { await db.from('marketing_postit').delete().eq('id', b.dataset.delPostit); mktVisaoGeral(alvo, editavel) }
+  })
+}
+
+function formDemandaMkt (alvoPai, editavel) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>Nova demanda</h3>
+    <div class="campo"><label>Descrição *</label><input id="dm-desc"></div>
+    <div class="form-grade" style="margin-top:10px;">
+      <div class="campo"><label>Categoria</label><select id="dm-cat">
+        ${Object.entries(ROTULO_CATEGORIA_DEMANDA).map(([k, v]) => `<option value="${k}" ${k === 'C' ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+      <div class="campo"><label>Prazo</label><input id="dm-prazo" type="date"></div>
+    </div>
+    <div class="acoes"><button class="btn" id="dm-salvar">Adicionar</button><button class="btn-secundario" id="dm-cancelar">Cancelar</button></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#dm-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  fundo.querySelector('#dm-salvar').onclick = async () => {
+    const desc = fundo.querySelector('#dm-desc').value.trim()
+    if (!desc) return
+    await db.from('marketing_demanda').insert({
+      descricao: desc, categoria: fundo.querySelector('#dm-cat').value,
+      prazo: fundo.querySelector('#dm-prazo').value || null, criado_por: PERFIL.pessoaId
+    })
+    fechar(); mktVisaoGeral(alvoPai, editavel)
+  }
+}
+
+// ----- Redes Sociais (metas mensais editáveis) -----
+let MKT_REDE_ATUAL = 'INSTAGRAM'
+let MKT_ANO_ATUAL = new Date().getFullYear()
+
+async function mktRedesSociais (alvo, editavel) {
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:16px;align-items:center;">
+      <div class="chips-cred" style="margin:0;">
+        ${Object.entries(REDES_MARKETING).map(([k, v]) => `<button data-rede="${k}" class="${MKT_REDE_ATUAL === k ? 'ativo' : ''}"
+          style="${MKT_REDE_ATUAL === k ? `border-color:${CORES_REDE_MARKETING[k]};color:${CORES_REDE_MARKETING[k]};` : ''}">${v}</button>`).join('')}
+      </div>
+      <select id="mk-ano" style="margin-left:auto;">
+        ${[MKT_ANO_ATUAL - 1, MKT_ANO_ATUAL, MKT_ANO_ATUAL + 1].map(a => `<option value="${a}" ${a === MKT_ANO_ATUAL ? 'selected' : ''}>${a}</option>`).join('')}
+      </select>
+    </div>
+    <div id="mk-grade-metas"></div>`
+
+  alvo.querySelectorAll('[data-rede]').forEach(b => { b.onclick = () => { MKT_REDE_ATUAL = b.dataset.rede; mktRedesSociais(alvo, editavel) } })
+  $('#mk-ano').onchange = e => { MKT_ANO_ATUAL = Number(e.target.value); mktRedesSociais(alvo, editavel) }
+
+  const { data, error } = await db.from('marketing_meta_mensal').select('id,mes,metrica,meta,realizado')
+    .eq('rede', MKT_REDE_ATUAL).eq('ano', MKT_ANO_ATUAL)
+  if (error) { $('#mk-grade-metas').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  const registros = data || []
+
+  const metricasExistentes = [...new Set([...METRICAS_PADRAO_REDE[MKT_REDE_ATUAL], ...registros.map(r => r.metrica)])]
+  const valorDe = (mes, metrica) => registros.find(r => r.mes === mes && r.metrica === metrica)
+
+  $('#mk-grade-metas').innerHTML = `
+    ${editavel ? `<div class="acoes" style="margin-bottom:12px;"><button class="btn-secundario mini" id="mk-add-metrica">+ métrica</button></div>` : ''}
+    <div class="grade-meses-mkt">
+      ${MESES_MKT.map((nome, i) => { const mes = i + 1
+        return `<div class="cartao-mes-mkt">
+          <h4>${nome}</h4>
+          <table><thead><tr><th>Métrica</th><th class="num">Meta</th><th class="num">Realizado</th></tr></thead><tbody>
+            ${metricasExistentes.map(met => {
+              const r = valorDe(mes, met)
+              return `<tr>
+                <td class="texto-dim2" style="font-size:11.5px;">${esc(met)}</td>
+                <td class="num">${editavel ? `<input type="number" step="0.01" data-mes="${mes}" data-metrica="${esc(met)}" data-campo="meta" value="${r?.meta ?? ''}" style="width:72px;text-align:right;">` : (r?.meta ?? '—')}</td>
+                <td class="num">${editavel ? `<input type="number" step="0.01" data-mes="${mes}" data-metrica="${esc(met)}" data-campo="realizado" value="${r?.realizado ?? ''}" style="width:72px;text-align:right;">` : (r?.realizado ?? '—')}</td>
+              </tr>`
+            }).join('')}
+          </tbody></table>
+        </div>`
+      }).join('')}
+    </div>`
+
+  if (!editavel) return
+  $('#mk-add-metrica').onclick = async () => {
+    const nome = prompt('Nome da nova métrica:'); if (!nome) return
+    await db.from('marketing_meta_mensal').insert({ rede: MKT_REDE_ATUAL, ano: MKT_ANO_ATUAL, mes: 1, metrica: nome.trim() })
+    mktRedesSociais(alvo, editavel)
+  }
+  $('#mk-grade-metas').querySelectorAll('input[data-campo]').forEach(inp => {
+    inp.onchange = async () => {
+      const mes = Number(inp.dataset.mes), metrica = inp.dataset.metrica, campo = inp.dataset.campo
+      const valor = inp.value === '' ? null : Number(inp.value)
+      const existente = valorDe(mes, metrica)
+      if (existente) {
+        await db.from('marketing_meta_mensal').update({ [campo]: valor, atualizado_em: new Date().toISOString() }).eq('id', existente.id)
+      } else {
+        await db.from('marketing_meta_mensal').insert({ rede: MKT_REDE_ATUAL, ano: MKT_ANO_ATUAL, mes, metrica, [campo]: valor })
+      }
+    }
+  })
+}
+
+// ----- Mercado -----
+async function mktMercado (alvo) {
+  alvo.innerHTML = `<p class="texto-dim2">carregando dados de mercado...</p>`
+  const [{ data: dadosMercado, error }, { data: calendario }, { data: noticiasResp }] = await Promise.all([
+    db.functions.invoke('mercado-agro', { body: {} }),
+    db.from('marketing_calendario_agricola').select('mes,tema,topicos').order('mes'),
+    db.functions.invoke('noticias-agro', { body: {} })
+  ])
+
+  const m = dadosMercado || {}
+  const hojeMes = new Date().getMonth() + 1
+  const doMesAtual = (calendario || []).find(c => c.mes === hojeMes)
+
+  alvo.innerHTML = `
+    ${m.aviso ? `<div class="aviso-bloqueio" style="margin-bottom:16px;">${esc(m.aviso)}</div>` : ''}
+    ${error ? `<p class="vazio">Não consegui buscar os dados de mercado agora. Tenta de novo em instantes.</p>` : ''}
+
+    <div class="kpis" style="margin-bottom:16px;">
+      ${kpi('Dólar (USD/BRL)', m.dolar ? 'R$ ' + fmtNum(m.dolar.valor, 4) : '—', m.dolar ? (Number(m.dolar.variacao_pct) >= 0 ? '+' : '') + fmtNum(m.dolar.variacao_pct, 2) + '% hoje' : '')}
+      ${kpi('Temperatura agora', m.clima?.temperatura_atual != null ? fmtNum(m.clima.temperatura_atual, 1) + '°C' : '—', m.clima?.cidade_referencia || '')}
+      ${kpi('Umidade do ar', m.clima?.umidade_atual != null ? fmtNum(m.clima.umidade_atual, 0) + '%' : '—')}
+      ${kpi('Chuva hoje', m.clima?.chuva_hoje_mm != null ? fmtNum(m.clima.chuva_hoje_mm, 1) + ' mm' : '—')}
+    </div>
+
+    ${m.commodities?.ativo ? `<div class="panel" style="padding:16px 18px;margin-bottom:16px;">
+      <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 10px;">Commodities</h3>
+      <div class="kpis">${Object.entries(m.commodities.dados || {}).map(([nome, d]) =>
+        kpi(nome.charAt(0).toUpperCase() + nome.slice(1), d?.price != null ? fmtNum(d.price, 2) : '—')).join('')}</div>
+    </div>` : `<div class="panel" style="padding:16px 18px;margin-bottom:16px;">
+      <p class="texto-dim2" style="font-size:12.5px;margin:0;">Soja, milho, algodão e café ainda não estão ativados —
+      falta configurar a chave da API de commodities (peça pro administrador do sistema).</p>
+    </div>`}
+
+    ${m.clima?.previsao_3_dias ? `<div class="panel" style="padding:16px 18px;margin-bottom:16px;">
+      <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 10px;">Previsão — próximos dias</h3>
+      <div class="duas-colunas">
+        ${m.clima.previsao_3_dias.map(p => `<div class="mini-kv"><span>${fmtData(p.data)}</span>
+          <span>${fmtNum(p.temp_min, 0)}° – ${fmtNum(p.temp_max, 0)}° · ${fmtNum(p.chuva_mm, 1)}mm</span></div>`).join('')}
+      </div>
+    </div>` : ''}
+
+    ${doMesAtual ? `<div class="panel" style="padding:16px 18px;margin-bottom:16px;">
+      <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 6px;">Calendário agrícola MATOPIBA — ${MESES_MKT[hojeMes - 1]}</h3>
+      <p class="texto-dim" style="margin:0 0 8px;font-size:13px;">Tema do mês: <b>${esc(doMesAtual.tema)}</b></p>
+      <div class="chips-cred" style="margin:0;">${(doMesAtual.topicos || []).map(t => `<span class="chip">${esc(t)}</span>`).join('')}</div>
+    </div>` : ''}
+
+    <div class="panel" style="padding:16px 18px;">
+      <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 4px;">Painel de tendências — leitura semanal</h3>
+      <p class="texto-dim2" style="font-size:11.5px;margin:0 0 12px;">Separe 10 minutos por semana pra ler isso — ajuda na produção de conteúdo.</p>
+      ${Object.entries((noticiasResp?.fontes) || {}).map(([fonte, itens]) => `
+        <div style="margin-bottom:14px;">
+          <div class="texto-dim2" style="font-size:11px;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px;">${esc(fonte)}</div>
+          ${(itens || []).slice(0, 5).map(n => `<div class="passo">
+            <span class="quando" style="width:auto;">📰</span>
+            <a href="${esc(n.link)}" target="_blank" rel="noopener" style="color:var(--txt);">${esc(n.titulo)}</a>
+          </div>`).join('') || '<p class="texto-dim2" style="font-size:12px;">indisponível no momento.</p>'}
+        </div>`).join('') || '<p class="texto-dim2" style="font-size:12.5px;">sem notícias carregadas agora.</p>'}
+    </div>`
+}
+
+// ----- Cronograma (pilares semanais de conteúdo) -----
+async function mktCronograma (alvo, editavel) {
+  const { data, error } = await db.from('marketing_pilar_semanal').select('id,dia_semana,periodo,titulo,descricao')
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  const lista = data || []
+  const de = (dia, periodo) => lista.find(x => x.dia_semana === dia && x.periodo === periodo)
+
+  alvo.innerHTML = `
+    <p class="texto-dim2" style="font-size:12.5px;margin:0 0 14px;">Estratégia de conteúdo por dia da semana — o pilar de cada manhã/tarde.</p>
+    <div class="grade-cronograma-mkt">
+      ${DIAS_SEMANA_MKT.map((nome, i) => { const dia = i + 1
+        return `<div class="coluna-cronograma-mkt"><h4>${nome}</h4>
+          ${['MANHA', 'TARDE'].map(periodo => {
+            const p = de(dia, periodo)
+            return `<div class="bloco-periodo-mkt">
+              <div class="texto-dim2" style="font-size:10px;text-transform:uppercase;letter-spacing:.4px;">${periodo === 'MANHA' ? 'manhã' : 'tarde'}</div>
+              ${editavel ? `<input data-titulo data-dia="${dia}" data-periodo="${periodo}" value="${esc(p?.titulo ?? '')}" placeholder="título do pilar" style="margin-top:4px;font-size:12px;">
+                <textarea data-desc data-dia="${dia}" data-periodo="${periodo}" style="margin-top:4px;min-height:70px;font-size:11.5px;">${esc(p?.descricao ?? '')}</textarea>`
+                : `<div style="font-size:12.5px;margin-top:4px;"><b>${esc(p?.titulo || '—')}</b></div>
+                   <div class="texto-dim2" style="font-size:11.5px;margin-top:3px;">${esc(p?.descricao || '')}</div>`}
+            </div>`
+          }).join('')}
+        </div>`
+      }).join('')}
+    </div>
+    ${editavel ? `<div class="acoes" style="margin-top:14px;"><button class="btn mini" id="mk-salvar-cronograma">Salvar alterações</button></div>` : ''}`
+
+  if (!editavel) return
+  $('#mk-salvar-cronograma').onclick = async () => {
+    const btn = $('#mk-salvar-cronograma'); btn.disabled = true
+    for (let dia = 1; dia <= 5; dia++) {
+      for (const periodo of ['MANHA', 'TARDE']) {
+        const titulo = alvo.querySelector(`[data-titulo][data-dia="${dia}"][data-periodo="${periodo}"]`).value.trim()
+        const descricao = alvo.querySelector(`[data-desc][data-dia="${dia}"][data-periodo="${periodo}"]`).value.trim()
+        if (!titulo) continue
+        await db.from('marketing_pilar_semanal').upsert({
+          dia_semana: dia, periodo, titulo, descricao: descricao || null, atualizado_em: new Date().toISOString()
+        }, { onConflict: 'dia_semana,periodo' })
+      }
+    }
+    btn.disabled = false
+    mktCronograma(alvo, editavel)
+  }
+}
+
+// ----- Aniversariantes -----
+async function mktAniversariantes (alvo, editavel) {
+  const { data, error } = await db.from('marketing_aniversariante').select('id,nome,empresa,mes,dia,contato').order('mes').order('dia')
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  const lista = data || []
+  const hoje = new Date()
+
+  alvo.innerHTML = `
+    ${editavel ? `<div class="acoes" style="margin-bottom:14px;"><button class="btn" id="mk-novo-aniv">+ Novo</button></div>` : ''}
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr><th>Nome</th><th>Empresa</th><th>Data</th><th>Contato</th>${editavel ? '<th></th>' : ''}</tr></thead><tbody>
+        ${lista.map(a => {
+          const ehHoje = a.mes === hoje.getMonth() + 1 && a.dia === hoje.getDate()
+          return `<tr style="${ehHoje ? 'background:rgba(var(--good-rgb),.1);' : ''}">
+            <td><b>${esc(a.nome)}</b>${ehHoje ? ' 🎂' : ''}</td>
+            <td class="texto-dim">${esc(a.empresa || '—')}</td>
+            <td class="texto-dim">${a.dia && a.mes ? String(a.dia).padStart(2, '0') + '/' + String(a.mes).padStart(2, '0') : '—'}</td>
+            <td class="texto-dim">${esc(a.contato || '—')}</td>
+            ${editavel ? `<td style="text-align:right;"><button class="btn-secundario mini" data-del-aniv="${a.id}">excluir</button></td>` : ''}
+          </tr>`
+        }).join('') || `<tr><td colspan="${editavel ? 5 : 4}" class="vazio">Nenhum aniversariante cadastrado ainda.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+
+  if (!editavel) return
+  $('#mk-novo-aniv').onclick = () => formAniversarianteMkt(alvo, editavel)
+  alvo.querySelectorAll('[data-del-aniv]').forEach(b => {
+    b.onclick = async () => { await db.from('marketing_aniversariante').delete().eq('id', b.dataset.delAniv); mktAniversariantes(alvo, editavel) }
+  })
+}
+
+function formAniversarianteMkt (alvoPai, editavel) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>Novo aniversariante</h3>
+    <div class="form-grade">
+      <div class="campo" style="grid-column:1/-1;"><label>Nome *</label><input id="av-nome"></div>
+      <div class="campo"><label>Empresa</label><input id="av-empresa"></div>
+      <div class="campo"><label>Dia</label><input id="av-dia" type="number" min="1" max="31"></div>
+      <div class="campo"><label>Mês</label><select id="av-mes">${MESES_MKT.map((m, i) => `<option value="${i + 1}">${m}</option>`).join('')}</select></div>
+      <div class="campo"><label>Contato</label><input id="av-contato" placeholder="telefone"></div>
+    </div>
+    <div class="acoes"><button class="btn" id="av-salvar">Adicionar</button><button class="btn-secundario" id="av-cancelar">Cancelar</button></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#av-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  fundo.querySelector('#av-salvar').onclick = async () => {
+    const nome = fundo.querySelector('#av-nome').value.trim()
+    if (!nome) return
+    await db.from('marketing_aniversariante').insert({
+      nome, empresa: fundo.querySelector('#av-empresa').value.trim() || null,
+      dia: fundo.querySelector('#av-dia').value ? Number(fundo.querySelector('#av-dia').value) : null,
+      mes: Number(fundo.querySelector('#av-mes').value),
+      contato: fundo.querySelector('#av-contato').value.trim() || null
+    })
+    fechar(); mktAniversariantes(alvoPai, editavel)
+  }
+}
 
 // ---------------------------------------------------------------
 // Se já houver sessão salva, entra direto
