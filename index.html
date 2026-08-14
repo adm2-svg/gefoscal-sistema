@@ -4508,6 +4508,99 @@ async function crmPainel (alvo, gerencia) {
       <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Leads por origem</h3>
       ${barrasHorizontais(barrasOrigem, { unidade: '', casas: 0 })}
     </div>`
+
+  await crmCardNovoPedido(alvo, gerencia)
+}
+
+// ----- Card "Novo pedido" no Painel do CRM -----
+// Mesma lógica de emissão de Crédito e Cobrança, mas o Cliente só
+// lista quem tem lead ativo no funil (o vendedor vê os dele; quem
+// gerencia vê de todo mundo) — e já traz junto os dados de contato/
+// fiscais do cliente pra completar ali mesmo, sem sair do CRM.
+async function crmCardNovoPedido (alvo, gerencia) {
+  let q = db.from('lead').select('cliente_id, cliente:cliente_id(id,razao_social,nome_fantasia,telefone,email,inscricao_estadual,cnpj_cpf,endereco)')
+    .eq('arquivado', false).not('cliente_id', 'is', null)
+  if (!gerencia) q = q.eq('vendedor_id', PERFIL.pessoaId)
+  const { data } = await q
+
+  const porId = {}
+  ;(data || []).forEach(l => { if (l.cliente) porId[l.cliente.id] = l.cliente })
+  const clientes = Object.values(porId).sort((a, b) => (a.nome_fantasia || a.razao_social).localeCompare(b.nome_fantasia || b.razao_social))
+
+  const bloco = document.createElement('div')
+  bloco.className = 'panel'
+  bloco.style.cssText = 'padding:20px;margin-top:16px;'
+  bloco.innerHTML = `
+    <h3 style="font-family:var(--serif);font-size:16px;margin:0 0 14px;">Novo pedido</h3>
+    ${!clientes.length ? `<p class="texto-dim2" style="font-size:12.5px;">Nenhum cliente com lead ativo no funil ainda — converta um lead em cliente (aba Funil/Progresso) pra ele aparecer aqui.</p>` : `
+    <div class="form-grade">
+      <div class="campo"><label>Cliente *</label>
+        <select id="npc-cliente"><option value="">selecione...</option>
+          ${clientes.map(c => `<option value="${c.id}">${esc(c.nome_fantasia || c.razao_social)}</option>`).join('')}</select></div>
+      <div class="campo"><label>PD</label><input id="npc-numero" placeholder="número do pedido"></div>
+      <div class="campo"><label>Vencimento</label><input type="date" id="npc-venc"></div>
+      <div class="campo"><label>Toneladas *</label><input type="number" step="0.01" id="npc-ton"></div>
+      <div class="campo"><label>R$/t *</label><input type="number" step="0.01" id="npc-preco"></div>
+    </div>
+
+    <div class="cabeca-secao" style="margin-top:16px;margin-bottom:2px;"><h3 style="font-family:var(--serif);font-size:14px;">Dados do cliente</h3></div>
+    <p class="texto-dim2" style="font-size:11px;margin:0 0 10px;">Completa/atualiza o cadastro junto com o pedido — não precisa ir em Crédito e Cobrança.</p>
+    <div class="form-grade">
+      <div class="campo"><label>E-mail</label><input id="npc-email"></div>
+      <div class="campo"><label>Telefone</label><input id="npc-telefone"></div>
+      <div class="campo"><label>Inscrição Estadual</label><input id="npc-ie"></div>
+      <div class="campo"><label>CNPJ ou CPF</label><input id="npc-doc"></div>
+      <div class="campo" style="grid-column:1/-1;"><label>Endereço de entrega</label><input id="npc-endereco"></div>
+    </div>
+
+    <div class="campo" style="margin-top:10px;"><label>Observação</label><input id="npc-obs" placeholder="opcional"></div>
+    <div class="acoes" style="margin-top:12px;"><button class="btn" id="npc-salvar">Adicionar</button></div>
+    <div class="recado oculto" id="npc-recado"></div>
+    <p class="texto-dim2" style="font-size:11.5px;margin-top:8px;">O valor do pedido é calculado por toneladas × R$/t.</p>`}`
+  alvo.appendChild(bloco)
+  if (!clientes.length) return
+
+  const preencherCliente = id => {
+    const c = porId[id]
+    bloco.querySelector('#npc-email').value = c?.email ?? ''
+    bloco.querySelector('#npc-telefone').value = c?.telefone ?? ''
+    bloco.querySelector('#npc-ie').value = c?.inscricao_estadual ?? ''
+    bloco.querySelector('#npc-doc').value = c?.cnpj_cpf ?? ''
+    bloco.querySelector('#npc-endereco').value = c?.endereco ?? ''
+  }
+  bloco.querySelector('#npc-cliente').onchange = e => preencherCliente(e.target.value)
+
+  bloco.querySelector('#npc-salvar').onclick = async () => {
+    const clienteId = bloco.querySelector('#npc-cliente').value
+    const ton = Number(bloco.querySelector('#npc-ton').value)
+    const preco = Number(bloco.querySelector('#npc-preco').value)
+    const el = bloco.querySelector('#npc-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    if (!clienteId || !ton || !preco) { aviso('Selecione o cliente e preencha toneladas e R$/t.'); return }
+
+    const { error: e1 } = await db.from('cliente').update({
+      email: bloco.querySelector('#npc-email').value.trim() || null,
+      telefone: bloco.querySelector('#npc-telefone').value.trim() || null,
+      inscricao_estadual: bloco.querySelector('#npc-ie').value.trim() || null,
+      cnpj_cpf: bloco.querySelector('#npc-doc').value.trim() || null,
+      endereco: bloco.querySelector('#npc-endereco').value.trim() || null
+    }).eq('id', clienteId)
+    if (e1) { aviso(e1.message); return }
+
+    const { error: e2 } = await db.from('pedido').insert({
+      cliente_id: clienteId, numero: bloco.querySelector('#npc-numero').value.trim() || null,
+      quantidade_t: ton, preco_unitario: preco, valor_total: ton * preco,
+      vencimento: bloco.querySelector('#npc-venc').value || null,
+      observacao_cobranca: bloco.querySelector('#npc-obs').value.trim() || null,
+      data_pedido: new Date().toISOString().slice(0, 10)
+    })
+    if (e2) { aviso(e2.message); return }
+    el.textContent = 'Pedido emitido com sucesso.'; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--good-text)'; el.style.color = 'var(--good-text)'
+    bloco.querySelector('#npc-numero').value = ''; bloco.querySelector('#npc-venc').value = ''
+    bloco.querySelector('#npc-ton').value = ''; bloco.querySelector('#npc-preco').value = ''
+    bloco.querySelector('#npc-obs').value = ''
+  }
 }
 
 // ----- Atribuir (só gerência): importa planilha e distribui pro vendedor -----
