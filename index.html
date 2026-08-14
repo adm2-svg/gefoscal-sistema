@@ -9092,6 +9092,19 @@ const ROTULO_AREA_OS = { INDUSTRIA_PLANTA: 'Indústria / Planta', PATIO_ESTOQUE_
 
 let MANUT_CACHE = { equipamentos: [], veiculos: [], pessoas: [], setores: [], fornecedores: [] }
 
+async function garantirManutCache () {
+  if (MANUT_CACHE.pessoas.length) return
+  const [{ data: equipamentos }, { data: veiculos }, { data: pessoas }, { data: setores }, { data: fornecedores }] = await Promise.all([
+    db.from('equipamento').select('id,tag,descricao,setor_id,veiculo_id,status').order('tag'),
+    db.from('veiculo').select('id,placa,descricao').order('placa'),
+    db.from('pessoa').select('id,nome').eq('status', 'ATIVO').order('nome'),
+    db.from('setor').select('id,nome').order('nome'),
+    db.from('fornecedor').select('id,nome,cnpj_cpf,contato,status').order('nome')
+  ])
+  MANUT_CACHE = { equipamentos: equipamentos || [], veiculos: veiculos || [], pessoas: pessoas || [],
+                   setores: setores || [], fornecedores: fornecedores || [] }
+}
+
 function corStatusOS (s) {
   if (s === 'CONCLUIDA') return 'badge-bom'
   if (s === 'CANCELADA') return 'texto-dim2'
@@ -9308,6 +9321,58 @@ async function manutPainel (alvo, editavel) {
 // não só abrir um chamado). Cobre tanto máquina industrial quanto
 // carro/caminhão da Gefoscal, com setor/área.
 // ---------------------------------------------------------------
+// Área ADMINISTRATIVO_COMERCIAL (carros fora da indústria) exige 2 orçamentos,
+// prazo de entrega e nota fiscal antes de aprovar — regra pedida pelo cliente.
+function campoOrcamentosAdministrativo (prefixo, os) {
+  return `
+    <div class="oculto" id="${prefixo}-bloco-admin">
+      <div class="aviso-bloqueio" style="margin-top:12px;">
+        <div><b>Área administrativa/comercial exige 2 orçamentos antes de aprovar</b></div>
+        <div class="form-grade" style="margin-top:8px;">
+          <div class="campo"><label>Orçamento 1 — fornecedor</label>
+            <select id="${prefixo}-orc1-forn"><option value="">—</option>${MANUT_CACHE.fornecedores.map(f => `<option value="${f.id}" ${f.id === os?.orcamento1_fornecedor_id ? 'selected' : ''}>${esc(f.nome)}</option>`).join('')}</select></div>
+          <div class="campo"><label>Orçamento 1 — valor (R$)</label><input id="${prefixo}-orc1-valor" inputmode="decimal" value="${os?.orcamento1_valor ?? ''}"></div>
+          <div class="campo"><label>Orçamento 2 — fornecedor</label>
+            <select id="${prefixo}-orc2-forn"><option value="">—</option>${MANUT_CACHE.fornecedores.map(f => `<option value="${f.id}" ${f.id === os?.orcamento2_fornecedor_id ? 'selected' : ''}>${esc(f.nome)}</option>`).join('')}</select></div>
+          <div class="campo"><label>Orçamento 2 — valor (R$)</label><input id="${prefixo}-orc2-valor" inputmode="decimal" value="${os?.orcamento2_valor ?? ''}"></div>
+          <div class="campo"><label>Prazo de entrega *</label><input type="date" id="${prefixo}-prazo-entrega" value="${os?.prazo_entrega ?? ''}"></div>
+          <div class="campo"><label>Nº da nota fiscal *</label><input id="${prefixo}-nf-numero" value="${esc(os?.numero_nota_fiscal ?? '')}"></div>
+        </div>
+        <div class="campo" style="margin-top:8px;"><label>Anexar nota fiscal</label>
+          <input type="file" id="${prefixo}-nf-arquivo" accept="image/*,application/pdf"></div>
+      </div>
+    </div>`
+}
+
+function ligarBlocoAdministrativo (prefixo, raiz = document) {
+  const alternar = () => {
+    const area = raiz.querySelector(`#${prefixo}-area`).value
+    raiz.querySelector(`#${prefixo}-bloco-admin`).classList.toggle('oculto', area !== 'ADMINISTRATIVO_COMERCIAL')
+  }
+  raiz.querySelector(`#${prefixo}-area`).onchange = alternar
+  alternar()
+}
+
+function lerOrcamentosAdministrativo (prefixo, raiz = document) {
+  const q = s => raiz.querySelector(s)
+  return {
+    orcamento1_fornecedor_id: q(`#${prefixo}-orc1-forn`).value || null,
+    orcamento1_valor: numeroBR(q(`#${prefixo}-orc1-valor`).value),
+    orcamento2_fornecedor_id: q(`#${prefixo}-orc2-forn`).value || null,
+    orcamento2_valor: numeroBR(q(`#${prefixo}-orc2-valor`).value),
+    prazo_entrega: q(`#${prefixo}-prazo-entrega`).value || null,
+    numero_nota_fiscal: q(`#${prefixo}-nf-numero`).value.trim() || null
+  }
+}
+
+function validarAdministrativo (area, dados) {
+  if (area !== 'ADMINISTRATIVO_COMERCIAL') return null
+  if (!dados.orcamento1_valor || !dados.orcamento2_valor) return 'Área administrativa/comercial exige os 2 orçamentos preenchidos (valor de cada um).'
+  if (!dados.prazo_entrega) return 'Informe o prazo de entrega.'
+  if (!dados.numero_nota_fiscal) return 'Informe o número da nota fiscal.'
+  return null
+}
+
 function manutLancar (alvo, editavel) {
   if (!editavel) { alvo.innerHTML = `<div class="panel" style="padding:22px;">
     <p class="texto-dim">Você pode consultar, mas não lançar manutenções.</p></div>`; return }
@@ -9347,9 +9412,12 @@ function manutLancar (alvo, editavel) {
         <textarea id="ml-problema" style="min-height:80px;" placeholder="descreva o problema ou serviço"></textarea></div>
       <div class="campo" style="margin-top:10px;"><label>Diagnóstico / o que foi feito</label>
         <textarea id="ml-diagnostico" style="min-height:70px;" placeholder="opcional — preencha quando concluir"></textarea></div>
+      ${campoOrcamentosAdministrativo('ml')}
       <div class="acoes"><button class="btn" id="ml-salvar">Lançar manutenção</button></div>
       <div class="recado oculto" id="ml-recado"></div>
     </div>`
+
+  ligarBlocoAdministrativo('ml')
 
   const aviso = (t, alerta = true) => {
     const el = $('#ml-recado'); el.textContent = t; el.classList.remove('oculto')
@@ -9367,12 +9435,17 @@ function manutLancar (alvo, editavel) {
     if (!alvoVal) { aviso('Escolha o equipamento ou veículo.'); return }
     if (!problema) { aviso('Descreva o que precisa ser feito.'); return }
 
+    const area = $('#ml-area').value
+    const dadosAdmin = lerOrcamentosAdministrativo('ml')
+    const erroAdmin = validarAdministrativo(area, dadosAdmin)
+    if (erroAdmin) { aviso(erroAdmin); return }
+
     const [tipoAlvo, id] = alvoVal.split(':')
     const btn = $('#ml-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
-    const { error } = await db.from('ordem_servico').insert({
+    const { data: novaOS, error } = await db.from('ordem_servico').insert({
       equipamento_id: tipoAlvo === 'e' ? id : null,
       veiculo_id: tipoAlvo === 'v' ? id : null,
-      area: $('#ml-area').value,
+      area,
       tipo: $('#ml-tipo').value,
       prioridade: $('#ml-prioridade').value,
       status: $('#ml-status').value,
@@ -9385,10 +9458,21 @@ function manutLancar (alvo, editavel) {
       solicitante_id: $('#ml-solicitante').value || null,
       responsavel_id: $('#ml-responsavel').value || null,
       valor_pecas: numeroBR($('#ml-pecas').value),
-      valor_terceiros: numeroBR($('#ml-terceiros').value)
-    })
+      valor_terceiros: numeroBR($('#ml-terceiros').value),
+      ...(area === 'ADMINISTRATIVO_COMERCIAL' ? dadosAdmin : {})
+    }).select('id').single()
+
+    if (error) { btn.disabled = false; btn.textContent = 'Lançar manutenção'; aviso(error.message); return }
+
+    const arquivoNF = $('#ml-nf-arquivo')?.files[0]
+    if (arquivoNF) {
+      try {
+        const { caminho, nome } = await subirComprovante(arquivoNF, `ordem_servico/${novaOS.id}`)
+        await db.from('anexo').insert({ entidade: 'ORDEM_SERVICO', registro_id: novaOS.id, tipo: 'nota_fiscal', nome_arquivo: nome, storage_path: caminho })
+      } catch (e) { aviso('OS salva, mas a nota fiscal falhou: ' + e.message); btn.disabled = false; btn.textContent = 'Lançar manutenção'; return }
+    }
+
     btn.disabled = false; btn.textContent = 'Lançar manutenção'
-    if (error) { aviso(error.message); return }
     aviso('Manutenção lançada.', false)
     $('#ml-problema').value = ''; $('#ml-diagnostico').value = ''
     $('#ml-pecas').value = ''; $('#ml-terceiros').value = ''
@@ -9520,6 +9604,7 @@ async function detalheOS (os, editavel, aoFechar) {
         </div>
         <div class="campo" style="margin-top:10px;"><label>Diagnóstico / o que foi feito</label>
           <textarea id="do-diagnostico" style="min-height:70px;">${esc(os.diagnostico ?? '')}</textarea></div>
+        ${campoOrcamentosAdministrativo('do', os)}
         <div class="acoes"><button class="btn" id="do-salvar">Salvar alterações</button>
           ${!os.lancamento_id ? `<button class="btn-secundario" id="do-financeiro">Gerar lançamento financeiro</button>` :
             `<span class="badge-bom" style="align-self:center;">lançamento financeiro já gerado</span>`}</div>
@@ -9569,15 +9654,26 @@ async function detalheOS (os, editavel, aoFechar) {
 
   if (!editavel) return
 
+  ligarBlocoAdministrativo('do', fundo)
+
   const aviso = t => {
     const el = fundo.querySelector('#do-recado'); el.textContent = t; el.classList.remove('oculto')
     el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
   }
 
   fundo.querySelector('#do-salvar').onclick = async () => {
+    const area = fundo.querySelector('#do-area').value || null
+    const dadosAdmin = lerOrcamentosAdministrativo('do', fundo)
+    const status = fundo.querySelector('#do-status').value
+    // só cobra os orçamentos/nota fiscal quando a OS já está concluindo — dá pra
+    // ir preenchendo aos poucos enquanto ainda está aberta/em execução
+    if (status === 'CONCLUIDA') {
+      const erroAdmin = validarAdministrativo(area, dadosAdmin)
+      if (erroAdmin) { aviso(erroAdmin); return }
+    }
     const corpo = {
-      status: fundo.querySelector('#do-status').value,
-      area: fundo.querySelector('#do-area').value || null,
+      status,
+      area,
       prioridade: fundo.querySelector('#do-prioridade').value,
       responsavel_id: fundo.querySelector('#do-responsavel').value || null,
       fornecedor_id: fundo.querySelector('#do-fornecedor').value || null,
@@ -9585,10 +9681,19 @@ async function detalheOS (os, editavel, aoFechar) {
       data_conclusao: fundo.querySelector('#do-conclusao').value || null,
       valor_pecas: numeroBR(fundo.querySelector('#do-pecas').value),
       valor_terceiros: numeroBR(fundo.querySelector('#do-terceiros').value),
-      diagnostico: fundo.querySelector('#do-diagnostico').value.trim() || null
+      diagnostico: fundo.querySelector('#do-diagnostico').value.trim() || null,
+      ...(area === 'ADMINISTRATIVO_COMERCIAL' ? dadosAdmin : {})
     }
     const { error } = await db.from('ordem_servico').update(corpo).eq('id', os.id)
     if (error) { aviso(error.message); return }
+
+    const arquivoNF = fundo.querySelector('#do-nf-arquivo')?.files[0]
+    if (arquivoNF) {
+      try {
+        const { caminho, nome } = await subirComprovante(arquivoNF, `ordem_servico/${os.id}`)
+        await db.from('anexo').insert({ entidade: 'ORDEM_SERVICO', registro_id: os.id, tipo: 'nota_fiscal', nome_arquivo: nome, storage_path: caminho })
+      } catch (e) { aviso('Salvo, mas a nota fiscal falhou: ' + e.message); return }
+    }
     fechar(); aoFechar()
   }
 
@@ -9839,7 +9944,32 @@ async function manutCustos (alvo, editavel) {
     lista.forEach(os => { if (os.area) porArea[os.area] = (porArea[os.area] || 0) + Number(os.valor_total || 0) })
     const barrasArea = AREAS_OS.filter(a => porArea[a] > 0).map(a => ({ rotulo: ROTULO_AREA_OS[a], valor: porArea[a] }))
 
+    // industria = tudo que não é administrativo/comercial (planta, pátio, mina, outro)
+    const totalIndustria = AREAS_OS.filter(a => a !== 'ADMINISTRATIVO_COMERCIAL')
+      .reduce((s, a) => s + porArea[a], 0)
+    const totalAdmin = porArea.ADMINISTRATIVO_COMERCIAL || 0
+    const qtdIndustria = lista.filter(os => os.area && os.area !== 'ADMINISTRATIVO_COMERCIAL').length
+    const qtdAdmin = lista.filter(os => os.area === 'ADMINISTRATIVO_COMERCIAL').length
+
     $('#mc-conteudo').innerHTML = `
+      <div class="resumo-topo" style="margin-bottom:16px;">
+        <div class="bloco" style="background:var(--rust);color:#fff;">
+          <div class="rot" style="color:rgba(255,255,255,.85);">Indústria (planta, pátio, mina, outro)</div>
+          <div class="val" style="color:#fff;">R$ ${fmtNum(totalIndustria)}</div>
+          <div class="nota" style="color:rgba(255,255,255,.75);">${qtdIndustria} OS com custo</div>
+        </div>
+        <div class="bloco">
+          <div class="rot">Administrativo / comercial (carros)</div>
+          <div class="val">R$ ${fmtNum(totalAdmin)}</div>
+          <div class="nota">${qtdAdmin} OS com custo · volume menor, mas exige 2 orçamentos</div>
+        </div>
+        <div class="bloco">
+          <div class="rot">Participação do administrativo</div>
+          <div class="val">${total ? ((totalAdmin / total) * 100).toFixed(1) : '0'}%</div>
+          <div class="nota">do gasto total de manutenção</div>
+        </div>
+      </div>
+
       <div class="panel" style="padding:18px;margin-bottom:16px;">
         <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Maior gasto por equipamento/veículo</h3>
         ${barrasHorizontais(topAlvo, { unidade: 'R$', casas: 2 })}
@@ -10607,15 +10737,20 @@ function nomeProcessoFrota (proc) {
 
 // ----- Frota › Painel -----
 async function frotaPainel (alvo, editavel) {
-  const [{ data: veiculos }, { data: acoes }] = await Promise.all([
+  const [{ data: veiculos }, { data: acoes }, { data: comIpva }] = await Promise.all([
     db.from('veiculo').select('id,descricao,status_frota,eh_proprio,valor_entrada'),
     db.from('frota_acao').select('id,descricao,categoria,sla_prazo,lembrete_data,lembrete_visto,status,veiculo:veiculo_id(descricao),fornecedor:fornecedor_id(nome)')
-      .eq('lembrete_visto', false).lte('lembrete_data', hojeISO()).eq('status', 'ABERTA').order('lembrete_data')
+      .eq('lembrete_visto', false).lte('lembrete_data', hojeISO()).eq('status', 'ABERTA').order('lembrete_data'),
+    db.from('veiculo').select('id,descricao,placa,ipva_vencimento').not('ipva_vencimento', 'is', null)
   ])
   const lista = veiculos || []
   const emUso = lista.filter(v => v.status_frota === 'EM_USO')
   const disponiveis = lista.filter(v => v.status_frota === 'DISPONIVEL_VENDA')
   const vendidos = lista.filter(v => v.status_frota === 'VENDIDO')
+
+  const daqui10 = new Date(Date.now() + 10 * 86400000).toISOString().slice(0, 10)
+  const ipvasProximos = (comIpva || []).filter(v => v.ipva_vencimento <= daqui10)
+    .sort((a, b) => a.ipva_vencimento.localeCompare(b.ipva_vencimento))
 
   alvo.innerHTML = `
     <div class="kpis" style="margin-bottom:16px;">
@@ -10624,6 +10759,13 @@ async function frotaPainel (alvo, editavel) {
       ${kpi('Vendidos', String(vendidos.length), 'histórico')}
       ${kpi('Lembretes pendentes', String((acoes || []).length), 'pra cobrar hoje')}
     </div>
+    ${ipvasProximos.length ? `<div class="aviso-bloqueio" style="margin-bottom:16px;">
+      ${ipvasProximos.map(v => {
+        const dias = Math.ceil((new Date(v.ipva_vencimento + 'T00:00:00') - new Date(hojeISO() + 'T00:00:00')) / 86400000)
+        return `<div>📅 <b>IPVA</b> ${esc(v.descricao)}${v.placa ? ' · ' + esc(v.placa) : ''} —
+          ${dias < 0 ? `vencido há ${Math.abs(dias)} dia(s)` : dias === 0 ? 'vence hoje' : `vence em ${dias} dia(s)`} (${fmtData(v.ipva_vencimento)})</div>`
+      }).join('')}
+    </div>` : ''}
     ${(acoes || []).length ? `<div class="aviso-bloqueio" style="margin-bottom:16px;">
       ${acoes.map(a => `<div>⏰ <b>${esc(ROTULO_CAT_ACAO_FROTA[a.categoria])}</b>
         ${a.veiculo?.descricao ? ' · ' + esc(a.veiculo.descricao) : ''}
@@ -10645,7 +10787,7 @@ async function frotaItens (alvo, editavel) {
   const [{ data, error }, { data: custosDoc }, { data: custosManut }] = await Promise.all([
     db.from('veiculo').select(`id,placa,descricao,eh_proprio,ano_modelo,renavam,chassi,contraparte,
       valor_entrada,data_entrada,status_frota,valor_venda,data_venda,comprador,processo_id,observacoes,responsavel_id,
-      responsavel:responsavel_id ( nome )`).order('data_entrada', { ascending: false, nullsFirst: false }),
+      ipva_vencimento, responsavel:responsavel_id ( nome )`).order('data_entrada', { ascending: false, nullsFirst: false }),
     db.from('veiculo_custo').select('veiculo_id,valor'),
     db.from('ordem_servico').select('veiculo_id,valor_total').not('veiculo_id', 'is', null)
   ])
@@ -10658,12 +10800,97 @@ async function frotaItens (alvo, editavel) {
   const valorDisponivel = disponiveis.reduce((s, i) => s + Number(i.valor_entrada || 0), 0)
   const resultadoAcumulado = vendidos.reduce((s, i) => { const r = resultadoFrota(i, custosDoc, custosManut); return s + (r ? r.liquido : 0) }, 0)
 
+  // fotos: uma busca só pra todos os veículos, com URL assinada em lote
+  const ids = lista.map(i => i.id)
+  const { data: fotosRaw } = ids.length
+    ? await db.from('anexo').select('registro_id,storage_path,nome_arquivo').eq('entidade', 'VEICULO').eq('tipo', 'foto').in('registro_id', ids)
+    : { data: [] }
+  const caminhos = [...new Set((fotosRaw || []).map(f => f.storage_path))]
+  let urlPorCaminho = {}
+  if (caminhos.length) {
+    const { data: assinadas } = await db.storage.from('comprovantes').createSignedUrls(caminhos, 3600)
+    ;(assinadas || []).forEach(a => { if (a.signedUrl) urlPorCaminho[a.path] = a.signedUrl })
+  }
+  const fotoPrincipal = {}
+  ;(fotosRaw || []).forEach(f => { if (!fotoPrincipal[f.registro_id]) fotoPrincipal[f.registro_id] = urlPorCaminho[f.storage_path] })
+
+  let modo = 'vitrine'
+
   alvo.innerHTML = `
     <div class="form-grade" style="margin-bottom:16px;">
       ${kpi('Disponíveis para venda', String(disponiveis.length), 'R$ ' + fmtNum(valorDisponivel) + ' em valor de entrada')}
       ${kpi('Vendidos', String(vendidos.length), (resultadoAcumulado >= 0 ? 'ganho' : 'perda') + ' líquida R$ ' + fmtNum(Math.abs(resultadoAcumulado)))}
     </div>
-    ${editavel ? `<div class="acoes" style="margin-bottom:14px;"><button class="btn" id="fr-novo">+ Novo item</button></div>` : ''}
+    <div class="cabeca-secao" style="margin-bottom:14px;">
+      <div class="subabas" style="margin:0;">
+        <button data-modo="vitrine" class="ativo">Vitrine</button>
+        <button data-modo="tabela">Tabela</button>
+      </div>
+      ${editavel ? `<button class="btn" id="fr-novo">+ Novo item</button>` : ''}
+    </div>
+    <div id="fr-conteudo"></div>`
+
+  alvo.querySelectorAll('[data-modo]').forEach(b => {
+    b.onclick = () => {
+      alvo.querySelectorAll('[data-modo]').forEach(x => x.classList.toggle('ativo', x === b))
+      modo = b.dataset.modo
+      desenhar()
+    }
+  })
+  if (editavel) $('#fr-novo').onclick = () => formFrotaItem(null)
+
+  const diasAteVencimento = data => {
+    if (!data) return null
+    return Math.ceil((new Date(data + 'T00:00:00') - new Date(hojeISO() + 'T00:00:00')) / 86400000)
+  }
+
+  const desenhar = () => { modo === 'vitrine' ? desenharVitrine() : desenharTabela() }
+
+  const desenharVitrine = () => {
+    $('#fr-conteudo').innerHTML = `
+      <div class="grade-cartoes" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;">
+        ${lista.map(i => {
+          const gasto = custoTotalFrota(i, custosDoc, custosManut)
+          const gastoManut = (custosManut || []).filter(o => o.veiculo_id === i.id).reduce((s, o) => s + Number(o.valor_total || 0), 0)
+          const preco = i.status_frota === 'VENDIDO' ? i.valor_venda : (i.valor_venda ?? i.valor_entrada)
+          const rotuloPreco = i.status_frota === 'VENDIDO' ? 'vendido por' : i.valor_venda != null ? 'à venda por' : 'valor de entrada'
+          const dias = diasAteVencimento(i.ipva_vencimento)
+          const foto = fotoPrincipal[i.id]
+          return `<div class="panel" style="padding:0;overflow:hidden;cursor:pointer;" data-abrir="${i.id}">
+            <div style="height:150px;background:${foto ? `url('${foto}') center/cover` : 'var(--surface2)'};display:flex;align-items:center;justify-content:center;">
+              ${!foto ? `<span class="texto-dim2" style="font-size:12px;">sem foto</span>` : ''}
+            </div>
+            <div style="padding:14px;">
+              <div style="display:flex;justify-content:space-between;align-items:start;gap:8px;">
+                <div>
+                  <div style="font-family:var(--serif);font-size:15px;">${esc(i.descricao)}</div>
+                  <div class="texto-dim2" style="font-size:11.5px;">${esc(i.ano_modelo || '')}${i.placa ? (i.ano_modelo ? ' · ' : '') + esc(i.placa) : ''}</div>
+                </div>
+                ${i.status_frota === 'VENDIDO' ? '<span class="badge-bom">vendido</span>'
+                  : i.status_frota === 'DISPONIVEL_VENDA' ? '<span class="badge-alerta">à venda</span>'
+                  : '<span class="chip">em uso</span>'}
+              </div>
+              <div style="margin-top:10px;">
+                <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;">${rotuloPreco}</div>
+                <div style="font-family:var(--serif);font-size:19px;color:var(--rust);">${preco != null ? 'R$ ' + fmtNum(preco) : '—'}</div>
+              </div>
+              <div style="display:flex;gap:14px;margin-top:10px;font-size:11.5px;" class="texto-dim">
+                <span>gasto total<br><b class="texto-dim2">R$ ${fmtNum(gasto)}</b></span>
+                <span>manutenção<br><b class="texto-dim2">R$ ${fmtNum(gastoManut)}</b></span>
+              </div>
+              ${dias !== null && dias <= 10 ? `<div class="badge-alerta" style="margin-top:10px;display:inline-block;">
+                ${dias < 0 ? `IPVA vencido há ${Math.abs(dias)}d` : dias === 0 ? 'IPVA vence hoje' : `IPVA vence em ${dias}d`}</div>` : ''}
+            </div>
+          </div>`
+        }).join('') || `<p class="vazio">Nenhum item cadastrado ainda.</p>`}
+      </div>`
+    $('#fr-conteudo').querySelectorAll('[data-abrir]').forEach(el => {
+      el.onclick = () => formFrotaItem(lista.find(x => x.id === el.dataset.abrir))
+    })
+  }
+
+  const desenharTabela = () => {
+    $('#fr-conteudo').innerHTML = `
     <div class="panel" style="padding:0;"><div class="tabela-scroll">
       <table><thead><tr>
         <th>Item</th><th>Tipo</th><th>Origem / contraparte</th>
@@ -10697,17 +10924,19 @@ async function frotaItens (alvo, editavel) {
       </tbody></table>
     </div></div>`
 
-  alvo.querySelectorAll('[data-custos]').forEach(b => {
-    b.onclick = () => formCustosVeiculo(lista.find(x => x.id === b.dataset.custos), custosManut, editavel)
-  })
-  if (!editavel) return
-  $('#fr-novo').onclick = () => formFrotaItem(null)
-  alvo.querySelectorAll('[data-editar]').forEach(b => {
-    b.onclick = () => formFrotaItem(lista.find(x => x.id === b.dataset.editar))
-  })
-  alvo.querySelectorAll('[data-vender]').forEach(b => {
-    b.onclick = () => formFrotaVenda(lista.find(x => x.id === b.dataset.vender), custosDoc, custosManut)
-  })
+    $('#fr-conteudo').querySelectorAll('[data-custos]').forEach(b => {
+      b.onclick = () => formCustosVeiculo(lista.find(x => x.id === b.dataset.custos), custosManut, editavel)
+    })
+    if (!editavel) return
+    $('#fr-conteudo').querySelectorAll('[data-editar]').forEach(b => {
+      b.onclick = () => formFrotaItem(lista.find(x => x.id === b.dataset.editar))
+    })
+    $('#fr-conteudo').querySelectorAll('[data-vender]').forEach(b => {
+      b.onclick = () => formFrotaVenda(lista.find(x => x.id === b.dataset.vender), custosDoc, custosManut)
+    })
+  }
+
+  desenhar()
 }
 
 function formFrotaItem (item) {
@@ -10718,7 +10947,7 @@ function formFrotaItem (item) {
     `<option value="${p.id}" ${p.id === item?.processo_id ? 'selected' : ''}>${esc(nomeProcessoFrota(p))}</option>`).join('')
 
   fundo.innerHTML = `
-    <div class="modal" style="max-width:720px;">
+    <div class="modal" style="max-width:760px;">
       <h3>${item ? 'Editar item' : 'Novo item de frota'}</h3>
       <div class="form-grade">
         <div class="campo" style="grid-column:1/-1;"><label>Descrição *</label>
@@ -10732,6 +10961,7 @@ function formFrotaItem (item) {
         <div class="campo"><label>Placa</label><input id="fr-placa" value="${v('placa')}"></div>
         <div class="campo"><label>Renavam</label><input id="fr-renavam" value="${v('renavam')}"></div>
         <div class="campo"><label>Chassi</label><input id="fr-chassi" value="${v('chassi')}"></div>
+        <div class="campo"><label>Vencimento do IPVA</label><input type="date" id="fr-ipva" value="${item?.ipva_vencimento ?? ''}"></div>
         <div class="campo" style="grid-column:1/-1;"><label>Origem / contraparte (propriedade anterior)</label>
           <input id="fr-contra" value="${v('contraparte')}" placeholder="de quem veio, ex.: Laerte Baechtold"></div>
         <div class="campo"><label>Valor de entrada / referência</label>
@@ -10758,6 +10988,29 @@ function formFrotaItem (item) {
         <button class="btn-secundario" id="fr-cancelar">Cancelar</button>
       </div>
       <div class="recado oculto" id="fr-recado"></div>
+
+      ${item ? `
+        <div class="cabeca-secao" style="margin-top:20px;"><h3 style="font-family:var(--serif);font-size:15px;">Fotos e documentos</h3></div>
+        <div id="fr-anexos"><p class="texto-dim2">carregando...</p></div>
+        <div class="form-grade" style="margin-top:10px;">
+          <div class="campo"><label>Fotos (pode marcar várias)</label><input type="file" id="fr-up-foto" accept="image/*" multiple></div>
+          <div class="campo"><label>Nota fiscal</label><input type="file" id="fr-up-nf" accept="image/*,application/pdf"></div>
+          <div class="campo"><label>Contrato</label><input type="file" id="fr-up-contrato" accept="image/*,application/pdf"></div>
+          <div class="campo"><label>Outro documento</label><input type="file" id="fr-up-outro" accept="image/*,application/pdf"></div>
+        </div>
+        <div class="acoes"><button class="btn-secundario" id="fr-up-salvar">Anexar arquivos</button></div>
+
+        <div class="cabeca-secao" style="margin-top:20px;">
+          <h3 style="font-family:var(--serif);font-size:15px;">Documentação jurídica deste veículo</h3>
+        </div>
+        <div id="fr-juridico"><p class="texto-dim2">carregando...</p></div>
+        <div class="form-grade" style="margin-top:10px;">
+          <div class="campo"><label>Nome do documento</label><input id="fr-jur-nome" placeholder="Ex: Contrato de compra"></div>
+          <div class="campo"><label>Categoria</label><input id="fr-jur-cat" placeholder="Ex: contrato, procuração..."></div>
+          <div class="campo" style="grid-column:1/-1;"><label>Link (Drive, etc.)</label><input id="fr-jur-link" placeholder="opcional"></div>
+        </div>
+        <div class="acoes"><button class="btn-secundario" id="fr-jur-add">Vincular documento jurídico</button></div>
+      ` : `<p class="texto-dim2" style="font-size:12px;margin-top:14px;">Salve o item primeiro pra poder anexar fotos e documentos.</p>`}
     </div>`
 
   document.body.appendChild(fundo)
@@ -10780,6 +11033,7 @@ function formFrotaItem (item) {
       placa: q('#fr-placa').value.trim() || null,
       renavam: q('#fr-renavam').value.trim() || null,
       chassi: q('#fr-chassi').value.trim() || null,
+      ipva_vencimento: q('#fr-ipva').value || null,
       contraparte: q('#fr-contra').value.trim() || null,
       valor_entrada: q('#fr-valor-ent').value ? Number(q('#fr-valor-ent').value) : null,
       data_entrada: q('#fr-data-ent').value || null,
@@ -10806,6 +11060,66 @@ function formFrotaItem (item) {
     const { error } = await db.from('veiculo').delete().eq('id', item.id)
     if (error) { aviso(error.message); return }
     fechar(); abrirFrota('itens', true)
+  }
+
+  if (!item) return
+
+  // ----- fotos e documentos já anexados -----
+  const carregarAnexos = async () => {
+    const { data: anexos } = await db.from('anexo').select('id,tipo,nome_arquivo,storage_path')
+      .eq('entidade', 'VEICULO').eq('registro_id', item.id).order('criado_em', { ascending: false })
+    q('#fr-anexos').innerHTML = (anexos || []).length ? `<div style="display:flex;flex-direction:column;gap:6px;">
+      ${anexos.map(a => `<div class="passo"><span class="quando">${esc(a.tipo || 'arquivo')}</span>
+        <span><a href="#" data-abrir-anexo-veiculo="${esc(a.storage_path)}">${esc(a.nome_arquivo ?? 'arquivo')}</a></span></div>`).join('')}
+      </div>` : `<p class="texto-dim2" style="font-size:12px;">Nenhum arquivo anexado ainda.</p>`
+    q('#fr-anexos').querySelectorAll('[data-abrir-anexo-veiculo]').forEach(a => {
+      a.onclick = e => { e.preventDefault(); abrirComprovante(a.dataset.abrirAnexoVeiculo) }
+    })
+  }
+  carregarAnexos()
+
+  q('#fr-up-salvar').onclick = async () => {
+    const btn = q('#fr-up-salvar'); btn.disabled = true; btn.textContent = 'Enviando...'
+    try {
+      const fotos = [...q('#fr-up-foto').files]
+      for (const arquivo of fotos) {
+        const { caminho, nome } = await subirComprovante(arquivo, `veiculo/${item.id}`)
+        await db.from('anexo').insert({ entidade: 'VEICULO', registro_id: item.id, tipo: 'foto', nome_arquivo: nome, storage_path: caminho })
+      }
+      for (const [campo, tipo] of [['#fr-up-nf', 'nota_fiscal'], ['#fr-up-contrato', 'contrato'], ['#fr-up-outro', 'outro']]) {
+        const arquivo = q(campo).files[0]
+        if (!arquivo) continue
+        const { caminho, nome } = await subirComprovante(arquivo, `veiculo/${item.id}`)
+        await db.from('anexo').insert({ entidade: 'VEICULO', registro_id: item.id, tipo, nome_arquivo: nome, storage_path: caminho })
+      }
+    } catch (e) { aviso('Falha ao enviar: ' + e.message); btn.disabled = false; btn.textContent = 'Anexar arquivos'; return }
+    btn.disabled = false; btn.textContent = 'Anexar arquivos'
+    q('#fr-up-foto').value = ''; q('#fr-up-nf').value = ''; q('#fr-up-contrato').value = ''; q('#fr-up-outro').value = ''
+    carregarAnexos()
+  }
+
+  // ----- documentação jurídica já vinculada a este veículo (ou nova) -----
+  const carregarJuridico = async () => {
+    const { data: docs, error: erroDocs } = await db.from('juridico_documento')
+      .select('id,nome,categoria,link').eq('veiculo_id', item.id).order('criado_em', { ascending: false })
+    if (faltaMigracao(erroDocs)) { q('#fr-juridico').innerHTML = `<p class="vazio">${esc(erroDocs.message)}</p>`; return }
+    q('#fr-juridico').innerHTML = (docs || []).length ? `<div style="display:flex;flex-direction:column;gap:6px;">
+      ${docs.map(d => `<div class="passo"><span class="quando">${esc(d.categoria || 'documento')}</span>
+        <span>${d.link ? `<a href="${esc(d.link)}" target="_blank" rel="noopener">${esc(d.nome)}</a>` : esc(d.nome)}</span></div>`).join('')}
+      </div>` : `<p class="texto-dim2" style="font-size:12px;">Nenhum documento jurídico vinculado a este veículo ainda — o que cadastrar aqui também aparece em Jurídico.</p>`
+  }
+  carregarJuridico()
+
+  q('#fr-jur-add').onclick = async () => {
+    const nome = q('#fr-jur-nome').value.trim()
+    if (!nome) { aviso('Dê um nome pro documento.'); return }
+    const { error: erroJ } = await db.from('juridico_documento').insert({
+      nome, categoria: q('#fr-jur-cat').value.trim() || null, link: q('#fr-jur-link').value.trim() || null,
+      veiculo_id: item.id, criado_por: PERFIL.pessoaId
+    })
+    if (erroJ) { aviso(erroJ.message); return }
+    q('#fr-jur-nome').value = ''; q('#fr-jur-cat').value = ''; q('#fr-jur-link').value = ''
+    carregarJuridico()
   }
 }
 
@@ -10933,10 +11247,11 @@ function formCustosVeiculo (item, custosManut, editavel) {
 // ----- Frota › Ações (acompanhamento com lembrar-me) -----
 async function frotaAcoes (alvo, editavel) {
   const [{ data: acoes, error }, { data: veiculos }] = await Promise.all([
-    db.from('frota_acao').select(`id,categoria,descricao,sla_prazo,lembrete_data,lembrete_visto,status,
-      veiculo:veiculo_id(descricao), fornecedor:fornecedor_id(nome), veiculo_id, fornecedor_id`)
+    db.from('frota_acao').select(`id,categoria,descricao,sla_prazo,lembrete_data,lembrete_visto,status,ordem_servico_id,
+      veiculo:veiculo_id(id,descricao,placa), fornecedor:fornecedor_id(nome), veiculo_id, fornecedor_id,
+      os:ordem_servico_id(codigo,status)`)
       .order('sla_prazo', { ascending: true, nullsFirst: false }),
-    db.from('veiculo').select('id,descricao').order('descricao')
+    db.from('veiculo').select('id,descricao,placa').order('descricao')
   ])
   if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
 
@@ -10948,7 +11263,7 @@ async function frotaAcoes (alvo, editavel) {
     <div class="panel" style="padding:0;"><div class="tabela-scroll">
       <table><thead><tr>
         <th>Categoria</th><th>Veículo</th><th>Prestador</th><th>Descrição</th>
-        <th>Prazo (SLA)</th><th>Lembrete</th><th>Status</th>${editavel ? '<th></th>' : ''}
+        <th>Prazo (SLA)</th><th>Lembrete</th><th>Status</th><th>OS</th>${editavel ? '<th></th>' : ''}
       </tr></thead><tbody>
       ${lista.map(a => `<tr>
         <td><span class="chip">${esc(ROTULO_CAT_ACAO_FROTA[a.categoria] || a.categoria)}</span></td>
@@ -10958,13 +11273,28 @@ async function frotaAcoes (alvo, editavel) {
         <td class="texto-dim">${a.sla_prazo ? fmtData(a.sla_prazo) : '—'}</td>
         <td>${a.lembrete_data ? (a.lembrete_visto ? `<span class="chip">visto · ${fmtData(a.lembrete_data)}</span>` : `<span class="badge-alerta">${fmtData(a.lembrete_data)}</span>`) : '<span class="texto-dim2">sem lembrete</span>'}</td>
         <td>${a.status === 'CONCLUIDA' ? '<span class="badge-bom">concluída</span>' : '<span class="chip">aberta</span>'}</td>
+        <td>${a.os ? `<span class="chip" style="cursor:pointer;" data-abrir-os-frota="${a.ordem_servico_id}">${esc(a.os.codigo)}</span>` : '<span class="texto-dim2">—</span>'}</td>
         ${editavel ? `<td style="text-align:right;white-space:nowrap;">
           ${a.status === 'ABERTA' && !a.lembrete_data ? `<button class="btn-secundario mini" data-lembrar="${a.id}">lembrar-me</button>` : ''}
           ${a.status === 'ABERTA' ? `<button class="btn-secundario mini" data-concluir="${a.id}">concluir</button>` : ''}
+          ${!a.ordem_servico_id && a.categoria === 'MANUTENCAO' ? `<button class="btn-secundario mini" data-virar-os="${a.id}">virar OS</button>` : ''}
         </td>` : ''}
-      </tr>`).join('') || `<tr><td colspan="${editavel ? 8 : 7}" class="vazio">Nenhuma ação registrada ainda.</td></tr>`}
+      </tr>`).join('') || `<tr><td colspan="${editavel ? 9 : 8}" class="vazio">Nenhuma ação registrada ainda.</td></tr>`}
       </tbody></table>
     </div></div>`
+
+  alvo.querySelectorAll('[data-abrir-os-frota]').forEach(el => {
+    el.onclick = async () => {
+      await garantirManutCache()
+      const { data: os } = await db.from('ordem_servico').select(`
+        id, codigo, data_solicitacao, tipo, prioridade, status, descricao_problema, area,
+        data_limite, data_conclusao, valor_pecas, valor_terceiros, valor_total,
+        equipamento:equipamento_id ( tag, descricao ), veiculo:veiculo_id ( placa, descricao ),
+        solicitante:solicitante_id ( nome ), responsavel:responsavel_id ( nome )
+      `).eq('id', el.dataset.abrirOsFrota).single()
+      if (os) detalheOS(os, podeEditar('manutencao'), () => frotaAcoes(alvo, editavel))
+    }
+  })
 
   if (!editavel) return
   $('#ac-nova').onclick = () => formAcaoFrota(veiculos || [])
@@ -10983,6 +11313,60 @@ async function frotaAcoes (alvo, editavel) {
       frotaAcoes(alvo, editavel)
     }
   })
+  alvo.querySelectorAll('[data-virar-os]').forEach(b => {
+    b.onclick = () => {
+      const a = lista.find(x => x.id === b.dataset.virarOs)
+      if (a) formVirarOS(a, () => frotaAcoes(alvo, editavel))
+    }
+  })
+}
+
+// converte uma ação de frota (categoria manutenção) numa OS de verdade em
+// Manutenção, sem precisar digitar tudo de novo — puxa veículo e descrição.
+function formVirarOS (acao, aoFechar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>Virar OS de manutenção</h3>
+    <p class="texto-dim" style="font-size:12.5px;margin-top:-8px;">
+      Cria a ordem de serviço em Manutenção com o veículo e a descrição já preenchidos.</p>
+    <div class="form-grade">
+      <div class="campo"><label>Veículo</label>
+        <input value="${esc(acao.veiculo?.descricao ?? 'sem veículo definido')}" disabled></div>
+      <div class="campo"><label>Setor / área *</label>
+        <select id="vo-area">${AREAS_OS.map(a => `<option value="${a}" ${a === 'ADMINISTRATIVO_COMERCIAL' ? 'selected' : ''}>${ROTULO_AREA_OS[a]}</option>`).join('')}</select></div>
+      <div class="campo"><label>Prioridade</label>
+        <select id="vo-prioridade">${PRIORIDADE_OS.map(p => `<option value="${p}" ${p === 'MEDIA' ? 'selected' : ''}>${ROTULO_PRIORIDADE_OS[p]}</option>`).join('')}</select></div>
+      <div class="campo"><label>Prazo</label><input type="date" id="vo-prazo" value="${acao.sla_prazo ?? ''}"></div>
+    </div>
+    <div class="acoes"><button class="btn" id="vo-salvar">Criar OS</button>
+      <button class="btn-secundario" id="vo-cancelar">Cancelar</button></div>
+    <div class="recado oculto" id="vo-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#vo-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  fundo.querySelector('#vo-salvar').onclick = async () => {
+    const el = fundo.querySelector('#vo-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const btn = fundo.querySelector('#vo-salvar'); btn.disabled = true; btn.textContent = 'Criando...'
+    const { data: novaOS, error } = await db.from('ordem_servico').insert({
+      veiculo_id: acao.veiculo_id || null,
+      fornecedor_id: acao.fornecedor_id || null,
+      area: fundo.querySelector('#vo-area').value,
+      prioridade: fundo.querySelector('#vo-prioridade').value,
+      status: 'ABERTA',
+      descricao_problema: acao.descricao,
+      data_solicitacao: new Date().toISOString(),
+      data_limite: fundo.querySelector('#vo-prazo').value || null,
+      solicitante_id: PERFIL.pessoaId
+    }).select('id').single()
+    if (error) { btn.disabled = false; btn.textContent = 'Criar OS'; aviso(error.message); return }
+    await db.from('frota_acao').update({ ordem_servico_id: novaOS.id }).eq('id', acao.id)
+    fechar(); aoFechar()
+  }
 }
 
 function formAcaoFrota (veiculos) {
