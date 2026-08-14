@@ -851,7 +851,7 @@ const PAGINAS = {
   visao_geral: { nome: 'Visão geral', render: paginaVisaoGeral, sempre: true },
   solicitacoes: { nome: 'Solicitações', render: paginaSolicitacoes, sempre: true },
   expedicao:   { nome: 'Expedição', render: paginaExpedicao },
-  compras:     { nome: 'Compras e Recebimento', render: paginaCompras, sempre: true },
+  compras:     { nome: 'Compras', render: paginaCompras, sempre: true },
   cobranca:    { nome: 'Crédito e Cobrança', render: paginaCobranca },
   crm:         { nome: 'CRM Comercial', render: paginaCrm },
   financeiro:  { nome: 'Financeiro', render: paginaFinanceiro },
@@ -945,6 +945,173 @@ function faltaMigracao (erro) {
 // ---------------------------------------------------------------
 // Página: Visão geral (tela inicial)
 // ---------------------------------------------------------------
+// ---------------------------------------------------------------
+// Central de atenção — junta num só lugar, na Visão Geral, o que
+// precisa de ação em cada módulo que a pessoa tem acesso: ordens de
+// serviço atrasadas/críticas (Manutenção), preço de combustível
+// desatualizado e estoque negativo (Combustível), documentos de
+// frota vencendo (Frota), títulos vencidos (Cobrança) e solicitações
+// internas atrasadas do próprio setor. Funciona como agenda: tudo
+// ordenado por urgência e depois por data, mais perto primeiro.
+// Cada seção só entra se `podeVer` liberar aquele módulo — então o
+// conteúdo muda sozinho conforme o acesso de quem está logado (dá
+// pra testar com qualquer usuário, não é fixo pra ninguém).
+// ---------------------------------------------------------------
+async function painelAtencao (area) {
+  if (!PERFIL.pessoaId) return
+  const hoje = hojeISO()
+  const itens = [] // {modulo, chave, titulo, data, urgente, detalhe}
+  const tarefas = []
+  let comprasAndando = 0
+
+  if (podeVer('manutencao')) {
+    tarefas.push((async () => {
+      const { data } = await db.from('ordem_servico')
+        .select('id,codigo,descricao_problema,status,prioridade,data_limite')
+        .not('status', 'in', '(CONCLUIDA,CANCELADA)').limit(300)
+      ;(data || []).forEach(os => {
+        const atrasada = !!(os.data_limite && os.data_limite < hoje)
+        const critica = os.prioridade === 'CRITICA'
+        if (atrasada || critica) {
+          itens.push({
+            modulo: 'Manutenção', chave: 'manutencao',
+            titulo: `${esc(os.codigo ?? 'OS')} — ${esc(os.descricao_problema ?? 'sem descrição')}`,
+            data: os.data_limite, urgente: atrasada || critica,
+            detalhe: atrasada ? 'atrasada' : 'prioridade crítica'
+          })
+        }
+      })
+    })())
+  }
+
+  if (podeVer('combustivel')) {
+    tarefas.push((async () => {
+      const [{ data: precos }, { data: entradas }, { data: saidas }] = await Promise.all([
+        db.from('preco_combustivel').select('tipo,preco,atualizado_em'),
+        db.from('entrada_combustivel').select('tipo,litros'),
+        db.from('abastecimento').select('tipo,litros')
+      ])
+      ;(precos || []).forEach(p => {
+        const dias = diasDesde(p.atualizado_em)
+        if (dias != null && dias > 15) {
+          itens.push({
+            modulo: 'Combustível', chave: 'combustivel',
+            titulo: `Preço de ${esc(p.tipo)} sem atualizar há ${dias} dias`,
+            data: null, urgente: dias > 30, detalhe: 'preço desatualizado'
+          })
+        }
+      })
+      const saldo = {}
+      ;(entradas || []).forEach(e => { saldo[e.tipo] = (saldo[e.tipo] || 0) + Number(e.litros || 0) })
+      ;(saidas || []).forEach(s => { saldo[s.tipo] = (saldo[s.tipo] || 0) - Number(s.litros || 0) })
+      Object.entries(saldo).forEach(([tipo, litros]) => {
+        if (litros < 0) {
+          itens.push({
+            modulo: 'Combustível', chave: 'combustivel',
+            titulo: `Estoque de ${esc(tipo)} negativo (${fmtNum(litros)} L) — conferir lançamentos`,
+            data: null, urgente: true, detalhe: 'estoque'
+          })
+        }
+      })
+    })())
+  }
+
+  if (podeVer('frota')) {
+    tarefas.push((async () => {
+      const limite = new Date(Date.now() + 15 * 864e5).toISOString().slice(0, 10)
+      const { data } = await db.from('veiculo_custo')
+        .select('id,tipo,descricao,vencimento,veiculo:veiculo_id(placa)')
+        .not('vencimento', 'is', null).lte('vencimento', limite).limit(200)
+      ;(data || []).forEach(c => {
+        const vencido = c.vencimento < hoje
+        itens.push({
+          modulo: 'Frota', chave: 'frota',
+          titulo: `${esc(c.tipo ?? 'documento')} — ${esc(c.veiculo?.placa ?? c.descricao ?? '')}`,
+          data: c.vencimento, urgente: vencido, detalhe: vencido ? 'vencido' : 'vence em breve'
+        })
+      })
+    })())
+  }
+
+  if (podeVer('cobranca')) {
+    tarefas.push((async () => {
+      const { data } = await db.from('pedido')
+        .select('id,numero,vencimento,situacao_pagamento,cliente:cliente_id(razao_social,nome_fantasia)')
+        .neq('situacao_pagamento', 'QUITADO').not('vencimento', 'is', null)
+        .lte('vencimento', hoje).limit(200)
+      ;(data || []).forEach(p => {
+        itens.push({
+          modulo: 'Cobrança', chave: 'cobranca',
+          titulo: `PD ${esc(p.numero ?? '')} — ${esc(p.cliente?.nome_fantasia || p.cliente?.razao_social || '—')}`,
+          data: p.vencimento, urgente: true, detalhe: 'vencido'
+        })
+      })
+    })())
+  }
+
+  if (PERFIL.setorId) {
+    tarefas.push((async () => {
+      const { data } = await db.from('solicitacao_interna')
+        .select('id,codigo,titulo,urgencia,status,data_solicitacao,data_limite')
+        .eq('setor_destino_id', PERFIL.setorId).in('status', ['ABERTA', 'EM_ANDAMENTO']).limit(200)
+      ;(data || []).filter(estaAtrasadaSolicitacao).forEach(s => {
+        itens.push({
+          modulo: 'Solicitações', chave: 'solicitacoes',
+          titulo: `${esc(s.codigo)} — ${esc(s.titulo)}`,
+          data: s.data_limite, urgente: true, detalhe: 'atrasada'
+        })
+      })
+    })())
+  }
+
+  // compras: só a contagem — o detalhe já aparece logo abaixo em "Minhas compras"
+  tarefas.push((async () => {
+    const { data } = await db.from('solicitacao_compra')
+      .select('id').eq('solicitante_id', PERFIL.pessoaId)
+      .in('status', ['AGUARDANDO_COORD', 'AGUARDANDO_COTACAO', 'AGUARDANDO_APROVACAO'])
+    comprasAndando = (data || []).length
+  })())
+
+  await Promise.all(tarefas)
+
+  if (!itens.length && !comprasAndando) return // sem pendência em nenhum módulo — não polui a tela
+
+  itens.sort((a, b) => {
+    if (a.urgente !== b.urgente) return a.urgente ? -1 : 1
+    if (!a.data) return 1
+    if (!b.data) return -1
+    return a.data < b.data ? -1 : 1
+  })
+
+  const porModulo = {}
+  itens.forEach(i => { porModulo[i.modulo] = (porModulo[i.modulo] || 0) + 1 })
+
+  const bloco = document.createElement('div')
+  bloco.className = 'panel'
+  bloco.style.cssText = 'padding:18px;margin-bottom:16px;'
+  bloco.innerHTML = `
+    <div class="cabeca-secao">
+      <h3 style="font-family:var(--serif);font-size:17px;">Central de atenção</h3>
+      <span class="texto-dim2" style="font-size:12px;">
+        ${itens.length} pendência${itens.length !== 1 ? 's' : ''}${comprasAndando ? ` · ${comprasAndando} compra${comprasAndando > 1 ? 's' : ''} sua${comprasAndando > 1 ? 's' : ''} em andamento` : ''}</span>
+    </div>
+    <p class="texto-dim2" style="font-size:11.5px;margin:-4px 0 12px;">Sua agenda de pendências — o que precisa de atenção agora, mais urgente primeiro.</p>
+    ${Object.keys(porModulo).length ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px;">
+      ${Object.entries(porModulo).map(([m, n]) => `<span class="chip">${esc(m)}: ${n}</span>`).join('')}
+    </div>` : ''}
+    ${itens.length ? `<div style="display:flex;flex-direction:column;gap:8px;max-height:340px;overflow:auto;">
+      ${itens.slice(0, 30).map(i => `<div class="passo" data-ir-atencao="${i.chave}" style="cursor:pointer;">
+        <span class="quando"><span class="${i.urgente ? 'badge-alerta' : 'chip'}" style="font-size:10px;">${esc(i.detalhe)}</span></span>
+        <span><b>${esc(i.modulo)}</b> — ${i.titulo}
+          ${i.data ? `<span class="texto-dim2" style="font-size:10.5px;margin-left:6px;">${fmtData(i.data)}</span>` : ''}</span>
+      </div>`).join('')}
+    </div>` : `<p class="texto-dim2" style="font-size:12.5px;">Sem pendências nos módulos que você acompanha — só suas compras em andamento (veja abaixo).</p>`}`
+  area.appendChild(bloco)
+  bloco.querySelectorAll('[data-ir-atencao]').forEach(el => {
+    el.onclick = () => irPara(el.dataset.irAtencao)
+  })
+}
+
 async function paginaVisaoGeral () {
   $('#subtitulo-pagina').textContent = 'O painel montado para você'
   const area = areaLivre()
@@ -985,6 +1152,7 @@ async function paginaVisaoGeral () {
   }
 
   // painel do financeiro, para quem trabalha nele
+  await painelAtencao(area)
   await painelGerencial(area)
   await minhasSolicitacoes(area)
   await minhasCompras(area)
@@ -2568,7 +2736,7 @@ async function painelFinanceiro (area) {
 }
 
 // ---------------------------------------------------------------
-// Página: Compras e Recebimento  (módulo 'compras')
+// Página: Compras  (módulo 'compras')
 // Modelada sobre as tabelas que já existem:
 //   solicitacao_compra · recebimento_mercadoria · fornecedor
 // ---------------------------------------------------------------
