@@ -1046,6 +1046,9 @@ function solicNova (alvo) {
         <input id="sn-titulo" placeholder="Resuma em uma linha o que você precisa"></div>
       <div class="campo" style="margin-top:10px;"><label>Descrição</label>
         <textarea id="sn-descricao" style="min-height:90px;" placeholder="Detalhe o que precisa ser feito"></textarea></div>
+      <div class="campo" style="margin-top:10px;"><label>Anexar arquivos (opcional)</label>
+        <input type="file" id="sn-arquivos" multiple accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx">
+        <span class="texto-dim2" style="font-size:11px;">pode marcar vários de uma vez</span></div>
       <div class="acoes"><button class="btn" id="sn-salvar">Enviar solicitação</button></div>
       <div class="recado oculto" id="sn-recado"></div>
     </div>`
@@ -1060,17 +1063,29 @@ function solicNova (alvo) {
     const titulo = $('#sn-titulo').value.trim()
     if (!titulo) { aviso('Escreva um título.'); return }
     const btn = $('#sn-salvar'); btn.disabled = true; btn.textContent = 'Enviando...'
-    const { error } = await db.from('solicitacao_interna').insert({
+    const { data: nova, error } = await db.from('solicitacao_interna').insert({
       solicitante_id: PERFIL.pessoaId,
       setor_destino_id: $('#sn-setor').value,
       titulo, descricao: $('#sn-descricao').value.trim() || null,
       urgencia: $('#sn-urgencia').value,
       data_limite: $('#sn-prazo').value || null
-    })
+    }).select('id').single()
+
+    if (error) { btn.disabled = false; btn.textContent = 'Enviar solicitação'; aviso(error.message); return }
+
+    const arquivos = [...$('#sn-arquivos').files]
+    if (arquivos.length) {
+      try {
+        for (const arquivo of arquivos) {
+          const { caminho, nome } = await subirComprovante(arquivo, `solicitacao/${nova.id}`)
+          await db.from('anexo').insert({ entidade: 'SOLICITACAO_INTERNA', registro_id: nova.id, tipo: 'anexo', nome_arquivo: nome, storage_path: caminho })
+        }
+      } catch (e) { aviso('Solicitação enviada, mas algum anexo falhou: ' + e.message); btn.disabled = false; btn.textContent = 'Enviar solicitação'; return }
+    }
+
     btn.disabled = false; btn.textContent = 'Enviar solicitação'
-    if (error) { aviso(error.message); return }
     aviso('Solicitação enviada.', false)
-    $('#sn-titulo').value = ''; $('#sn-descricao').value = ''; $('#sn-prazo').value = ''
+    $('#sn-titulo').value = ''; $('#sn-descricao').value = ''; $('#sn-prazo').value = ''; $('#sn-arquivos').value = ''
   }
 }
 
@@ -1167,6 +1182,11 @@ function detalheSolicitacao (s, aoFechar) {
       <p>${esc(s.descricao ?? 'sem descrição adicional')}</p>
     </div>
 
+    <div class="cabeca-secao" style="margin-bottom:6px;"><h3 style="font-family:var(--serif);font-size:15px;">Anexos</h3></div>
+    <div id="ds-anexos"><p class="texto-dim2" style="font-size:12px;">carregando...</p></div>
+    <div class="campo" style="margin:8px 0 14px;"><input type="file" id="ds-arquivos" multiple accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx"></div>
+    <div class="acoes" style="margin-bottom:14px;"><button class="btn-secundario" id="ds-anexar">Anexar arquivo(s)</button></div>
+
     <div class="form-grade">
       <div class="campo"><label>Status</label>
         <select id="ds-status">${STATUS_SOLICITACAO.map(st => `<option value="${st}" ${st === s.status ? 'selected' : ''}>${ROTULO_STATUS_SOLICITACAO[st]}</option>`).join('')}</select></div>
@@ -1187,6 +1207,35 @@ function detalheSolicitacao (s, aoFechar) {
   const aviso = t => {
     const el = fundo.querySelector('#ds-recado'); el.textContent = t; el.classList.remove('oculto')
     el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  const carregarAnexos = async () => {
+    const { data: anexos } = await db.from('anexo').select('id,nome_arquivo,storage_path')
+      .eq('entidade', 'SOLICITACAO_INTERNA').eq('registro_id', s.id).order('criado_em')
+    fundo.querySelector('#ds-anexos').innerHTML = (anexos || []).length
+      ? `<div style="display:flex;flex-direction:column;gap:6px;">
+        ${anexos.map(a => `<div class="passo"><span><a href="#" data-abrir-anexo-solic="${esc(a.storage_path)}">📎 ${esc(a.nome_arquivo ?? 'arquivo')}</a></span></div>`).join('')}
+        </div>`
+      : `<p class="texto-dim2" style="font-size:12px;">Nenhum anexo ainda.</p>`
+    fundo.querySelectorAll('[data-abrir-anexo-solic]').forEach(a => {
+      a.onclick = e => { e.preventDefault(); abrirComprovante(a.dataset.abrirAnexoSolic) }
+    })
+  }
+  carregarAnexos()
+
+  fundo.querySelector('#ds-anexar').onclick = async () => {
+    const arquivos = [...fundo.querySelector('#ds-arquivos').files]
+    if (!arquivos.length) { aviso('Escolha pelo menos um arquivo.'); return }
+    const btn = fundo.querySelector('#ds-anexar'); btn.disabled = true; btn.textContent = 'Enviando...'
+    try {
+      for (const arquivo of arquivos) {
+        const { caminho, nome } = await subirComprovante(arquivo, `solicitacao/${s.id}`)
+        await db.from('anexo').insert({ entidade: 'SOLICITACAO_INTERNA', registro_id: s.id, tipo: 'anexo', nome_arquivo: nome, storage_path: caminho })
+      }
+    } catch (e) { aviso('Falha ao enviar: ' + e.message); btn.disabled = false; btn.textContent = 'Anexar arquivo(s)'; return }
+    btn.disabled = false; btn.textContent = 'Anexar arquivo(s)'
+    fundo.querySelector('#ds-arquivos').value = ''
+    carregarAnexos()
   }
 
   fundo.querySelector('#ds-salvar').onclick = async () => {
