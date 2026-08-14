@@ -804,6 +804,7 @@ const PAGINAS = {
   manutencao:  { nome: 'Manutenção', render: paginaManutencao },
   frota:       { nome: 'Frota', render: paginaFrota },
   juridico:    { nome: 'Jurídico', render: paginaJuridico },
+  desempenho:  { nome: 'RH', render: paginaDesempenho },
   ti:          { nome: 'Administração', render: paginaAdministracao }
 }
 
@@ -939,6 +940,30 @@ async function paginaVisaoGeral () {
 // ---------------------------------------------------------------
 const URGENCIAS_SOLICITACAO = ['BAIXA', 'MEDIA', 'ALTA', 'URGENTE']
 const ROTULO_URGENCIA_SOLICITACAO = { BAIXA: 'Baixa', MEDIA: 'Média', ALTA: 'Alta', URGENTE: 'Urgente' }
+// prazo padrão de cada urgência, combinado com o cliente
+const SLA_HORAS_URGENCIA = { BAIXA: 120, MEDIA: 72, ALTA: 24, URGENTE: 1 }
+const SLA_TEXTO_URGENCIA = { BAIXA: '5 dias', MEDIA: '3 dias', ALTA: '24 horas', URGENTE: '1 hora' }
+
+// data-limite "de verdade" pra cada solicitação: usa o prazo manual se tiver
+// sido preenchido, senão calcula pela urgência a partir de quando foi aberta
+function prazoSlaSolicitacao (s) {
+  if (s.data_limite) return new Date(s.data_limite + 'T23:59:59').getTime()
+  const horas = SLA_HORAS_URGENCIA[s.urgencia] ?? 72
+  return new Date(s.data_solicitacao).getTime() + horas * 3600000
+}
+function estaAtrasadaSolicitacao (s) {
+  if (['CONCLUIDA', 'CANCELADA'].includes(s.status)) return false
+  return Date.now() > prazoSlaSolicitacao(s)
+}
+// texto tipo "vence em 3h" ou "atrasada há 2 dias", pra mostrar na lista
+function textoPrazoSolicitacao (s) {
+  if (['CONCLUIDA', 'CANCELADA'].includes(s.status)) return null
+  const diffMs = prazoSlaSolicitacao(s) - Date.now()
+  const atrasada = diffMs < 0
+  const horas = Math.abs(diffMs) / 3600000
+  const valor = horas < 24 ? `${Math.round(horas)}h` : `${Math.round(horas / 24)}d`
+  return { atrasada, texto: atrasada ? `atrasada há ${valor}` : `vence em ${valor}` }
+}
 const STATUS_SOLICITACAO = ['ABERTA', 'EM_ANDAMENTO', 'CONCLUIDA', 'CANCELADA']
 const ROTULO_STATUS_SOLICITACAO = { ABERTA: 'Aberta', EM_ANDAMENTO: 'Em andamento', CONCLUIDA: 'Concluída', CANCELADA: 'Cancelada' }
 
@@ -1004,11 +1029,10 @@ async function solicPainel (alvo) {
 
   if (faltaMigracao(error)) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
   const lista = data || []
-  const hoje = hojeISO()
 
   const abertas = lista.filter(s => !['CONCLUIDA', 'CANCELADA'].includes(s.status))
   const urgentes = abertas.filter(s => s.urgencia === 'URGENTE')
-  const atrasadas = abertas.filter(s => s.data_limite && s.data_limite < hoje)
+  const atrasadas = abertas.filter(estaAtrasadaSolicitacao)
 
   const porSetor = {}
   abertas.forEach(s => { const n = s.setor?.nome ?? '—'; porSetor[n] = (porSetor[n] || 0) + 1 })
@@ -1044,8 +1068,10 @@ function solicNova (alvo) {
         <div class="campo"><label>Responsável (opcional)</label>
           <select id="sn-responsavel"><option value="">— quem pegar responde —</option></select></div>
         <div class="campo"><label>Urgência</label>
-          <select id="sn-urgencia">${URGENCIAS_SOLICITACAO.map(u => `<option value="${u}" ${u === 'MEDIA' ? 'selected' : ''}>${ROTULO_URGENCIA_SOLICITACAO[u]}</option>`).join('')}</select></div>
-        <div class="campo"><label>Prazo desejado</label><input type="date" id="sn-prazo"></div>
+          <select id="sn-urgencia">${URGENCIAS_SOLICITACAO.map(u => `<option value="${u}" ${u === 'MEDIA' ? 'selected' : ''}>${ROTULO_URGENCIA_SOLICITACAO[u]}</option>`).join('')}</select>
+          <span class="texto-dim2" style="font-size:11px;" id="sn-sla-texto"></span></div>
+        <div class="campo"><label>Prazo desejado</label><input type="date" id="sn-prazo">
+          <span class="texto-dim2" style="font-size:10.5px;">deixe em branco pra usar o prazo padrão da urgência</span></div>
       </div>
       <div class="campo" style="margin-top:12px;"><label>Título *</label>
         <input id="sn-titulo" placeholder="Resuma em uma linha o que você precisa"></div>
@@ -1068,6 +1094,12 @@ function solicNova (alvo) {
   }
   $('#sn-setor').onchange = atualizarResponsaveis
   atualizarResponsaveis()
+
+  const atualizarSlaTexto = () => {
+    $('#sn-sla-texto').textContent = 'prazo padrão: ' + SLA_TEXTO_URGENCIA[$('#sn-urgencia').value]
+  }
+  $('#sn-urgencia').onchange = atualizarSlaTexto
+  atualizarSlaTexto()
 
   const aviso = (t, alerta = true) => {
     const el = $('#sn-recado'); el.textContent = t; el.classList.remove('oculto')
@@ -1148,24 +1180,26 @@ async function solicLista (alvo, { meuSetor }) {
 
     $('#kpis').innerHTML = kpi('Solicitações', lista.length) +
       kpi('Em aberto', lista.filter(s => s.status === 'ABERTA').length) +
-      kpi('Urgentes', lista.filter(s => s.urgencia === 'URGENTE' && !['CONCLUIDA', 'CANCELADA'].includes(s.status)).length)
+      kpi('Urgentes', lista.filter(s => s.urgencia === 'URGENTE' && !['CONCLUIDA', 'CANCELADA'].includes(s.status)).length) +
+      kpi('Atrasadas', lista.filter(estaAtrasadaSolicitacao).length)
 
     $('#sl-conteudo').innerHTML = `
       <div class="panel" style="padding:0;"><div class="tabela-scroll">
         <table><thead><tr>
           <th>Código</th><th>Quando</th>${meuSetor ? '' : '<th>Setor</th>'}<th>Título</th>
-          <th>Urgência</th><th>Status</th><th>Solicitante</th><th>Responsável</th>
+          <th>Urgência</th><th>Prazo</th><th>Status</th><th>Solicitante</th><th>Responsável</th>
         </tr></thead><tbody>
-          ${lista.map(s => `<tr style="cursor:pointer;" data-abrir="${s.id}">
+          ${lista.map(s => { const prazo = textoPrazoSolicitacao(s); return `<tr style="cursor:pointer;" data-abrir="${s.id}">
             <td><b>${esc(s.codigo)}</b></td>
             <td class="texto-dim">${fmtQuando(s.data_solicitacao) ?? '—'}</td>
             ${meuSetor ? '' : `<td class="texto-dim2">${esc(s.setor?.nome ?? '—')}</td>`}
             <td>${esc(s.titulo)}</td>
             <td><span class="${corUrgenciaSolicitacao(s.urgencia)}">${esc(ROTULO_URGENCIA_SOLICITACAO[s.urgencia])}</span></td>
+            <td>${prazo ? `<span class="${prazo.atrasada ? 'badge-alerta' : 'texto-dim2'}" style="font-size:11px;">${prazo.texto}</span>` : '<span class="texto-dim2">—</span>'}</td>
             <td><span class="${corStatusSolicitacao(s.status)}">${esc(ROTULO_STATUS_SOLICITACAO[s.status])}</span></td>
             <td class="texto-dim">${esc(s.solicitante?.nome ?? '—')}</td>
             <td class="texto-dim">${esc(s.responsavel?.nome ?? '—')}</td>
-          </tr>`).join('') || `<tr><td colspan="${meuSetor ? 7 : 8}" class="vazio">Nenhuma solicitação no filtro.</td></tr>`}
+          </tr>`}).join('') || `<tr><td colspan="${meuSetor ? 8 : 9}" class="vazio">Nenhuma solicitação no filtro.</td></tr>`}
         </tbody></table>
       </div></div>`
 
@@ -1185,6 +1219,7 @@ async function solicLista (alvo, { meuSetor }) {
 
 // ----- Detalhe / responder -----
 function detalheSolicitacao (s, aoFechar) {
+  const prazo = textoPrazoSolicitacao(s)
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
   fundo.innerHTML = `<div class="modal">
@@ -1194,7 +1229,9 @@ function detalheSolicitacao (s, aoFechar) {
     </div>
     <p class="texto-dim2" style="font-size:12px;margin:-8px 0 14px;">
       ${esc(s.setor?.nome ?? '—')} · aberta por ${esc(s.solicitante?.nome ?? '—')} em ${fmtQuando(s.data_solicitacao) ?? '—'}
-      ${s.data_limite ? ` · prazo ${fmtData(s.data_limite)}` : ''}</p>
+      · urgência <span class="${corUrgenciaSolicitacao(s.urgencia)}" style="font-size:10px;">${esc(ROTULO_URGENCIA_SOLICITACAO[s.urgencia])}</span>
+      ${prazo ? ` · <span class="${prazo.atrasada ? 'badge-alerta' : ''}" style="font-size:11px;">${prazo.texto}</span>` : ''}
+      ${s.data_limite ? ` · prazo manual ${fmtData(s.data_limite)}` : ''}</p>
 
     <div class="caixa-texto" style="margin-bottom:12px;">
       <div class="rot">${esc(s.titulo)}</div>
@@ -1274,7 +1311,7 @@ function detalheSolicitacao (s, aoFechar) {
 async function minhasSolicitacoes (area) {
   if (!PERFIL.setorId) return
   const { data, error } = await db.from('solicitacao_interna').select(`
-    id, codigo, titulo, urgencia, status, data_solicitacao
+    id, codigo, titulo, urgencia, status, data_solicitacao, data_limite
   `).eq('setor_destino_id', PERFIL.setorId).in('status', ['ABERTA', 'EM_ANDAMENTO'])
     .order('urgencia', { ascending: false }).order('data_solicitacao').limit(20)
   if (faltaMigracao(error) || error || !data?.length) return
@@ -1288,10 +1325,11 @@ async function minhasSolicitacoes (area) {
         ${data.length} solicitação${data.length > 1 ? 'ões' : ''} pro seu setor</h3>
       <button class="btn-secundario mini" id="ms-ver-todas">ver todas</button>
     </div>
-    ${data.map(s => `<div class="passo">
+    ${data.map(s => { const prazo = textoPrazoSolicitacao(s); return `<div class="passo">
       <span class="quando"><span class="${corUrgenciaSolicitacao(s.urgencia)}" style="font-size:10px;">${esc(ROTULO_URGENCIA_SOLICITACAO[s.urgencia])}</span></span>
-      <span><b>${esc(s.codigo)}</b> — ${esc(s.titulo)}</span>
-    </div>`).join('')}`
+      <span><b>${esc(s.codigo)}</b> — ${esc(s.titulo)}
+        ${prazo ? `<span class="${prazo.atrasada ? 'badge-alerta' : 'texto-dim2'}" style="font-size:10.5px;margin-left:6px;">${prazo.texto}</span>` : ''}</span>
+    </div>` }).join('')}`
   area.appendChild(bloco)
   bloco.querySelector('#ms-ver-todas').onclick = () => irPara('solicitacoes')
 }
@@ -11957,7 +11995,9 @@ function frotaCalculadora (alvo) {
 // ---------------------------------------------------------------
 let JUR_CACHE = { pessoas: [] }
 const CATEGORIAS_LICENCA = ['Ambiental', 'Sanitária/Bombeiros', 'Municipal/Alvará', 'Fiscal/Certidões', 'Seguros', 'Trabalhista', 'Outra']
-const CATEGORIAS_CONTRATO = ['Fornecedor', 'Cliente', 'Locação', 'Prestação de serviço', 'Parceria', 'Financeiro', 'Outro']
+const CATEGORIAS_CONTRATO = ['Fornecedor', 'Cliente', 'Locação', 'Prestação de serviço', 'PJ', 'Parceria', 'Financeiro', 'Outro']
+const ROTULO_TIPO_PJ = { PJ_INTERNO: 'PJ interno (faz parte do time)', PJ_PRESTADOR_SERVICOS: 'PJ prestador de serviços (externo)' }
+const ROTULO_STATUS_ENTREGAVEL_PJ = { PENDENTE: 'Pendente', ENTREGUE: 'Entregue', ATRASADO: 'Atrasado' }
 const ROTULO_TIPO_PROCESSO = { TRABALHISTA: 'trabalhista', TRIBUTARIO: 'tributário', AMBIENTAL: 'ambiental', CIVEL: 'cível', CRIMINAL: 'criminal', OUTRO: 'outro' }
 const ROTULO_TIPO_NOTIFICACAO = { AMBIENTAL: 'ambiental', TRABALHISTA: 'trabalhista', TRIBUTARIO: 'tributário', OUTRO: 'outro' }
 
@@ -12079,7 +12119,7 @@ async function juridicoPainel (alvo, editavel) {
 // ----- Jurídico › Contratos -----
 async function juridicoContratos (alvo, editavel) {
   const { data, error } = await db.from('juridico_contrato')
-    .select(`id,titulo,contraparte,categoria,valor,data_inicio,data_fim,renovacao,status,anexo_link,observacoes,
+    .select(`id,titulo,contraparte,categoria,tipo_pj,recorrente,valor,data_inicio,data_fim,renovacao,status,anexo_link,observacoes,
       responsavel:responsavel_id ( nome )`)
     .order('data_fim', { ascending: true, nullsFirst: false })
 
@@ -12096,7 +12136,7 @@ async function juridicoContratos (alvo, editavel) {
       ${lista.map(c => `<tr>
         <td><b>${esc(c.titulo)}</b>${c.anexo_link ? ` · <a href="${esc(c.anexo_link)}" target="_blank" rel="noopener">anexo</a>` : ''}</td>
         <td class="texto-dim">${esc(c.contraparte || '—')}</td>
-        <td><span class="chip">${esc(c.categoria || '—')}</span></td>
+        <td><span class="chip">${esc(c.categoria || '—')}</span>${c.tipo_pj ? `<br><span class="texto-dim2" style="font-size:10.5px;">${esc(ROTULO_TIPO_PJ[c.tipo_pj])}${c.recorrente ? ' · recorrente' : ''}</span>` : ''}</td>
         <td class="num">${c.valor != null ? 'R$ ' + fmtNum(c.valor) : '<span class="texto-dim2">—</span>'}</td>
         <td class="texto-dim">${fmtData(c.data_inicio)} – ${c.data_fim ? fmtData(c.data_fim) : 'indeterminado'}</td>
         <td class="texto-dim">${{ AUTOMATICA: 'automática', MANUAL: 'manual', NAO_RENOVA: 'não renova' }[c.renovacao] || '—'}</td>
@@ -12122,7 +12162,7 @@ function formContrato (c) {
   const v = k => esc(c?.[k] ?? '')
 
   fundo.innerHTML = `
-    <div class="modal">
+    <div class="modal" style="max-width:760px;">
       <h3>${c ? 'Editar contrato' : 'Novo contrato'}</h3>
       <div class="form-grade">
         <div class="campo" style="grid-column:1/-1;"><label>Título / objeto *</label>
@@ -12130,6 +12170,11 @@ function formContrato (c) {
         <div class="campo"><label>Contraparte</label><input id="ct-contra" value="${v('contraparte')}"></div>
         <div class="campo"><label>Categoria</label>
           <select id="ct-cat">${CATEGORIAS_CONTRATO.map(x => `<option ${c?.categoria === x ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
+        <div class="campo oculto" id="ct-linha-tipo-pj"><label>Tipo de PJ *</label>
+          <select id="ct-tipo-pj"><option value="">—</option>${Object.entries(ROTULO_TIPO_PJ).map(([k, lbl]) => `<option value="${k}" ${c?.tipo_pj === k ? 'selected' : ''}>${lbl}</option>`).join('')}</select></div>
+        <div class="campo oculto" id="ct-linha-recorrente">
+          <label class="linha-modulo"><input type="checkbox" id="ct-recorrente" ${c?.recorrente ? 'checked' : ''}>
+          <span class="nome">Recorrente (tem entregáveis periódicos)</span></label></div>
         <div class="campo"><label>Valor</label><input id="ct-valor" type="number" step="0.01" value="${c?.valor ?? ''}"></div>
         <div class="campo"><label>Início da vigência</label><input id="ct-inicio" type="date" value="${c?.data_inicio ?? ''}"></div>
         <div class="campo"><label>Fim da vigência</label><input id="ct-fim" type="date" value="${c?.data_fim ?? ''}"></div>
@@ -12158,6 +12203,17 @@ function formContrato (c) {
         <button class="btn-secundario" id="ct-cancelar">Cancelar</button>
       </div>
       <div class="recado oculto" id="ct-recado"></div>
+
+      ${c && c.categoria === 'PJ' ? `
+        <div class="cabeca-secao" style="margin-top:18px;"><h3 style="font-family:var(--serif);font-size:15px;">Entregáveis</h3></div>
+        <div id="ct-entregaveis"><p class="texto-dim2" style="font-size:12px;">carregando...</p></div>
+        <div class="form-grade" style="margin-top:10px;">
+          <div class="campo" style="grid-column:1/-1;"><label>Descrição</label><input id="ct-eg-desc" placeholder="Ex: Relatório mensal de horas"></div>
+          <div class="campo"><label>Período de referência</label><input id="ct-eg-periodo" placeholder="Ex: ago/2026"></div>
+          <div class="campo"><label>Prazo</label><input type="date" id="ct-eg-prazo"></div>
+        </div>
+        <div class="acoes"><button class="btn-secundario" id="ct-eg-add">Adicionar entregável</button></div>
+      ` : ''}
     </div>`
 
   document.body.appendChild(fundo)
@@ -12170,13 +12226,24 @@ function formContrato (c) {
     el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
   }
 
+  const alternarCamposPJ = () => {
+    const ehPJ = q('#ct-cat').value === 'PJ'
+    q('#ct-linha-tipo-pj').classList.toggle('oculto', !ehPJ)
+    q('#ct-linha-recorrente').classList.toggle('oculto', !ehPJ)
+  }
+  q('#ct-cat').onchange = alternarCamposPJ
+  alternarCamposPJ()
+
   q('#ct-salvar').onclick = async () => {
     const titulo = q('#ct-titulo').value.trim()
     if (!titulo) { aviso('Escreva o título ou objeto do contrato.'); return }
+    const categoria = q('#ct-cat').value
     const corpo = {
       titulo,
       contraparte: q('#ct-contra').value.trim() || null,
-      categoria: q('#ct-cat').value,
+      categoria,
+      tipo_pj: categoria === 'PJ' ? (q('#ct-tipo-pj').value || null) : null,
+      recorrente: categoria === 'PJ' ? q('#ct-recorrente').checked : false,
       valor: q('#ct-valor').value ? Number(q('#ct-valor').value) : null,
       data_inicio: q('#ct-inicio').value || null,
       data_fim: q('#ct-fim').value || null,
@@ -12204,6 +12271,46 @@ function formContrato (c) {
     const { error } = await db.from('juridico_contrato').delete().eq('id', c.id)
     if (error) { aviso(error.message); return }
     fechar(); abrirJuridico('contratos', true)
+  }
+
+  if (!c || c.categoria !== 'PJ') return
+
+  const carregarEntregaveis = async () => {
+    const { data: entregaveis, error: erroEg } = await db.from('juridico_contrato_entregavel')
+      .select('id,descricao,periodo_referencia,prazo,status,data_entrega')
+      .eq('contrato_id', c.id).order('prazo', { ascending: false, nullsFirst: true })
+    if (faltaMigracao(erroEg)) { q('#ct-entregaveis').innerHTML = `<p class="vazio">${esc(erroEg.message)}</p>`; return }
+    q('#ct-entregaveis').innerHTML = (entregaveis || []).length ? `
+      <div class="panel" style="padding:0;">
+        ${entregaveis.map(eg => `<div class="passo">
+          <span class="quando">${eg.periodo_referencia ? esc(eg.periodo_referencia) : (eg.prazo ? fmtData(eg.prazo) : '—')}</span>
+          <span>${esc(eg.descricao)}</span>
+          <span class="${eg.status === 'ENTREGUE' ? 'badge-bom' : eg.status === 'ATRASADO' ? 'badge-alerta' : 'chip'}" style="margin-left:auto;">${ROTULO_STATUS_ENTREGAVEL_PJ[eg.status]}</span>
+          ${eg.status !== 'ENTREGUE' ? `<button class="btn-secundario mini" data-marcar-entregue="${eg.id}" style="margin-left:8px;">marcar entregue</button>` : ''}
+        </div>`).join('')}
+      </div>` : `<p class="texto-dim2" style="font-size:12px;">Nenhum entregável cadastrado ainda.</p>`
+    q('#ct-entregaveis').querySelectorAll('[data-marcar-entregue]').forEach(b => {
+      b.onclick = async () => {
+        await db.from('juridico_contrato_entregavel').update({ status: 'ENTREGUE', data_entrega: new Date().toISOString().slice(0, 10) }).eq('id', b.dataset.marcarEntregue)
+        carregarEntregaveis()
+      }
+    })
+  }
+  carregarEntregaveis()
+
+  const badd = q('#ct-eg-add')
+  if (badd) badd.onclick = async () => {
+    const descricao = q('#ct-eg-desc').value.trim()
+    if (!descricao) { aviso('Descreva o entregável.'); return }
+    const { error: erroEg } = await db.from('juridico_contrato_entregavel').insert({
+      contrato_id: c.id, descricao,
+      periodo_referencia: q('#ct-eg-periodo').value.trim() || null,
+      prazo: q('#ct-eg-prazo').value || null,
+      criado_por: PERFIL.pessoaId
+    })
+    if (erroEg) { aviso(erroEg.message); return }
+    q('#ct-eg-desc').value = ''; q('#ct-eg-periodo').value = ''; q('#ct-eg-prazo').value = ''
+    carregarEntregaveis()
   }
 }
 
@@ -12709,6 +12816,581 @@ function formDocumentoJuridico (d) {
     if (error) { aviso(error.message); return }
     fechar(); abrirJuridico('documentos', true)
   }
+}
+
+// ---------------------------------------------------------------
+// Página: RH  (módulo 'desempenho')
+// Sub-abas: Painel de conduta · Avaliar conduta · Avaliação 360 ·
+// Planos de desenvolvimento · Meu desempenho.
+//
+// Dado sensível de RH: quem não tem o módulo só enxerga o que é sobre
+// si mesmo (RLS já trava isso), então "Meu desempenho" funciona mesmo
+// pra quem não tem acesso de gestão.
+// ---------------------------------------------------------------
+let DESEMP_CACHE = { pessoas: [], setores: [] }
+const ROTULO_STATUS_PDI = { EM_ANDAMENTO: 'Em andamento', CONCLUIDO: 'Concluído', ATRASADO: 'Atrasado', CANCELADO: 'Cancelado' }
+const ROTULO_TIPO_360 = { AUTOAVALIACAO: 'Autoavaliação', PARES: 'Pares', GESTOR: 'Gestor' }
+const ROTULO_STATUS_360_CICLO = { PLANEJADO: 'Planejado', ABERTO: 'Aberto', ENCERRADO: 'Encerrado' }
+
+async function paginaDesempenho () {
+  if (!podeVer('desempenho')) { areaLivre().innerHTML =
+    `<div class="panel" style="padding:22px;"><p class="texto-dim">
+     Você não tem acesso à gestão de RH, mas pode ver o que é sobre você
+     em "Meu RH".</p>
+     <div class="acoes" style="margin-top:10px;"><button class="btn-secundario" id="ds-so-meu">Ver meu RH</button></div>
+     </div>`
+    const b = document.getElementById('ds-so-meu')
+    if (b) b.onclick = () => { areaLivre().innerHTML = `<div class="subabas"><button class="ativo">Meu RH</button></div><div id="sub-desempenho"></div>`; desempMeu($('#sub-desempenho')) }
+    return
+  }
+
+  const editavel = podeEditar('desempenho')
+  $('#subtitulo-pagina').textContent = 'Conduta, avaliação 360 e desenvolvimento'
+  const area = areaLivre()
+  area.innerHTML = `<p class="texto-dim2">carregando...</p>`
+
+  const [{ data: pessoas }, { data: setores }] = await Promise.all([
+    db.from('pessoa').select('id,nome,setor_id,cargo_id').eq('status', 'ATIVO').order('nome'),
+    db.from('setor').select('id,nome,gestor_id').order('nome')
+  ])
+  DESEMP_CACHE = { pessoas: pessoas || [], setores: setores || [] }
+
+  const abas = [['painel', 'Painel de conduta'], ['conduta', 'Avaliar conduta'],
+                ['360', 'Avaliação 360'], ['pdi', 'Planos de desenvolvimento'], ['meu', 'Meu RH']]
+  area.innerHTML = `
+    <div class="subabas">
+      ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
+    </div>
+    <div id="sub-desempenho"></div>`
+
+  area.querySelectorAll('.subabas button').forEach(b => {
+    b.onclick = () => {
+      area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
+      abrirDesempenho(b.dataset.sub, editavel)
+    }
+  })
+  abrirDesempenho('painel', editavel)
+}
+
+function abrirDesempenho (sub, editavel) {
+  const alvo = $('#sub-desempenho')
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  $('#kpis').innerHTML = ''
+  if (sub === 'painel') desempPainel(alvo, editavel)
+  if (sub === 'conduta') desempConduta(alvo, editavel)
+  if (sub === '360') desemp360(alvo, editavel)
+  if (sub === 'pdi') desempPdi(alvo, editavel)
+  if (sub === 'meu') desempMeu(alvo)
+}
+
+// ----- Painel de conduta -----
+async function desempPainel (alvo, editavel) {
+  const inicioMes = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10)
+  const [{ data: avaliacoes, error }, { data: cicloAtivo }] = await Promise.all([
+    db.from('avaliacao_conduta').select('pessoa_id,nota_prazos,nota_demandas,nota_postura,data_avaliacao,pessoa:pessoa_id(nome)')
+      .order('data_avaliacao', { ascending: false }).limit(500),
+    db.from('avaliacao_360_ciclo').select('id,nome,status,data_fim').eq('status', 'ABERTO').maybeSingle()
+  ])
+  if (faltaMigracao(error)) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  const lista = avaliacoes || []
+  const doMes = lista.filter(a => a.data_avaliacao >= inicioMes)
+
+  const media = arr => arr.length ? arr.reduce((s, x) => s + x, 0) / arr.length : null
+  const mediaGeral = media(lista.flatMap(a => [a.nota_prazos, a.nota_demandas, a.nota_postura].filter(n => n != null)))
+
+  // média por pessoa (últimos lançamentos) — pra achar quem está mais baixo,
+  // sem virar ranking público: só aparece pra quem edita o módulo
+  const porPessoa = {}
+  lista.forEach(a => {
+    const notas = [a.nota_prazos, a.nota_demandas, a.nota_postura].filter(n => n != null)
+    if (!notas.length) return
+    const k = a.pessoa?.nome ?? '—'
+    porPessoa[k] = porPessoa[k] || []
+    porPessoa[k].push(...notas)
+  })
+  const mediasPorPessoa = Object.entries(porPessoa).map(([nome, notas]) => ({ rotulo: nome, valor: media(notas) }))
+    .sort((a, b) => a.valor - b.valor)
+
+  let cicloHtml = ''
+  if (cicloAtivo) {
+    const { data: respostas } = await db.from('avaliacao_360_resposta').select('status').eq('ciclo_id', cicloAtivo.id)
+    const total = (respostas || []).length
+    const respondidas = (respostas || []).filter(r => r.status === 'RESPONDIDO').length
+    cicloHtml = `
+      <div class="panel" style="padding:18px;margin-bottom:16px;">
+        <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:15px;">Ciclo 360 em andamento: ${esc(cicloAtivo.nome)}</h3>
+          <span class="texto-dim2" style="font-size:12px;">encerra em ${fmtData(cicloAtivo.data_fim)}</span></div>
+        <div style="background:var(--surface2);border-radius:5px;height:10px;overflow:hidden;margin-top:6px;">
+          <div style="width:${total ? (respondidas / total * 100) : 0}%;height:100%;background:var(--rust);"></div>
+        </div>
+        <p class="texto-dim2" style="font-size:12px;margin-top:6px;">${respondidas} de ${total} respostas preenchidas</p>
+      </div>`
+  }
+
+  alvo.innerHTML = `
+    <div class="resumo-topo" style="margin-bottom:16px;">
+      ${kpi('Avaliações no mês', doMes.length)}
+      ${kpi('Nota média geral', mediaGeral != null ? mediaGeral.toFixed(1) : '—', 'de 1 a 5')}
+      ${kpi('Pessoas avaliadas', Object.keys(porPessoa).length)}
+      ${kpi('Ciclo 360', cicloAtivo ? 'em andamento' : 'nenhum aberto')}
+    </div>
+    ${cicloHtml}
+    ${editavel && mediasPorPessoa.length ? `
+      <div class="panel" style="padding:18px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Média de conduta por pessoa (histórico)</h3>
+        ${barrasHorizontais(mediasPorPessoa, { unidade: '', casas: 1 })}
+        <p class="texto-dim2" style="font-size:11px;margin-top:10px;">Visível só pra quem tem edição do módulo — não é um ranking público.</p>
+      </div>` : ''}`
+}
+
+// ----- Avaliar conduta -----
+function desempConduta (alvo, editavel) {
+  if (!editavel) { alvo.innerHTML = `<div class="panel" style="padding:22px;">
+    <p class="texto-dim">Você pode consultar em "Meu RH", mas não lançar avaliações de conduta.</p></div>`; return }
+
+  const hoje = new Date().toISOString().slice(0, 10)
+  alvo.innerHTML = `
+    <div class="panel" style="padding:20px;max-width:720px;margin-bottom:16px;">
+      <h3 style="font-family:var(--serif);font-size:18px;margin:0 0 14px;">Nova avaliação de conduta</h3>
+      <div class="form-grade">
+        <div class="campo" style="grid-column:1/-1;"><label>Pessoa *</label>
+          <select id="cd-pessoa"><option value="">Selecione...</option>${DESEMP_CACHE.pessoas.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Data</label><input type="date" id="cd-data" value="${hoje}"></div>
+        <div class="campo"><label>Prazos (1 a 5) *</label><input type="number" min="1" max="5" id="cd-prazos"></div>
+        <div class="campo"><label>Demandas (1 a 5) *</label><input type="number" min="1" max="5" id="cd-demandas"></div>
+        <div class="campo"><label>Postura (1 a 5) *</label><input type="number" min="1" max="5" id="cd-postura"></div>
+      </div>
+      <div class="campo" style="margin-top:12px;"><label>Observações</label>
+        <textarea id="cd-obs" style="min-height:70px;" placeholder="opcional"></textarea></div>
+      <div class="acoes"><button class="btn" id="cd-salvar">Lançar avaliação</button></div>
+      <div class="recado oculto" id="cd-recado"></div>
+    </div>
+    <div id="cd-historico"></div>`
+
+  const aviso = (t, alerta = true) => {
+    const el = $('#cd-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = alerta ? 'var(--warn-text)' : 'var(--line2)'
+    el.style.color = alerta ? 'var(--warn-text)' : 'var(--dim)'
+  }
+
+  const carregarHistorico = async () => {
+    const { data } = await db.from('avaliacao_conduta')
+      .select('id,data_avaliacao,nota_prazos,nota_demandas,nota_postura,observacoes,pessoa:pessoa_id(nome),avaliador:avaliador_id(nome)')
+      .order('data_avaliacao', { ascending: false }).limit(100)
+    $('#cd-historico').innerHTML = `
+      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:15px;">Últimas avaliações</h3></div>
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr><th>Data</th><th>Pessoa</th><th class="num">Prazos</th><th class="num">Demandas</th>
+          <th class="num">Postura</th><th>Avaliador</th></tr></thead><tbody>
+          ${(data || []).map(a => `<tr>
+            <td class="texto-dim">${fmtData(a.data_avaliacao)}</td>
+            <td>${esc(a.pessoa?.nome ?? '—')}</td>
+            <td class="num">${a.nota_prazos ?? '—'}</td>
+            <td class="num">${a.nota_demandas ?? '—'}</td>
+            <td class="num">${a.nota_postura ?? '—'}</td>
+            <td class="texto-dim">${esc(a.avaliador?.nome ?? '—')}</td>
+          </tr>`).join('') || `<tr><td colspan="6" class="vazio">Nenhuma avaliação lançada ainda.</td></tr>`}
+        </tbody></table>
+      </div></div>`
+  }
+  carregarHistorico()
+
+  $('#cd-salvar').onclick = async () => {
+    const pessoaId = $('#cd-pessoa').value
+    if (!pessoaId) { aviso('Escolha a pessoa avaliada.'); return }
+    const prazos = Number($('#cd-prazos').value), demandas = Number($('#cd-demandas').value), postura = Number($('#cd-postura').value)
+    if (!prazos || !demandas || !postura) { aviso('Preencha as três notas (1 a 5).'); return }
+
+    const btn = $('#cd-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const { error } = await db.from('avaliacao_conduta').insert({
+      pessoa_id: pessoaId, avaliador_id: PERFIL.pessoaId,
+      data_avaliacao: $('#cd-data').value || hoje,
+      nota_prazos: prazos, nota_demandas: demandas, nota_postura: postura,
+      observacoes: $('#cd-obs').value.trim() || null,
+      criado_por: PERFIL.pessoaId
+    })
+    btn.disabled = false; btn.textContent = 'Lançar avaliação'
+    if (error) { aviso(error.message); return }
+    aviso('Avaliação lançada.', false)
+    $('#cd-prazos').value = ''; $('#cd-demandas').value = ''; $('#cd-postura').value = ''; $('#cd-obs').value = ''
+    carregarHistorico()
+  }
+}
+
+// ----- Avaliação 360 -----
+async function desemp360 (alvo, editavel) {
+  const { data: ciclos, error } = await db.from('avaliacao_360_ciclo').select('id,nome,data_inicio,data_fim,status').order('data_inicio', { ascending: false })
+  if (faltaMigracao(error)) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  alvo.innerHTML = `
+    ${editavel ? `<div class="acoes" style="margin-bottom:14px;"><button class="btn" id="c360-novo">+ Novo ciclo trimestral</button></div>` : ''}
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr><th>Ciclo</th><th>Vigência</th><th>Status</th><th></th></tr></thead><tbody>
+        ${(ciclos || []).map(c => `<tr>
+          <td><b>${esc(c.nome)}</b></td>
+          <td class="texto-dim">${fmtData(c.data_inicio)} – ${fmtData(c.data_fim)}</td>
+          <td><span class="${c.status === 'ENCERRADO' ? 'texto-dim2' : c.status === 'ABERTO' ? 'badge-alerta' : 'chip'}">${ROTULO_STATUS_360_CICLO[c.status]}</span></td>
+          <td><button class="btn-secundario mini" data-abrir-ciclo="${c.id}">abrir</button></td>
+        </tr>`).join('') || `<tr><td colspan="4" class="vazio">Nenhum ciclo criado ainda.</td></tr>`}
+      </tbody></table>
+    </div></div>
+    <div id="c360-minhas" style="margin-top:16px;"></div>`
+
+  // respostas pendentes que EU preciso preencher, de qualquer ciclo aberto
+  ;(async () => {
+    const { data: minhas } = await db.from('avaliacao_360_resposta')
+      .select('id,tipo,status,ciclo:ciclo_id(nome,status),avaliado:avaliado_id(nome)')
+      .eq('avaliador_id', PERFIL.pessoaId).eq('status', 'PENDENTE')
+    const pendentes = (minhas || []).filter(m => m.ciclo?.status === 'ABERTO')
+    if (!pendentes.length) return
+    $('#c360-minhas').innerHTML = `
+      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Suas avaliações pendentes</h3></div>
+      <div class="panel" style="padding:0;">
+        ${pendentes.map(p => `<div class="passo">
+          <span class="quando">${ROTULO_TIPO_360[p.tipo]}</span>
+          <span>Avaliar <b>${esc(p.avaliado?.nome ?? '—')}</b> — ${esc(p.ciclo?.nome ?? '')}</span>
+          <button class="btn-secundario mini" data-responder="${p.id}" style="margin-left:auto;">responder</button>
+        </div>`).join('')}
+      </div>`
+    $('#c360-minhas').querySelectorAll('[data-responder]').forEach(b => {
+      b.onclick = () => formResponder360(pendentes.find(p => p.id === b.dataset.responder), () => desemp360(alvo, editavel))
+    })
+  })()
+
+  alvo.querySelectorAll('[data-abrir-ciclo]').forEach(b => {
+    b.onclick = () => detalheCiclo360((ciclos || []).find(c => c.id === b.dataset.abrirCiclo), editavel, () => desemp360(alvo, editavel))
+  })
+
+  if (!editavel) return
+  $('#c360-novo').onclick = () => formNovoCiclo360(() => desemp360(alvo, editavel))
+}
+
+function formNovoCiclo360 (aoFechar) {
+  const trimestre = Math.floor(new Date().getMonth() / 3) + 1
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:640px;">
+    <h3>Novo ciclo de avaliação 360</h3>
+    <div class="form-grade">
+      <div class="campo" style="grid-column:1/-1;"><label>Nome do ciclo *</label>
+        <input id="nc-nome" value="${trimestre}º trimestre ${new Date().getFullYear()}"></div>
+      <div class="campo"><label>Início</label><input type="date" id="nc-inicio" value="${new Date().toISOString().slice(0, 10)}"></div>
+      <div class="campo"><label>Fim</label><input type="date" id="nc-fim" value="${new Date(Date.now() + 21 * 864e5).toISOString().slice(0, 10)}"></div>
+    </div>
+    <p class="texto-dim" style="font-size:12.5px;margin-top:10px;">Marque quem participa. Pra cada participante,
+      já cria a autoavaliação e — se o setor tiver gestor definido — a avaliação do gestor. Avaliação de pares
+      você adiciona manualmente depois, abrindo o ciclo.</p>
+    <div style="max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:8px;margin-top:8px;">
+      ${DESEMP_CACHE.pessoas.map(p => `<label class="linha-modulo">
+        <input type="checkbox" class="nc-participante" value="${p.id}">
+        <span class="nome">${esc(p.nome)}</span></label>`).join('')}
+    </div>
+    <div class="acoes" style="margin-top:14px;"><button class="btn" id="nc-criar">Criar ciclo</button>
+      <button class="btn-secundario" id="nc-cancelar">Cancelar</button></div>
+    <div class="recado oculto" id="nc-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#nc-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const aviso = t => {
+    const el = fundo.querySelector('#nc-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  fundo.querySelector('#nc-criar').onclick = async () => {
+    const nome = fundo.querySelector('#nc-nome').value.trim()
+    if (!nome) { aviso('Dê um nome pro ciclo.'); return }
+    const participantes = [...fundo.querySelectorAll('.nc-participante:checked')].map(c => c.value)
+    if (!participantes.length) { aviso('Marque pelo menos um participante.'); return }
+
+    const btn = fundo.querySelector('#nc-criar'); btn.disabled = true; btn.textContent = 'Criando...'
+    const { data: ciclo, error } = await db.from('avaliacao_360_ciclo').insert({
+      nome, data_inicio: fundo.querySelector('#nc-inicio').value, data_fim: fundo.querySelector('#nc-fim').value,
+      status: 'ABERTO', criado_por: PERFIL.pessoaId
+    }).select('id').single()
+    if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Criar ciclo'; return }
+
+    const linhas = []
+    participantes.forEach(pid => {
+      linhas.push({ ciclo_id: ciclo.id, avaliado_id: pid, avaliador_id: pid, tipo: 'AUTOAVALIACAO' })
+      const pessoa = DESEMP_CACHE.pessoas.find(p => p.id === pid)
+      const setor = DESEMP_CACHE.setores.find(s => s.id === pessoa?.setor_id)
+      if (setor?.gestor_id && setor.gestor_id !== pid) {
+        linhas.push({ ciclo_id: ciclo.id, avaliado_id: pid, avaliador_id: setor.gestor_id, tipo: 'GESTOR' })
+      }
+    })
+    const { error: erroResp } = await db.from('avaliacao_360_resposta').insert(linhas)
+    if (erroResp) { aviso('Ciclo criado, mas falhou ao gerar as avaliações: ' + erroResp.message); btn.disabled = false; btn.textContent = 'Criar ciclo'; return }
+    fechar(); aoFechar()
+  }
+}
+
+async function detalheCiclo360 (ciclo, editavel, aoFechar) {
+  const { data: respostas } = await db.from('avaliacao_360_resposta')
+    .select('id,tipo,status,nota_competencia_tecnica,nota_trabalho_equipe,nota_comunicacao,nota_lideranca,nota_proatividade,pontos_fortes,pontos_melhoria,avaliado:avaliado_id(nome),avaliador:avaliador_id(nome)')
+    .eq('ciclo_id', ciclo.id).order('avaliado_id')
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:820px;">
+    <div class="cabeca-secao"><h3>${esc(ciclo.nome)}</h3>
+      <span class="${ciclo.status === 'ABERTO' ? 'badge-alerta' : 'chip'}">${ROTULO_STATUS_360_CICLO[ciclo.status]}</span></div>
+    <p class="texto-dim2" style="font-size:12px;margin:-8px 0 14px;">${fmtData(ciclo.data_inicio)} – ${fmtData(ciclo.data_fim)}</p>
+
+    ${editavel && ciclo.status !== 'ENCERRADO' ? `
+      <div class="form-grade" style="margin-bottom:8px;">
+        <div class="campo"><label>Avaliado</label><select id="pr-avaliado">${DESEMP_CACHE.pessoas.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Avaliador (par)</label><select id="pr-avaliador">${DESEMP_CACHE.pessoas.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')}</select></div>
+      </div>
+      <div class="acoes" style="margin-bottom:14px;"><button class="btn-secundario" id="pr-add">+ Adicionar avaliação de pares</button></div>
+    ` : ''}
+
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr><th>Avaliado</th><th>Tipo</th><th>Avaliador</th><th>Status</th><th class="num">Média</th></tr></thead><tbody>
+        ${(respostas || []).map(r => {
+          const notas = [r.nota_competencia_tecnica, r.nota_trabalho_equipe, r.nota_comunicacao, r.nota_lideranca, r.nota_proatividade].filter(n => n != null)
+          const media = notas.length ? (notas.reduce((s, n) => s + n, 0) / notas.length).toFixed(1) : '—'
+          return `<tr>
+          <td>${esc(r.avaliado?.nome ?? '—')}</td>
+          <td><span class="chip">${ROTULO_TIPO_360[r.tipo]}</span></td>
+          <td class="texto-dim">${esc(r.avaliador?.nome ?? '—')}</td>
+          <td>${r.status === 'RESPONDIDO' ? '<span class="badge-bom">respondido</span>' : '<span class="badge-alerta">pendente</span>'}</td>
+          <td class="num">${media}</td>
+        </tr>`}).join('') || `<tr><td colspan="5" class="vazio">Nenhuma avaliação neste ciclo.</td></tr>`}
+      </tbody></table>
+    </div></div>
+
+    <div class="acoes" style="margin-top:16px;">
+      ${editavel && ciclo.status === 'ABERTO' ? `<button class="btn-secundario" id="cc-encerrar">Encerrar ciclo</button>` : ''}
+      <button class="btn-secundario" id="cc-fechar">Fechar</button>
+    </div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#cc-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const badd = fundo.querySelector('#pr-add')
+  if (badd) badd.onclick = async () => {
+    const avaliado = fundo.querySelector('#pr-avaliado').value
+    const avaliador = fundo.querySelector('#pr-avaliador').value
+    if (avaliado === avaliador) { alert('Avaliado e avaliador não podem ser a mesma pessoa numa avaliação de pares.'); return }
+    const { error } = await db.from('avaliacao_360_resposta').insert({ ciclo_id: ciclo.id, avaliado_id: avaliado, avaliador_id: avaliador, tipo: 'PARES' })
+    if (error) { alert(error.message); return }
+    fechar(); detalheCiclo360(ciclo, editavel, aoFechar)
+  }
+
+  const benc = fundo.querySelector('#cc-encerrar')
+  if (benc) benc.onclick = async () => {
+    if (!confirm('Encerrar este ciclo? As respostas pendentes ficam registradas como não respondidas.')) return
+    await db.from('avaliacao_360_ciclo').update({ status: 'ENCERRADO' }).eq('id', ciclo.id)
+    fechar(); aoFechar()
+  }
+}
+
+function formResponder360 (item, aoFechar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>Avaliar ${esc(item.avaliado?.nome ?? '')}</h3>
+    <p class="texto-dim2" style="font-size:12px;margin-top:-8px;">${ROTULO_TIPO_360[item.tipo]} · ${esc(item.ciclo?.nome ?? '')}</p>
+    <div class="form-grade">
+      <div class="campo"><label>Competência técnica (1-5)</label><input type="number" min="1" max="5" id="r3-tecnica"></div>
+      <div class="campo"><label>Trabalho em equipe (1-5)</label><input type="number" min="1" max="5" id="r3-equipe"></div>
+      <div class="campo"><label>Comunicação (1-5)</label><input type="number" min="1" max="5" id="r3-comunicacao"></div>
+      <div class="campo"><label>Liderança (1-5)</label><input type="number" min="1" max="5" id="r3-lideranca"></div>
+      <div class="campo"><label>Proatividade (1-5)</label><input type="number" min="1" max="5" id="r3-proatividade"></div>
+    </div>
+    <div class="campo" style="margin-top:10px;"><label>Pontos fortes</label><textarea id="r3-fortes" style="min-height:60px;"></textarea></div>
+    <div class="campo" style="margin-top:10px;"><label>Pontos de melhoria</label><textarea id="r3-melhoria" style="min-height:60px;"></textarea></div>
+    <div class="acoes"><button class="btn" id="r3-salvar">Enviar avaliação</button>
+      <button class="btn-secundario" id="r3-cancelar">Cancelar</button></div>
+    <div class="recado oculto" id="r3-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#r3-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const aviso = t => {
+    const el = fundo.querySelector('#r3-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  fundo.querySelector('#r3-salvar').onclick = async () => {
+    const q = id => fundo.querySelector(id).value
+    const { error } = await db.from('avaliacao_360_resposta').update({
+      status: 'RESPONDIDO',
+      nota_competencia_tecnica: q('#r3-tecnica') || null,
+      nota_trabalho_equipe: q('#r3-equipe') || null,
+      nota_comunicacao: q('#r3-comunicacao') || null,
+      nota_lideranca: q('#r3-lideranca') || null,
+      nota_proatividade: q('#r3-proatividade') || null,
+      pontos_fortes: fundo.querySelector('#r3-fortes').value.trim() || null,
+      pontos_melhoria: fundo.querySelector('#r3-melhoria').value.trim() || null,
+      respondido_em: new Date().toISOString()
+    }).eq('id', item.id)
+    if (error) { aviso(error.message); return }
+    fechar(); aoFechar()
+  }
+}
+
+// ----- Planos de desenvolvimento (PDI) -----
+async function desempPdi (alvo, editavel) {
+  const { data, error } = await db.from('plano_desenvolvimento')
+    .select('id,objetivo,acoes,prazo,status,pessoa:pessoa_id(nome),responsavel:responsavel_acompanhamento_id(nome)')
+    .order('prazo', { ascending: true, nullsFirst: false })
+  if (faltaMigracao(error)) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  alvo.innerHTML = `
+    ${editavel ? `<div class="acoes" style="margin-bottom:14px;"><button class="btn" id="pdi-novo">+ Novo plano</button></div>` : ''}
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr><th>Pessoa</th><th>Objetivo</th><th>Prazo</th><th>Status</th><th>Acompanha</th>${editavel ? '<th></th>' : ''}</tr></thead><tbody>
+        ${(data || []).map(p => `<tr>
+          <td>${esc(p.pessoa?.nome ?? '—')}</td>
+          <td class="texto-dim2">${esc((p.objetivo ?? '').slice(0, 70))}</td>
+          <td class="texto-dim">${p.prazo ? fmtData(p.prazo) : '—'}</td>
+          <td><span class="${p.status === 'CONCLUIDO' ? 'badge-bom' : p.status === 'ATRASADO' ? 'badge-alerta' : 'chip'}">${ROTULO_STATUS_PDI[p.status]}</span></td>
+          <td class="texto-dim">${esc(p.responsavel?.nome ?? '—')}</td>
+          ${editavel ? `<td><button class="btn-secundario mini" data-editar="${p.id}">editar</button></td>` : ''}
+        </tr>`).join('') || `<tr><td colspan="${editavel ? 6 : 5}" class="vazio">Nenhum plano cadastrado ainda.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+
+  if (!editavel) return
+  $('#pdi-novo').onclick = () => formPdi(null, () => desempPdi(alvo, editavel))
+  alvo.querySelectorAll('[data-editar]').forEach(b => {
+    b.onclick = async () => {
+      const { data: item } = await db.from('plano_desenvolvimento').select('*').eq('id', b.dataset.editar).single()
+      formPdi(item, () => desempPdi(alvo, editavel))
+    }
+  })
+}
+
+function formPdi (item, aoFechar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>${item ? 'Editar plano de desenvolvimento' : 'Novo plano de desenvolvimento'}</h3>
+    <div class="form-grade">
+      <div class="campo" style="grid-column:1/-1;"><label>Pessoa *</label>
+        <select id="pd-pessoa" ${item ? 'disabled' : ''}>${DESEMP_CACHE.pessoas.map(p => `<option value="${p.id}" ${p.id === item?.pessoa_id ? 'selected' : ''}>${esc(p.nome)}</option>`).join('')}</select></div>
+      <div class="campo"><label>Prazo</label><input type="date" id="pd-prazo" value="${item?.prazo ?? ''}"></div>
+      <div class="campo"><label>Status</label>
+        <select id="pd-status">${Object.entries(ROTULO_STATUS_PDI).map(([k, v]) => `<option value="${k}" ${item?.status === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+      <div class="campo" style="grid-column:1/-1;"><label>Quem acompanha</label>
+        <select id="pd-resp"><option value="">—</option>${DESEMP_CACHE.pessoas.map(p => `<option value="${p.id}" ${p.id === item?.responsavel_acompanhamento_id ? 'selected' : ''}>${esc(p.nome)}</option>`).join('')}</select></div>
+    </div>
+    <div class="campo" style="margin-top:10px;"><label>Objetivo *</label>
+      <textarea id="pd-objetivo" style="min-height:60px;">${esc(item?.objetivo ?? '')}</textarea></div>
+    <div class="campo" style="margin-top:10px;"><label>Ações combinadas</label>
+      <textarea id="pd-acoes" style="min-height:60px;">${esc(item?.acoes ?? '')}</textarea></div>
+    <div class="acoes"><button class="btn" id="pd-salvar">Salvar</button>
+      ${item ? '<button class="btn-secundario" id="pd-excluir">Excluir</button>' : ''}
+      <button class="btn-secundario" id="pd-cancelar">Cancelar</button></div>
+    <div class="recado oculto" id="pd-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#pd-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const aviso = t => {
+    const el = fundo.querySelector('#pd-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  fundo.querySelector('#pd-salvar').onclick = async () => {
+    const objetivo = fundo.querySelector('#pd-objetivo').value.trim()
+    if (!objetivo) { aviso('Descreva o objetivo.'); return }
+    const status = fundo.querySelector('#pd-status').value
+    const corpo = {
+      objetivo, acoes: fundo.querySelector('#pd-acoes').value.trim() || null,
+      prazo: fundo.querySelector('#pd-prazo').value || null,
+      status, responsavel_acompanhamento_id: fundo.querySelector('#pd-resp').value || null,
+      concluido_em: status === 'CONCLUIDO' ? new Date().toISOString() : null
+    }
+    let error
+    if (item) {
+      ;({ error } = await db.from('plano_desenvolvimento').update(corpo).eq('id', item.id))
+    } else {
+      corpo.pessoa_id = fundo.querySelector('#pd-pessoa').value
+      corpo.criado_por = PERFIL.pessoaId
+      ;({ error } = await db.from('plano_desenvolvimento').insert(corpo))
+    }
+    if (error) { aviso(error.message); return }
+    fechar(); aoFechar()
+  }
+
+  const bx = fundo.querySelector('#pd-excluir')
+  if (bx) bx.onclick = async () => {
+    if (!confirm('Excluir este plano?')) return
+    const { error } = await db.from('plano_desenvolvimento').delete().eq('id', item.id)
+    if (error) { alert(error.message); return }
+    fechar(); aoFechar()
+  }
+}
+
+// ----- Meu desempenho (autoatendimento, mesmo sem acesso ao módulo) -----
+async function desempMeu (alvo) {
+  if (!PERFIL.pessoaId) { alvo.innerHTML = `<p class="vazio">Seu login não está ligado a uma pessoa do cadastro.</p>`; return }
+
+  const [{ data: conduta }, { data: resp360 }, { data: pdi }] = await Promise.all([
+    db.from('avaliacao_conduta').select('data_avaliacao,nota_prazos,nota_demandas,nota_postura,observacoes')
+      .eq('pessoa_id', PERFIL.pessoaId).order('data_avaliacao', { ascending: false }).limit(20),
+    db.from('avaliacao_360_resposta').select('tipo,status,nota_competencia_tecnica,nota_trabalho_equipe,nota_comunicacao,nota_lideranca,nota_proatividade,pontos_fortes,pontos_melhoria,ciclo:ciclo_id(nome,status)')
+      .eq('avaliado_id', PERFIL.pessoaId).eq('status', 'RESPONDIDO'),
+    db.from('plano_desenvolvimento').select('objetivo,acoes,prazo,status')
+      .eq('pessoa_id', PERFIL.pessoaId).order('prazo', { ascending: true, nullsFirst: false })
+  ])
+
+  const media = arr => arr.length ? (arr.reduce((s, n) => s + n, 0) / arr.length).toFixed(1) : '—'
+  const notasConduta = (conduta || []).flatMap(c => [c.nota_prazos, c.nota_demandas, c.nota_postura].filter(n => n != null))
+
+  alvo.innerHTML = `
+    <div class="resumo-topo" style="margin-bottom:16px;">
+      ${kpi('Minha média de conduta', media(notasConduta))}
+      ${kpi('Avaliações recebidas', (conduta || []).length)}
+      ${kpi('Avaliações 360 respondidas sobre mim', (resp360 || []).length)}
+      ${kpi('Planos de desenvolvimento', (pdi || []).length)}
+    </div>
+
+    <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Minhas avaliações de conduta</h3></div>
+    <div class="panel" style="padding:0;margin-bottom:16px;"><div class="tabela-scroll">
+      <table><thead><tr><th>Data</th><th class="num">Prazos</th><th class="num">Demandas</th><th class="num">Postura</th><th>Observações</th></tr></thead><tbody>
+        ${(conduta || []).map(c => `<tr>
+          <td class="texto-dim">${fmtData(c.data_avaliacao)}</td>
+          <td class="num">${c.nota_prazos ?? '—'}</td><td class="num">${c.nota_demandas ?? '—'}</td><td class="num">${c.nota_postura ?? '—'}</td>
+          <td class="texto-dim2">${esc(c.observacoes ?? '—')}</td>
+        </tr>`).join('') || `<tr><td colspan="5" class="vazio">Nenhuma avaliação registrada ainda.</td></tr>`}
+      </tbody></table>
+    </div></div>
+
+    <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Minha avaliação 360 (ciclos encerrados/respondidos)</h3></div>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px;">
+      ${(resp360 || []).map(r => {
+        const notas = [r.nota_competencia_tecnica, r.nota_trabalho_equipe, r.nota_comunicacao, r.nota_lideranca, r.nota_proatividade].filter(n => n != null)
+        return `<div class="panel" style="padding:14px;">
+          <div class="cabeca-secao"><span><b>${esc(r.ciclo?.nome ?? '—')}</b> · ${ROTULO_TIPO_360[r.tipo]}</span>
+            <span class="chip">média ${media(notas)}</span></div>
+          ${r.pontos_fortes ? `<p class="texto-dim" style="font-size:12.5px;margin:6px 0 0;"><b>Pontos fortes:</b> ${esc(r.pontos_fortes)}</p>` : ''}
+          ${r.pontos_melhoria ? `<p class="texto-dim" style="font-size:12.5px;margin:4px 0 0;"><b>A melhorar:</b> ${esc(r.pontos_melhoria)}</p>` : ''}
+        </div>`
+      }).join('') || `<p class="vazio">Nenhuma avaliação 360 concluída sobre você ainda.</p>`}
+    </div>
+
+    <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Meus planos de desenvolvimento</h3></div>
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr><th>Objetivo</th><th>Ações</th><th>Prazo</th><th>Status</th></tr></thead><tbody>
+        ${(pdi || []).map(p => `<tr>
+          <td>${esc(p.objetivo)}</td><td class="texto-dim2">${esc(p.acoes ?? '—')}</td>
+          <td class="texto-dim">${p.prazo ? fmtData(p.prazo) : '—'}</td>
+          <td><span class="${p.status === 'CONCLUIDO' ? 'badge-bom' : p.status === 'ATRASADO' ? 'badge-alerta' : 'chip'}">${ROTULO_STATUS_PDI[p.status]}</span></td>
+        </tr>`).join('') || `<tr><td colspan="4" class="vazio">Nenhum plano de desenvolvimento ainda.</td></tr>`}
+      </tbody></table>
+    </div></div>`
 }
 
 // ---------------------------------------------------------------
