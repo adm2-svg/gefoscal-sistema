@@ -864,6 +864,7 @@ const PAGINAS = {
   financeiro:  { nome: 'Financeiro', render: paginaFinanceiro },
   projetos:    { nome: 'Projetos', render: paginaProjetos },
   ferramentas: { nome: 'Ferramentas', render: paginaFerramentas },
+  banco:       { nome: 'Banco de Informações', render: paginaBancoInformacoes },
   estoque:     { nome: 'Estoque e Produção', render: paginaEstoque },
   combustivel: { nome: 'Combustível', render: paginaCombustivel },
   manutencao:  { nome: 'Manutenção', render: paginaManutencao },
@@ -887,6 +888,7 @@ const ICONES_MODULO = {
   financeiro: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V10M11 21V6M17 21v-8"/></svg>',
   projetos: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M15 3v12"/></svg>',
   ferramentas: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.9-3.9a5 5 0 0 1-6.6 6.6L4.3 22.7a2 2 0 0 1-2.8-2.8L12.2 9.2a5 5 0 0 1 6.6-6.6z"/></svg>',
+  banco: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10l9-6 9 6"/><path d="M5 10v9M10 10v9M14 10v9M19 10v9"/><path d="M3 19h18"/></svg>',
   estoque: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg>',
   combustivel: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21.5S5 14 5 9a7 7 0 0 1 14 0c0 5-7 12.5-7 12.5z"/><circle cx="12" cy="9" r="2.3"/></svg>',
   manutencao: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.6 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.6 1z"/></svg>',
@@ -1961,6 +1963,11 @@ async function subUsuarios (alvo, editavel) {
             <option value="usuario">Usuário — só consulta</option>
             <option value="administrador">Administrador — consulta e altera</option>
           </select></div>
+        <div class="campo"><label>&nbsp;</label>
+          <label style="display:flex;align-items:center;gap:7px;font-size:13px;font-weight:400;padding-top:7px;">
+            <input type="checkbox" id="u-gestor-comercial" ${editavel ? '' : 'disabled'}>
+            Gestor comercial (vê a aba Gestão do CRM)
+          </label></div>
         ${editavel ? `<div class="campo"><label>Senha de acesso</label>
           <input id="u-senha" type="text" autocomplete="off" placeholder="mínimo 8 caracteres">
           <span class="texto-dim2" style="font-size:11px;">deixe vazio para não mexer na senha</span>
@@ -2042,6 +2049,7 @@ async function subUsuarios (alvo, editavel) {
       <div class="botoes">
         <button class="btn-secundario mini" data-abrir="${p.id}">abrir</button>
         ${editavel && pc ? `<button class="btn-secundario mini" data-senha="${esc(p.email)}">senha</button>` : ''}
+        ${editavel ? `<button class="btn-secundario mini" data-excluir-pessoa="${p.id}" style="color:var(--warn-text);">excluir</button>` : ''}
       </div>
     </div>`
   }).join('') || `<p class="vazio">Nenhuma pessoa cadastrada ainda.</p>`
@@ -2056,6 +2064,7 @@ async function subUsuarios (alvo, editavel) {
       $('#u-cargo').value = p.cargo_id || ''
       $('#u-setor').value = p.setor_id || ''
       $('#u-nivel').value = (pc?.papeis || []).includes('ADMIN') ? 'administrador' : 'usuario'
+      $('#u-gestor-comercial').checked = (pc?.papeis || []).includes('GESTOR_COMERCIAL')
       const meus = (perms || []).filter(x => x.pessoa_id === p.id)
       $('#u-modulos').querySelectorAll('[data-ver]').forEach(c => {
         const r = meus.find(x => x.modulo_id === c.dataset.ver)
@@ -2088,6 +2097,20 @@ async function subUsuarios (alvo, editavel) {
     }
   })
 
+  // excluir em definitivo: apaga o login (Auth) e o cadastro, via Edge Function
+  // com privilégio de admin — não dá pra fazer isso direto do navegador.
+  $('#u-lista').querySelectorAll('[data-excluir-pessoa]').forEach(b => {
+    b.onclick = async () => {
+      const p = pessoas.find(x => x.id === b.dataset.excluirPessoa)
+      if (!confirm(`Excluir ${p.nome} em definitivo? Isso apaga o login dela também — não dá pra desfazer.`)) return
+      b.disabled = true; const antes = b.textContent; b.textContent = 'excluindo...'
+      const { data: r, error } = await db.functions.invoke('excluir-usuario', { body: { pessoaId: p.id } })
+      if (error || r?.erro) { recado('Não deu certo: ' + (r?.erro || error.message), true); b.disabled = false; b.textContent = antes; return }
+      recado(r.acao === 'excluida' ? `${p.nome} excluída.` : `${p.nome} tinha registros vinculados (lançamentos, projetos...) — mantida como histórico, só desativada.`)
+      setTimeout(() => abrirSub('usuarios', true), 1200)
+    }
+  })
+
   // + cargo / + setor, sem prompt do navegador
   const criador = (btnAbrir, linha, campo, tabela, select) => {
     $(btnAbrir).onclick = () => {
@@ -2115,6 +2138,7 @@ async function subUsuarios (alvo, editavel) {
       const el = $('#' + i); if (el) el.value = ''
     })
     $('#u-nivel').value = 'usuario'
+    $('#u-gestor-comercial').checked = false
     $('#u-modulos').querySelectorAll('input').forEach(c => c.checked = false)
     $('#u-recado').classList.add('oculto')
   }
@@ -2136,10 +2160,21 @@ async function subUsuarios (alvo, editavel) {
     if (e1) { recado(e1.message, true); btn.disabled = false; btn.textContent = 'Salvar cadastro'; return }
 
     const papeis = $('#u-nivel').value === 'administrador' ? ['ADMIN', 'DIRETORIA'] : ['LEITOR']
+    if ($('#u-gestor-comercial').checked) papeis.push('GESTOR_COMERCIAL')
     const { error: e2 } = await db.from('usuario_precadastro').upsert({
       email, papeis, pessoa_id: pessoa.id, setor_id: pessoa.setor_id
     }, { onConflict: 'email' })
     if (e2) { recado(e2.message, true); btn.disabled = false; btn.textContent = 'Salvar cadastro'; return }
+
+    // pra quem já tem login ativo, aplica o papel de gestor comercial na hora
+    // (o resto do papeis só pega no próximo login, via o pré-cadastro acima)
+    const { data: perfilAtivo } = await db.from('usuario_perfil').select('user_id').eq('pessoa_id', pessoa.id).maybeSingle()
+    if (perfilAtivo?.user_id) {
+      await db.from('usuario_papel').delete().eq('user_id', perfilAtivo.user_id).eq('papel', 'GESTOR_COMERCIAL')
+      if ($('#u-gestor-comercial').checked) {
+        await db.from('usuario_papel').insert({ user_id: perfilAtivo.user_id, papel: 'GESTOR_COMERCIAL' })
+      }
+    }
 
     // permissões: apaga as antigas e grava as marcadas
     const marcadas = [...$('#u-modulos').querySelectorAll('[data-ver]:checked')].map(c => ({
@@ -5244,7 +5279,35 @@ async function crmGestaoTab (alvo) {
           <td class="num">${l.valor_estimado ? 'R$ ' + fmtNum(l.valor_estimado) : '—'}</td>
         </tr>`).join('') || `<tr><td colspan="4" class="vazio">Você não tem leads na sua própria carteira.</td></tr>`}
       </tbody></table>
-    </div></div>` : ''}`
+    </div></div>` : ''}
+
+    <div class="cabeca-secao" style="margin-top:20px;">
+      <h3 style="font-family:var(--serif);font-size:16px;">Histórico da equipe</h3>
+      <button class="btn-secundario mini" id="cg-toggle-historico">Ver histórico (todos, com filtro)</button>
+    </div>
+    <div id="cg-historico-painel" class="oculto" style="margin-top:10px;"></div>
+
+    <div class="cabeca-secao" style="margin-top:20px;">
+      <h3 style="font-family:var(--serif);font-size:16px;">Banco de Informações — compartilhar listas</h3>
+      <button class="btn-secundario mini" id="cg-toggle-banco">Gerenciar acesso por vendedor</button>
+    </div>
+    <div id="cg-banco-painel" class="oculto" style="margin-top:10px;"></div>`
+
+  const painelHistorico = $('#cg-historico-painel')
+  $('#cg-toggle-historico').onclick = () => {
+    if (painelHistorico.classList.contains('oculto')) {
+      painelHistorico.classList.remove('oculto')
+      crmHistoricoEquipe(painelHistorico)
+    } else painelHistorico.classList.add('oculto')
+  }
+
+  const painelBanco = $('#cg-banco-painel')
+  $('#cg-toggle-banco').onclick = () => {
+    if (painelBanco.classList.contains('oculto')) {
+      painelBanco.classList.remove('oculto')
+      crmCompartilharBanco(painelBanco)
+    } else painelBanco.classList.add('oculto')
+  }
 
   const painelAtribuir = $('#cg-atribuir-painel')
   const abrirPainelAtribuir = () => {
@@ -5269,6 +5332,102 @@ async function crmGestaoTab (alvo) {
   })
 }
 
+// ----- Histórico da equipe (só dentro de Gestão — mistura todo mundo,
+// com filtro por vendedor). O histórico pessoal (aba Histórico normal)
+// nunca mostra o de outra pessoa; essa versão aqui é a exceção. -----
+async function crmHistoricoEquipe (alvo) {
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:12px;">
+      <div class="campo"><label>Vendedor</label><select id="he-vendedor">
+        <option value="">todos</option>
+        ${CRM_CACHE.vendedores.map(v => `<option value="${v.id}">${esc(v.nome)}</option>`).join('')}
+      </select></div>
+      <div class="campo" style="flex:1;min-width:200px;"><label>Buscar</label><input id="he-busca" placeholder="nome, cidade, telefone..."></div>
+    </div>
+    <div id="he-conteudo"><p class="texto-dim2">carregando...</p></div>`
+
+  const { data, error } = await db.from('lead').select(selLead).eq('arquivado', true)
+    .order('criado_em', { ascending: false }).limit(1500)
+  if (error) { $('#he-conteudo').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  const base = data || []
+
+  const render = lista => {
+    $('#he-conteudo').innerHTML = `<div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr><th>Lead</th><th>Local</th><th>Contato</th><th>Etapa</th><th>Vendedor</th><th>Observações</th></tr></thead><tbody>
+        ${lista.map(l => `<tr>
+          <td>${esc(l.nome)}</td>
+          <td class="texto-dim2">${esc([l.municipio, l.uf].filter(Boolean).join(' / ') || '—')}</td>
+          <td class="texto-dim2">${esc(l.telefone || l.email || '—')}</td>
+          <td><span class="${corEtapaLead(l.etapa)}">${esc(ROTULO_ETAPA_LEAD[l.etapa] ?? l.etapa)}</span></td>
+          <td class="texto-dim">${esc(l.vendedor?.nome || '—')}</td>
+          <td class="texto-dim2" style="max-width:260px;">${esc(l.observacoes || '—')}</td>
+        </tr>`).join('') || `<tr><td colspan="6" class="vazio">Nada aqui.</td></tr>`}
+      </tbody></table></div></div>`
+  }
+  render(base)
+
+  const aplicarFiltro = () => {
+    const v = $('#he-vendedor').value
+    const busca = $('#he-busca').value.trim().toLowerCase()
+    render(base.filter(l =>
+      (!v || l.vendedor_id === v) &&
+      (!busca || [l.nome, l.municipio, l.telefone, l.email].filter(Boolean).some(x => x.toLowerCase().includes(busca)))
+    ))
+  }
+  $('#he-vendedor').onchange = aplicarFiltro
+  $('#he-busca').oninput = aplicarFiltro
+}
+
+// ----- Compartilhar listas do Banco de Informações por vendedor -----
+// Reaproveita recurso/recurso_permissao (o mesmo sistema que já libera
+// calculadora por pessoa em Ferramentas) — aqui só pros recursos do
+// tipo REGIAO, que são as listas comerciais.
+async function crmCompartilharBanco (alvo) {
+  const [{ data: regioes }, { data: permissoes }] = await Promise.all([
+    db.from('recurso').select('id,chave,nome').eq('tipo', 'REGIAO').eq('status', 'ATIVO').order('ordem'),
+    db.from('recurso_permissao').select('id,recurso_id,pessoa_id').not('pessoa_id', 'is', null)
+  ])
+  const listaRegioes = regioes || []
+  let permissoesAtuais = permissoes || []
+
+  alvo.innerHTML = `
+    <div class="campo" style="max-width:320px;margin-bottom:12px;">
+      <label>Vendedor</label>
+      <select id="cb-vendedor-banco"><option value="">selecione…</option>
+        ${CRM_CACHE.vendedores.map(v => `<option value="${v.id}">${esc(v.nome)}</option>`).join('')}
+      </select>
+    </div>
+    <div id="cb-checklist" class="check-pessoas"></div>
+    <p class="texto-dim2" style="font-size:11.5px;margin-top:8px;">
+      Marcar/desmarcar já salva na hora — não precisa de botão de confirmar.</p>`
+
+  const desenharChecklist = vendedorId => {
+    const alvoLista = $('#cb-checklist')
+    if (!vendedorId) { alvoLista.innerHTML = '<p class="texto-dim2" style="font-size:12.5px;">selecione um vendedor pra ver as listas dele.</p>'; return }
+    alvoLista.innerHTML = listaRegioes.map(r => {
+      const marcado = permissoesAtuais.some(p => p.recurso_id === r.id && p.pessoa_id === vendedorId)
+      return `<label><input type="checkbox" data-regiao="${r.id}" ${marcado ? 'checked' : ''}>${esc(r.nome)}</label>`
+    }).join('') || '<p class="texto-dim2" style="font-size:12.5px;">nenhuma lista cadastrada ainda.</p>'
+
+    alvoLista.querySelectorAll('[data-regiao]').forEach(cb => {
+      cb.onchange = async () => {
+        cb.disabled = true
+        if (cb.checked) {
+          const { data: nova, error } = await db.from('recurso_permissao')
+            .insert({ recurso_id: cb.dataset.regiao, pessoa_id: vendedorId }).select('id').single()
+          if (!error && nova) permissoesAtuais.push({ id: nova.id, recurso_id: cb.dataset.regiao, pessoa_id: vendedorId })
+        } else {
+          await db.from('recurso_permissao').delete().eq('recurso_id', cb.dataset.regiao).eq('pessoa_id', vendedorId)
+          permissoesAtuais = permissoesAtuais.filter(p => !(p.recurso_id === cb.dataset.regiao && p.pessoa_id === vendedorId))
+        }
+        cb.disabled = false
+      }
+    })
+  }
+  $('#cb-vendedor-banco').onchange = e => desenharChecklist(e.target.value)
+  desenharChecklist('')
+}
+
 // ----- Histórico -----
 // Base de suporte/consulta: leads arquivados (ex.: migrados do CRM
 // antigo). NÃO participa do funil ativo nem das métricas de painel —
@@ -5285,7 +5444,7 @@ async function crmHistorico (alvo, editavel, gerencia) {
       Base de consulta/suporte — não é o funil ativo. Útil pra checar se alguém já foi contatado antes.</p>
     <div id="hi-conteudo"><p class="texto-dim2">carregando...</p></div>`
 
-  const { data, error } = await filtrarPorDonoHistorico(db.from('lead').select(selLead), gerencia)
+  const { data, error } = await filtrarPorDonoHistorico(db.from('lead').select(selLead))
     .order('criado_em', { ascending: false }).limit(1000)
   if (faltaMigracao(error) || error) { $('#hi-conteudo').innerHTML = `<p class="vazio">${esc(error?.message ?? '')}</p>`; return }
   const base = data || []
@@ -5294,17 +5453,16 @@ async function crmHistorico (alvo, editavel, gerencia) {
     $('#hi-conteudo').innerHTML = `
       <div class="panel" style="padding:0;"><div class="tabela-scroll">
         <table><thead><tr>
-          <th>Lead</th><th>Local</th><th>Contato</th><th>Etapa</th>${gerencia ? '<th>Vendedor</th>' : ''}<th>Observações</th>${gerencia ? '<th></th>' : ''}
+          <th>Lead</th><th>Local</th><th>Contato</th><th>Etapa</th><th>Observações</th>${editavel ? '<th></th>' : ''}
         </tr></thead><tbody>
           ${lista.map(l => `<tr>
             <td><b>${esc(l.nome)}</b></td>
             <td class="texto-dim2">${esc([l.municipio, l.uf].filter(Boolean).join(' / ') || '—')}</td>
             <td class="texto-dim2">${esc([l.telefone, l.email].filter(Boolean).join(' · ') || '—')}</td>
             <td><span class="${corEtapaLead(l.etapa)}">${esc(ROTULO_ETAPA_LEAD[l.etapa] ?? l.etapa)}</span></td>
-            ${gerencia ? `<td class="texto-dim">${esc(l.vendedor?.nome ?? '—')}</td>` : ''}
             <td class="texto-dim2" style="max-width:280px;">${esc(l.observacoes ?? '—')}</td>
-            ${gerencia && editavel ? `<td><button class="btn-secundario mini" data-reativar="${l.id}">Reativar no funil</button></td>` : ''}
-          </tr>`).join('') || `<tr><td colspan="${gerencia ? 7 : 5}" class="vazio">Nada no histórico.</td></tr>`}
+            ${editavel ? `<td><button class="btn-secundario mini" data-reativar="${l.id}">Reativar no funil</button></td>` : ''}
+          </tr>`).join('') || `<tr><td colspan="${editavel ? 6 : 5}" class="vazio">Nada no histórico.</td></tr>`}
         </tbody></table>
       </div></div>`
 
@@ -5327,10 +5485,8 @@ async function crmHistorico (alvo, editavel, gerencia) {
 
 // mesmo recorte "só o meu" de filtrarPorDono, mas pro histórico
 // (arquivado = true, sem tocar no funil ativo)
-function filtrarPorDonoHistorico (q, gerencia) {
-  q = q.eq('arquivado', true)
-  if (gerencia) return q
-  return q.eq('vendedor_id', PERFIL.pessoaId)
+function filtrarPorDonoHistorico (q) {
+  return q.eq('arquivado', true).eq('vendedor_id', PERFIL.pessoaId)
 }
 
 // ---------------------------------------------------------------
@@ -8788,22 +8944,9 @@ async function paginaFerramentas () {
     `<div class="panel" style="padding:22px;"><p class="texto-dim">
      Você não tem acesso a Ferramentas.</p></div>`; return }
 
-  $('#subtitulo-pagina').textContent = 'Calculadoras e banco de informações comerciais'
+  $('#subtitulo-pagina').textContent = 'Calculadoras de trabalho'
   const area = areaLivre()
-  area.innerHTML = `
-    <div class="subabas">
-      <button data-sub="calculadoras" class="ativo">Calculadoras</button>
-      <button data-sub="banco">Banco de informações</button>
-    </div>
-    <div id="sub-ferramentas"></div>`
-
-  area.querySelectorAll('.subabas button').forEach(b => {
-    b.onclick = () => {
-      area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
-      FER_ABERTA = null
-      abrirFerramentas(b.dataset.sub)
-    }
-  })
+  area.innerHTML = `<div id="sub-ferramentas"></div>`
 
   // a RLS já devolve só o que o usuário pode ver; se não puder nada, vem vazio
   const { data } = await db.from('recurso').select('id,chave,nome,tipo,descricao').eq('status', 'ATIVO').order('ordem')
@@ -8819,21 +8962,42 @@ async function paginaFerramentas () {
 
 function abrirFerramentas (sub) {
   const alvo = $('#sub-ferramentas')
-  if (sub === 'calculadoras') {
-    const calcs = meusRecursos('CALCULADORA')
-    if (FER_ABERTA === 'calc-barter') return calcBarter(alvo)
-    if (FER_ABERTA === 'calc-enxofre') return calcEnxofre(alvo)
-    alvo.innerHTML = calcs.length
-      ? `<div class="grade-cartoes">${calcs.map(c => `
-          <div class="cartao-ferramenta" data-abrir="${c.chave}">
-            <h4>${esc(c.nome)}</h4><p>${esc(c.descricao ?? '')}</p></div>`).join('')}</div>`
-      : `<p class="vazio">Nenhuma calculadora liberada para você. Peça ao administrador do sistema.</p>`
-    alvo.querySelectorAll('[data-abrir]').forEach(c => {
-      c.onclick = () => { FER_ABERTA = c.dataset.abrir; abrirFerramentas('calculadoras') }
-    })
-    return
+  const calcs = meusRecursos('CALCULADORA')
+  if (FER_ABERTA === 'calc-barter') return calcBarter(alvo)
+  if (FER_ABERTA === 'calc-enxofre') return calcEnxofre(alvo)
+  alvo.innerHTML = calcs.length
+    ? `<div class="grade-cartoes">${calcs.map(c => `
+        <div class="cartao-ferramenta" data-abrir="${c.chave}">
+          <h4>${esc(c.nome)}</h4><p>${esc(c.descricao ?? '')}</p></div>`).join('')}</div>`
+    : `<p class="vazio">Nenhuma calculadora liberada para você. Peça ao administrador do sistema.</p>`
+  alvo.querySelectorAll('[data-abrir]').forEach(c => {
+    c.onclick = () => { FER_ABERTA = c.dataset.abrir; abrirFerramentas('calculadoras') }
+  })
+}
+
+// ---------------------------------------------------------------
+// Página: Banco de Informações  (módulo 'banco', antes era sub-aba
+// de Ferramentas — agora é aba própria, pra caber melhor a ideia de
+// compartilhar listas específicas com vendedores específicos. A
+// visibilidade de cada lista continua vindo de tem_recurso() — quem
+// libera isso pra cada pessoa é a aba Gestão do CRM.)
+// ---------------------------------------------------------------
+async function paginaBancoInformacoes () {
+  if (!podeVer('banco')) { areaLivre().innerHTML =
+    `<div class="panel" style="padding:22px;"><p class="texto-dim">
+     Você não tem acesso ao Banco de Informações.</p></div>`; return }
+  $('#subtitulo-pagina').textContent = 'Listas comerciais por região'
+  const area = areaLivre()
+  area.innerHTML = `<div id="sub-banco"></div>`
+
+  const { data } = await db.from('recurso').select('id,chave,nome,tipo,descricao').eq('status', 'ATIVO').eq('tipo', 'REGIAO').order('ordem')
+  const visiveis = []
+  for (const r of (data || [])) {
+    const { data: ok } = await db.rpc('tem_recurso', { p_chave: r.chave })
+    if (ok === true) visiveis.push(r)
   }
-  if (sub === 'banco') bancoInformacoes(alvo)
+  RECURSOS = visiveis
+  bancoInformacoes($('#sub-banco'))
 }
 
 function voltarFerramentas (sub) {
