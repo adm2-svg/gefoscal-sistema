@@ -826,7 +826,7 @@ const MODULOS_POR_PAPEL = { cobranca: ['ADMIN', 'DIRETORIA', 'COMERCIAL', 'COBRA
 // liberar automaticamente quem gerencia algum setor a ver o CRM
 // Gestão, sem precisar de um checkbox manual em Administração.
 const souGestor = () => PERFIL.setoresGeridos.length > 0
-const MODULOS_SO_GESTOR = ['crm_gestao', 'crm']
+const MODULOS_SO_GESTOR = ['crm']
 
 function podeVer (chave) {
   if (ehTotal()) return true
@@ -854,7 +854,6 @@ const PAGINAS = {
   compras:     { nome: 'Compras e Recebimento', render: paginaCompras },
   cobranca:    { nome: 'Crédito e Cobrança', render: paginaCobranca },
   crm:         { nome: 'CRM Comercial', render: paginaCrm },
-  crm_gestao:  { nome: 'CRM Gestão', render: paginaCrmGestao },
   financeiro:  { nome: 'Financeiro', render: paginaFinanceiro },
   projetos:    { nome: 'Projetos', render: paginaProjetos },
   ferramentas: { nome: 'Ferramentas', render: paginaFerramentas },
@@ -878,7 +877,6 @@ const ICONES_MODULO = {
   compras: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="20" r="1.4"/><circle cx="18" cy="20" r="1.4"/><path d="M2 2h3l2.6 13a2 2 0 0 0 2 1.6h9a2 2 0 0 0 2-1.8L22 7H6"/></svg>',
   cobranca: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="13" rx="2"/><path d="M2 10h20"/><circle cx="17" cy="14.5" r="1.2" fill="currentColor" stroke="none"/></svg>',
   crm: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
-  crm_gestao: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg>',
   financeiro: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V10M11 21V6M17 21v-8"/></svg>',
   projetos: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M15 3v12"/></svg>',
   ferramentas: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.9-3.9a5 5 0 0 1-6.6 6.6L4.3 22.7a2 2 0 0 1-2.8-2.8L12.2 9.2a5 5 0 0 1 6.6-6.6z"/></svg>',
@@ -4290,9 +4288,8 @@ async function paginaCrm () {
   }
   if (!CRM_CACHE.vendedores.length) CRM_CACHE.vendedores = CRM_CACHE.pessoas
 
-  const abas = [['painel', 'Painel'], ['funil', 'Funil']]
-  if (gerencia) abas.push(['atribuir', 'Atribuir'])
-  abas.push(['progresso', 'Progresso'])
+  const abas = [['painel', 'Painel'], ['funil', 'Funil'], ['progresso', 'Progresso'], ['historico', 'Histórico']]
+  if (gerencia) abas.push(['gestao', 'Gestão'])
 
   const inicial = CRM_SUBABA_INICIAL && abas.some(a => a[0] === CRM_SUBABA_INICIAL) ? CRM_SUBABA_INICIAL : abas[0][0]
   CRM_SUBABA_INICIAL = null
@@ -4320,17 +4317,22 @@ function abrirCrm (sub, editavel, gerencia) {
   if (sub === 'funil') crmFunil(alvo, editavel, gerencia)
   if (sub === 'atribuir') crmAtribuir(alvo)
   if (sub === 'progresso') crmLeads(alvo, editavel, gerencia)
+  if (sub === 'historico') crmHistorico(alvo, editavel, gerencia)
+  if (sub === 'gestao') crmGestaoTab(alvo)
 }
 
 const selLead = `
   id, nome, cliente_id, vendedor_id, origem, uf, municipio, telefone, email,
-  etapa, valor_estimado, observacoes, criado_em, atualizado_em, atribuido_por_id, atribuido_em,
+  etapa, valor_estimado, observacoes, criado_em, atualizado_em, atribuido_por_id, atribuido_em, arquivado,
   vendedor:vendedor_id ( nome ), cliente:cliente_id ( razao_social, nome_fantasia ),
   atribuidoPor:atribuido_por_id ( nome )`
 
 // aplica o recorte "só o meu" pra quem não gerencia — mesma regra que
-// a RLS já aplica no banco, só evitando pedir dado que vai voltar vazio
+// a RLS já aplica no banco, só evitando pedir dado que vai voltar vazio.
+// Também tira os registros arquivados (histórico/suporte, ex.: migração
+// do CRM antigo) do funil ativo — esses só aparecem na aba Histórico.
 function filtrarPorDono (q, gerencia) {
+  q = q.eq('arquivado', false)
   if (gerencia) return q.not('vendedor_id', 'is', null) // gerência já vê tudo atribuído; o pool fica na aba Atribuir
   return q.eq('vendedor_id', PERFIL.pessoaId)
 }
@@ -4599,7 +4601,7 @@ async function crmAtribuir (alvo) {
   }
 
   const carregarPool = async () => {
-    const { data, error } = await db.from('lead').select(selLead).is('vendedor_id', null).order('criado_em', { ascending: false }).limit(300)
+    const { data, error } = await db.from('lead').select(selLead).is('vendedor_id', null).eq('arquivado', false).order('criado_em', { ascending: false }).limit(300)
     if (faltaMigracao(error) || error) { $('#crm-pool').innerHTML = `<p class="vazio">${esc(error?.message ?? '')}</p>`; return }
     const lista = data || []
     $('#crm-pool').innerHTML = lista.length ? `
@@ -4696,7 +4698,8 @@ function formLead (l, editavel, gerencia, aoFechar) {
     </div>
     <div class="campo" style="margin-top:10px;"><label>Observações</label>
       <textarea id="ld-obs" style="min-height:80px;" ${editavel ? '' : 'disabled'}>${esc(l?.observacoes ?? '')}</textarea></div>
-    ${l?.cliente_id ? `<p class="texto-dim2" style="font-size:12px;margin-top:8px;">Já convertido em cliente: <b>${esc(l.cliente?.nome_fantasia || l.cliente?.razao_social || '—')}</b></p>`
+    ${l?.cliente_id ? `<p class="texto-dim2" style="font-size:12px;margin-top:8px;">Já convertido em cliente: <b>${esc(l.cliente?.nome_fantasia || l.cliente?.razao_social || '—')}</b></p>
+      ${editavel ? `<div class="acoes" style="margin-top:8px;"><button class="btn-secundario" id="ld-emitir-pedido" type="button">Emitir pedido</button></div>` : ''}`
       : (editavel && l ? `<div class="acoes" style="margin-top:10px;"><button class="btn-secundario" id="ld-converter" type="button">Converter em cliente</button></div>` : '')}
     <div class="acoes" style="margin-top:14px;">
       ${editavel ? `<button class="btn" id="ld-salvar">Salvar</button>` : ''}
@@ -4775,31 +4778,74 @@ function formLead (l, editavel, gerencia, aoFechar) {
       fechar(); aoFechar()
     }
   }
+
+  if (editavel && l?.cliente_id) {
+    const btnEmitir = fundo.querySelector('#ld-emitir-pedido')
+    if (btnEmitir) btnEmitir.onclick = () => formEmitirPedidoCrm(l)
+  }
+}
+
+// ----- Emitir pedido direto do CRM (mesmo formulário/tabela "Novo
+// pedido" de Crédito e Cobrança — só que aqui o cliente já vem
+// travado, porque já sabemos qual lead/cliente é) -----
+function formEmitirPedidoCrm (l) {
+  const nomeCli = l.cliente?.nome_fantasia || l.cliente?.razao_social || l.nome
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>Emitir pedido — ${esc(nomeCli)}</h3>
+    <div class="form-grade">
+      <div class="campo"><label>PD</label><input id="ep-numero" placeholder="número do pedido"></div>
+      <div class="campo"><label>Vencimento</label><input id="ep-venc" type="date"></div>
+      <div class="campo"><label>Toneladas *</label><input id="ep-ton" type="number" step="0.01"></div>
+      <div class="campo"><label>R$/t *</label><input id="ep-preco" type="number" step="0.01"></div>
+    </div>
+    <div class="campo" style="margin-top:10px;"><label>Observação</label><input id="ep-obs" placeholder="opcional"></div>
+    <div class="acoes" style="margin-top:14px;"><button class="btn" id="ep-salvar">Emitir pedido</button>
+      <button class="btn-secundario" id="ep-cancelar">Cancelar</button></div>
+    <div class="recado oculto" id="ep-recado"></div>
+    <p class="texto-dim2" style="font-size:11.5px;margin-top:8px;">O valor do pedido é calculado por toneladas × R$/t. Depois de emitido, o pedido aparece normalmente em Crédito e Cobrança.</p>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#ep-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  fundo.querySelector('#ep-salvar').onclick = async () => {
+    const ton = Number(fundo.querySelector('#ep-ton').value)
+    const preco = Number(fundo.querySelector('#ep-preco').value)
+    const el = fundo.querySelector('#ep-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    if (!ton || !preco) { aviso('Preencha toneladas e R$/t.'); return }
+    const { error } = await db.from('pedido').insert({
+      cliente_id: l.cliente_id, numero: fundo.querySelector('#ep-numero').value.trim() || null,
+      quantidade_t: ton, preco_unitario: preco, valor_total: ton * preco,
+      vencimento: fundo.querySelector('#ep-venc').value || null,
+      observacao_cobranca: fundo.querySelector('#ep-obs').value.trim() || null,
+      data_pedido: new Date().toISOString().slice(0, 10)
+    })
+    if (error) { aviso(error.message); return }
+    el.textContent = 'Pedido emitido com sucesso.'; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--good-text)'; el.style.color = 'var(--good-text)'
+    setTimeout(fechar, 1400)
+  }
 }
 
 // ---------------------------------------------------------------
-// Página: CRM Gestão  (módulo 'crm_gestao')
-// Visão de quem gerencia gente comercial: liberada automaticamente
-// pra ADMIN/DIRETORIA e pra quem é gestor de algum setor (mesmo campo
-// setor.gestor_id usado no Painel do gestor da Visão Geral). Junta
-// o que dá pra acompanhar sobre a equipe (ritmo, conversão, leads
-// parados) com a carteira própria do gestor — porque gestor também
-// vende, não só supervisiona.
+// Aba "Gestão" do CRM — visão de quem gerencia gente comercial:
+// liberada automaticamente pra ADMIN/DIRETORIA e pra quem é gestor de
+// algum setor (mesmo campo setor.gestor_id usado no Painel do gestor
+// da Visão Geral). Junta o que dá pra acompanhar sobre a equipe
+// (ritmo, conversão, leads parados) com a carteira própria do gestor
+// — porque gestor também vende, não só supervisiona. Só olha o funil
+// ativo (arquivado = false); histórico fica na aba Histórico.
 // ---------------------------------------------------------------
-async function paginaCrmGestao () {
-  if (!podeVer('crm_gestao')) { areaLivre().innerHTML =
-    `<div class="panel" style="padding:22px;"><p class="texto-dim">
-     O CRM Gestão é liberado pra ADMIN/DIRETORIA e pra quem gerencia algum setor.</p></div>`; return }
-
-  $('#subtitulo-pagina').textContent = 'Acompanhamento da equipe comercial e sua própria carteira'
-  const area = areaLivre()
-  area.innerHTML = `<p class="texto-dim2">carregando...</p>`
-
+async function crmGestaoTab (alvo) {
   const { data, error } = await db.from('lead').select(`
     id, nome, etapa, valor_estimado, vendedor_id, criado_em, atualizado_em, municipio, uf,
     vendedor:vendedor_id ( nome )
-  `).order('atualizado_em', { ascending: false }).limit(1500)
-  if (faltaMigracao(error)) { area.innerHTML = `<div class="panel" style="padding:22px;"><p class="vazio">${esc(error.message)}</p></div>`; return }
+  `).eq('arquivado', false).order('atualizado_em', { ascending: false }).limit(1500)
+  if (faltaMigracao(error)) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
 
   const lista = data || []
   const atribuidos = lista.filter(l => l.vendedor_id)
@@ -4833,7 +4879,13 @@ async function paginaCrmGestao () {
   // carteira própria do gestor (ele também vende)
   const minhaCarteira = PERFIL.pessoaId ? lista.filter(l => l.vendedor_id === PERFIL.pessoaId) : []
 
-  area.innerHTML = `
+  alvo.innerHTML = `
+    <div class="cabeca-secao" style="margin-bottom:2px;">
+      <h3 style="font-family:var(--serif);font-size:17px;">Gestão comercial</h3>
+      <button class="btn-secundario mini" id="cg-toggle-atribuir">Atribuir clientes</button>
+    </div>
+    <div id="cg-atribuir-painel" class="oculto" style="margin:10px 0 18px;"></div>
+
     <div class="resumo-topo" style="margin-bottom:16px;">
       ${[['Leads em aberto (equipe)', emAberto.length, ''], ['Valor em funil (equipe)', 'R$ ' + fmtNum(valorPipeline), ''],
          ['Taxa de conversão', taxaConversao != null ? taxaConversao + '%' : '—', ''],
@@ -4875,8 +4927,7 @@ async function paginaCrmGestao () {
     </div>
 
     ${PERFIL.pessoaId ? `<div class="cabeca-secao" style="margin-top:20px;">
-      <h3 style="font-family:var(--serif);font-size:16px;">Sua carteira</h3>
-      <button class="btn-secundario mini" id="cg-ir-crm">abrir no CRM Comercial</button></div>
+      <h3 style="font-family:var(--serif);font-size:16px;">Sua carteira</h3></div>
     <div class="panel" style="padding:0;"><div class="tabela-scroll">
       <table><thead><tr><th>Lead</th><th>Local</th><th>Etapa</th><th class="num">Valor estimado</th></tr></thead><tbody>
         ${minhaCarteira.map(l => `<tr>
@@ -4887,15 +4938,91 @@ async function paginaCrmGestao () {
       </tbody></table>
     </div></div>` : ''}`
 
-  const irCrm = sub => { CRM_SUBABA_INICIAL = sub; irPara('crm') }
-  const btnAtribuir = $('#cg-ir-atribuir'); if (btnAtribuir) btnAtribuir.onclick = () => irCrm('atribuir')
-  const btnCrm = $('#cg-ir-crm'); if (btnCrm) btnCrm.onclick = () => irCrm('funil')
-  area.querySelectorAll('[data-abrir-parado]').forEach(el => {
+  const painelAtribuir = $('#cg-atribuir-painel')
+  const abrirPainelAtribuir = () => {
+    painelAtribuir.classList.remove('oculto')
+    painelAtribuir.innerHTML = '<p class="texto-dim2">carregando...</p>'
+    crmAtribuir(painelAtribuir)
+    painelAtribuir.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+  const toggleAtribuir = () => {
+    if (painelAtribuir.classList.contains('oculto')) abrirPainelAtribuir()
+    else painelAtribuir.classList.add('oculto')
+  }
+  $('#cg-toggle-atribuir').onclick = toggleAtribuir
+  const btnAtribuir = $('#cg-ir-atribuir'); if (btnAtribuir) btnAtribuir.onclick = abrirPainelAtribuir
+
+  const irSub = sub => { CRM_SUBABA_INICIAL = sub; irPara('crm') }
+  alvo.querySelectorAll('[data-abrir-parado]').forEach(el => {
     el.onclick = () => {
       const l = parados.find(x => x.id === el.dataset.abrirParado)
-      if (l) irCrm('progresso')
+      if (l) irSub('progresso')
     }
   })
+}
+
+// ----- Histórico -----
+// Base de suporte/consulta: leads arquivados (ex.: migrados do CRM
+// antigo). NÃO participa do funil ativo nem das métricas de painel —
+// é só referência pra consultar contato/observações antigas. Quem
+// gerencia pode "reativar" um registro de volta pro funil se ele
+// voltar a ficar quente.
+async function crmHistorico (alvo, editavel, gerencia) {
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo" style="flex:1;min-width:220px;"><label>Buscar</label>
+        <input id="hi-busca" placeholder="nome, cidade, telefone..."></div>
+    </div>
+    <p class="texto-dim2" style="font-size:12px;margin:-6px 0 14px;">
+      Base de consulta/suporte — não é o funil ativo. Útil pra checar se alguém já foi contatado antes.</p>
+    <div id="hi-conteudo"><p class="texto-dim2">carregando...</p></div>`
+
+  const { data, error } = await filtrarPorDonoHistorico(db.from('lead').select(selLead), gerencia)
+    .order('criado_em', { ascending: false }).limit(1000)
+  if (faltaMigracao(error) || error) { $('#hi-conteudo').innerHTML = `<p class="vazio">${esc(error?.message ?? '')}</p>`; return }
+  const base = data || []
+
+  const render = lista => {
+    $('#hi-conteudo').innerHTML = `
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr>
+          <th>Lead</th><th>Local</th><th>Contato</th><th>Etapa</th>${gerencia ? '<th>Vendedor</th>' : ''}<th>Observações</th>${gerencia ? '<th></th>' : ''}
+        </tr></thead><tbody>
+          ${lista.map(l => `<tr>
+            <td><b>${esc(l.nome)}</b></td>
+            <td class="texto-dim2">${esc([l.municipio, l.uf].filter(Boolean).join(' / ') || '—')}</td>
+            <td class="texto-dim2">${esc([l.telefone, l.email].filter(Boolean).join(' · ') || '—')}</td>
+            <td><span class="${corEtapaLead(l.etapa)}">${esc(ROTULO_ETAPA_LEAD[l.etapa] ?? l.etapa)}</span></td>
+            ${gerencia ? `<td class="texto-dim">${esc(l.vendedor?.nome ?? '—')}</td>` : ''}
+            <td class="texto-dim2" style="max-width:280px;">${esc(l.observacoes ?? '—')}</td>
+            ${gerencia && editavel ? `<td><button class="btn-secundario mini" data-reativar="${l.id}">Reativar no funil</button></td>` : ''}
+          </tr>`).join('') || `<tr><td colspan="${gerencia ? 7 : 5}" class="vazio">Nada no histórico.</td></tr>`}
+        </tbody></table>
+      </div></div>`
+
+    alvo.querySelectorAll('[data-reativar]').forEach(b => {
+      b.onclick = async () => {
+        if (!confirm('Tirar este lead do histórico e trazer de volta pro funil ativo?')) return
+        await db.from('lead').update({ arquivado: false, atualizado_em: new Date().toISOString() }).eq('id', b.dataset.reativar)
+        crmHistorico(alvo, editavel, gerencia)
+      }
+    })
+  }
+  render(base)
+
+  $('#hi-busca').oninput = () => {
+    const termo = $('#hi-busca').value.trim().toLowerCase()
+    render(!termo ? base : base.filter(l => [l.nome, l.municipio, l.uf, l.telefone, l.email]
+      .some(campo => (campo || '').toLowerCase().includes(termo))))
+  }
+}
+
+// mesmo recorte "só o meu" de filtrarPorDono, mas pro histórico
+// (arquivado = true, sem tocar no funil ativo)
+function filtrarPorDonoHistorico (q, gerencia) {
+  q = q.eq('arquivado', true)
+  if (gerencia) return q
+  return q.eq('vendedor_id', PERFIL.pessoaId)
 }
 
 // ---------------------------------------------------------------
