@@ -728,14 +728,17 @@ async function abrirApp () {
     db.from('usuario_papel').select('papel').eq('user_id', user.id),
     db.from('modulo').select('id,chave,nome,ordem').order('ordem'),
     db.from('usuario_perfil')
-      .select('pessoa_id,setor_id,ativo,pessoa:pessoa_id(nome)')
+      .select('pessoa_id,setor_id,ativo,pessoa:pessoa_id(nome,setor_id)')
       .eq('user_id', user.id).maybeSingle()
   ])
 
   PERFIL.papeis = (papeis || []).map(p => p.papel)
   PERFIL.modulos = modulos || []
   PERFIL.pessoaId = perfil?.pessoa_id ?? null
-  PERFIL.setorId = perfil?.setor_id ?? null
+  // usuario_perfil.setor_id é o "de verdade" pro login, mas se ele ficar vazio
+  // (ex.: usuário novo, cadastro incompleto) cai pro setor já salvo na pessoa,
+  // pra não sumir solicitação/painel de ninguém por um campo esquecido
+  PERFIL.setorId = perfil?.setor_id ?? perfil?.pessoa?.setor_id ?? null
   PERFIL.nome = perfil?.pessoa?.nome || user.email
 
   if (PERFIL.papeis.length === 0 || perfil?.ativo === false) {
