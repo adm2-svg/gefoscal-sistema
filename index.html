@@ -150,6 +150,12 @@ tbody tr:hover { background: var(--hover-bg); }
                background:rgba(var(--warn-rgb),.13); color:var(--warn-text); line-height:1.6; }
 .aviso-bloqueio > div + div { margin-top:6px; padding-top:6px; border-top:1px solid rgba(var(--warn-rgb),.25); }
 .mini-kv { display:flex; justify-content:space-between; font-size:13px; padding:5px 0; }
+
+@keyframes piscar-amarelo { 0%,100% { background:rgba(var(--gold-rgb),.18); } 50% { background:rgba(var(--gold-rgb),.55); } }
+@keyframes piscar-vermelho { 0%,100% { background:rgba(var(--warn-rgb),.18); } 50% { background:rgba(var(--warn-rgb),.65); } }
+.pisca-alta { animation: piscar-amarelo 1.4s ease-in-out infinite; }
+.pisca-urgente { animation: piscar-vermelho 1s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .pisca-alta, .pisca-urgente { animation: none; } }
 .anel { position:relative; width:96px; height:96px; }
 .anel svg { width:100%; height:100%; transform:rotate(-90deg); }
 .anel circle { fill:none; stroke-width:8; }
@@ -1084,8 +1090,8 @@ function ticksProgressoSolicitacao (valor, editavel) {
 }
 
 function corUrgenciaSolicitacao (u) {
-  if (u === 'URGENTE') return 'badge-alerta'
-  if (u === 'ALTA') return 'chip'
+  if (u === 'URGENTE') return 'badge-alerta pisca-urgente'
+  if (u === 'ALTA') return 'chip pisca-alta'
   return 'texto-dim2'
 }
 function corStatusSolicitacao (s) {
@@ -11125,9 +11131,10 @@ function detalheProjeto (p, todos, editavel) {
   if (p.pausado) h += `<div class="aviso-pausa">Motivo da pausa: ${esc(p.motivo_pausa || '—')}</div>`
   if (bloqueadoresAtivos.length) h += `<div class="aviso-bloqueio">⛓ aguardando terminar: ${bloqueadoresAtivos.map(b => esc(b.nome) + ' (' + b.progresso + '%)').join(', ')}</div>`
 
+  h += `<div data-bloco-detalhe="${p.id}">`
   h += editavel
     ? `<label class="texto-dim2" style="font-size:11px;">Onde está / o que falta</label>
-       <textarea data-detail="${p.id}" style="width:100%;min-height:60px;margin-top:4px;">${esc(p.descricao || '')}</textarea>`
+       <textarea data-detail style="width:100%;min-height:60px;margin-top:4px;">${esc(p.descricao || '')}</textarea>`
     : `<div style="font-size:13px;">${esc(p.descricao) || '<span class="texto-dim2">sem descrição</span>'}</div>`
 
   h += `<div style="margin-top:12px;"><label class="texto-dim2" style="font-size:11px;">membros (podem editar este projeto)</label>
@@ -11139,16 +11146,21 @@ function detalheProjeto (p, todos, editavel) {
       : `<div style="font-size:13px;margin-top:4px;color:${atrasado ? 'var(--warn-text)' : 'inherit'};${atrasado ? 'font-weight:600;' : ''}">${esc(aguardando.map(m => m.pessoa?.nome).join(', ') || '—')}</div>`}</div>`
 
   h += `<div style="margin-top:12px;max-width:220px;"><label class="texto-dim2" style="font-size:11px;">SLA / prazo de resposta</label>
-    ${editavel ? `<input type="date" data-sla="${p.id}" value="${p.sla || ''}" style="width:100%;margin-top:4px;">`
+    ${editavel ? `<input type="date" data-sla value="${p.sla || ''}" style="width:100%;margin-top:4px;">`
       : `<div style="font-size:13px;margin-top:4px;">${p.sla ? fmtData(p.sla) : '—'}</div>`}</div>`
 
   const outros = todos.filter(x => x.id !== p.id)
   h += `<div style="margin-top:12px;"><label class="texto-dim2" style="font-size:11px;">é parte de (projeto principal)</label>
-    ${editavel ? `<select data-pai="${p.id}" style="margin-top:4px;">
+    ${editavel ? `<select data-pai style="margin-top:4px;">
         <option value="">nenhum — é um projeto independente</option>
         ${outros.map(o => `<option value="${o.id}" ${p.projeto_pai_id === o.id ? 'selected' : ''}>${esc(o.nome)}</option>`).join('')}
       </select>`
       : `<div style="font-size:13px;margin-top:4px;">${p.projeto_pai_id ? esc((todos.find(x => x.id === p.projeto_pai_id) || {}).nome || '—') : '—'}</div>`}</div>`
+  if (editavel) h += `<div class="acoes" style="margin-top:12px;">
+      <button class="btn mini" data-salvar-detalhe="${p.id}">Salvar alterações</button>
+      <span class="texto-dim2 oculto" data-salvo="${p.id}" style="font-size:11.5px;">salvo ✓</span>
+    </div>`
+  h += `</div>`
 
   h += `<div style="margin-top:12px;"><label class="texto-dim2" style="font-size:11px;">esperando estes projetos terminarem antes de seguir</label>
     ${editavel ? `<div class="check-pessoas">${outros.map(o => `<label><input type="checkbox" ${bloqIds.includes(o.id) ? 'checked' : ''}
@@ -11192,17 +11204,24 @@ function ligarProjeto (alvo, editModulo) {
       projProgresso(alvo, editModulo)
     }
   })
-  alvo.querySelectorAll('[data-detail]').forEach(el => {
-    el.onclick = e => e.stopPropagation()
-    el.onchange = async () => { await db.from('projeto').update({ descricao: el.value.trim() || null }).eq('id', el.dataset.detail) }
-  })
-  alvo.querySelectorAll('[data-sla]').forEach(el => {
-    el.onclick = e => e.stopPropagation()
-    el.onchange = async () => { await db.from('projeto').update({ sla: el.value || null }).eq('id', el.dataset.sla) }
-  })
-  alvo.querySelectorAll('[data-pai]').forEach(el => {
-    el.onclick = e => e.stopPropagation()
-    el.onchange = async () => { await db.from('projeto').update({ projeto_pai_id: el.value || null }).eq('id', el.dataset.pai); projProgresso(alvo, editModulo) }
+  alvo.querySelectorAll('[data-detail]').forEach(el => { el.onclick = e => e.stopPropagation() })
+  alvo.querySelectorAll('[data-sla]').forEach(el => { el.onclick = e => e.stopPropagation() })
+  alvo.querySelectorAll('[data-pai]').forEach(el => { el.onclick = e => e.stopPropagation() })
+  alvo.querySelectorAll('[data-salvar-detalhe]').forEach(b => {
+    b.onclick = async e => {
+      e.stopPropagation()
+      const id = b.dataset.salvarDetalhe
+      const bloco = alvo.querySelector(`[data-bloco-detalhe="${id}"]`)
+      b.disabled = true
+      const { error } = await db.from('projeto').update({
+        descricao: bloco.querySelector('[data-detail]').value.trim() || null,
+        sla: bloco.querySelector('[data-sla]').value || null,
+        projeto_pai_id: bloco.querySelector('[data-pai]').value || null
+      }).eq('id', id)
+      b.disabled = false
+      if (error) { alert(error.message); return }
+      await projProgresso(alvo, editModulo)
+    }
   })
   alvo.querySelectorAll('[data-membro]').forEach(el => {
     el.onclick = e => e.stopPropagation()
