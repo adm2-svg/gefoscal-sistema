@@ -999,6 +999,7 @@ function faltaMigracao (erro) {
 // ---------------------------------------------------------------
 async function painelAtencao (area) {
   if (!PERFIL.pessoaId) return
+  if (!PERFIL.papeis.includes('ADMIN')) return
   const hoje = hojeISO()
   const itens = [] // {modulo, chave, titulo, data, urgente, detalhe}
   const tarefas = []
@@ -2061,17 +2062,25 @@ async function subUsuarios (alvo, editavel) {
   ;[...(pessoas || [])].sort((a, b) => new Date(a.criado_em) - new Date(b.criado_em))
     .forEach((p, i) => { numeroPessoa[p.id] = i + 1 })
 
-  $('#u-lista').innerHTML = (pessoas || []).map(p => {
+  $('#u-lista').innerHTML = `
+    ${editavel ? `<div class="acoes" id="u-acoes-massa" style="margin-bottom:10px;">
+      <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:400;">
+        <input type="checkbox" id="u-marcar-todos"> selecionar todos</label>
+      <button class="btn-secundario mini oculto" id="u-excluir-selecionados" style="color:var(--warn-text);margin-left:auto;">Excluir selecionados</button>
+    </div>` : ''}
+    ${(pessoas || []).map(p => {
     const pc = preDe(p.email)
     const n = (perms || []).filter(x => x.pessoa_id === p.id).length
     const estado = !pc ? 'sem cadastro de acesso'
       : pc.usado_em ? 'último acesso em ' + fmtQuando(pc.usado_em)
       : 'cadastrado, aguardando primeiro acesso'
-    return `<div class="cartao-pessoa">
+    const inativa = p.status === 'INATIVO'
+    return `<div class="cartao-pessoa" style="${inativa ? 'opacity:.55;' : ''}">
+      ${editavel ? `<label style="display:flex;align-items:center;"><input type="checkbox" class="u-check-pessoa" data-id="${p.id}" data-nome="${esc(p.nome)}"></label>` : ''}
       <div class="numero-pessoa">${String(numeroPessoa[p.id]).padStart(3, '0')}</div>
       <div class="inicial">${esc(iniciais(p.nome))}</div>
       <div class="dados">
-        <div class="nome">${esc(p.nome)}</div>
+        <div class="nome">${esc(p.nome)}${inativa ? ' <span class="selo" style="background:var(--warn-text);">inativa</span>' : ''}</div>
         <div class="sub">${esc(p.email || 'sem e-mail')} · ${esc(estado)}${n ? ` · ${n} aba${n > 1 ? 's' : ''}` : ''}</div>
       </div>
       <div class="selos">
@@ -2080,10 +2089,10 @@ async function subUsuarios (alvo, editavel) {
       <div class="botoes">
         <button class="btn-secundario mini" data-abrir="${p.id}">abrir</button>
         ${editavel && pc ? `<button class="btn-secundario mini" data-senha="${esc(p.email)}">senha</button>` : ''}
-        ${editavel ? `<button class="btn-secundario mini" data-excluir-pessoa="${p.id}" style="color:var(--warn-text);">excluir</button>` : ''}
+        ${editavel && !inativa ? `<button class="btn-secundario mini" data-excluir-pessoa="${p.id}" style="color:var(--warn-text);">excluir</button>` : ''}
       </div>
     </div>`
-  }).join('') || `<p class="vazio">Nenhuma pessoa cadastrada ainda.</p>`
+  }).join('') || `<p class="vazio">Nenhuma pessoa cadastrada ainda.</p>`}`
 
   // abrir uma pessoa no formulário
   $('#u-lista').querySelectorAll('[data-abrir]').forEach(b => {
@@ -2130,17 +2139,59 @@ async function subUsuarios (alvo, editavel) {
 
   // excluir em definitivo: apaga o login (Auth) e o cadastro, via Edge Function
   // com privilégio de admin — não dá pra fazer isso direto do navegador.
+  // Quando a pessoa tem histórico vinculado (pedido, lançamento, projeto...),
+  // a Edge Function não apaga — só desativa (status='INATIVO') pra não
+  // quebrar o histórico. Isso agora fica visível na lista (selo "inativa"
+  // + linha meio apagada), pra não parecer que nada aconteceu.
+  const executarExclusao = async ids => {
+    let excluidas = 0, desativadas = 0, falhas = []
+    for (const id of ids) {
+      const p = pessoas.find(x => x.id === id)
+      const { data: r, error } = await db.functions.invoke('excluir-usuario', { body: { pessoaId: id } })
+      if (error || r?.erro) { falhas.push(`${p?.nome ?? id}: ${r?.erro || error.message}`); continue }
+      if (r.acao === 'excluida') excluidas++
+      else desativadas++
+    }
+    const partes = []
+    if (excluidas) partes.push(`${excluidas} excluída${excluidas > 1 ? 's' : ''} em definitivo`)
+    if (desativadas) partes.push(`${desativadas} desativada${desativadas > 1 ? 's' : ''} (tinha${desativadas > 1 ? 'm' : ''} histórico vinculado — pedido, lançamento, projeto etc. — mantidas só como registro)`)
+    if (falhas.length) partes.push(`${falhas.length} com erro: ${falhas.join('; ')}`)
+    recado(partes.join(' · '), !!falhas.length)
+    $('#u-recado')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    setTimeout(() => abrirSub('usuarios', true), desativadas || falhas.length ? 2600 : 1200)
+  }
+
   $('#u-lista').querySelectorAll('[data-excluir-pessoa]').forEach(b => {
     b.onclick = async () => {
       const p = pessoas.find(x => x.id === b.dataset.excluirPessoa)
-      if (!confirm(`Excluir ${p.nome} em definitivo? Isso apaga o login dela também — não dá pra desfazer.`)) return
+      if (!confirm(`Excluir ${p.nome}? Se ela tiver histórico no sistema (pedidos, lançamentos, projetos...), fica só desativada em vez de apagada — não dá pra desfazer o que for excluído de verdade.`)) return
       b.disabled = true; const antes = b.textContent; b.textContent = 'excluindo...'
-      const { data: r, error } = await db.functions.invoke('excluir-usuario', { body: { pessoaId: p.id } })
-      if (error || r?.erro) { recado('Não deu certo: ' + (r?.erro || error.message), true); b.disabled = false; b.textContent = antes; return }
-      recado(r.acao === 'excluida' ? `${p.nome} excluída.` : `${p.nome} tinha registros vinculados (lançamentos, projetos...) — mantida como histórico, só desativada.`)
-      setTimeout(() => abrirSub('usuarios', true), 1200)
+      await executarExclusao([p.id])
+      b.disabled = false; b.textContent = antes
     }
   })
+
+  const marcarTodos = $('#u-marcar-todos')
+  const botaoMassa = $('#u-excluir-selecionados')
+  const atualizarBotaoMassa = () => {
+    const marcados = [...$('#u-lista').querySelectorAll('.u-check-pessoa:checked')]
+    botaoMassa.classList.toggle('oculto', marcados.length === 0)
+    botaoMassa.textContent = `Excluir selecionados (${marcados.length})`
+  }
+  if (marcarTodos) {
+    marcarTodos.onchange = () => {
+      $('#u-lista').querySelectorAll('.u-check-pessoa').forEach(c => { c.checked = marcarTodos.checked })
+      atualizarBotaoMassa()
+    }
+    $('#u-lista').querySelectorAll('.u-check-pessoa').forEach(c => { c.onchange = atualizarBotaoMassa })
+    botaoMassa.onclick = async () => {
+      const marcados = [...$('#u-lista').querySelectorAll('.u-check-pessoa:checked')]
+      const nomes = marcados.map(c => c.dataset.nome).join(', ')
+      if (!confirm(`Excluir ${marcados.length} pessoa(s): ${nomes}?\nQuem tiver histórico no sistema fica só desativada em vez de apagada — não dá pra desfazer o que for excluído de verdade.`)) return
+      botaoMassa.disabled = true; botaoMassa.textContent = 'excluindo...'
+      await executarExclusao(marcados.map(c => c.dataset.id))
+    }
+  }
 
   // + cargo / + setor, sem prompt do navegador
   const criador = (btnAbrir, linha, campo, tabela, select) => {
