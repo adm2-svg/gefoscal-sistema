@@ -1039,8 +1039,10 @@ function solicNova (alvo) {
     <div class="panel" style="padding:20px;max-width:760px;">
       <h3 style="font-family:var(--serif);font-size:18px;margin:0 0 14px;">Nova solicitação</h3>
       <div class="form-grade">
-        <div class="campo" style="grid-column:1/-1;"><label>Setor de destino *</label>
+        <div class="campo"><label>Setor de destino *</label>
           <select id="sn-setor">${SOLIC_CACHE.setores.map(s => `<option value="${s.id}">${esc(s.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Responsável (opcional)</label>
+          <select id="sn-responsavel"><option value="">— quem pegar responde —</option></select></div>
         <div class="campo"><label>Urgência</label>
           <select id="sn-urgencia">${URGENCIAS_SOLICITACAO.map(u => `<option value="${u}" ${u === 'MEDIA' ? 'selected' : ''}>${ROTULO_URGENCIA_SOLICITACAO[u]}</option>`).join('')}</select></div>
         <div class="campo"><label>Prazo desejado</label><input type="date" id="sn-prazo"></div>
@@ -1056,6 +1058,17 @@ function solicNova (alvo) {
       <div class="recado oculto" id="sn-recado"></div>
     </div>`
 
+  // a lista de responsável acompanha o setor escolhido — só faz sentido
+  // apontar alguém que já é daquele setor
+  const atualizarResponsaveis = () => {
+    const setorId = $('#sn-setor').value
+    const doSetor = SOLIC_CACHE.pessoas.filter(p => p.setor_id === setorId)
+    $('#sn-responsavel').innerHTML = `<option value="">— quem pegar responde —</option>` +
+      doSetor.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')
+  }
+  $('#sn-setor').onchange = atualizarResponsaveis
+  atualizarResponsaveis()
+
   const aviso = (t, alerta = true) => {
     const el = $('#sn-recado'); el.textContent = t; el.classList.remove('oculto')
     el.style.borderColor = alerta ? 'var(--warn-text)' : 'var(--line2)'
@@ -1069,6 +1082,8 @@ function solicNova (alvo) {
     const { data: nova, error } = await db.from('solicitacao_interna').insert({
       solicitante_id: PERFIL.pessoaId,
       setor_destino_id: $('#sn-setor').value,
+      responsavel_id: $('#sn-responsavel').value || null,
+      status: $('#sn-responsavel').value ? 'EM_ANDAMENTO' : 'ABERTA',
       titulo, descricao: $('#sn-descricao').value.trim() || null,
       urgencia: $('#sn-urgencia').value,
       data_limite: $('#sn-prazo').value || null
@@ -1089,6 +1104,7 @@ function solicNova (alvo) {
     btn.disabled = false; btn.textContent = 'Enviar solicitação'
     aviso('Solicitação enviada.', false)
     $('#sn-titulo').value = ''; $('#sn-descricao').value = ''; $('#sn-prazo').value = ''; $('#sn-arquivos').value = ''
+    $('#sn-responsavel').value = ''
   }
 }
 
