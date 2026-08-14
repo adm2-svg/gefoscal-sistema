@@ -813,7 +813,7 @@ function moduloPorChave (chave) { return PERFIL.modulos.find(m => m.chave === ch
 // frente de trabalho quando chegamos nela) OU o checkbox normal de módulo em
 // Administração (tem_modulo). O RLS no banco já aceita os dois; aqui só
 // espelhamos a mesma regra pra não esconder uma aba que o ADMIN liberou.
-const MODULOS_POR_PAPEL = { cobranca: ['ADMIN', 'DIRETORIA', 'COMERCIAL', 'COBRANCA'] }
+const MODULOS_POR_PAPEL = { cobranca: ['ADMIN', 'DIRETORIA', 'COMERCIAL', 'COBRANCA'], crm: ['ADMIN', 'DIRETORIA', 'COMERCIAL'] }
 
 function podeVer (chave) {
   if (ehTotal()) return true
@@ -838,6 +838,7 @@ const PAGINAS = {
   expedicao:   { nome: 'Expedição', render: paginaExpedicao },
   compras:     { nome: 'Compras e Recebimento', render: paginaCompras },
   cobranca:    { nome: 'Crédito e Cobrança', render: paginaCobranca },
+  crm:         { nome: 'CRM Comercial', render: paginaCrm },
   financeiro:  { nome: 'Financeiro', render: paginaFinanceiro },
   projetos:    { nome: 'Projetos', render: paginaProjetos },
   ferramentas: { nome: 'Ferramentas', render: paginaFerramentas },
@@ -860,6 +861,7 @@ const ICONES_MODULO = {
   expedicao: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="14" height="10"/><path d="M15 8h4l4 4v2h-8z"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/></svg>',
   compras: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="20" r="1.4"/><circle cx="18" cy="20" r="1.4"/><path d="M2 2h3l2.6 13a2 2 0 0 0 2 1.6h9a2 2 0 0 0 2-1.8L22 7H6"/></svg>',
   cobranca: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="13" rx="2"/><path d="M2 10h20"/><circle cx="17" cy="14.5" r="1.2" fill="currentColor" stroke="none"/></svg>',
+  crm: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
   financeiro: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V10M11 21V6M17 21v-8"/></svg>',
   projetos: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M15 3v12"/></svg>',
   ferramentas: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.9-3.9a5 5 0 0 1-6.6 6.6L4.3 22.7a2 2 0 0 1-2.8-2.8L12.2 9.2a5 5 0 0 1 6.6-6.6z"/></svg>',
@@ -4193,6 +4195,333 @@ async function paginaExpedicao () {
       .eq('entidade', 'CARREGAMENTO').eq('registro_id', c.id)
     if (!anexos?.length) { alert('Sem anexos nesta linha.'); return }
     anexos.forEach(a => window.open('https://drive.google.com/open?id=' + a.drive_file_id, '_blank'))
+  }
+}
+
+// ---------------------------------------------------------------
+// Página: CRM Comercial  (módulo 'crm')
+// Funil de vendas: cada lead nasce de um contato comercial e passa
+// por etapas até virar cliente (ou ser perdido). Fica sobre as
+// tabelas `lead` e `lead_historico` (todo troca de etapa é
+// registrada) e se liga em `cliente` quando o negócio é fechado —
+// o cadastro completo do cliente continua em Crédito e Cobrança,
+// aqui só criamos o registro básico ao converter.
+//
+// Escrita (criar/editar lead, mudar etapa, converter em cliente)
+// exige papel ADMIN/DIRETORIA/COMERCIAL — é a mesma regra que a RLS
+// já aplica nas tabelas lead/lead_historico/cliente no banco,
+// espelhada aqui só pra não mostrar um botão que vai falhar.
+// ---------------------------------------------------------------
+const ETAPAS_LEAD = ['NOVO', 'CONTATO', 'QUALIFICADO', 'PROPOSTA', 'NEGOCIACAO', 'GANHO', 'PERDIDO']
+const ROTULO_ETAPA_LEAD = {
+  NOVO: 'Novo', CONTATO: 'Em contato', QUALIFICADO: 'Qualificado',
+  PROPOSTA: 'Proposta enviada', NEGOCIACAO: 'Em negociação', GANHO: 'Ganho', PERDIDO: 'Perdido'
+}
+const ETAPAS_LEAD_ABERTAS = ETAPAS_LEAD.filter(e => !['GANHO', 'PERDIDO'].includes(e))
+
+function corEtapaLead (e) {
+  if (e === 'GANHO') return 'badge-bom'
+  if (e === 'PERDIDO') return 'texto-dim2'
+  if (e === 'NEGOCIACAO' || e === 'PROPOSTA') return 'chip'
+  return 'texto-dim'
+}
+
+let CRM_CACHE = { pessoas: [], leads: [] }
+
+async function paginaCrm () {
+  if (!podeVer('crm')) { areaLivre().innerHTML =
+    `<div class="panel" style="padding:22px;"><p class="texto-dim">Você não tem acesso ao CRM Comercial.</p></div>`; return }
+
+  const editavel = podeEditar('crm')
+  $('#subtitulo-pagina').textContent = editavel ? 'Funil de vendas, leads e conversão em cliente' : 'Somente leitura — você pode consultar, mas não alterar'
+  const area = areaLivre()
+  area.innerHTML = `<p class="texto-dim2">carregando...</p>`
+
+  const { data: pessoas } = await db.from('pessoa').select('id,nome').eq('status', 'ATIVO').order('nome')
+  CRM_CACHE.pessoas = pessoas || []
+
+  const abas = [['funil', 'Funil'], ['leads', 'Leads'], ['painel', 'Painel']]
+  area.innerHTML = `
+    <div class="subabas">
+      ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
+    </div>
+    <div id="sub-crm"></div>`
+
+  area.querySelectorAll('.subabas button').forEach(b => {
+    b.onclick = () => {
+      area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
+      abrirCrm(b.dataset.sub, editavel)
+    }
+  })
+  abrirCrm('funil', editavel)
+}
+
+function abrirCrm (sub, editavel) {
+  const alvo = $('#sub-crm')
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  $('#kpis').innerHTML = ''
+  if (sub === 'funil') crmFunil(alvo, editavel)
+  if (sub === 'leads') crmLeads(alvo, editavel)
+  if (sub === 'painel') crmPainel(alvo)
+}
+
+const selLead = `
+  id, nome, cliente_id, vendedor_id, origem, uf, municipio, telefone, email,
+  etapa, valor_estimado, observacoes, criado_em, atualizado_em,
+  vendedor:vendedor_id ( nome ), cliente:cliente_id ( razao_social, nome_fantasia )`
+
+// ----- Funil (kanban por etapa) -----
+async function crmFunil (alvo, editavel) {
+  const { data, error } = await db.from('lead').select(selLead).order('atualizado_em', { ascending: false }).limit(500)
+  if (faltaMigracao(error)) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  CRM_CACHE.leads = data || []
+  renderFunil(alvo, editavel)
+}
+
+function renderFunil (alvo, editavel) {
+  const lista = CRM_CACHE.leads
+  const cartao = l => `<div class="card-tarefa" data-lead="${l.id}">
+      <div>${esc(l.nome)}</div>
+      ${l.municipio || l.uf ? `<div class="proj">${esc([l.municipio, l.uf].filter(Boolean).join(' / '))}</div>` : ''}
+      <div class="rodape-t">
+        <span class="texto-dim2" style="font-size:11px;">${esc(l.vendedor?.nome ?? 'sem vendedor')}</span>
+        <span class="texto-dim2" style="font-size:11px;">${l.valor_estimado ? 'R$ ' + fmtNum(l.valor_estimado) : ''}</span>
+      </div></div>`
+
+  alvo.innerHTML =
+    (editavel ? `<div class="acoes" style="margin:0 0 16px;"><button class="btn" id="crm-novo">Novo lead</button></div>` : '') +
+    `<div class="kanban" style="grid-template-columns:repeat(${ETAPAS_LEAD.length},1fr);overflow-x:auto;">
+      ${ETAPAS_LEAD.map(et => `<div class="coluna-kanban" style="min-width:170px;"><h4>${ROTULO_ETAPA_LEAD[et]}
+        <span class="texto-dim2">${lista.filter(l => l.etapa === et).length}</span></h4>
+        ${lista.filter(l => l.etapa === et).map(cartao).join('') || '<p class="vazio" style="padding:10px;">vazio</p>'}</div>`).join('')}
+    </div>`
+
+  alvo.querySelectorAll('[data-lead]').forEach(el => {
+    el.onclick = () => formLead(lista.find(l => l.id === el.dataset.lead), editavel, () => abrirCrm('funil', editavel))
+  })
+  if (editavel) $('#crm-novo').onclick = () => formLead(null, editavel, () => abrirCrm('funil', editavel))
+}
+
+// ----- Leads (lista/busca) -----
+async function crmLeads (alvo, editavel) {
+  const hoje = new Date().toISOString().slice(0, 10)
+  const de = new Date(Date.now() - 180 * 864e5).toISOString().slice(0, 10)
+
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>De</label><input type="date" id="cl-de" value="${de}"></div>
+      <div class="campo"><label>Até</label><input type="date" id="cl-ate" value="${hoje}"></div>
+      <div class="campo"><label>Etapa</label>
+        <select id="cl-etapa"><option value="">Todas</option>${ETAPAS_LEAD.map(e => `<option value="${e}">${ROTULO_ETAPA_LEAD[e]}</option>`).join('')}</select></div>
+      <button class="btn" id="cl-buscar">Buscar</button>
+      ${editavel ? `<button class="btn-secundario" id="cl-novo">Novo lead</button>` : ''}
+    </div>
+    <div id="cl-conteudo"></div>`
+
+  const buscar = async () => {
+    let q = db.from('lead').select(selLead)
+      .gte('criado_em', $('#cl-de').value).lte('criado_em', $('#cl-ate').value + 'T23:59:59')
+      .order('criado_em', { ascending: false }).limit(500)
+    if ($('#cl-etapa').value) q = q.eq('etapa', $('#cl-etapa').value)
+    const { data, error } = await q
+    if (error) { $('#cl-conteudo').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+    const lista = data || []
+    CRM_CACHE.leads = lista
+
+    const emAberto = lista.filter(l => ETAPAS_LEAD_ABERTAS.includes(l.etapa))
+    const valorPipeline = emAberto.reduce((s, l) => s + Number(l.valor_estimado || 0), 0)
+
+    $('#kpis').innerHTML = kpi('Leads no filtro', lista.length) +
+      kpi('Em aberto', emAberto.length) +
+      kpi('Valor em funil', 'R$ ' + fmtNum(valorPipeline)) +
+      kpi('Ganhos', lista.filter(l => l.etapa === 'GANHO').length)
+
+    $('#cl-conteudo').innerHTML = `
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr>
+          <th>Lead</th><th>Local</th><th>Origem</th><th>Etapa</th>
+          <th class="num">Valor estimado</th><th>Vendedor</th><th>Cliente vinculado</th>
+        </tr></thead><tbody>
+          ${lista.map(l => `<tr style="cursor:pointer;" data-abrir="${l.id}">
+            <td><b>${esc(l.nome)}</b></td>
+            <td class="texto-dim2">${esc([l.municipio, l.uf].filter(Boolean).join(' / ') || '—')}</td>
+            <td class="texto-dim2">${esc(l.origem ?? '—')}</td>
+            <td><span class="${corEtapaLead(l.etapa)}">${esc(ROTULO_ETAPA_LEAD[l.etapa] ?? l.etapa)}</span></td>
+            <td class="num">${l.valor_estimado ? 'R$ ' + fmtNum(l.valor_estimado) : '—'}</td>
+            <td class="texto-dim">${esc(l.vendedor?.nome ?? '—')}</td>
+            <td class="texto-dim">${esc(l.cliente?.nome_fantasia || l.cliente?.razao_social || '—')}</td>
+          </tr>`).join('') || `<tr><td colspan="7" class="vazio">Nenhum lead no filtro.</td></tr>`}
+        </tbody></table>
+      </div></div>`
+
+    $('#cl-conteudo').querySelectorAll('[data-abrir]').forEach(tr => {
+      tr.onclick = () => formLead(lista.find(l => l.id === tr.dataset.abrir), editavel, buscar)
+    })
+  }
+
+  $('#cl-buscar').onclick = buscar
+  $('#cl-etapa').onchange = buscar
+  if (editavel) $('#cl-novo').onclick = () => formLead(null, editavel, buscar)
+  buscar()
+}
+
+// ----- Painel (KPIs e distribuição) -----
+async function crmPainel (alvo) {
+  const { data, error } = await db.from('lead').select(`
+    id, etapa, origem, valor_estimado, vendedor_id, criado_em, vendedor:vendedor_id ( nome )
+  `).order('criado_em', { ascending: false }).limit(1000)
+  if (faltaMigracao(error)) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  const lista = data || []
+
+  const emAberto = lista.filter(l => ETAPAS_LEAD_ABERTAS.includes(l.etapa))
+  const ganhos = lista.filter(l => l.etapa === 'GANHO')
+  const perdidos = lista.filter(l => l.etapa === 'PERDIDO')
+  const fechados = ganhos.length + perdidos.length
+  const taxaConversao = fechados ? Math.round((ganhos.length / fechados) * 100) : null
+  const valorPipeline = emAberto.reduce((s, l) => s + Number(l.valor_estimado || 0), 0)
+
+  const porOrigem = {}
+  lista.forEach(l => { const o = l.origem || 'não informado'; porOrigem[o] = (porOrigem[o] || 0) + 1 })
+  const barrasOrigem = Object.entries(porOrigem).sort((a, b) => b[1] - a[1]).map(([rotulo, valor]) => ({ rotulo, valor }))
+
+  const porVendedor = {}
+  emAberto.forEach(l => { const n = l.vendedor?.nome ?? 'sem vendedor'; porVendedor[n] = (porVendedor[n] || 0) + 1 })
+  const barrasVendedor = Object.entries(porVendedor).sort((a, b) => b[1] - a[1]).map(([rotulo, valor]) => ({ rotulo, valor }))
+
+  const donutEtapa = ETAPAS_LEAD.map(e => ({ rotulo: ROTULO_ETAPA_LEAD[e], valor: lista.filter(l => l.etapa === e).length }))
+
+  alvo.innerHTML = `
+    <div class="resumo-topo" style="margin-bottom:16px;">
+      ${[['Leads no funil', emAberto.length, ''], ['Valor em funil', 'R$ ' + fmtNum(valorPipeline), ''],
+         ['Taxa de conversão', taxaConversao != null ? taxaConversao + '%' : '—', ''], ['Total histórico', lista.length, '']]
+        .map(([rot, val]) => `<div class="bloco"><div class="rot">${rot}</div><div class="val">${val}</div></div>`).join('')}
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;" class="grade-painel-comb">
+      <div class="panel" style="padding:18px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Leads em aberto por vendedor</h3>
+        ${barrasHorizontais(barrasVendedor, { unidade: '', casas: 0 })}
+      </div>
+      <div class="panel" style="padding:18px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Por etapa (histórico)</h3>
+        ${svgDonut(donutEtapa)}
+      </div>
+    </div>
+    <div class="panel" style="padding:18px;margin-top:16px;">
+      <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Leads por origem</h3>
+      ${barrasHorizontais(barrasOrigem, { unidade: '', casas: 0 })}
+    </div>`
+}
+
+// ----- Formulário de lead (criar/editar/mudar etapa/converter) -----
+function formLead (l, editavel, aoFechar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <div class="cabeca-secao">
+      <h3>${l ? esc(l.nome) : 'Novo lead'}</h3>
+      ${l ? `<span class="${corEtapaLead(l.etapa)}">${esc(ROTULO_ETAPA_LEAD[l.etapa] ?? l.etapa)}</span>` : ''}
+    </div>
+    <div class="form-grade">
+      <div class="campo"><label>Nome / razão social *</label>
+        <input id="ld-nome" value="${esc(l?.nome ?? '')}" ${editavel ? '' : 'disabled'}></div>
+      <div class="campo"><label>Vendedor</label>
+        <select id="ld-vendedor" ${editavel ? '' : 'disabled'}><option value="">—</option>
+          ${CRM_CACHE.pessoas.map(p => `<option value="${p.id}" ${p.id === l?.vendedor_id ? 'selected' : ''}>${esc(p.nome)}</option>`).join('')}</select></div>
+      <div class="campo"><label>Origem</label>
+        <input id="ld-origem" placeholder="indicação, site, feira..." value="${esc(l?.origem ?? '')}" ${editavel ? '' : 'disabled'}></div>
+      <div class="campo"><label>Etapa</label>
+        <select id="ld-etapa" ${editavel ? '' : 'disabled'}>${ETAPAS_LEAD.map(e => `<option value="${e}" ${e === (l?.etapa ?? 'NOVO') ? 'selected' : ''}>${ROTULO_ETAPA_LEAD[e]}</option>`).join('')}</select></div>
+      <div class="campo"><label>Município</label>
+        <input id="ld-municipio" value="${esc(l?.municipio ?? '')}" ${editavel ? '' : 'disabled'}></div>
+      <div class="campo"><label>UF</label>
+        <input id="ld-uf" maxlength="2" style="text-transform:uppercase;" value="${esc(l?.uf ?? '')}" ${editavel ? '' : 'disabled'}></div>
+      <div class="campo"><label>Telefone</label>
+        <input id="ld-telefone" value="${esc(l?.telefone ?? '')}" ${editavel ? '' : 'disabled'}></div>
+      <div class="campo"><label>E-mail</label>
+        <input id="ld-email" value="${esc(l?.email ?? '')}" ${editavel ? '' : 'disabled'}></div>
+      <div class="campo"><label>Valor estimado (R$)</label>
+        <input id="ld-valor" type="number" step="0.01" value="${l?.valor_estimado ?? ''}" ${editavel ? '' : 'disabled'}></div>
+    </div>
+    <div class="campo" style="margin-top:10px;"><label>Observações</label>
+      <textarea id="ld-obs" style="min-height:80px;" ${editavel ? '' : 'disabled'}>${esc(l?.observacoes ?? '')}</textarea></div>
+    ${l?.cliente_id ? `<p class="texto-dim2" style="font-size:12px;margin-top:8px;">Já convertido em cliente: <b>${esc(l.cliente?.nome_fantasia || l.cliente?.razao_social || '—')}</b></p>`
+      : (editavel && l ? `<div class="acoes" style="margin-top:10px;"><button class="btn-secundario" id="ld-converter" type="button">Converter em cliente</button></div>` : '')}
+    <div class="acoes" style="margin-top:14px;">
+      ${editavel ? `<button class="btn" id="ld-salvar">Salvar</button>` : ''}
+      <button class="btn-secundario" id="ld-fechar">Fechar</button>
+      ${editavel && l ? `<button class="btn-secundario" id="ld-excluir" style="margin-left:auto;">Excluir</button>` : ''}
+    </div>
+    <div class="recado oculto" id="ld-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#ld-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const aviso = (t, ok = false) => {
+    const el = fundo.querySelector('#ld-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = ok ? 'var(--good-text)' : 'var(--warn-text)'
+    el.style.color = ok ? 'var(--good-text)' : 'var(--warn-text)'
+  }
+
+  if (editavel) fundo.querySelector('#ld-salvar').onclick = async () => {
+    const nome = fundo.querySelector('#ld-nome').value.trim()
+    if (!nome) { aviso('Escreva o nome do lead.'); return }
+    const novaEtapa = fundo.querySelector('#ld-etapa').value
+    const corpo = {
+      nome,
+      vendedor_id: fundo.querySelector('#ld-vendedor').value || null,
+      origem: fundo.querySelector('#ld-origem').value.trim() || null,
+      etapa: novaEtapa,
+      municipio: fundo.querySelector('#ld-municipio').value.trim() || null,
+      uf: fundo.querySelector('#ld-uf').value.trim().toUpperCase() || null,
+      telefone: fundo.querySelector('#ld-telefone').value.trim() || null,
+      email: fundo.querySelector('#ld-email').value.trim() || null,
+      valor_estimado: fundo.querySelector('#ld-valor').value || null,
+      observacoes: fundo.querySelector('#ld-obs').value.trim() || null,
+      atualizado_em: new Date().toISOString()
+    }
+    let leadId = l?.id
+    let error
+    if (l) {
+      ;({ error } = await db.from('lead').update(corpo).eq('id', l.id))
+    } else {
+      const { data: novo, error: e2 } = await db.from('lead').insert(corpo).select('id').single()
+      error = e2; leadId = novo?.id
+    }
+    if (error) { aviso(error.message); return }
+    // registra a troca de etapa no histórico, pra medir tempo de funil
+    if (leadId && (!l || l.etapa !== novaEtapa)) {
+      await db.from('lead_historico').insert({
+        lead_id: leadId, etapa_de: l?.etapa ?? null, etapa_para: novaEtapa, pessoa_id: PERFIL.pessoaId
+      })
+    }
+    fechar(); aoFechar()
+  }
+
+  if (editavel && l) {
+    const btnConverter = fundo.querySelector('#ld-converter')
+    if (btnConverter) btnConverter.onclick = async () => {
+      if (!confirm(`Criar um cliente a partir de "${l.nome}"?`)) return
+      const { data: cliente, error: e1 } = await db.from('cliente').insert({
+        razao_social: l.nome, telefone: l.telefone, email: l.email,
+        municipio: l.municipio, uf: l.uf, vendedor_id: l.vendedor_id
+      }).select('id').single()
+      if (e1) { aviso(e1.message); return }
+      const { error: e2 } = await db.from('lead').update({ cliente_id: cliente.id, etapa: 'GANHO' }).eq('id', l.id)
+      if (e2) { aviso(e2.message); return }
+      aviso('Cliente criado e lead marcado como ganho. Complete o cadastro em Crédito e Cobrança → Clientes.', true)
+      setTimeout(() => { fechar(); aoFechar() }, 1800)
+    }
+
+    const btnExcluir = fundo.querySelector('#ld-excluir')
+    if (btnExcluir) btnExcluir.onclick = async () => {
+      if (!confirm('Excluir este lead?')) return
+      const { error } = await db.from('lead').delete().eq('id', l.id)
+      if (error) { aviso(error.message); return }
+      fechar(); aoFechar()
+    }
   }
 }
 
