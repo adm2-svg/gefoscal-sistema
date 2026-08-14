@@ -1083,28 +1083,61 @@ async function painelAtencao (area) {
 
   const porModulo = {}
   itens.forEach(i => { porModulo[i.modulo] = (porModulo[i.modulo] || 0) + 1 })
+  const iconePor = chave => ICONES_MODULO[chave] || ICONES_MODULO._padrao
+  const urgentes = itens.filter(i => i.urgente).length
 
   const bloco = document.createElement('div')
   bloco.className = 'panel'
-  bloco.style.cssText = 'padding:18px;margin-bottom:16px;'
+  bloco.style.cssText = 'padding:22px;margin-bottom:16px;'
   bloco.innerHTML = `
-    <div class="cabeca-secao">
-      <h3 style="font-family:var(--serif);font-size:17px;">Central de atenção</h3>
-      <span class="texto-dim2" style="font-size:12px;">
-        ${itens.length ? `${itens.length} pendência${itens.length !== 1 ? 's' : ''}` : 'tudo em dia'}${comprasAndando ? ` · ${comprasAndando} compra${comprasAndando > 1 ? 's' : ''} sua${comprasAndando > 1 ? 's' : ''} em andamento` : ''}</span>
+    <div class="cabeca-secao" style="align-items:flex-start;">
+      <div style="display:flex;gap:12px;align-items:center;">
+        <div style="width:38px;height:38px;border-radius:10px;background:var(--surface2);border:1px solid var(--line2);
+                     display:flex;align-items:center;justify-content:center;color:${itens.length ? 'var(--rust)' : 'var(--good-text)'};flex:none;">
+          <span style="width:20px;height:20px;display:block;">
+            ${itens.length
+              ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'
+              : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>'}
+          </span>
+        </div>
+        <div>
+          <h3 style="font-family:var(--serif);font-size:18px;margin:0;">Central de atenção</h3>
+          <p class="texto-dim2" style="font-size:11.5px;margin:2px 0 0;">Sua agenda de pendências — mais urgente primeiro</p>
+        </div>
+      </div>
+      <span class="${urgentes ? 'badge-alerta' : 'badge-bom'}" style="font-size:11px;white-space:nowrap;">
+        ${itens.length ? `${itens.length} pendência${itens.length !== 1 ? 's' : ''}` : 'tudo em dia'}</span>
     </div>
-    <p class="texto-dim2" style="font-size:11.5px;margin:-4px 0 12px;">Sua agenda de pendências — o que precisa de atenção agora, mais urgente primeiro.</p>
-    ${Object.keys(porModulo).length ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px;">
-      ${Object.entries(porModulo).map(([m, n]) => `<span class="chip">${esc(m)}: ${n}</span>`).join('')}
+
+    ${Object.keys(porModulo).length ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 4px;">
+      ${Object.entries(porModulo).map(([m, n]) => {
+        const chave = itens.find(i => i.modulo === m)?.chave
+        return `<span class="chip" style="display:inline-flex;align-items:center;gap:6px;padding:5px 12px;">
+          <span style="width:14px;height:14px;display:inline-flex;">${iconePor(chave)}</span>${esc(m)} · ${n}</span>`
+      }).join('')}
     </div>` : ''}
-    ${itens.length ? `<div style="display:flex;flex-direction:column;gap:8px;max-height:340px;overflow:auto;">
-      ${itens.slice(0, 30).map(i => `<div class="passo" data-ir-atencao="${i.chave}" style="cursor:pointer;">
-        <span class="quando"><span class="${i.urgente ? 'badge-alerta' : 'chip'}" style="font-size:10px;">${esc(i.detalhe)}</span></span>
-        <span><b>${esc(i.modulo)}</b> — ${i.titulo}
-          ${i.data ? `<span class="texto-dim2" style="font-size:10.5px;margin-left:6px;">${fmtData(i.data)}</span>` : ''}</span>
-      </div>`).join('')}
-    </div>` : `<p class="texto-dim2" style="font-size:12.5px;">
-      Nada atrasado ou crítico nos módulos que você acompanha.${comprasAndando ? ' Suas compras em andamento estão logo abaixo.' : ''}</p>`}`
+
+    ${itens.length ? `<div style="display:flex;flex-direction:column;gap:8px;max-height:360px;overflow:auto;margin-top:14px;">
+      ${itens.slice(0, 30).map(i => `
+        <div data-ir-atencao="${i.chave}" style="cursor:pointer;display:flex;align-items:center;gap:12px;
+             padding:11px 14px;border-radius:8px;background:var(--surface2);
+             border-left:3px solid ${i.urgente ? 'var(--warn-text)' : 'var(--gold, #c8a11a)'};transition:background .15s ease;"
+             onmouseover="this.style.background='var(--hover-bg)'" onmouseout="this.style.background='var(--surface2)'">
+          <span style="width:18px;height:18px;flex:none;color:var(--dim);">${iconePor(i.chave)}</span>
+          <span style="flex:1;min-width:0;">
+            <span style="font-size:13px;">${i.titulo}</span>
+            <span class="texto-dim2" style="font-size:11px;display:block;margin-top:1px;">${esc(i.modulo)}${i.data ? ' · ' + fmtData(i.data) : ''}</span>
+          </span>
+          <span class="${i.urgente ? 'badge-alerta' : 'chip'}" style="font-size:10px;white-space:nowrap;flex:none;">${esc(i.detalhe)}</span>
+        </div>`).join('')}
+    </div>` : `<div style="display:flex;align-items:center;gap:10px;margin-top:14px;padding:14px 16px;background:var(--surface2);border-radius:8px;">
+        <span style="width:18px;height:18px;color:var(--good-text);flex:none;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></span>
+        <p class="texto-dim" style="font-size:12.5px;margin:0;">
+          Nada atrasado ou crítico nos módulos que você acompanha.${comprasAndando ? ' Suas compras em andamento estão logo abaixo.' : ''}</p>
+      </div>`}
+    ${itens.length && comprasAndando ? `<p class="texto-dim2" style="font-size:11px;margin:10px 0 0;">
+      + ${comprasAndando} compra${comprasAndando > 1 ? 's' : ''} sua${comprasAndando > 1 ? 's' : ''} em andamento — veja em "Minhas compras" logo abaixo.</p>` : ''}`
   area.appendChild(bloco)
   bloco.querySelectorAll('[data-ir-atencao]').forEach(el => {
     el.onclick = () => irPara(el.dataset.irAtencao)
