@@ -890,7 +890,7 @@ function podeEditar (chave) {
 const PAGINAS = {
   visao_geral: { nome: 'Visão geral', render: paginaVisaoGeral, sempre: true },
   solicitacoes: { nome: 'Solicitações', render: paginaSolicitacoes, sempre: true },
-  expedicao:   { nome: 'Expedição', render: paginaExpedicao },
+  expedicao:   { nome: 'Faturamento', render: paginaExpedicao },
   compras:     { nome: 'Compras', render: paginaCompras, sempre: true },
   cobranca:    { nome: 'Crédito e Cobrança', render: paginaCobranca },
   marketing:   { nome: 'Marketing', render: paginaMarketing },
@@ -4468,53 +4468,202 @@ async function comprasFornecedores (alvo, editavel) {
 // ---------------------------------------------------------------
 // Página: Expedição
 // ---------------------------------------------------------------
+// ---------------------------------------------------------------
+// Página: Faturamento  (módulo 'expedicao')
+// Antes era só uma listagem read-only dos carregamentos migrados da
+// planilha antiga. Agora vira o centro de faturamento de verdade:
+// - Painel: visão geral das notas fiscais emitidas, por produto
+// - Lançamentos: a listagem original, com filtro e anexos
+// - Lançar: registra um novo carregamento/NF manualmente
+// - Ordem de Carregamento: puxa um pedido já cadastrado em Crédito e
+//   Cobrança, define veículo/motorista/data e gera o PDF pro motorista
+// ---------------------------------------------------------------
+let EXPED_CACHE = { clientes: [], vendedores: [], produtos: [], veiculos: [], empresas: [] }
+const STATUS_CARREGAMENTO = ['PROGRAMADO', 'EM_ANDAMENTO', 'CARREGADO', 'FATURADO', 'CANCELADO']
+const ROTULO_STATUS_CARREGAMENTO = {
+  PROGRAMADO: 'Programado', EM_ANDAMENTO: 'Em andamento', CARREGADO: 'Carregado', FATURADO: 'Faturado', CANCELADO: 'Cancelado'
+}
+function corStatusCarregamento (s) {
+  if (s === 'FATURADO') return 'badge-bom'
+  if (s === 'CANCELADO') return 'texto-dim2'
+  if (s === 'CARREGADO') return 'chip'
+  return 'texto-dim'
+}
+
 async function paginaExpedicao () {
-  $('#subtitulo-pagina').textContent = 'Carregamentos migrados da planilha'
-  $('#filtros').innerHTML = `
-    <div class="campo"><label>Cliente</label><select id="f-cliente"><option value="">todos</option></select></div>
-    <div class="campo"><label>Vendedor</label><select id="f-vendedor"><option value="">todos</option></select></div>
-    <div class="campo"><label>De</label><input type="date" id="f-de"></div>
-    <div class="campo"><label>Até</label><input type="date" id="f-ate"></div>
-    <button class="btn" id="f-aplicar">Filtrar</button>
-    <button class="btn-secundario" id="f-limpar">Limpar</button>`
+  const editavel = podeEditar('expedicao')
+  $('#subtitulo-pagina').textContent = 'Notas fiscais, lançamentos e ordens de carregamento'
+  const area = areaLivre()
+  area.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
-  const [{ data: clientes }, { data: vendedores }] = await Promise.all([
+  const [{ data: clientes }, { data: vendedores }, { data: produtos }, { data: veiculos }, { data: empresas }] = await Promise.all([
     db.from('cliente').select('id,razao_social').order('razao_social'),
-    db.from('pessoa').select('id,nome').eq('eh_vendedor', true).order('nome')
+    db.from('pessoa').select('id,nome').eq('eh_vendedor', true).order('nome'),
+    db.from('produto').select('id,nome,unidade').order('nome'),
+    db.from('veiculo').select('id,placa,descricao').order('placa'),
+    db.from('empresa').select('id,nome,regime_tributario').eq('status', 'ATIVO').order('nome')
   ])
-  ;(clientes || []).forEach(c => $('#f-cliente').add(new Option(c.razao_social, c.id)))
-  ;(vendedores || []).forEach(v => $('#f-vendedor').add(new Option(v.nome, v.id)))
+  EXPED_CACHE = { clientes: clientes || [], vendedores: vendedores || [], produtos: produtos || [], veiculos: veiculos || [], empresas: empresas || [] }
 
-  $('#f-aplicar').onclick = carregar
-  $('#f-limpar').onclick = () => {
-    $('#f-cliente').value = ''; $('#f-vendedor').value = ''
-    $('#f-de').value = ''; $('#f-ate').value = ''; carregar()
+  const abas = [['painel', 'Painel'], ['lancamentos', 'Lançamentos']]
+  if (editavel) abas.push(['lancar', 'Lançar'], ['ordem', 'Ordem de Carregamento'])
+
+  area.innerHTML = `
+    <div class="subabas">
+      ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
+    </div>
+    <div id="sub-exped"></div>`
+
+  area.querySelectorAll('.subabas button').forEach(b => {
+    b.onclick = () => {
+      area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
+      abrirExped(b.dataset.sub, editavel)
+    }
+  })
+  abrirExped('painel', editavel)
+}
+
+function abrirExped (sub, editavel) {
+  const alvo = $('#sub-exped')
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  if (sub === 'painel') expedPainel(alvo)
+  if (sub === 'lancamentos') expedLancamentos(alvo, editavel)
+  if (sub === 'lancar') expedLancar(alvo)
+  if (sub === 'ordem') expedOrdem(alvo)
+}
+
+// ----- Painel: visão geral das NFs emitidas, por produto -----
+async function expedPainel (alvo) {
+  const hoje = hojeISO()
+  const de = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10)
+
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>De</label><input type="date" id="ep-de" value="${de}"></div>
+      <div class="campo"><label>Até</label><input type="date" id="ep-ate" value="${hoje}"></div>
+      <button class="btn" id="ep-buscar">Filtrar</button>
+    </div>
+    <div id="ep-conteudo"><p class="texto-dim2">carregando...</p></div>`
+
+  // cada empresa (Gefoscal, P-TEC) tem um tom de azul diferente, pra dar
+  // pra distinguir de relance qual quadro é qual — regime tributário
+  // diferente entre elas, então nunca devem se misturar num total só
+  const TONS = ['#0b3d91,#1560bd', '#0d5c4a,#137a63', '#5b3a99,#7c4dbd', '#8a4b0b,#b8641a']
+
+  const quadroEmpresa = (nome, regime, lista, tom) => {
+    const comNF = lista.filter(c => c.numero_nf)
+    const valorTotal = lista.reduce((s, c) => s + Number(c.valor_nf || 0), 0)
+    const toneladas = lista.reduce((s, c) => s + Number(c.quantidade_t || 0), 0)
+    const nClientes = new Set(lista.map(c => c.cliente?.razao_social).filter(Boolean)).size
+
+    const porProduto = {}
+    lista.forEach(c => {
+      const p = c.produto?.nome ?? 'sem produto'
+      porProduto[p] = porProduto[p] || { qtd: 0, valor: 0, un: c.produto?.unidade ?? 't' }
+      porProduto[p].qtd += Number(c.quantidade_t || 0)
+      porProduto[p].valor += Number(c.valor_nf || 0)
+    })
+    const produtosOrdenados = Object.entries(porProduto).sort((a, b) => b[1].valor - a[1].valor)
+    const corBorda = tom.split(',')[1]
+
+    return `
+      <div style="background:linear-gradient(135deg,${tom});border-radius:14px;padding:24px 26px;margin-bottom:14px;
+                  box-shadow:0 8px 24px rgba(0,0,0,.2);">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:14px;margin-bottom:18px;">
+          <div>
+            <div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:rgba(255,255,255,.7);font-weight:600;">
+              Faturamento${regime ? ' · ' + esc(regime) : ''}</div>
+            <h2 style="margin:4px 0 0;color:#fff;font-family:var(--serif);font-size:22px;">${esc(nome)}</h2>
+          </div>
+          <span style="background:rgba(255,255,255,.15);color:#fff;padding:6px 14px;border-radius:20px;font-size:12px;">
+            ${comNF.length} NF${comNF.length !== 1 ? 's' : ''} no período</span>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:16px;">
+          <div><div style="color:rgba(255,255,255,.65);font-size:11px;text-transform:uppercase;letter-spacing:.08em;">Valor faturado</div>
+            <div style="color:#fff;font-family:var(--serif);font-size:26px;margin-top:4px;">R$ ${fmtNum(valorTotal)}</div></div>
+          <div><div style="color:rgba(255,255,255,.65);font-size:11px;text-transform:uppercase;letter-spacing:.08em;">Toneladas</div>
+            <div style="color:#fff;font-family:var(--serif);font-size:26px;margin-top:4px;">${fmtNum(toneladas, 3)}</div></div>
+          <div><div style="color:rgba(255,255,255,.65);font-size:11px;text-transform:uppercase;letter-spacing:.08em;">Clientes atendidos</div>
+            <div style="color:#fff;font-family:var(--serif);font-size:26px;margin-top:4px;">${nClientes}</div></div>
+          <div><div style="color:rgba(255,255,255,.65);font-size:11px;text-transform:uppercase;letter-spacing:.08em;">Carregamentos</div>
+            <div style="color:#fff;font-family:var(--serif);font-size:26px;margin-top:4px;">${lista.length}</div></div>
+        </div>
+      </div>
+      ${produtosOrdenados.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-bottom:22px;">
+        ${produtosOrdenados.map(([p, v]) => `
+          <div class="panel" style="padding:14px 16px;border-left:3px solid ${corBorda};">
+            <div style="font-weight:600;font-size:13px;margin-bottom:5px;">${esc(p)}</div>
+            <div style="font-family:var(--serif);font-size:19px;">${fmtNum(v.qtd, casasPara(v.un))} <span style="font-size:12px;color:var(--dim2);">${esc(v.un)}</span></div>
+            <div class="texto-dim2" style="font-size:11.5px;margin-top:3px;">R$ ${fmtNum(v.valor)}</div>
+          </div>`).join('')}
+      </div>` : '<p class="vazio" style="margin-bottom:22px;">Sem carregamentos no período.</p>'}`
   }
 
-  $('#cabecalho').innerHTML = `<tr>
-    <th>Linha</th><th>Data</th><th>Cliente</th><th>Vendedor</th>
-    <th>Produto</th><th>Placa</th><th class="num">Qtd (t)</th>
-    <th>NF</th><th>UF</th><th>Anexos</th></tr>`
-  await carregar()
+  const buscar = async () => {
+    const { data, error } = await db.from('carregamento').select(`
+      quantidade_t, valor_nf, numero_nf, status, data_carregamento, empresa_id,
+      produto:produto_id ( nome, unidade ), cliente:cliente_id ( razao_social ),
+      empresa:empresa_id ( nome, regime_tributario )
+    `).gte('data_carregamento', $('#ep-de').value).lte('data_carregamento', $('#ep-ate').value).limit(2000)
+    if (error) { $('#ep-conteudo').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+    const lista = data || []
 
-  async function carregar () {
-    $('#corpo').innerHTML = `<tr><td colspan="10" class="vazio">carregando...</td></tr>`
+    // um quadro por empresa cadastrada (Gefoscal, P-TEC...), na ordem do
+    // cadastro — cada uma só com os carregamentos dela, nunca somadas
+    const semEmpresa = lista.filter(c => !c.empresa_id)
+    let html = EXPED_CACHE.empresas.map((emp, i) =>
+      quadroEmpresa(emp.nome, emp.regime_tributario, lista.filter(c => c.empresa_id === emp.id), TONS[i % TONS.length])
+    ).join('')
+
+    if (semEmpresa.length) {
+      html += `<div class="panel" style="padding:14px 18px;margin-bottom:16px;border-left:3px solid var(--warn-text);">
+        <p class="texto-dim" style="margin:0;font-size:13px;">
+          <b>${semEmpresa.length} carregamento(s)</b> sem empresa definida (a maioria vinda da migração da planilha antiga) —
+          ${fmtNum(semEmpresa.reduce((s, c) => s + Number(c.quantidade_t || 0), 0), 3)} t,
+          R$ ${fmtNum(semEmpresa.reduce((s, c) => s + Number(c.valor_nf || 0), 0))}.
+          Edite o lançamento pra atribuir a Gefoscal ou P-TEC.</p>
+      </div>`
+    }
+    $('#ep-conteudo').innerHTML = html || '<p class="vazio">Nenhum carregamento no período.</p>'
+  }
+  $('#ep-buscar').onclick = buscar
+  buscar()
+}
+
+// ----- Lançamentos: a listagem original (filtro + anexos) -----
+async function expedLancamentos (alvo, editavel) {
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>Empresa</label><select id="f-empresa"><option value="">todas</option>
+        ${EXPED_CACHE.empresas.map(e => `<option value="${e.id}">${esc(e.nome)}</option>`).join('')}</select></div>
+      <div class="campo"><label>Cliente</label><select id="f-cliente"><option value="">todos</option>
+        ${EXPED_CACHE.clientes.map(c => `<option value="${c.id}">${esc(c.razao_social)}</option>`).join('')}</select></div>
+      <div class="campo"><label>Vendedor</label><select id="f-vendedor"><option value="">todos</option>
+        ${EXPED_CACHE.vendedores.map(v => `<option value="${v.id}">${esc(v.nome)}</option>`).join('')}</select></div>
+      <div class="campo"><label>De</label><input type="date" id="f-de"></div>
+      <div class="campo"><label>Até</label><input type="date" id="f-ate"></div>
+      <button class="btn" id="f-aplicar">Filtrar</button>
+      <button class="btn-secundario" id="f-limpar">Limpar</button>
+    </div>
+    <div id="lc-conteudo"><p class="texto-dim2">carregando...</p></div>`
+
+  const carregar = async () => {
+    $('#lc-conteudo').innerHTML = `<p class="texto-dim2">carregando...</p>`
     let q = db.from('carregamento').select(`
-      origem_linha, data_carregamento, quantidade_t, numero_nf, uf_destino,
-      cliente:cliente_id ( razao_social ),
-      vendedor:vendedor_id ( nome ),
-      produto:produto_id ( nome ),
-      veiculo:veiculo_id ( placa )
+      id, origem_linha, data_carregamento, quantidade_t, numero_nf, uf_destino, status,
+      cliente:cliente_id ( razao_social ), vendedor:vendedor_id ( nome ),
+      produto:produto_id ( nome ), veiculo:veiculo_id ( placa ), empresa:empresa_id ( nome )
     `).order('data_carregamento', { ascending: false }).limit(500)
 
     if ($('#f-cliente').value) q = q.eq('cliente_id', $('#f-cliente').value)
     if ($('#f-vendedor').value) q = q.eq('vendedor_id', $('#f-vendedor').value)
+    if ($('#f-empresa').value) q = q.eq('empresa_id', $('#f-empresa').value)
     if ($('#f-de').value) q = q.gte('data_carregamento', $('#f-de').value)
     if ($('#f-ate').value) q = q.lte('data_carregamento', $('#f-ate').value)
 
     const { data, error } = await q
-    if (error) { $('#corpo').innerHTML = `<tr><td colspan="10" class="vazio">${esc(error.message)}</td></tr>`; return }
-    if (!data.length) { $('#corpo').innerHTML = `<tr><td colspan="10" class="vazio">Nenhum carregamento no filtro.</td></tr>`; return }
+    if (error) { $('#lc-conteudo').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+    if (!data.length) { $('#lc-conteudo').innerHTML = `<p class="vazio">Nenhum carregamento no filtro.</p>`; return }
 
     const total = data.reduce((s, c) => s + Number(c.quantidade_t || 0), 0)
     const nClientes = new Set(data.map(c => c.cliente?.razao_social)).size
@@ -4524,31 +4673,254 @@ async function paginaExpedicao () {
       kpi('Clientes', nClientes) +
       kpi('Média por carga', fmtNum(total / data.length) + ' t')
 
-    $('#corpo').innerHTML = data.map(c => `<tr>
-      <td class="texto-dim2">${c.origem_linha ?? '—'}</td>
-      <td>${fmtData(c.data_carregamento)}</td>
-      <td>${esc(c.cliente?.razao_social)}</td>
-      <td>${c.vendedor?.nome ? esc(c.vendedor.nome) : '<span class="badge-alerta">sem vendedor</span>'}</td>
-      <td><span class="chip">${esc(c.produto?.nome ?? '—')}</span></td>
-      <td>${esc(c.veiculo?.placa ?? '—')}</td>
-      <td class="num">${fmtNum(c.quantidade_t, 3)}</td>
-      <td>${esc(c.numero_nf ?? '—')}</td>
-      <td>${esc(c.uf_destino ?? '—')}</td>
-      <td><a class="anexo-link" data-linha="${c.origem_linha}">ver</a></td>
-    </tr>`).join('')
+    $('#lc-conteudo').innerHTML = `
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>Linha</th><th>Data</th><th>Empresa</th><th>Cliente</th><th>Vendedor</th>
+        <th>Produto</th><th>Placa</th><th class="num">Qtd (t)</th>
+        <th>NF</th><th>Status</th><th>UF</th><th>Anexos</th></tr></thead><tbody>
+      ${data.map(c => `<tr>
+        <td class="texto-dim2">${c.origem_linha ?? '—'}</td>
+        <td>${fmtData(c.data_carregamento)}</td>
+        <td>${c.empresa?.nome ? `<span class="chip">${esc(c.empresa.nome)}</span>` : '<span class="badge-alerta">sem empresa</span>'}</td>
+        <td>${esc(c.cliente?.razao_social)}</td>
+        <td>${c.vendedor?.nome ? esc(c.vendedor.nome) : '<span class="badge-alerta">sem vendedor</span>'}</td>
+        <td><span class="chip">${esc(c.produto?.nome ?? '—')}</span></td>
+        <td>${esc(c.veiculo?.placa ?? '—')}</td>
+        <td class="num">${fmtNum(c.quantidade_t, 3)}</td>
+        <td>${esc(c.numero_nf ?? '—')}</td>
+        <td><span class="${corStatusCarregamento(c.status)}">${esc(ROTULO_STATUS_CARREGAMENTO[c.status] ?? c.status ?? '—')}</span></td>
+        <td>${esc(c.uf_destino ?? '—')}</td>
+        <td><a href="#" class="anexo-link" data-id="${c.id}">ver</a></td>
+      </tr>`).join('')}
+      </tbody></table></div></div>`
 
-    $('#corpo').querySelectorAll('.anexo-link').forEach(a => { a.onclick = () => verAnexos(a.dataset.linha) })
+    $('#lc-conteudo').querySelectorAll('.anexo-link').forEach(a => {
+      a.onclick = e => { e.preventDefault(); verAnexosCarregamento(a.dataset.id) }
+    })
     $('#rodape').textContent = `${data.length} registros · ${fmtNum(total)} t`
   }
 
-  async function verAnexos (linha) {
-    const { data: c } = await db.from('carregamento').select('id').eq('origem_linha', linha).maybeSingle()
-    if (!c) return
-    const { data: anexos } = await db.from('anexo').select('tipo, drive_file_id')
-      .eq('entidade', 'CARREGAMENTO').eq('registro_id', c.id)
-    if (!anexos?.length) { alert('Sem anexos nesta linha.'); return }
-    anexos.forEach(a => window.open('https://drive.google.com/open?id=' + a.drive_file_id, '_blank'))
+  $('#f-aplicar').onclick = carregar
+  $('#f-limpar').onclick = () => {
+    $('#f-empresa').value = ''; $('#f-cliente').value = ''; $('#f-vendedor').value = ''
+    $('#f-de').value = ''; $('#f-ate').value = ''; carregar()
   }
+  await carregar()
+}
+
+async function verAnexosCarregamento (carregamentoId) {
+  const { data: anexos } = await db.from('anexo').select('tipo, drive_file_id')
+    .eq('entidade', 'CARREGAMENTO').eq('registro_id', carregamentoId)
+  if (!anexos?.length) { alert('Sem anexos nesta linha.'); return }
+  anexos.forEach(a => window.open('https://drive.google.com/open?id=' + a.drive_file_id, '_blank'))
+}
+
+// ----- Lançar: registra um novo carregamento/NF manualmente -----
+function expedLancar (alvo) {
+  alvo.innerHTML = `
+    <div class="panel" style="padding:20px;max-width:900px;">
+      <h3 style="font-family:var(--serif);font-size:16px;margin:0 0 14px;">Novo lançamento</h3>
+      <div class="form-grade">
+        <div class="campo"><label>Empresa *</label><select id="el-empresa"><option value="">selecione...</option>
+          ${EXPED_CACHE.empresas.map(e => `<option value="${e.id}">${esc(e.nome)}${e.regime_tributario ? ' — ' + esc(e.regime_tributario) : ''}</option>`).join('')}</select></div>
+        <div class="campo"><label>Cliente *</label><select id="el-cliente"><option value="">selecione...</option>
+          ${EXPED_CACHE.clientes.map(c => `<option value="${c.id}">${esc(c.razao_social)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Vendedor</label><select id="el-vendedor"><option value="">—</option>
+          ${EXPED_CACHE.vendedores.map(v => `<option value="${v.id}">${esc(v.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Produto *</label><select id="el-produto"><option value="">selecione...</option>
+          ${EXPED_CACHE.produtos.map(p => `<option value="${p.id}" data-un="${esc(p.unidade)}">${esc(p.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Veículo</label><select id="el-veiculo"><option value="">—</option>
+          ${EXPED_CACHE.veiculos.map(v => `<option value="${v.id}">${esc(v.placa)}${v.descricao ? ' — ' + esc(v.descricao) : ''}</option>`).join('')}</select></div>
+        <div class="campo"><label>Motorista</label><input id="el-motorista"></div>
+        <div class="campo"><label>Quantidade *</label><input id="el-qtd" inputmode="decimal" placeholder="ex: 32,5"></div>
+        <div class="campo"><label>Preço unitário</label><input id="el-preco" inputmode="decimal" placeholder="R$/t"></div>
+        <div class="campo"><label>Número da NF</label><input id="el-nf"></div>
+        <div class="campo"><label>UF destino</label><input id="el-uf" maxlength="2" style="text-transform:uppercase;"></div>
+        <div class="campo"><label>Data *</label><input type="date" id="el-data" value="${hojeISO()}"></div>
+        <div class="campo"><label>Status</label><select id="el-status">
+          ${STATUS_CARREGAMENTO.map(s => `<option value="${s}" ${s === 'FATURADO' ? 'selected' : ''}>${ROTULO_STATUS_CARREGAMENTO[s]}</option>`).join('')}</select></div>
+      </div>
+      <div class="campo" style="margin-top:10px;"><label>Observação</label><input id="el-obs" placeholder="opcional"></div>
+      <div class="acoes" style="margin-top:14px;"><button class="btn" id="el-salvar">Salvar lançamento</button></div>
+      <div class="recado oculto" id="el-recado"></div>
+    </div>`
+
+  $('#el-salvar').onclick = async () => {
+    const el = $('#el-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const empresaId = $('#el-empresa').value
+    const clienteId = $('#el-cliente').value
+    const produtoSel = $('#el-produto').selectedOptions[0]
+    let qtd = numeroBR($('#el-qtd').value)
+    if (!empresaId) { aviso('Escolha a empresa (Gefoscal ou P-TEC).'); return }
+    if (!clienteId) { aviso('Escolha o cliente.'); return }
+    if (!produtoSel?.value) { aviso('Escolha o produto.'); return }
+    if (qtd === null || qtd <= 0) { aviso('Informe a quantidade.'); return }
+    if (casasPara(produtoSel.dataset.un) === 0) qtd = Math.round(qtd)
+    const preco = numeroBR($('#el-preco').value) || 0
+
+    const btn = $('#el-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const { error } = await db.from('carregamento').insert({
+      empresa_id: empresaId, cliente_id: clienteId, vendedor_id: $('#el-vendedor').value || null,
+      produto_id: produtoSel.value, veiculo_id: $('#el-veiculo').value || null,
+      motorista: $('#el-motorista').value.trim() || null,
+      quantidade_t: qtd, preco_unitario: preco || null, valor_nf: preco ? qtd * preco : null,
+      numero_nf: $('#el-nf').value.trim() || null, uf_destino: $('#el-uf').value.trim().toUpperCase() || null,
+      data_carregamento: $('#el-data').value, status: $('#el-status').value,
+      observacoes: $('#el-obs').value.trim() || null, registrado_por: PERFIL.pessoaId
+    })
+    btn.disabled = false; btn.textContent = 'Salvar lançamento'
+    if (error) { aviso(error.message); return }
+    el.textContent = 'Lançamento salvo.'; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--good-text)'; el.style.color = 'var(--good-text)'
+    ;['el-motorista', 'el-qtd', 'el-preco', 'el-nf', 'el-uf', 'el-obs'].forEach(id => { $('#' + id).value = '' })
+    $('#el-empresa').value = ''; $('#el-cliente').value = ''; $('#el-produto').value = ''; $('#el-veiculo').value = ''
+  }
+}
+
+// ----- Ordem de Carregamento: puxa um pedido de Crédito e Cobrança,
+// define veículo/motorista/data e gera o PDF pro motorista -----
+async function expedOrdem (alvo) {
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo" style="flex:1;min-width:220px;"><label>Buscar pedido</label>
+        <input id="oc-busca" placeholder="número do pedido ou cliente"></div>
+      <button class="btn" id="oc-buscar">Buscar</button>
+    </div>
+    <p class="texto-dim2" style="font-size:12px;margin:-8px 0 14px;">
+      Pedidos ainda não totalmente carregados aparecem aqui — escolha um pra montar a ordem de carregamento.</p>
+    <div id="oc-lista"><p class="texto-dim2">carregando...</p></div>`
+
+  const buscar = async () => {
+    let q = db.from('pedido').select(`
+      id, numero, quantidade_t, preco_unitario, data_pedido, local_entrega, empresa_id,
+      cliente:cliente_id ( id, razao_social ), produto:produto_id ( id, nome, unidade )
+    `).neq('status', 'CANCELADO').order('data_pedido', { ascending: false }).limit(100)
+    const termo = $('#oc-busca').value.trim()
+    if (termo) q = q.or(`numero.ilike.%${termo}%`)
+    const { data, error } = await q
+    if (error) { $('#oc-lista').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+    let lista = data || []
+    if (termo) {
+      const t = termo.toLowerCase()
+      lista = lista.filter(p => (p.numero ?? '').toLowerCase().includes(t) || (p.cliente?.razao_social ?? '').toLowerCase().includes(t))
+    }
+
+    $('#oc-lista').innerHTML = lista.length ? `
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr><th>PD</th><th>Cliente</th><th>Produto</th><th class="num">Qtd</th><th>Data</th><th></th></tr></thead><tbody>
+          ${lista.map(p => `<tr>
+            <td><b>${esc(p.numero ?? '—')}</b></td>
+            <td>${esc(p.cliente?.razao_social ?? '—')}</td>
+            <td>${esc(p.produto?.nome ?? '—')}</td>
+            <td class="num">${fmtNum(p.quantidade_t, casasPara(p.produto?.unidade))} ${esc(p.produto?.unidade ?? 't')}</td>
+            <td class="texto-dim2">${fmtData(p.data_pedido)}</td>
+            <td><button class="btn-secundario mini" data-montar="${p.id}">Montar ordem</button></td>
+          </tr>`).join('')}
+        </tbody></table>
+      </div></div>` : `<p class="vazio">Nenhum pedido encontrado.</p>`
+
+    $('#oc-lista').querySelectorAll('[data-montar]').forEach(b => {
+      b.onclick = () => formOrdemCarregamento(lista.find(p => p.id === b.dataset.montar))
+    })
+  }
+  $('#oc-buscar').onclick = buscar
+  $('#oc-busca').addEventListener('keydown', e => { if (e.key === 'Enter') buscar() })
+  buscar()
+}
+
+function formOrdemCarregamento (pedido) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>Ordem de carregamento — PD ${esc(pedido.numero ?? '—')}</h3>
+    <p class="texto-dim2" style="font-size:12.5px;margin:-8px 0 14px;">
+      ${esc(pedido.cliente?.razao_social ?? '—')} · ${esc(pedido.produto?.nome ?? '—')}</p>
+    <div class="form-grade">
+      <div class="campo"><label>Empresa *</label><select id="oc-empresa"><option value="">selecione...</option>
+        ${EXPED_CACHE.empresas.map(e => `<option value="${e.id}" ${e.id === pedido.empresa_id ? 'selected' : ''}>${esc(e.nome)}${e.regime_tributario ? ' — ' + esc(e.regime_tributario) : ''}</option>`).join('')}</select></div>
+      <div class="campo"><label>Veículo *</label><select id="oc-veiculo"><option value="">selecione...</option>
+        ${EXPED_CACHE.veiculos.map(v => `<option value="${v.id}">${esc(v.placa)}${v.descricao ? ' — ' + esc(v.descricao) : ''}</option>`).join('')}</select></div>
+      <div class="campo"><label>Motorista *</label><input id="oc-motorista"></div>
+      <div class="campo"><label>Quantidade *</label>
+        <input id="oc-qtd" inputmode="decimal" value="${String(pedido.quantidade_t ?? '').replace('.', ',')}"></div>
+      <div class="campo"><label>Data programada *</label><input type="datetime-local" id="oc-data"></div>
+      <div class="campo" style="grid-column:1/-1;"><label>Local de entrega</label>
+        <input id="oc-local" value="${esc(pedido.local_entrega ?? '')}"></div>
+    </div>
+    <div class="campo" style="margin-top:10px;"><label>Observação pro motorista</label>
+      <textarea id="oc-obs" style="min-height:70px;" placeholder="opcional"></textarea></div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="oc-salvar">Criar ordem e gerar PDF</button>
+      <button class="btn-secundario" id="oc-cancelar">Cancelar</button>
+    </div>
+    <div class="recado oculto" id="oc-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#oc-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  fundo.querySelector('#oc-salvar').onclick = async () => {
+    const el = fundo.querySelector('#oc-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const veiculoId = fundo.querySelector('#oc-veiculo').value
+    const empresaId = fundo.querySelector('#oc-empresa').value
+    const motorista = fundo.querySelector('#oc-motorista').value.trim()
+    let qtd = numeroBR(fundo.querySelector('#oc-qtd').value)
+    const dataProg = fundo.querySelector('#oc-data').value
+    if (!empresaId) { aviso('Escolha a empresa (Gefoscal ou P-TEC).'); return }
+    if (!veiculoId) { aviso('Escolha o veículo.'); return }
+    if (!motorista) { aviso('Informe o motorista.'); return }
+    if (qtd === null || qtd <= 0) { aviso('Informe a quantidade.'); return }
+    if (!dataProg) { aviso('Informe a data programada.'); return }
+    if (casasPara(pedido.produto?.unidade) === 0) qtd = Math.round(qtd)
+
+    const btn = fundo.querySelector('#oc-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const { data: novo, error } = await db.from('carregamento').insert({
+      pedido_id: pedido.id, empresa_id: empresaId, cliente_id: pedido.cliente?.id, produto_id: pedido.produto?.id,
+      veiculo_id: veiculoId, motorista, quantidade_t: qtd,
+      preco_unitario: pedido.preco_unitario || null,
+      valor_nf: pedido.preco_unitario ? qtd * pedido.preco_unitario : null,
+      data_programada: new Date(dataProg).toISOString(), data_carregamento: dataProg.slice(0, 10),
+      status: 'PROGRAMADO', observacoes: fundo.querySelector('#oc-obs').value.trim() || null,
+      registrado_por: PERFIL.pessoaId
+    }).select('id').single()
+    btn.disabled = false; btn.textContent = 'Criar ordem e gerar PDF'
+    if (error) { aviso(error.message); return }
+
+    const veiculo = EXPED_CACHE.veiculos.find(v => v.id === veiculoId)
+    const empresa = EXPED_CACHE.empresas.find(e => e.id === empresaId)
+    fechar()
+    abrirPdfOrdemCarregamento({
+      numeroPedido: pedido.numero, empresa: empresa?.nome, cliente: pedido.cliente?.razao_social, produto: pedido.produto?.nome,
+      quantidade: qtd, unidade: pedido.produto?.unidade ?? 't', placa: veiculo?.placa, motorista,
+      dataProgramada: dataProg, local: fundo.querySelector('#oc-local').value.trim(),
+      observacao: fundo.querySelector('#oc-obs').value.trim(), carregamentoId: novo?.id
+    })
+  }
+}
+
+function abrirPdfOrdemCarregamento (o) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = documentoPDF({
+    titulo: 'Ordem de Carregamento',
+    subtitulo: `${o.empresa ? o.empresa + ' · ' : ''}PD ${o.numeroPedido ?? '—'}`,
+    corpo: `
+      ${docBloco('Cliente e produto', docLinha('Empresa emitente', o.empresa) + docLinha('Cliente', o.cliente) + docLinha('Produto', o.produto) +
+        docLinha('Quantidade', `${fmtNum(o.quantidade, casasPara(o.unidade))} ${o.unidade}`))}
+      ${docBloco('Transporte', docLinha('Veículo', o.placa) + docLinha('Motorista', o.motorista) +
+        docLinha('Data programada', fmtQuando(o.dataProgramada)) + docLinha('Local de entrega', o.local || '—'))}
+      ${o.observacao ? docTexto('Observação', o.observacao) : ''}`,
+    acoes: `<button class="btn" id="oc-pdf-imprimir">Baixar / imprimir PDF</button>
+            <button class="btn-secundario" id="oc-pdf-fechar">Fechar</button>`
+  })
+  document.body.appendChild(fundo)
+  fundo.querySelector('#oc-pdf-fechar').onclick = () => fundo.remove()
+  fundo.querySelector('#oc-pdf-imprimir').onclick = () => window.print()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
 }
 
 // ---------------------------------------------------------------
