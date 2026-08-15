@@ -1479,10 +1479,17 @@ async function solicPainel (alvo) {
 }
 
 // ----- Nova solicitação -----
-function solicNova (alvo) {
+async function solicNova (alvo) {
+  if (!SETOR_TI_ID) {
+    const { data: setorTI } = await db.from('setor').select('id').ilike('nome', 'TI').maybeSingle()
+    SETOR_TI_ID = setorTI?.id ?? null
+  }
   alvo.innerHTML = `
     <div class="panel" style="padding:20px;max-width:760px;">
       <h3 style="font-family:var(--serif);font-size:18px;margin:0 0 14px;">Nova solicitação</h3>
+      ${SETOR_TI_ID ? `<div class="acoes" style="margin:0 0 16px;">
+        <button class="btn-secundario mini" id="sn-atalho-melhoria" type="button">💡 Solicitação de melhoria pro sistema</button>
+      </div>` : ''}
       <div class="form-grade">
         <div class="campo"><label>Setor de destino *</label>
           <select id="sn-setor">${SOLIC_CACHE.setores.map(s => `<option value="${s.id}">${esc(s.nome)}</option>`).join('')}</select></div>
@@ -1504,6 +1511,15 @@ function solicNova (alvo) {
       <div class="acoes"><button class="btn" id="sn-salvar">Enviar solicitação</button></div>
       <div class="recado oculto" id="sn-recado"></div>
     </div>`
+
+  if (SETOR_TI_ID) $('#sn-atalho-melhoria').onclick = () => {
+    $('#sn-setor').value = SETOR_TI_ID
+    atualizarResponsaveis()
+    $('#sn-titulo').value = 'Sugestão de melhoria: '
+    $('#sn-titulo').focus()
+    $('#sn-titulo').setSelectionRange($('#sn-titulo').value.length, $('#sn-titulo').value.length)
+    $('#sn-descricao').placeholder = 'Descreva a melhoria que você gostaria de ver no sistema — o que você precisa e por quê'
+  }
 
   // a lista de responsável acompanha o setor escolhido — só faz sentido
   // apontar alguém que já é daquele setor
@@ -5144,7 +5160,7 @@ async function paginaGestaoTI () {
     SETOR_TI_ID = setorTI?.id ?? null
   }
 
-  const abas = [['orcamento', 'Orçamento'], ['solicitacoes', 'Solicitações'], ['melhorias', 'Melhorias'], ['mapa', 'Mapa (MAPA/Trimestral)']]
+  const abas = [['orcamento', 'Orçamento'], ['solicitacoes', 'Solicitações'], ['mapa', 'Mapa (MAPA/Trimestral)']]
   area.innerHTML = `
     <div class="subabas">
       ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
@@ -5164,7 +5180,6 @@ function abrirGestaoTI (sub, editavel) {
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
   if (sub === 'orcamento') tiOrcamento(alvo, editavel)
   if (sub === 'solicitacoes') tiSolicitacoes(alvo, editavel)
-  if (sub === 'melhorias') tiMelhorias(alvo, editavel)
   if (sub === 'mapa') tiMapa(alvo)
 }
 
