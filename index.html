@@ -16,15 +16,21 @@
 @media (max-width: 860px) { .app { grid-template-columns: 1fr; } .nav { display: none; } }
 @media (max-width: 760px) { .grade-painel-comb { grid-template-columns: 1fr !important; } }
 .nav { background: var(--panel); border-right: 1px solid var(--line); padding: 18px 12px;
-       overflow: hidden; }
+       overflow-y: auto; overflow-x: hidden; }
 .nav h1 { font-family: var(--serif); font-size: 19px; margin: 0 0 2px; }
 .nav .sub { color: var(--dim2); font-size: 11px; margin-bottom: 22px; white-space: nowrap; }
+.nav .grupo-titulo { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--dim2);
+       margin: 16px 11px 6px; opacity: .65; white-space: nowrap; }
+.nav .grupo-titulo:first-child { margin-top: 0; }
+.nav .grupo-divisor { height: 1px; background: var(--line); margin: 10px 8px 12px; }
 .nav a { display:flex; align-items:center; gap:11px; padding:9px 11px; border-radius:6px; color:var(--dim);
          text-decoration:none; font-size:14px; margin-bottom:2px; cursor:pointer; white-space:nowrap; }
 .nav a svg { width:18px; height:18px; flex:none; }
 .nav a:hover { background: var(--hover-bg); color: var(--txt); }
 .nav a.ativo { background: var(--hover-bg); color: var(--txt); border-left:3px solid var(--rust); }
 .nav a.bloqueado { opacity:.35; cursor:not-allowed; }
+.app.nav-colapsada .nav .grupo-titulo,
+.app.nav-colapsada .nav .grupo-divisor { display:none; }
 .app.nav-colapsada .nav .rotulo,
 .app.nav-colapsada .nav .sub,
 .app.nav-colapsada #btn-sair .rotulo { display:none; }
@@ -936,6 +942,17 @@ const ICONES_MODULO = {
   _padrao: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/></svg>'
 }
 
+// Agrupamento visual do menu — só organiza a exibição, não mexe em
+// permissão nenhuma (quem não vê um módulo continua não vendo,
+// grupo vazio simplesmente some da tela). Item que não estiver
+// mapeado aqui cai automaticamente em "Outros", pra nunca sumir.
+const GRUPOS_MENU = [
+  ['Comercial', ['crm', 'cadastro', 'expedicao', 'cobranca', 'marketing']],
+  ['Operações', ['estoque', 'combustivel', 'manutencao', 'frota', 'projetos']],
+  ['Gestão', ['financeiro', 'desempenho', 'juridico', 'ferramentas', 'banco']],
+  ['Administração', ['ti']]
+]
+
 function montarMenu () {
   // páginas marcadas "sempre" (visão geral, solicitações, compras) aparecem
   // pra qualquer usuário logado, sem depender de permissão de módulo —
@@ -944,14 +961,26 @@ function montarMenu () {
   const fixos = chavesSempre.map(chave =>
     `<a data-chave="${chave}" title="${esc(PAGINAS[chave].nome)}">${ICONES_MODULO[chave] || ICONES_MODULO._padrao}<span class="rotulo">${esc(PAGINAS[chave].nome)}</span></a>`
   ).join('')
-  const doBanco = PERFIL.modulos.filter(m => !chavesSempre.includes(m.chave)).map(m => {
+
+  const linkModulo = m => {
     const temPagina = !!PAGINAS[m.chave]
-    const liberado = podeVer(m.chave)
-    if (!liberado) return ''
     const icone = ICONES_MODULO[m.chave] || ICONES_MODULO._padrao
     return `<a data-chave="${m.chave}" class="${temPagina ? '' : 'bloqueado'}" title="${esc(m.nome)}">${icone}<span class="rotulo">${esc(m.nome)}</span></a>`
-  }).join('')
-  $('#menu').innerHTML = fixos + doBanco
+  }
+
+  const disponiveis = PERFIL.modulos.filter(m => !chavesSempre.includes(m.chave) && podeVer(m.chave))
+  const usados = new Set()
+  let doBanco = ''
+  GRUPOS_MENU.forEach(([titulo, chaves]) => {
+    const itens = chaves.map(c => disponiveis.find(m => m.chave === c)).filter(Boolean)
+    if (!itens.length) return
+    itens.forEach(m => usados.add(m.chave))
+    doBanco += `<div class="grupo-titulo">${esc(titulo)}</div>` + itens.map(linkModulo).join('')
+  })
+  const resto = disponiveis.filter(m => !usados.has(m.chave))
+  if (resto.length) doBanco += `<div class="grupo-titulo">Outros</div>` + resto.map(linkModulo).join('')
+
+  $('#menu').innerHTML = fixos + (doBanco ? `<div class="grupo-divisor"></div>${doBanco}` : '')
   $('#menu').querySelectorAll('a').forEach(a => {
     if (!a.classList.contains('bloqueado')) a.onclick = () => irPara(a.dataset.chave)
   })
