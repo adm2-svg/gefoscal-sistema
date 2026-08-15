@@ -2076,7 +2076,10 @@ async function subUsuarios (alvo, editavel) {
 
     <div class="cabeca-secao">
       <h3 style="font-family:var(--serif);font-size:17px;">Pessoas cadastradas</h3>
-      <span class="texto-dim2" style="font-size:12px;">${(pessoas || []).length} no total</span>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:400;color:var(--dim);">
+        <input type="checkbox" id="u-mostrar-inativos"> mostrar inativos
+        (<span id="u-contagem-inativos">${(pessoas || []).filter(p => p.status === 'INATIVO').length}</span>)</label>
+      <span class="texto-dim2" style="font-size:12px;" id="u-contagem-total"></span>
     </div>
     <div class="lista-pessoas" id="u-lista"></div>`
 
@@ -2115,13 +2118,17 @@ async function subUsuarios (alvo, editavel) {
   ;[...(pessoas || [])].sort((a, b) => new Date(a.criado_em) - new Date(b.criado_em))
     .forEach((p, i) => { numeroPessoa[p.id] = i + 1 })
 
-  $('#u-lista').innerHTML = `
+  function renderizarListaPessoas (mostrarInativos) {
+    const listaFiltrada = mostrarInativos ? (pessoas || []) : (pessoas || []).filter(p => p.status !== 'INATIVO')
+    $('#u-contagem-total').textContent = `${listaFiltrada.length} de ${(pessoas || []).length}`
+
+    $('#u-lista').innerHTML = `
     ${editavel ? `<div class="acoes" id="u-acoes-massa" style="margin-bottom:10px;">
       <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:400;">
         <input type="checkbox" id="u-marcar-todos"> selecionar todos</label>
       <button class="btn-secundario mini oculto" id="u-excluir-selecionados" style="color:var(--warn-text);margin-left:auto;">Excluir selecionados</button>
     </div>` : ''}
-    ${(pessoas || []).map(p => {
+    ${listaFiltrada.map(p => {
     const pc = preDe(p.email)
     const n = (perms || []).filter(x => x.pessoa_id === p.id).length
     const estado = !pc ? 'sem cadastro de acesso'
@@ -2245,6 +2252,10 @@ async function subUsuarios (alvo, editavel) {
       await executarExclusao(marcados.map(c => c.dataset.id))
     }
   }
+  } // fim renderizarListaPessoas
+
+  renderizarListaPessoas(false)
+  $('#u-mostrar-inativos').onchange = e => renderizarListaPessoas(e.target.checked)
 
   // + cargo / + setor, sem prompt do navegador
   const criador = (btnAbrir, linha, campo, tabela, select) => {
