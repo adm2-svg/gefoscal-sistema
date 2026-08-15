@@ -912,6 +912,7 @@ const PAGINAS = {
   frota:       { nome: 'Frota', render: paginaFrota },
   juridico:    { nome: 'Jurídico', render: paginaJuridico },
   desempenho:  { nome: 'RH', render: paginaDesempenho },
+  laboratorio: { nome: 'Laboratório', render: paginaLaboratorio },
   ti:          { nome: 'Administração', render: paginaAdministracao },
   gestao_ti:   { nome: 'Gestão de TI', render: paginaGestaoTI }
 }
@@ -941,6 +942,7 @@ const ICONES_MODULO = {
   desempenho: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a8 8 0 0 1 16 0v1"/></svg>',
   ti: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8 3.5v6c0 5-3.4 8.6-8 10.5-4.6-1.9-8-5.5-8-10.5v-6z"/></svg>',
   gestao_ti: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
+  laboratorio: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6"/><path d="M10 3v6l-5.5 9.5A1.5 1.5 0 0 0 5.8 21h12.4a1.5 1.5 0 0 0 1.3-2.5L14 9V3"/><path d="M7.5 14.5h9"/></svg>',
   _padrao: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/></svg>'
 }
 
@@ -950,7 +952,7 @@ const ICONES_MODULO = {
 // mapeado aqui cai automaticamente em "Outros", pra nunca sumir.
 const GRUPOS_MENU = [
   ['Comercial', ['crm', 'cadastro', 'expedicao', 'cobranca', 'marketing']],
-  ['Operações', ['estoque', 'combustivel', 'manutencao', 'frota', 'projetos']],
+  ['Operações', ['estoque', 'combustivel', 'manutencao', 'frota', 'projetos', 'laboratorio']],
   ['Gestão', ['financeiro', 'desempenho', 'juridico', 'ferramentas', 'banco', 'gestao_ti']],
   ['Administração', ['ti']]
 ]
@@ -5683,6 +5685,554 @@ async function exportarMapaExcel (ano, trimestre) {
   if (acabados.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(linhasAcabado), 'Produto Acabado')
   if (materiasPrimas.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(linhasMateriaPrima), 'Matéria-Prima')
   XLSX.writeFile(wb, `mapa_${TRIMESTRE_ROMANO[trimestre].slice(0, 1)}_${ano}.xlsx`)
+}
+
+// ---------------------------------------------------------------
+// Página: Laboratório  (módulo 'laboratorio')
+// Fica na Indústria: testa amostra de matéria-prima e produto. Três
+// frentes: Amostras (com filtro diário puxando direto do Faturamento
+// — cliente/placa/produto do caminhão que carregou naquele dia, sem
+// digitar de novo), Reagentes (uso químico) e Estoque (com controle
+// regulatório de Polícia Federal e Exército Brasileiro, que gera o
+// mapa em PDF pra declarar).
+// ---------------------------------------------------------------
+const ORIGENS_AMOSTRA = ['EXPEDICAO', 'PRODUCAO', 'SONDA', 'ROM', 'CANALETA', 'CAMPO', 'OUTRO']
+const ROTULO_ORIGEM_AMOSTRA = { EXPEDICAO: 'Expedição', PRODUCAO: 'Produção', SONDA: 'Sonda', ROM: 'ROM', CANALETA: 'Canaleta', CAMPO: 'Campo', OUTRO: 'Outro' }
+const STATUS_AMOSTRA = ['PENDENTE', 'APROVADA', 'REPROVADA']
+const ROTULO_STATUS_AMOSTRA = { PENDENTE: 'Pendente', APROVADA: 'Aprovada', REPROVADA: 'Reprovada' }
+function corStatusAmostra (s) {
+  if (s === 'APROVADA') return 'badge-bom'
+  if (s === 'REPROVADA') return 'badge-alerta'
+  return 'texto-dim'
+}
+const REAGENTES_LAB = [
+  'Molibdato de Amônio', 'Metavanadato de Amônio', 'Fenolftaleína', 'Hidróxido de Amônio',
+  'Hidróxido de Potássio', 'Cloreto de Bário', 'Oxalato de Amônio', 'Ácido Cítrico',
+  'Hidróxido de Sódio', 'Ácido Clorídrico 37%', 'Ácido Nítrico 65%', 'Acetona',
+  'Álcool Etílico', 'Peróxido de Hidrogênio', 'Fosfato de Potássio'
+]
+
+async function paginaLaboratorio () {
+  const editavel = podeEditar('laboratorio')
+  $('#subtitulo-pagina').textContent = 'Amostras, reagentes e estoque controlado'
+  const area = areaLivre()
+  area.innerHTML = `<p class="texto-dim2">carregando...</p>`
+
+  const abas = [['painel', 'Painel'], ['amostras', 'Amostras'], ['reagentes', 'Reagentes'], ['estoque', 'Estoque']]
+  area.innerHTML = `
+    <div class="subabas">
+      ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
+    </div>
+    <div id="sub-lab"></div>`
+  area.querySelectorAll('.subabas button').forEach(b => {
+    b.onclick = () => {
+      area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
+      abrirLab(b.dataset.sub, editavel)
+    }
+  })
+  abrirLab('painel', editavel)
+}
+
+function abrirLab (sub, editavel) {
+  const alvo = $('#sub-lab')
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  if (sub === 'painel') labPainel(alvo)
+  if (sub === 'amostras') labAmostras(alvo, editavel)
+  if (sub === 'reagentes') labReagentes(alvo, editavel)
+  if (sub === 'estoque') labEstoque(alvo, editavel)
+}
+
+// ----- Painel -----
+async function labPainel (alvo) {
+  const hoje = new Date()
+  const mesInicio = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString().slice(0, 10)
+
+  const [{ data: amostras }, { data: amostrasMes }, { data: reagentesMes }, { data: estoque }] = await Promise.all([
+    db.from('lab_amostra').select('id'),
+    db.from('lab_amostra').select('id, origem, status').gte('data_amostra', mesInicio),
+    db.from('lab_reagente_uso').select('id, reagente, quantidade').gte('data', mesInicio),
+    db.from('lab_estoque_movimento').select('material, saldo_apos, controlado_pf, controlado_exercito, criado_em').order('criado_em', { ascending: false })
+  ])
+
+  const porMaterial = {}
+  ;(estoque || []).forEach(m => { if (!porMaterial[m.material]) porMaterial[m.material] = m })
+  const itensEstoque = Object.values(porMaterial)
+  const controladosPF = itensEstoque.filter(i => i.controlado_pf).length
+  const controladosExercito = itensEstoque.filter(i => i.controlado_exercito).length
+
+  const porOrigem = {}
+  ;(amostrasMes || []).forEach(a => { porOrigem[a.origem] = (porOrigem[a.origem] || 0) + 1 })
+
+  const porReagente = {}
+  ;(reagentesMes || []).forEach(r => { porReagente[r.reagente] = (porReagente[r.reagente] || 0) + Number(r.quantidade || 0) })
+
+  alvo.innerHTML = `
+    <div class="resumo-topo" style="margin-bottom:18px;">
+      ${[['Amostras (total)', (amostras || []).length, ''],
+         ['Amostras no mês', (amostrasMes || []).length, ''],
+         ['Reagentes usados no mês', fmtNum((reagentesMes || []).reduce((s, r) => s + Number(r.quantidade || 0), 0)), ''],
+         ['Itens em estoque', itensEstoque.length, ''],
+         ['Controlados PF', controladosPF, controladosPF ? 'alerta' : ''],
+         ['Controlados Exército', controladosExercito, controladosExercito ? 'alerta' : '']]
+        .map(([rot, val, cl]) => `<div class="bloco ${cl}"><div class="rot">${rot}</div><div class="val">${val}</div></div>`).join('')}
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;" class="grade-painel-comb">
+      <div class="panel" style="padding:18px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Amostras do mês, por origem</h3>
+        ${barrasHorizontais(Object.entries(porOrigem).map(([o, n]) => ({ rotulo: ROTULO_ORIGEM_AMOSTRA[o] ?? o, valor: n })), { unidade: '', casas: 0 })}
+      </div>
+      <div class="panel" style="padding:18px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Consumo por reagente no mês</h3>
+        ${Object.keys(porReagente).length
+          ? barrasHorizontais(Object.entries(porReagente).sort((a, b) => b[1] - a[1]).map(([r, q]) => ({ rotulo: r, valor: q })), { unidade: '', casas: 2 })
+          : '<p class="vazio">Nenhum reagente lançado no mês.</p>'}
+      </div>
+    </div>`
+}
+
+// ----- Amostras (filtro diário ligado ao Faturamento) -----
+async function labAmostras (alvo, editavel) {
+  const hoje = hojeISO()
+  alvo.innerHTML = `
+    ${editavel ? `
+    <div class="panel" style="padding:18px 20px;margin-bottom:16px;">
+      <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 4px;">Caminhões do dia</h3>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 12px;">Escolhe o dia e já aparecem os carregamentos do Faturamento — clica em "Coletar amostra" e o cliente e a placa já vêm preenchidos.</p>
+      <div class="filtros" style="margin-bottom:0;">
+        <div class="campo"><label>Data</label><input type="date" id="la-data-dia" value="${hoje}"></div>
+        <button class="btn" id="la-buscar-dia">Buscar</button>
+        <button class="btn-secundario" id="la-nova-avulsa">+ Amostra avulsa (produção, sonda, campo...)</button>
+      </div>
+      <div id="la-caminhoes-dia" style="margin-top:14px;"></div>
+    </div>` : ''}
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>Origem</label><select id="la-f-origem"><option value="">todas</option>
+        ${ORIGENS_AMOSTRA.map(o => `<option value="${o}">${ROTULO_ORIGEM_AMOSTRA[o]}</option>`).join('')}</select></div>
+      <div class="campo" style="flex:1;min-width:180px;"><label>Buscar</label><input id="la-f-busca" placeholder="nº amostra, produtor, placa..."></div>
+      <button class="btn-secundario" id="la-f-aplicar">Filtrar</button>
+    </div>
+    <div id="la-lista"><p class="texto-dim2">carregando...</p></div>`
+
+  const buscarDia = async () => {
+    const data = $('#la-data-dia').value
+    const { data: carregamentos, error } = await db.from('carregamento').select(`
+      id, numero_nf, cliente:cliente_id ( razao_social, nome_fantasia ), produto:produto_id ( nome ), veiculo:veiculo_id ( placa )
+    `).eq('data_carregamento', data).limit(200)
+    if (error) { $('#la-caminhoes-dia').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+    const { data: jaColetadas } = await db.from('lab_amostra').select('carregamento_id').eq('data_amostra', data)
+    const coletados = new Set((jaColetadas || []).map(a => a.carregamento_id))
+
+    $('#la-caminhoes-dia').innerHTML = carregamentos?.length ? `
+      <div style="display:flex;flex-direction:column;gap:6px;">
+        ${carregamentos.map(c => `<div class="passo">
+          <span><b>${esc(c.cliente?.nome_fantasia || c.cliente?.razao_social || '—')}</b>
+            <span class="texto-dim2" style="font-size:11px;">— ${esc(c.veiculo?.placa ?? 'sem placa')} · ${esc(c.produto?.nome ?? '—')}${c.numero_nf ? ' · NF ' + esc(c.numero_nf) : ''}</span></span>
+          ${coletados.has(c.id)
+            ? '<span class="badge-bom" style="font-size:10.5px;">amostra coletada</span>'
+            : `<button class="btn-secundario mini" data-coletar="${c.id}">Coletar amostra</button>`}
+        </div>`).join('')}
+      </div>` : '<p class="vazio">Nenhum carregamento nessa data.</p>'
+
+    $('#la-caminhoes-dia').querySelectorAll('[data-coletar]').forEach(b => {
+      b.onclick = () => {
+        const c = carregamentos.find(x => x.id === b.dataset.coletar)
+        formAmostra(null, c, data, () => { buscarDia(); buscarLista() })
+      }
+    })
+  }
+
+  const buscarLista = async () => {
+    $('#la-lista').innerHTML = `<p class="texto-dim2">carregando...</p>`
+    let q = db.from('lab_amostra').select(`
+      id, numero_amostra, produtor_nome, placa_caminhao, produto_nome, data_amostra, horario_amostra,
+      quantidade, origem, status, resultado, observacoes, carregamento_id,
+      recebida:recebida_por ( nome )
+    `).order('data_amostra', { ascending: false }).limit(500)
+    if ($('#la-f-origem').value) q = q.eq('origem', $('#la-f-origem').value)
+    const { data, error } = await q
+    if (error) { $('#la-lista').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+    let lista = data || []
+    const termo = $('#la-f-busca').value.trim().toLowerCase()
+    if (termo) lista = lista.filter(a => [a.numero_amostra, a.produtor_nome, a.placa_caminhao, a.produto_nome]
+      .some(campo => (campo || '').toLowerCase().includes(termo)))
+
+    $('#la-lista').innerHTML = `
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr>
+          <th>Nº Amostra</th><th>Data</th><th>Origem</th><th>Produtor</th><th>Placa</th>
+          <th>Produto</th><th class="num">Qtd</th><th>Status</th>${editavel ? '<th></th>' : ''}
+        </tr></thead><tbody>
+          ${lista.map(a => `<tr>
+            <td><b>${esc(a.numero_amostra)}</b></td>
+            <td class="texto-dim2">${fmtData(a.data_amostra)}${a.horario_amostra ? ' ' + a.horario_amostra.slice(0, 5) : ''}</td>
+            <td><span class="chip">${esc(ROTULO_ORIGEM_AMOSTRA[a.origem] ?? a.origem)}</span></td>
+            <td>${esc(a.produtor_nome ?? '—')}</td>
+            <td class="texto-dim">${esc(a.placa_caminhao ?? '—')}</td>
+            <td class="texto-dim2">${esc(a.produto_nome ?? '—')}</td>
+            <td class="num">${a.quantidade != null ? fmtNum(a.quantidade, 2) : '—'}</td>
+            <td><span class="${corStatusAmostra(a.status)}">${esc(ROTULO_STATUS_AMOSTRA[a.status] ?? a.status)}</span></td>
+            ${editavel ? `<td style="white-space:nowrap;">
+              <button class="btn-secundario mini" data-editar-am="${a.id}">editar</button>
+              <button class="btn-secundario mini" data-ticket-am="${a.id}">ticket</button></td>` : ''}
+          </tr>`).join('') || `<tr><td colspan="${editavel ? 9 : 8}" class="vazio">Nenhuma amostra no filtro.</td></tr>`}
+        </tbody></table>
+      </div></div>`
+
+    $('#la-lista').querySelectorAll('[data-editar-am]').forEach(b => {
+      b.onclick = () => formAmostra(lista.find(a => a.id === b.dataset.editarAm), null, null, () => { buscarDia?.(); buscarLista() })
+    })
+    $('#la-lista').querySelectorAll('[data-ticket-am]').forEach(b => {
+      b.onclick = () => abrirTicketAmostra(lista.find(a => a.id === b.dataset.ticketAm))
+    })
+  }
+
+  if (editavel) {
+    $('#la-buscar-dia').onclick = buscarDia
+    $('#la-nova-avulsa').onclick = () => formAmostra(null, null, $('#la-data-dia').value, () => { buscarDia(); buscarLista() })
+    buscarDia()
+  }
+  $('#la-f-aplicar').onclick = buscarLista
+  buscarLista()
+}
+
+// c = carregamento (se veio do filtro diário) | l = amostra existente (edição)
+function formAmostra (l, c, dataSugerida, aoSalvar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  const produtor = l?.produtor_nome ?? (c?.cliente?.nome_fantasia || c?.cliente?.razao_social) ?? ''
+  const placa = l?.placa_caminhao ?? c?.veiculo?.placa ?? ''
+  const produtoNome = l?.produto_nome ?? c?.produto?.nome ?? ''
+  fundo.innerHTML = `<div class="modal">
+    <h3>${l ? 'Editar amostra' : 'Nova amostra'}</h3>
+    ${c ? `<p class="texto-dim2" style="font-size:12px;margin:-8px 0 14px;">Vinculada ao carregamento — cliente e placa vieram do Faturamento.</p>` : ''}
+    <div class="form-grade">
+      <div class="campo"><label>Nº da amostra *</label><input id="fa-numero" value="${esc(l?.numero_amostra ?? '')}"></div>
+      <div class="campo"><label>Origem</label><select id="fa-origem" ${c ? 'disabled' : ''}>
+        ${ORIGENS_AMOSTRA.map(o => `<option value="${o}" ${(l?.origem ?? (c ? 'EXPEDICAO' : 'PRODUCAO')) === o ? 'selected' : ''}>${ROTULO_ORIGEM_AMOSTRA[o]}</option>`).join('')}</select></div>
+      <div class="campo"><label>Produtor / Cliente</label><input id="fa-produtor" value="${esc(produtor)}" ${c ? 'disabled' : ''}></div>
+      <div class="campo"><label>Placa do caminhão</label><input id="fa-placa" value="${esc(placa)}" ${c ? 'disabled' : ''}></div>
+      <div class="campo"><label>Produto</label><input id="fa-produto" value="${esc(produtoNome)}" ${c ? 'disabled' : ''}></div>
+      <div class="campo"><label>Data da amostra *</label><input type="date" id="fa-data" value="${l?.data_amostra ?? dataSugerida ?? hojeISO()}"></div>
+      <div class="campo"><label>Horário *</label><input type="time" id="fa-hora" value="${l?.horario_amostra?.slice(0, 5) ?? ''}"></div>
+      <div class="campo"><label>Quantidade</label><input id="fa-qtd" inputmode="decimal" value="${l?.quantidade ?? ''}"></div>
+      <div class="campo"><label>Recebida por</label><select id="fa-recebida"><option value="">carregando...</option></select></div>
+      <div class="campo"><label>Entregue por (motorista)</label><input id="fa-entregue" value="${esc(l?.entregue_por ?? '')}"></div>
+      <div class="campo"><label>Status</label><select id="fa-status">
+        ${STATUS_AMOSTRA.map(s => `<option value="${s}" ${(l?.status ?? 'PENDENTE') === s ? 'selected' : ''}>${ROTULO_STATUS_AMOSTRA[s]}</option>`).join('')}</select></div>
+    </div>
+    <div class="campo" style="margin-top:10px;"><label>Resultado</label><input id="fa-resultado" value="${esc(l?.resultado ?? '')}" placeholder="ex: teor, umidade, laudo..."></div>
+    <div class="campo" style="margin-top:10px;"><label>Observações</label><textarea id="fa-obs" style="min-height:70px;">${esc(l?.observacoes ?? '')}</textarea></div>
+    <div class="acoes" style="margin-top:14px;"><button class="btn" id="fa-salvar">Salvar</button>
+      <button class="btn-secundario" id="fa-fechar">Fechar</button></div>
+    <div class="recado oculto" id="fa-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#fa-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  // carrega pessoas pro select de "recebida por" (função definida abaixo)
+  carregarPessoasLab(fundo.querySelector('#fa-recebida'), l?.recebida_por)
+
+  fundo.querySelector('#fa-salvar').onclick = async () => {
+    const el = fundo.querySelector('#fa-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const numero = fundo.querySelector('#fa-numero').value.trim()
+    if (!numero) { aviso('Informe o número da amostra.'); return }
+    if (!fundo.querySelector('#fa-data').value) { aviso('Informe a data.'); return }
+    const btn = fundo.querySelector('#fa-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const corpo = {
+      numero_amostra: numero, carregamento_id: c?.id ?? l?.carregamento_id ?? null,
+      origem: fundo.querySelector('#fa-origem').value,
+      produtor_nome: fundo.querySelector('#fa-produtor').value.trim() || null,
+      placa_caminhao: fundo.querySelector('#fa-placa').value.trim() || null,
+      produto_nome: fundo.querySelector('#fa-produto').value.trim() || null,
+      data_amostra: fundo.querySelector('#fa-data').value,
+      horario_amostra: fundo.querySelector('#fa-hora').value || null,
+      quantidade: numeroBR(fundo.querySelector('#fa-qtd').value),
+      recebida_por: fundo.querySelector('#fa-recebida').value || null,
+      entregue_por: fundo.querySelector('#fa-entregue').value.trim() || null,
+      status: fundo.querySelector('#fa-status').value,
+      resultado: fundo.querySelector('#fa-resultado').value.trim() || null,
+      observacoes: fundo.querySelector('#fa-obs').value.trim() || null
+    }
+    let error, novaAmostra = null
+    if (l) { ({ error } = await db.from('lab_amostra').update(corpo).eq('id', l.id)) }
+    else { ({ data: novaAmostra, error } = await db.from('lab_amostra').insert({ ...corpo, criado_por: PERFIL.pessoaId }).select().single()) }
+    btn.disabled = false; btn.textContent = 'Salvar'
+    if (error) { aviso(error.message); return }
+    fechar(); aoSalvar()
+    if (novaAmostra) abrirTicketAmostra(novaAmostra) // "salvar amostra + ticket", igual o sistema antigo
+  }
+}
+
+// cache simples de pessoas ativas pra popular o select de "recebida por"
+let LAB_PESSOAS_CACHE = null
+async function carregarPessoasLab (select, selecionadoId) {
+  if (!LAB_PESSOAS_CACHE) {
+    const { data } = await db.from('pessoa').select('id,nome').eq('status', 'ATIVO').order('nome')
+    LAB_PESSOAS_CACHE = data || []
+  }
+  select.innerHTML = '<option value="">—</option>' + LAB_PESSOAS_CACHE.map(p =>
+    `<option value="${p.id}" ${p.id === selecionadoId ? 'selected' : ''}>${esc(p.nome)}</option>`).join('')
+}
+
+function abrirTicketAmostra (a) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = documentoPDF({
+    titulo: 'Laboratório Gefoscal',
+    subtitulo: 'Etiqueta da amostra — colar no frasco',
+    corpo: `
+      <div style="border:2px solid var(--rust);border-radius:12px;padding:18px 20px;max-width:320px;">
+        <div style="font-size:28px;font-weight:800;color:var(--rust);margin-bottom:10px;">#${esc(a.numero_amostra)}</div>
+        ${docLinha('Origem', ROTULO_ORIGEM_AMOSTRA[a.origem] ?? a.origem)}
+        ${docLinha('Data', fmtData(a.data_amostra))}
+        ${docLinha('Horário', a.horario_amostra ? a.horario_amostra.slice(0, 5) : '—')}
+        ${docLinha('Produtor', a.produtor_nome || '—')}
+        ${docLinha('Placa', a.placa_caminhao || '—')}
+        ${docLinha('Quantidade', a.quantidade != null ? fmtNum(a.quantidade, 2) : '—')}
+      </div>`,
+    acoes: `<button class="btn" id="tk-imprimir">Baixar / imprimir</button>
+            <button class="btn-secundario" id="tk-fechar">Fechar</button>`
+  })
+  document.body.appendChild(fundo)
+  fundo.querySelector('#tk-fechar').onclick = () => fundo.remove()
+  fundo.querySelector('#tk-imprimir').onclick = () => window.print()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+}
+
+// ----- Reagentes -----
+async function labReagentes (alvo, editavel) {
+  const hoje = new Date()
+  alvo.innerHTML = `
+    ${editavel ? `<div class="panel" style="padding:20px;margin-bottom:16px;">
+      <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 14px;">Lançar uso de reagente</h3>
+      <div class="form-grade">
+        <div class="campo"><label>Data *</label><input type="date" id="lr-data" value="${hojeISO()}"></div>
+        <div class="campo"><label>Reagente *</label><select id="lr-reagente">${REAGENTES_LAB.map(r => `<option value="${esc(r)}">${esc(r)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Quantidade *</label><input id="lr-qtd" inputmode="decimal"></div>
+        <div class="campo"><label>Analista</label><select id="lr-analista"></select></div>
+      </div>
+      <div class="campo" style="margin-top:10px;"><label>Uso</label><input id="lr-uso" placeholder="ex: análise de teor de P2O5"></div>
+      <div class="acoes" style="margin-top:12px;"><button class="btn" id="lr-salvar">Lançar</button></div>
+      <div class="recado oculto" id="lr-recado"></div>
+    </div>` : ''}
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>Mês</label><input type="number" id="lr-f-mes" min="1" max="12" value="${hoje.getMonth() + 1}" style="width:70px;"></div>
+      <div class="campo"><label>Ano</label><input type="number" id="lr-f-ano" value="${hoje.getFullYear()}" style="width:90px;"></div>
+      <button class="btn-secundario" id="lr-f-aplicar">Filtrar</button>
+    </div>
+    <div id="lr-lista"><p class="texto-dim2">carregando...</p></div>`
+
+  if (editavel) carregarPessoasLab($('#lr-analista'))
+
+  const buscar = async () => {
+    $('#lr-lista').innerHTML = `<p class="texto-dim2">carregando...</p>`
+    const mes = Number($('#lr-f-mes').value), ano = Number($('#lr-f-ano').value)
+    const de = new Date(ano, mes - 1, 1).toISOString().slice(0, 10)
+    const ate = new Date(ano, mes, 0).toISOString().slice(0, 10)
+    const { data, error } = await db.from('lab_reagente_uso').select(`
+      id, data, reagente, quantidade, uso, analista:analista_id ( nome )
+    `).gte('data', de).lte('data', ate).order('data', { ascending: false })
+    if (error) { $('#lr-lista').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+    const lista = data || []
+    const totalQtd = lista.reduce((s, r) => s + Number(r.quantidade || 0), 0)
+
+    $('#kpis').innerHTML = kpi('Lançamentos no mês', lista.length) + kpi('Quantidade total', fmtNum(totalQtd))
+
+    $('#lr-lista').innerHTML = `
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr><th>Data</th><th>Reagente</th><th class="num">Qtd</th><th>Uso</th><th>Analista</th></tr></thead><tbody>
+          ${lista.map(r => `<tr>
+            <td class="texto-dim2">${fmtData(r.data)}</td>
+            <td>${esc(r.reagente)}</td>
+            <td class="num">${fmtNum(r.quantidade)}</td>
+            <td class="texto-dim">${esc(r.uso ?? '—')}</td>
+            <td class="texto-dim">${esc(r.analista?.nome ?? '—')}</td>
+          </tr>`).join('') || `<tr><td colspan="5" class="vazio">Nenhum lançamento no período.</td></tr>`}
+        </tbody></table>
+      </div></div>`
+  }
+
+  if (editavel) $('#lr-salvar').onclick = async () => {
+    const el = $('#lr-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const qtd = numeroBR($('#lr-qtd').value)
+    if (qtd === null || qtd <= 0) { aviso('Informe a quantidade.'); return }
+    const btn = $('#lr-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const { error } = await db.from('lab_reagente_uso').insert({
+      data: $('#lr-data').value, reagente: $('#lr-reagente').value, quantidade: qtd,
+      uso: $('#lr-uso').value.trim() || null, analista_id: $('#lr-analista').value || null
+    })
+    btn.disabled = false; btn.textContent = 'Lançar'
+    if (error) { aviso(error.message); return }
+    $('#lr-qtd').value = ''; $('#lr-uso').value = ''
+    buscar()
+  }
+  $('#lr-f-aplicar').onclick = buscar
+  buscar()
+}
+
+// ----- Estoque (com controle regulatório PF / Exército) -----
+async function labEstoque (alvo, editavel) {
+  alvo.innerHTML = `
+    ${editavel ? `<div class="panel" style="padding:20px;margin-bottom:16px;">
+      <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 14px;">Movimentar estoque</h3>
+      <div class="form-grade">
+        <div class="campo"><label>Data *</label><input type="date" id="le-data" value="${hojeISO()}"></div>
+        <div class="campo"><label>Material *</label><input id="le-material" placeholder="ex: Ácido Nítrico 65%"></div>
+        <div class="campo"><label>Categoria</label><input id="le-categoria"></div>
+        <div class="campo"><label>Unidade</label><input id="le-unidade" value="L"></div>
+        <div class="campo"><label>Tipo</label><select id="le-tipo"><option value="ENTRADA">Entrada</option><option value="SAIDA">Saída</option></select></div>
+        <div class="campo"><label>Quantidade *</label><input id="le-qtd" inputmode="decimal"></div>
+        <div class="campo"><label>Lote</label><input id="le-lote"></div>
+        <div class="campo"><label>Validade</label><input type="date" id="le-validade"></div>
+        <div class="campo"><label>Fornecedor</label><input id="le-fornecedor"></div>
+      </div>
+      <div style="display:flex;gap:18px;margin-top:10px;">
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;"><input type="checkbox" id="le-pf"> Controlado — Polícia Federal</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;"><input type="checkbox" id="le-exercito"> Controlado — Exército</label>
+      </div>
+      <div class="campo" style="margin-top:10px;"><label>Observação</label><input id="le-obs"></div>
+      <div class="acoes" style="margin-top:12px;"><button class="btn" id="le-salvar">Registrar movimentação</button></div>
+      <div class="recado oculto" id="le-recado"></div>
+    </div>` : ''}
+
+    <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Saldo atual por material</h3></div>
+    <div id="le-resumo" style="margin-bottom:18px;"><p class="texto-dim2">carregando...</p></div>
+
+    <div class="acoes" style="margin-bottom:14px;">
+      <button class="btn-secundario" id="le-mapa-pf">Gerar Mapa — Polícia Federal</button>
+      <button class="btn-secundario" id="le-mapa-exercito">Gerar Mapa — Exército</button>
+    </div>
+
+    <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Movimentações</h3></div>
+    <div id="le-lista"><p class="texto-dim2">carregando...</p></div>`
+
+  const carregarResumo = async () => {
+    const { data, error } = await db.from('lab_estoque_movimento').select('*').order('criado_em', { ascending: false }).limit(3000)
+    if (error) { $('#le-resumo').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return [] }
+    const porMaterial = {}
+    ;(data || []).forEach(m => { if (!porMaterial[m.material]) porMaterial[m.material] = m })
+    const itens = Object.values(porMaterial).sort((a, b) => a.material.localeCompare(b.material))
+
+    $('#le-resumo').innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;">
+        ${itens.map(m => `<div class="panel" style="padding:14px 16px;border-left:3px solid ${m.controlado_pf || m.controlado_exercito ? 'var(--warn-text)' : 'var(--dim2)'};">
+          <div style="font-weight:600;font-size:13px;margin-bottom:4px;">${esc(m.material)}
+            ${m.controlado_pf ? '<span class="badge-alerta" style="font-size:9px;margin-left:4px;">PF</span>' : ''}
+            ${m.controlado_exercito ? '<span class="badge-alerta" style="font-size:9px;margin-left:4px;">EXÉRCITO</span>' : ''}</div>
+          <div style="font-family:var(--serif);font-size:19px;">${fmtNum(m.saldo_apos)} <span style="font-size:12px;color:var(--dim2);">${esc(m.unidade_medida)}</span></div>
+          ${m.validade ? `<div class="texto-dim2" style="font-size:11px;margin-top:3px;">validade: ${fmtData(m.validade)}</div>` : ''}
+        </div>`).join('') || '<p class="vazio">Nenhum material em estoque ainda.</p>'}
+      </div>`
+    return data || []
+  }
+
+  const carregarLista = async () => {
+    const { data, error } = await db.from('lab_estoque_movimento').select('*').order('data', { ascending: false }).limit(300)
+    if (error) { $('#le-lista').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+    $('#le-lista').innerHTML = `
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr><th>Data</th><th>Material</th><th>Tipo</th><th class="num">Qtd</th><th class="num">Saldo após</th><th>Controlado</th></tr></thead><tbody>
+          ${(data || []).map(m => `<tr>
+            <td class="texto-dim2">${fmtData(m.data)}</td>
+            <td>${esc(m.material)}</td>
+            <td><span class="${m.tipo_mov === 'ENTRADA' ? 'badge-bom' : 'texto-dim'}">${m.tipo_mov === 'ENTRADA' ? 'Entrada' : 'Saída'}</span></td>
+            <td class="num">${fmtNum(m.quantidade)} ${esc(m.unidade_medida)}</td>
+            <td class="num">${fmtNum(m.saldo_apos)} ${esc(m.unidade_medida)}</td>
+            <td class="texto-dim2">${[m.controlado_pf ? 'PF' : null, m.controlado_exercito ? 'Exército' : null].filter(Boolean).join(', ') || '—'}</td>
+          </tr>`).join('') || `<tr><td colspan="6" class="vazio">Nenhuma movimentação ainda.</td></tr>`}
+        </tbody></table>
+      </div></div>`
+  }
+
+  if (editavel) $('#le-salvar').onclick = async () => {
+    const el = $('#le-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const material = $('#le-material').value.trim()
+    const qtd = numeroBR($('#le-qtd').value)
+    if (!material) { aviso('Informe o material.'); return }
+    if (qtd === null || qtd <= 0) { aviso('Informe a quantidade.'); return }
+
+    const { data: ultimo } = await db.from('lab_estoque_movimento').select('saldo_apos')
+      .eq('material', material).order('criado_em', { ascending: false }).limit(1).maybeSingle()
+    const saldoAnterior = Number(ultimo?.saldo_apos ?? 0)
+    const tipo = $('#le-tipo').value
+    const saldoApos = tipo === 'SAIDA' ? saldoAnterior - qtd : saldoAnterior + qtd
+    if (saldoApos < 0) { aviso('Essa saída deixaria o saldo negativo — confere a quantidade.'); return }
+
+    const btn = $('#le-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const { error } = await db.from('lab_estoque_movimento').insert({
+      data: $('#le-data').value, material, categoria: $('#le-categoria').value.trim() || null,
+      unidade_medida: $('#le-unidade').value.trim() || 'L', tipo_mov: tipo, quantidade: qtd, saldo_apos: saldoApos,
+      controlado_pf: $('#le-pf').checked, controlado_exercito: $('#le-exercito').checked,
+      numero_lote: $('#le-lote').value.trim() || null, validade: $('#le-validade').value || null,
+      fornecedor: $('#le-fornecedor').value.trim() || null, observacoes: $('#le-obs').value.trim() || null,
+      criado_por: PERFIL.pessoaId
+    })
+    btn.disabled = false; btn.textContent = 'Registrar movimentação'
+    if (error) { aviso(error.message); return }
+    ;['le-material', 'le-categoria', 'le-qtd', 'le-lote', 'le-fornecedor', 'le-obs'].forEach(id => { $('#' + id).value = '' })
+    $('#le-pf').checked = false; $('#le-exercito').checked = false
+    carregarResumo(); carregarLista()
+  }
+
+  $('#le-mapa-pf').onclick = async () => gerarMapaControlado('controlado_pf', 'Polícia Federal')
+  $('#le-mapa-exercito').onclick = async () => gerarMapaControlado('controlado_exercito', 'Exército Brasileiro')
+
+  carregarResumo(); carregarLista()
+}
+
+// Mapa de controle de produtos químicos (PF / Exército) — mesmo espírito
+// do Mapa MAPA: lista os controlados com estoque anterior/entrada/saída/atual
+// do mês corrente, pronto pra declarar.
+async function gerarMapaControlado (campo, orgao) {
+  const hoje = new Date()
+  const de = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString().slice(0, 10)
+  const { data, error } = await db.from('lab_estoque_movimento').select('*').eq(campo, true).order('material').order('criado_em')
+  if (error || !data?.length) { alert(`Nenhum material controlado por ${orgao} no estoque.`); return }
+
+  const porMaterial = {}
+  data.forEach(m => {
+    porMaterial[m.material] = porMaterial[m.material] || { entradaAntes: 0, saidaAntes: 0, entradaMes: 0, saidaMes: 0, saldoAtual: 0, unidade: m.unidade_medida }
+    const g = porMaterial[m.material]
+    const noMes = m.data >= de
+    if (m.tipo_mov === 'ENTRADA') { if (noMes) g.entradaMes += Number(m.quantidade); else g.entradaAntes += Number(m.quantidade) }
+    else { if (noMes) g.saidaMes += Number(m.quantidade); else g.saidaAntes += Number(m.quantidade) }
+    g.saldoAtual = Number(m.saldo_apos)
+    g.unidade = m.unidade_medida
+  })
+
+  const linhas = Object.entries(porMaterial)
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = documentoPDF({
+    titulo: `Mapa de Controle de Produtos Químicos — ${orgao}`,
+    subtitulo: `Grupo Gefoscal · Mês de referência: ${hoje.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}`,
+    corpo: docBloco('Materiais controlados', `
+      <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+        <thead><tr style="text-align:left;border-bottom:1px solid var(--borda, #ccc);">
+          <th style="padding:6px 4px;">Produto</th><th style="padding:6px 4px;">Estoque anterior</th>
+          <th style="padding:6px 4px;">Entrada (mês)</th><th style="padding:6px 4px;">Saída (mês)</th><th style="padding:6px 4px;">Estoque atual</th>
+        </tr></thead><tbody>
+          ${linhas.map(([nome, v]) => `<tr>
+            <td style="padding:6px 4px;">${esc(nome)}</td>
+            <td style="padding:6px 4px;">${fmtNum(v.entradaAntes - v.saidaAntes)} ${esc(v.unidade)}</td>
+            <td style="padding:6px 4px;">${fmtNum(v.entradaMes)} ${esc(v.unidade)}</td>
+            <td style="padding:6px 4px;">${fmtNum(v.saidaMes)} ${esc(v.unidade)}</td>
+            <td style="padding:6px 4px;"><b>${fmtNum(v.saldoAtual)} ${esc(v.unidade)}</b></td>
+          </tr>`).join('')}
+        </tbody></table>`) + docTexto('Finalidade do consumo', 'Análises laboratoriais.'),
+    acoes: `<button class="btn" id="gm-pdf-imprimir">Baixar / imprimir PDF</button>
+            <button class="btn-secundario" id="gm-pdf-fechar">Fechar</button>`
+  })
+  document.body.appendChild(fundo)
+  fundo.querySelector('#gm-pdf-fechar').onclick = () => fundo.remove()
+  fundo.querySelector('#gm-pdf-imprimir').onclick = () => window.print()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
 }
 
 // ---------------------------------------------------------------
