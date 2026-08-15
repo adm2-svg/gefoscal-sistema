@@ -4,6 +4,17 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sistema Gefoscal</title>
+
+<!-- PWA: deixa instalar como app no celular, sem passar por loja -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1c5632">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Gefoscal">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icon-192.png">
+
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400..700&family=Roboto:wght@300;400;500;700;900&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="skins_gefoscal.css">
@@ -597,6 +608,9 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
     </div>
     <div id="menu"></div>
     <div class="linha-divisoria" style="margin:18px 0 12px;"></div>
+    <button class="btn-secundario oculto" id="btn-instalar" style="width:100%;margin-bottom:8px;">
+      <span class="rotulo">📲 Instalar app</span>
+    </button>
     <button class="btn-secundario" id="btn-sair" style="width:100%;" onclick="sair()">
       <span class="rotulo">Sair</span>
     </button>
@@ -1251,6 +1265,21 @@ async function paginaVisaoGeral () {
     return
   }
 
+  // saudação com a data por extenso — amarra visualmente todos os
+  // blocos que vêm a seguir, meio que um "hoje é assim" antes de entrar
+  // nos detalhes de cada módulo
+  const agora = new Date()
+  const hora = agora.getHours()
+  const saudacao = hora < 12 ? 'Bom dia' : hora < 18 ? 'Boa tarde' : 'Boa noite'
+  const dataExtenso = agora.toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })
+  const primeiroNome = (PERFIL.nome || '').split(' ')[0]
+  const cabecalho = document.createElement('div')
+  cabecalho.style.cssText = 'margin-bottom:18px;'
+  cabecalho.innerHTML = `
+    <h2 style="font-family:var(--serif);font-size:24px;margin:0;">${saudacao}${primeiroNome ? ', ' + esc(primeiroNome) : ''}</h2>
+    <p class="texto-dim2" style="font-size:13px;margin:3px 0 0;text-transform:capitalize;">${esc(dataExtenso)}</p>`
+  area.appendChild(cabecalho)
+
   // avisos não lidos primeiro
   const { data: avisos } = await db.from('aviso')
     .select('id,titulo,texto,criado_em').is('lido_em', null)
@@ -1613,8 +1642,10 @@ async function solicLista (alvo, { meuSetor }) {
       ${!meuSetor ? `<div class="campo"><label>Setor</label>
         <select id="sl-setor"><option value="">Todos</option>${SOLIC_CACHE.setores.map(s => `<option value="${s.id}">${esc(s.nome)}</option>`).join('')}</select></div>` : ''}
       <div class="campo"><label>Status</label>
-        <select id="sl-status"><option value="">Todos</option>${STATUS_SOLICITACAO.map(s => `<option value="${s}">${ROTULO_STATUS_SOLICITACAO[s]}</option>`).join('')}</select></div>
+        <select id="sl-status"><option value="">Todos (em andamento)</option>${STATUS_SOLICITACAO.map(s => `<option value="${s}">${ROTULO_STATUS_SOLICITACAO[s]}</option>`).join('')}</select></div>
       <button class="btn" id="sl-buscar">Buscar</button>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:400;color:var(--dim);align-self:center;">
+        <input type="checkbox" id="sl-mostrar-concluidas"> mostrar concluídas/canceladas também</label>
     </div>
     <div id="sl-conteudo"></div>`
 
@@ -1629,6 +1660,10 @@ async function solicLista (alvo, { meuSetor }) {
     if (meuSetor) q = q.eq('setor_destino_id', PERFIL.setorId)
     else if ($('#sl-setor').value) q = q.eq('setor_destino_id', $('#sl-setor').value)
     if ($('#sl-status').value) q = q.eq('status', $('#sl-status').value)
+    // concluída/cancelada não fica acumulando na tela de quem trabalha —
+    // isso vira histórico (já rastreado em RH → Agilidade e prazos),
+    // só aparece aqui se pedir status específico ou marcar o checkbox
+    else if (!$('#sl-mostrar-concluidas').checked) q = q.not('status', 'in', '(CONCLUIDA,CANCELADA)')
 
     const { data, error } = await q
     if (error) { $('#sl-conteudo').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
@@ -1670,6 +1705,7 @@ async function solicLista (alvo, { meuSetor }) {
   }
 
   $('#sl-buscar').onclick = buscar
+  $('#sl-mostrar-concluidas').onchange = buscar
   $('#sl-status').onchange = buscar
   if (!meuSetor) $('#sl-setor').onchange = buscar
   buscar()
@@ -2567,7 +2603,22 @@ async function areaDeTrabalho (area) {
       <button class="apagar" data-apagar="${t.id}" title="apagar">×</button>
     </div>`
 
-  $('#tf-lista').innerHTML = abertas.map(linhaTarefa).join('') ||
+  // agrupa em seções tipo agenda de verdade, em vez de uma lista corrida —
+  // fica mais fácil bater o olho no que é urgente x no que ainda tem tempo
+  const daqui7dias = new Date(Date.now() + 7 * 864e5).toISOString().slice(0, 10)
+  const grupos = [
+    ['Atrasadas', abertas.filter(t => t.prazo && t.prazo < hoje)],
+    ['Hoje', abertas.filter(t => t.prazo === hoje)],
+    ['Próximos 7 dias', abertas.filter(t => t.prazo && t.prazo > hoje && t.prazo <= daqui7dias)],
+    ['Mais adiante', abertas.filter(t => t.prazo && t.prazo > daqui7dias)],
+    ['Sem data', abertas.filter(t => !t.prazo)]
+  ].filter(([, itens]) => itens.length)
+
+  $('#tf-lista').innerHTML = grupos.length ? grupos.map(([titulo, itens]) => `
+    <div style="margin-top:10px;">
+      <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;margin:8px 0 4px;">${titulo}</div>
+      ${itens.map(linhaTarefa).join('')}
+    </div>`).join('') :
     `<p class="texto-dim2" style="font-size:13px;padding:10px 0;">
       Nada pendente. Escreva acima o que precisa fazer.</p>`
 
@@ -3025,7 +3076,7 @@ function podeEditarSolicitacao (s) {
   return false
 }
 
-let COMPRAS_CACHE = { fornecedores: [], setores: [], pessoas: [], meusSetores: [], veiculos: [] }
+let COMPRAS_CACHE = { fornecedores: [], setores: [], pessoas: [], meusSetores: [], veiculos: [], empresas: [] }
 
 async function paginaCompras () {
   const editavel = podeEditar('compras')
@@ -3039,18 +3090,20 @@ async function paginaCompras () {
   area.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
   // carrega antes de montar as abas: quem coordena depende dos setores
-  const [{ data: forn }, { data: setores }, { data: pessoas }, { data: veiculos }] = await Promise.all([
+  const [{ data: forn }, { data: setores }, { data: pessoas }, { data: veiculos }, { data: empresas }] = await Promise.all([
     db.from('fornecedor').select('id,nome,cnpj_cpf,contato,status').order('nome'),
     db.from('setor').select('id,nome,gestor_id').order('nome'),
     db.from('pessoa').select('id,nome').order('nome'),
-    db.from('veiculo').select('id,placa,descricao').order('placa')
+    db.from('veiculo').select('id,placa,descricao').order('placa'),
+    db.from('empresa').select('id,nome').eq('status', 'ATIVO').order('nome')
   ])
   COMPRAS_CACHE = {
     fornecedores: forn || [],
     setores: setores || [],
     pessoas: pessoas || [],
     meusSetores: (setores || []).filter(s => s.gestor_id && s.gestor_id === PERFIL.pessoaId),
-    veiculos: veiculos || []
+    veiculos: veiculos || [],
+    empresas: empresas || []
   }
 
   const abas = [
@@ -3862,6 +3915,8 @@ function formSolicitacao (s = null) {
           <select id="s-veiculo"><option value="">—</option>${COMPRAS_CACHE.veiculos.map(v => `<option value="${v.id}" ${v.id === s?.veiculo_id ? 'selected' : ''}>${esc(v.placa)}${v.descricao ? ' — ' + esc(v.descricao) : ''}</option>`).join('')}</select></div>
         <div class="campo"><label>Setor</label>
           <select id="s-setor">${opc(COMPRAS_CACHE.setores, s?.setor_id)}</select></div>
+        <div class="campo"><label>Empresa</label>
+          <select id="s-empresa">${opc(COMPRAS_CACHE.empresas, s?.empresa_id)}</select></div>
         <div class="campo"><label>Valor estimado (R$)</label>
           <input id="s-valor" inputmode="decimal" value="${s?.valor_estimado ?? ''}" placeholder="80,00"></div>
         <div class="campo"><label>Fornecedor sugerido</label>
@@ -3927,6 +3982,7 @@ function formSolicitacao (s = null) {
       tipo_solicitacao: q('#s-tipo').value || null,
       veiculo_id: q('#s-tipo').value === 'Peça de reposição' ? (q('#s-veiculo').value || null) : null,
       setor_id: q('#s-setor').value || null,
+      empresa_id: q('#s-empresa').value || null,
       valor_estimado: (() => {
         let b = q('#s-valor').value.trim()
         if (!b) return null
@@ -15500,7 +15556,7 @@ function frotaCalculadora (alvo) {
 // Notificações/autuações podem virar um Projeto com 1 clique, pra
 // tocar o trabalho no Kanban/Progresso que já existe.
 // ---------------------------------------------------------------
-let JUR_CACHE = { pessoas: [] }
+let JUR_CACHE = { pessoas: [], empresas: [] }
 const CATEGORIAS_LICENCA = ['Ambiental', 'Sanitária/Bombeiros', 'Municipal/Alvará', 'Fiscal/Certidões', 'Seguros', 'Trabalhista', 'Outra']
 const CATEGORIAS_CONTRATO = ['Fornecedor', 'Cliente', 'Locação', 'Prestação de serviço', 'PJ', 'Parceria', 'Financeiro', 'Outro']
 const ROTULO_TIPO_PJ = { PJ_INTERNO: 'PJ interno (faz parte do time)', PJ_PRESTADOR_SERVICOS: 'PJ prestador de serviços (externo)' }
@@ -15518,8 +15574,12 @@ async function paginaJuridico () {
   const area = areaLivre()
   area.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
-  const { data: pessoas } = await db.from('pessoa').select('id,nome').eq('status', 'ATIVO').order('nome')
+  const [{ data: pessoas }, { data: empresas }] = await Promise.all([
+    db.from('pessoa').select('id,nome').eq('status', 'ATIVO').order('nome'),
+    db.from('empresa').select('id,nome').eq('status', 'ATIVO').order('nome')
+  ])
   JUR_CACHE.pessoas = pessoas || []
+  JUR_CACHE.empresas = empresas || []
 
   const abas = [['painel', 'Painel'], ['contratos', 'Contratos'], ['licencas', 'Licenças e certidões'],
     ['processos', 'Processos'], ['notificacoes', 'Notificações e autuações'], ['documentos', 'Documentos']]
@@ -15699,6 +15759,8 @@ function formContrato (c) {
           </select></div>
         <div class="campo"><label>Responsável</label>
           <select id="ct-resp">${opcoesFin(JUR_CACHE.pessoas, 'sem responsável', c?.responsavel_id)}</select></div>
+        <div class="campo"><label>Empresa</label>
+          <select id="ct-empresa">${opcoesFin(JUR_CACHE.empresas, '—', c?.empresa_id)}</select></div>
         <div class="campo" style="grid-column:1/-1;"><label>Link do anexo</label>
           <input id="ct-anexo" value="${v('anexo_link')}" placeholder="link do Drive"></div>
       </div>
@@ -15757,6 +15819,7 @@ function formContrato (c) {
       renovacao: q('#ct-renov').value,
       status: q('#ct-status').value,
       responsavel_id: q('#ct-resp').value || null,
+      empresa_id: q('#ct-empresa').value || null,
       anexo_link: q('#ct-anexo').value.trim() || null,
       observacoes: q('#ct-obs').value.trim() || null
     }
@@ -15885,6 +15948,8 @@ function formLicenca (l) {
           </select></div>
         <div class="campo"><label>Responsável</label>
           <select id="lc-resp">${opcoesFin(JUR_CACHE.pessoas, 'sem responsável', l?.responsavel_id)}</select></div>
+        <div class="campo"><label>Empresa</label>
+          <select id="lc-empresa">${opcoesFin(JUR_CACHE.empresas, '—', l?.empresa_id)}</select></div>
         <div class="campo" style="grid-column:1/-1;"><label>Link do anexo</label>
           <input id="lc-anexo" value="${v('anexo_link')}" placeholder="link do Drive"></div>
       </div>
@@ -15920,6 +15985,7 @@ function formLicenca (l) {
       data_validade: q('#lc-validade').value || null,
       status: q('#lc-status').value,
       responsavel_id: q('#lc-resp').value || null,
+      empresa_id: q('#lc-empresa').value || null,
       anexo_link: q('#lc-anexo').value.trim() || null,
       observacoes: q('#lc-obs').value.trim() || null
     }
@@ -16037,6 +16103,8 @@ function formProcesso (p) {
             <option value="SUSPENSO" ${p?.status === 'SUSPENSO' ? 'selected' : ''}>suspenso</option>
             <option value="ENCERRADO" ${p?.status === 'ENCERRADO' ? 'selected' : ''}>encerrado</option>
           </select></div>
+        <div class="campo"><label>Empresa</label>
+          <select id="pr-empresa">${opcoesFin(JUR_CACHE.empresas, '—', p?.empresa_id)}</select></div>
       </div>
       <div class="campo" style="margin-top:12px;"><label>Observações</label>
         <textarea id="pr-obs" style="min-height:64px;">${v('observacoes')}</textarea></div>
@@ -16072,6 +16140,7 @@ function formProcesso (p) {
       responsavel: q('#pr-resp').value.trim() || null,
       proxima_data: q('#pr-prox').value || null,
       status: q('#pr-status').value,
+      empresa_id: q('#pr-empresa').value || null,
       observacoes: q('#pr-obs').value.trim() || null
     }
     let error
@@ -16172,6 +16241,8 @@ function formNotificacao (n) {
             <option value="RESPONDIDA" ${n?.status === 'RESPONDIDA' ? 'selected' : ''}>respondida</option>
             <option value="ENCERRADA" ${n?.status === 'ENCERRADA' ? 'selected' : ''}>encerrada</option>
           </select></div>
+        <div class="campo"><label>Empresa</label>
+          <select id="nt-empresa">${opcoesFin(JUR_CACHE.empresas, '—', n?.empresa_id)}</select></div>
         <div class="campo" style="grid-column:1/-1;"><label>Link do anexo</label><input id="nt-anexo" value="${v('anexo_link')}" placeholder="link do Drive"></div>
       </div>
       <div class="campo" style="margin-top:12px;"><label>Descrição *</label><input id="nt-desc" value="${v('descricao')}" placeholder="o que a notificação/autuação diz"></div>
@@ -16205,6 +16276,7 @@ function formNotificacao (n) {
       prazo_resposta: q('#nt-prazo').value || null,
       responsavel_id: q('#nt-resp').value || null,
       status: q('#nt-status').value,
+      empresa_id: q('#nt-empresa').value || null,
       anexo_link: q('#nt-anexo').value.trim() || null,
       descricao: desc,
       observacoes: q('#nt-obs').value.trim() || null
@@ -16277,6 +16349,7 @@ function formDocumentoJuridico (d) {
       <div class="campo"><label>Categoria</label>
         <select id="dc-cat">${CATEGORIAS_DOC.map(x => `<option ${d?.categoria === x ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
       <div class="campo"><label>Responsável</label><select id="dc-resp">${opcoesFin(JUR_CACHE.pessoas, 'sem responsável', d?.responsavel_id)}</select></div>
+      <div class="campo"><label>Empresa</label><select id="dc-empresa">${opcoesFin(JUR_CACHE.empresas, '—', d?.empresa_id)}</select></div>
       <div class="campo" style="grid-column:1/-1;"><label>Link (Drive)</label><input id="dc-link" value="${v('link')}"></div>
     </div>
     <div class="campo" style="margin-top:10px;"><label>Observações</label><textarea id="dc-obs" style="min-height:64px;">${v('observacoes')}</textarea></div>
@@ -16302,6 +16375,7 @@ function formDocumentoJuridico (d) {
     if (!nome) { aviso('Escreva o nome do documento.'); return }
     const corpo = {
       nome, categoria: q('#dc-cat').value, responsavel_id: q('#dc-resp').value || null,
+      empresa_id: q('#dc-empresa').value || null,
       link: q('#dc-link').value.trim() || null, observacoes: q('#dc-obs').value.trim() || null,
       atualizado_em: new Date().toISOString()
     }
@@ -17459,6 +17533,34 @@ function formAniversarianteMkt (alvoPai, editavel) {
 // ---------------------------------------------------------------
 const { data: { session } } = await db.auth.getSession()
 if (session) await abrirApp()
+
+// PWA: registra o service worker (silencioso — se falhar, o sistema
+// continua funcionando normal, só não vira "app instalável")
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./service-worker.js').catch(() => {})
+  })
+}
+
+// botão "Instalar app" — só aparece quando o navegador (Chrome/Android,
+// Edge etc.) sinaliza que dá pra instalar. No iPhone/Safari não existe
+// esse evento — lá é "Compartilhar → Adicionar à Tela de Início".
+let promptInstalacao = null
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault()
+  promptInstalacao = e
+  document.getElementById('btn-instalar')?.classList.remove('oculto')
+})
+document.getElementById('btn-instalar')?.addEventListener('click', async () => {
+  if (!promptInstalacao) return
+  promptInstalacao.prompt()
+  await promptInstalacao.userChoice
+  promptInstalacao = null
+  document.getElementById('btn-instalar')?.classList.add('oculto')
+})
+window.addEventListener('appinstalled', () => {
+  document.getElementById('btn-instalar')?.classList.add('oculto')
+})
 </script>
 </body>
 </html>
