@@ -4723,7 +4723,7 @@ function expedLancar (alvo) {
       <h3 style="font-family:var(--serif);font-size:16px;margin:0 0 14px;">Novo lançamento</h3>
       <div class="form-grade">
         <div class="campo"><label>Empresa *</label><select id="el-empresa"><option value="">selecione...</option>
-          ${EXPED_CACHE.empresas.map(e => `<option value="${e.id}">${esc(e.nome)}${e.regime_tributario ? ' — ' + esc(e.regime_tributario) : ''}</option>`).join('')}</select></div>
+          ${EXPED_CACHE.empresas.map(e => `<option value="${e.id}" ${e.nome === 'Gefoscal' ? 'selected' : ''}>${esc(e.nome)}${e.regime_tributario ? ' — ' + esc(e.regime_tributario) : ''}</option>`).join('')}</select></div>
         <div class="campo"><label>Cliente *</label><select id="el-cliente"><option value="">selecione...</option>
           ${EXPED_CACHE.clientes.map(c => `<option value="${c.id}">${esc(c.razao_social)}</option>`).join('')}</select></div>
         <div class="campo"><label>Vendedor</label><select id="el-vendedor"><option value="">—</option>
@@ -4839,7 +4839,7 @@ function formOrdemCarregamento (pedido) {
       ${esc(pedido.cliente?.razao_social ?? '—')} · ${esc(pedido.produto?.nome ?? '—')}</p>
     <div class="form-grade">
       <div class="campo"><label>Empresa *</label><select id="oc-empresa"><option value="">selecione...</option>
-        ${EXPED_CACHE.empresas.map(e => `<option value="${e.id}" ${e.id === pedido.empresa_id ? 'selected' : ''}>${esc(e.nome)}${e.regime_tributario ? ' — ' + esc(e.regime_tributario) : ''}</option>`).join('')}</select></div>
+        ${EXPED_CACHE.empresas.map(e => `<option value="${e.id}" ${e.id === (pedido.empresa_id || EXPED_CACHE.empresas.find(x => x.nome === 'Gefoscal')?.id) ? 'selected' : ''}>${esc(e.nome)}${e.regime_tributario ? ' — ' + esc(e.regime_tributario) : ''}</option>`).join('')}</select></div>
       <div class="campo"><label>Veículo *</label><select id="oc-veiculo"><option value="">selecione...</option>
         ${EXPED_CACHE.veiculos.map(v => `<option value="${v.id}">${esc(v.placa)}${v.descricao ? ' — ' + esc(v.descricao) : ''}</option>`).join('')}</select></div>
       <div class="campo"><label>Motorista *</label><input id="oc-motorista"></div>
@@ -6198,7 +6198,7 @@ async function carregarCarregamentosCliente (clienteId) {
 
   if (!data?.length) { alvo.innerHTML = '<p class="texto-dim2" style="font-size:12px;">nenhum carregamento faturado sem pedido vinculado pra este cliente.</p>'; return }
 
-  alvo.innerHTML = `<label class="texto-dim2" style="font-size:11px;">puxar de um carregamento da Expedição (opcional)</label>` +
+  alvo.innerHTML = `<label class="texto-dim2" style="font-size:11px;">puxar de um carregamento do Faturamento (opcional)</label>` +
     data.map(c => `<div class="carreg-disponivel" data-carregamento="${c.id}">
       <span>NF ${esc(c.numero_nf || '—')} · ${fmtData(c.data_carregamento)} · ${fmtNum(c.quantidade_t)} t</span>
       <span class="texto-dim2">R$ ${fmtNum(c.valor_nf)}</span></div>`).join('')
@@ -11573,7 +11573,7 @@ function combVeiculos (alvo, editavel) {
       <div style="padding:16px 18px;">
         <h3 style="font-family:var(--serif);font-size:17px;margin:0 0 4px;">Frota cadastrada</h3>
         <p class="texto-dim" style="font-size:12.5px;margin:0;">
-          Mesmo cadastro de veículo usado na Expedição para vincular carregamentos.</p>
+          Mesmo cadastro de veículo usado no Faturamento para vincular carregamentos.</p>
       </div>
       <table><thead><tr><th>Placa</th><th>Descrição</th><th>Tipo</th>${editavel ? '<th></th>' : ''}</tr></thead><tbody>
         ${COMB_CACHE.veiculos.map(v => `<tr>
