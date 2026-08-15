@@ -5055,7 +5055,19 @@ function expedEspecialistaFiscal (alvo) {
     carregando.remove()
 
     if (error || data?.erro) {
-      renderMensagem('assistant', (data?.erro || error?.message || 'Erro ao consultar.') + (data?.aviso ? '\n\n' + data.aviso : ''))
+      let detalhe = data?.erro || error?.message || 'Erro ao consultar.'
+      let aviso = data?.aviso
+      // supabase-js não expõe o corpo JSON do erro direto em error.message
+      // (só um texto genérico "non-2xx status code") — o corpo de verdade
+      // fica em error.context, que é a Response original da função
+      if (error?.context?.json) {
+        try {
+          const corpo = await error.context.json()
+          detalhe = corpo?.erro || detalhe
+          aviso = corpo?.aviso || corpo?.detalhe || aviso
+        } catch { /* corpo não veio em JSON, mantém a mensagem genérica */ }
+      }
+      renderMensagem('assistant', detalhe + (aviso ? '\n\n' + aviso : ''))
       ESPEC_HISTORICO.pop() // não guarda pergunta sem resposta válida
       return
     }
