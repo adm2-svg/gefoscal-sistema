@@ -1038,7 +1038,6 @@ function faltaMigracao (erro) {
 // ---------------------------------------------------------------
 async function painelAtencao (area) {
   if (!PERFIL.pessoaId) return
-  if (!PERFIL.papeis.includes('ADMIN')) return
   const hoje = hojeISO()
   const itens = [] // {modulo, chave, titulo, data, urgente, detalhe}
   const tarefas = []
@@ -1110,6 +1109,22 @@ async function painelAtencao (area) {
           data: c.vencimento, urgente: vencido, detalhe: vencido ? 'vencido' : 'vence em breve'
         })
       })
+    })())
+  }
+
+  // lembrete do Mapa de Controle (PF/Exército) do Laboratório — só
+  // avisa a partir do dia 10, pra não incomodar logo no início do mês
+  if (podeVer('laboratorio') && new Date().getDate() >= 10) {
+    tarefas.push((async () => {
+      const hojeD = new Date(); const mes = hojeD.getMonth() + 1; const ano = hojeD.getFullYear()
+      const [{ data: temControlado }, { data: jaGerado }] = await Promise.all([
+        db.from('lab_estoque_movimento').select('controlado_pf,controlado_exercito').or('controlado_pf.eq.true,controlado_exercito.eq.true').limit(1),
+        db.from('lab_mapa_envio').select('tipo').eq('mes_ref', mes).eq('ano_ref', ano)
+      ])
+      if (!temControlado?.length) return
+      const tiposGerados = new Set((jaGerado || []).map(g => g.tipo))
+      if (!tiposGerados.has('PF')) itens.push({ modulo: 'Laboratório', chave: 'laboratorio', titulo: 'Mapa de Controle — Polícia Federal ainda não gerado esse mês', data: null, urgente: true, detalhe: 'mapa mensal' })
+      if (!tiposGerados.has('EXERCITO')) itens.push({ modulo: 'Laboratório', chave: 'laboratorio', titulo: 'Mapa de Controle — Exército ainda não gerado esse mês', data: null, urgente: true, detalhe: 'mapa mensal' })
     })())
   }
 
@@ -2990,7 +3005,7 @@ const SETORES_COM_COORDENACAO = ['Indústria', 'P-TEC']
 //   aprovação final   -> papel DIRETORIA
 //   ADMIN passa em todas, para destravar o fluxo
 const ehAdminSistema = () => PERFIL.papeis.includes('ADMIN')
-const podeCotar     = () => PERFIL.papeis.includes('COMPRAS') || ehAdminSistema()
+const podeCotar     = () => PERFIL.papeis.includes('COMPRAS') || podeEditar('compras') || ehAdminSistema()
 const podeAprovar   = () => PERFIL.papeis.includes('DIRETORIA') || ehAdminSistema()
 // baixa de pagamento: quem edita o módulo financeiro
 const podePagar     = () => podeEditar('financeiro') || ehAdminSistema()
@@ -6194,6 +6209,11 @@ async function gerarMapaControlado (campo, orgao) {
   const de = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString().slice(0, 10)
   const { data, error } = await db.from('lab_estoque_movimento').select('*').eq(campo, true).order('material').order('criado_em')
   if (error || !data?.length) { alert(`Nenhum material controlado por ${orgao} no estoque.`); return }
+
+  db.from('lab_mapa_envio').insert({
+    tipo: campo === 'controlado_pf' ? 'PF' : 'EXERCITO',
+    mes_ref: hoje.getMonth() + 1, ano_ref: hoje.getFullYear(), gerado_por: PERFIL.pessoaId
+  }) // registra em segundo plano, não trava a geração do PDF se falhar
 
   const porMaterial = {}
   data.forEach(m => {
