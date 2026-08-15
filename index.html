@@ -5144,7 +5144,7 @@ async function paginaGestaoTI () {
     SETOR_TI_ID = setorTI?.id ?? null
   }
 
-  const abas = [['orcamento', 'Orçamento'], ['solicitacoes', 'Solicitações'], ['melhorias', 'Melhorias']]
+  const abas = [['orcamento', 'Orçamento'], ['solicitacoes', 'Solicitações'], ['melhorias', 'Melhorias'], ['mapa', 'Mapa (MAPA/Trimestral)']]
   area.innerHTML = `
     <div class="subabas">
       ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
@@ -5165,6 +5165,7 @@ function abrirGestaoTI (sub, editavel) {
   if (sub === 'orcamento') tiOrcamento(alvo, editavel)
   if (sub === 'solicitacoes') tiSolicitacoes(alvo, editavel)
   if (sub === 'melhorias') tiMelhorias(alvo, editavel)
+  if (sub === 'mapa') tiMapa(alvo)
 }
 
 // ----- Orçamento -----
@@ -5365,6 +5366,256 @@ function formGerenciarMelhoria (m, aoSalvar) {
     }).eq('id', m.id)
     fechar(); aoSalvar()
   }
+}
+
+// ----- Mapa (matéria-prima) -----
+// Relatório que a Amanda manda a cada 3 meses: quanto de matéria-prima
+// (minério/rocha fosfática vinda da P-TEC) entrou no estoque, e quanto
+// foi expedido por estado — hoje espalhado entre Estoque e Faturamento,
+// aqui junta tudo automaticamente, sem precisar caçar em dois lugares.
+// Relatório Trimestral do MAPA (Ministério da Agricultura) — produto
+// acabado e matéria-prima. O estoque inicial de um trimestre é sempre
+// o estoque final do trimestre anterior do mesmo produto — isso é
+// buscado sozinho, não precisa digitar de novo. No fim, exporta um
+// .xlsx com as mesmas colunas do relatório que a Amanda já manda.
+const TRIMESTRE_ROMANO = { 1: 'I (Primeiro)', 2: 'II (Segundo)', 3: 'III (Terceiro)', 4: 'IV (Quarto)' }
+const CAMPOS_GARANTIA = ['N', 'P2O5_total', 'P2O5_soluvel', 'K2O', 'Ca', 'Mg', 'S', 'B', 'Cl', 'Co', 'Cu', 'Fe', 'Mn', 'Mo', 'Ni', 'Se', 'Si', 'Zn', 'COT']
+const ROTULO_GARANTIA = { N: 'N', P2O5_total: 'P2O5 Total', P2O5_soluvel: 'P2O5 Solúvel', K2O: 'K2O', Ca: 'Ca', Mg: 'Mg', S: 'S', B: 'B', Cl: 'Cl', Co: 'Co', Cu: 'Cu', Fe: 'Fe', Mn: 'Mn', Mo: 'Mo', Ni: 'Ni', Se: 'Se', Si: 'Si', Zn: 'Zn', COT: 'COT' }
+
+let MAPA_PRODUTOS = []
+
+async function tiMapa (alvo) {
+  const hoje = new Date()
+  const anoAtual = hoje.getFullYear()
+  const trimestreAtual = Math.floor(hoje.getMonth() / 3) + 1
+
+  const { data: produtos, error } = await db.from('mapa_produto').select('*').eq('ativo', true).order('tipo').order('nome')
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  MAPA_PRODUTOS = produtos || []
+
+  alvo.innerHTML = `
+    <p class="texto-dim2" style="font-size:12px;margin:0 0 14px;">
+      Relatório Trimestral do MAPA (produto acabado e matéria-prima). O estoque inicial de cada produto já vem
+      sozinho do estoque final do trimestre anterior — só preenche o que entrou/saiu nesse trimestre.</p>
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>Ano</label><input type="number" id="mp-ano" value="${anoAtual}" style="width:90px;"></div>
+      <div class="campo"><label>Trimestre</label><select id="mp-trimestre">
+        ${[1, 2, 3, 4].map(t => `<option value="${t}" ${t === trimestreAtual ? 'selected' : ''}>${TRIMESTRE_ROMANO[t]}</option>`).join('')}</select></div>
+      <button class="btn" id="mp-carregar">Carregar</button>
+      <button class="btn-secundario" id="mp-produto-novo">+ Produto</button>
+      <button class="btn-secundario" id="mp-exportar">Exportar Excel</button>
+    </div>
+    <div id="mp-conteudo"><p class="texto-dim2">carregando...</p></div>`
+
+  $('#mp-carregar').onclick = carregarTrimestre
+  $('#mp-produto-novo').onclick = () => formMapaProduto(() => tiMapa(alvo))
+  $('#mp-exportar').onclick = () => exportarMapaExcel(Number($('#mp-ano').value), Number($('#mp-trimestre').value))
+
+  async function carregarTrimestre () {
+    const ano = Number($('#mp-ano').value)
+    const trimestre = Number($('#mp-trimestre').value)
+    $('#mp-conteudo').innerHTML = `<p class="texto-dim2">carregando...</p>`
+
+    const linhas = await Promise.all(MAPA_PRODUTOS.map(async p => {
+      const { data: atual } = await db.from('mapa_trimestre').select('*')
+        .eq('produto_id', p.id).eq('ano', ano).eq('trimestre', trimestre).maybeSingle()
+      if (atual) return { produto: p, registro: atual, novo: false }
+      // busca o trimestre anterior pra herdar o estoque final como inicial
+      let anoAnt = ano, triAnt = trimestre - 1
+      if (triAnt < 1) { triAnt = 4; anoAnt = ano - 1 }
+      const { data: anterior } = await db.from('mapa_trimestre').select('estoque_final')
+        .eq('produto_id', p.id).eq('ano', anoAnt).eq('trimestre', triAnt).maybeSingle()
+      return { produto: p, registro: { estoque_inicial: anterior?.estoque_final ?? 0, dados: {}, estoque_final: anterior?.estoque_final ?? 0 }, novo: true }
+    }))
+
+    $('#mp-conteudo').innerHTML = MAPA_PRODUTOS.length
+      ? `<div style="display:flex;flex-direction:column;gap:12px;">${linhas.map((l, i) => cartaoProdutoMapa(l, i)).join('')}</div>`
+      : `<p class="vazio">Nenhum produto cadastrado ainda — clique em "+ Produto" pra começar.</p>`
+
+    linhas.forEach((l, i) => ligarCartaoMapa(l, i, ano, trimestre))
+  }
+
+  function cartaoProdutoMapa (l, i) {
+    const p = l.produto, r = l.registro, d = r.dados || {}
+    const camposComuns = `
+      <div class="campo"><label>Estoque inicial</label><input value="${fmtNum(r.estoque_inicial, 3)}" disabled></div>`
+    const camposAcabado = `
+      <div class="campo"><label>Produção do trimestre</label><input id="mp-producao-${i}" inputmode="decimal" value="${d.producao ?? ''}"></div>
+      <div class="campo"><label>Na UF (quantidade)</label><input id="mp-nauf-${i}" inputmode="decimal" value="${d.na_uf_qtd ?? ''}"></div>
+      <div class="campo"><label>Outras UFs (quais)</label><input id="mp-ufs-${i}" value="${esc(d.outras_ufs ?? '')}" placeholder="ex: BA, GO, SP"></div>
+      <div class="campo"><label>Outras UFs (quantidade)</label><input id="mp-ufsqtd-${i}" inputmode="decimal" value="${d.outras_ufs_qtd ?? ''}"></div>
+      <div class="campo"><label>Exportação (país)</label><input id="mp-exppais-${i}" value="${esc(d.exportacao_pais ?? '')}"></div>
+      <div class="campo"><label>Exportação (quantidade)</label><input id="mp-expqtd-${i}" inputmode="decimal" value="${d.exportacao_qtd ?? ''}"></div>`
+    const camposMateriaPrima = `
+      <div class="campo"><label>Compras nacional (quantidade)</label><input id="mp-comprasqtd-${i}" inputmode="decimal" value="${d.compras_nacional_qtd ?? ''}"></div>
+      <div class="campo"><label>Compras nacional (empresa)</label><input id="mp-comprasemp-${i}" value="${esc(d.compras_nacional_empresa ?? '')}"></div>
+      <div class="campo"><label>Uso na produção</label><input id="mp-uso-${i}" inputmode="decimal" value="${d.uso_producao_qtd ?? ''}"></div>
+      <div class="campo"><label>Venda como produto</label><input id="mp-venda-${i}" inputmode="decimal" value="${d.venda_produto_qtd ?? ''}"></div>
+      <div class="campo"><label>Outras entradas</label><input id="mp-outent-${i}" inputmode="decimal" value="${d.outras_entradas_qtd ?? ''}"></div>
+      <div class="campo"><label>Outras saídas</label><input id="mp-outsai-${i}" inputmode="decimal" value="${d.outras_saidas_qtd ?? ''}"></div>`
+
+    return `<div class="panel" style="padding:18px 20px;">
+      <div class="cabeca-secao" style="margin-bottom:12px;">
+        <h3 style="font-family:var(--serif);font-size:15px;">${esc(p.nome)}
+          <span class="chip" style="margin-left:8px;">${p.tipo === 'ACABADO' ? 'Produto acabado' : 'Matéria-prima'}</span></h3>
+        <span class="texto-dim2" style="font-size:11px;">${esc(p.registro ?? 'sem registro')}</span>
+      </div>
+      <div class="form-grade">
+        ${camposComuns}${p.tipo === 'ACABADO' ? camposAcabado : camposMateriaPrima}
+        <div class="campo"><label>Estoque final <span class="texto-dim2">(calcule e confirme)</span></label>
+          <input id="mp-final-${i}" inputmode="decimal" value="${fmtNum(r.estoque_final, 3)}"></div>
+      </div>
+      <div class="acoes" style="margin-top:12px;"><button class="btn-secundario mini" id="mp-calcular-${i}">Calcular estoque final</button>
+        <button class="btn" id="mp-salvar-${i}">Salvar trimestre</button></div>
+      <div class="recado oculto" id="mp-recado-${i}"></div>
+    </div>`
+  }
+
+  function lerCampos (i, tipo) {
+    if (tipo === 'ACABADO') return {
+      producao: numeroBR($(`#mp-producao-${i}`).value) || 0,
+      na_uf_qtd: numeroBR($(`#mp-nauf-${i}`).value) || 0,
+      outras_ufs: $(`#mp-ufs-${i}`).value.trim() || null,
+      outras_ufs_qtd: numeroBR($(`#mp-ufsqtd-${i}`).value) || 0,
+      exportacao_pais: $(`#mp-exppais-${i}`).value.trim() || null,
+      exportacao_qtd: numeroBR($(`#mp-expqtd-${i}`).value) || 0
+    }
+    return {
+      compras_nacional_qtd: numeroBR($(`#mp-comprasqtd-${i}`).value) || 0,
+      compras_nacional_empresa: $(`#mp-comprasemp-${i}`).value.trim() || null,
+      uso_producao_qtd: numeroBR($(`#mp-uso-${i}`).value) || 0,
+      venda_produto_qtd: numeroBR($(`#mp-venda-${i}`).value) || 0,
+      outras_entradas_qtd: numeroBR($(`#mp-outent-${i}`).value) || 0,
+      outras_saidas_qtd: numeroBR($(`#mp-outsai-${i}`).value) || 0
+    }
+  }
+
+  function calcularFinal (inicial, tipo, d) {
+    if (tipo === 'ACABADO') return inicial + (d.producao || 0) - (d.na_uf_qtd || 0) - (d.outras_ufs_qtd || 0) - (d.exportacao_qtd || 0)
+    return inicial + (d.compras_nacional_qtd || 0) + (d.outras_entradas_qtd || 0) - (d.uso_producao_qtd || 0) - (d.venda_produto_qtd || 0) - (d.outras_saidas_qtd || 0)
+  }
+
+  function ligarCartaoMapa (l, i, ano, trimestre) {
+    const p = l.produto
+    $(`#mp-calcular-${i}`).onclick = () => {
+      const d = lerCampos(i, p.tipo)
+      const final = calcularFinal(l.registro.estoque_inicial, p.tipo, d)
+      $(`#mp-final-${i}`).value = String(final.toFixed(3)).replace('.', ',')
+    }
+    $(`#mp-salvar-${i}`).onclick = async () => {
+      const d = lerCampos(i, p.tipo)
+      const final = numeroBR($(`#mp-final-${i}`).value)
+      const el = $(`#mp-recado-${i}`)
+      const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+      if (final === null) { aviso('Calcule ou digite o estoque final.'); return }
+      const btn = $(`#mp-salvar-${i}`); btn.disabled = true; btn.textContent = 'Salvando...'
+      const { error } = await db.from('mapa_trimestre').upsert({
+        produto_id: p.id, ano, trimestre, estoque_inicial: l.registro.estoque_inicial,
+        dados: d, estoque_final: final, preenchido_por: PERFIL.pessoaId, atualizado_em: new Date().toISOString()
+      }, { onConflict: 'produto_id,ano,trimestre' })
+      btn.disabled = false; btn.textContent = 'Salvar trimestre'
+      if (error) { aviso(error.message); return }
+      el.textContent = 'Salvo.'; el.classList.remove('oculto'); el.style.borderColor = 'var(--good-text)'; el.style.color = 'var(--good-text)'
+    }
+  }
+
+  carregarTrimestre()
+}
+
+function formMapaProduto (aoSalvar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>Novo produto no Mapa MAPA</h3>
+    <div class="form-grade">
+      <div class="campo" style="grid-column:1/-1;"><label>Nome *</label><input id="fp-nome"></div>
+      <div class="campo"><label>Tipo</label><select id="fp-tipo"><option value="ACABADO">Produto acabado</option><option value="MATERIA_PRIMA">Matéria-prima</option></select></div>
+      <div class="campo"><label>Nº Registro</label><input id="fp-registro"></div>
+      <div class="campo"><label>Unidade</label><input id="fp-unidade" value="Tonelada"></div>
+    </div>
+    <p class="texto-dim2" style="font-size:11.5px;margin:12px 0 4px;">Garantias (nutrientes, em %) — deixa em branco o que não se aplica</p>
+    <div class="form-grade">
+      ${CAMPOS_GARANTIA.map(c => `<div class="campo"><label>${ROTULO_GARANTIA[c]}</label><input id="fp-g-${c}" inputmode="decimal"></div>`).join('')}
+    </div>
+    <div class="acoes" style="margin-top:14px;"><button class="btn" id="fp-salvar">Salvar</button>
+      <button class="btn-secundario" id="fp-fechar">Fechar</button></div>
+    <div class="recado oculto" id="fp-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#fp-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  fundo.querySelector('#fp-salvar').onclick = async () => {
+    const el = fundo.querySelector('#fp-recado')
+    const nome = fundo.querySelector('#fp-nome').value.trim()
+    if (!nome) { el.textContent = 'Escreva o nome.'; el.classList.remove('oculto'); return }
+    const garantias = {}
+    CAMPOS_GARANTIA.forEach(c => {
+      const v = numeroBR(fundo.querySelector(`#fp-g-${c}`).value)
+      if (v !== null) garantias[c] = v
+    })
+    const { error } = await db.from('mapa_produto').insert({
+      nome, tipo: fundo.querySelector('#fp-tipo').value, registro: fundo.querySelector('#fp-registro').value.trim() || null,
+      unidade: fundo.querySelector('#fp-unidade').value.trim() || 'Tonelada', garantias
+    })
+    if (error) { el.textContent = error.message; el.classList.remove('oculto'); return }
+    fechar(); aoSalvar()
+  }
+}
+
+// Exporta o trimestre inteiro num .xlsx no mesmo layout dos relatórios
+// que a Amanda já manda — uma aba "Produto Acabado" e uma "Matéria-Prima"
+async function exportarMapaExcel (ano, trimestre) {
+  const { data: registros, error } = await db.from('mapa_trimestre').select(`
+    *, produto:produto_id ( nome, tipo, registro, unidade, garantias )
+  `).eq('ano', ano).eq('trimestre', trimestre)
+  if (error || !registros?.length) { alert('Nada salvo pra esse trimestre ainda.'); return }
+
+  const cabecalho = titulo1 => ([
+    ['MINISTÉRIO DA AGRICULTURA, PECUÁRIA E ABASTECIMENTO – MAPA'],
+    ['COORDENAÇÃO DE FERTILIZANTES, INOCULANTES E CORRETIVOS - CFIC'],
+    [],
+    ['Relatório Trimestral de Produção, Importação e Exportação'],
+    [titulo1],
+    [],
+    ['Estabelecimento:', 'GEFOSCAL COMERCIO, INDUSTRIA, REPRESENTACOES E TRANSPORTES DE PRODUTOS AGROPECUARIOS LTDA', '', '', 'Registro nº:', 'TO-000802-8', 'UF:', 'TO'],
+    ['Trimestre:', TRIMESTRE_ROMANO[trimestre], '', '', 'Ano:', ano],
+    []
+  ])
+
+  const acabados = registros.filter(r => r.produto.tipo === 'ACABADO')
+  const materiasPrimas = registros.filter(r => r.produto.tipo === 'MATERIA_PRIMA')
+
+  const linhasAcabado = [
+    ...cabecalho('PARA ESTABELECIMENTOS PRODUTORES, IMPORTADORES E EXPORTADORES DE FERTILIZANTES MINERAIS (Produto Acabado)'),
+    ['Tipo', 'Nº Registro', ...CAMPOS_GARANTIA.map(c => ROTULO_GARANTIA[c]), 'Unidade', 'Estoque Inicial',
+     'Produção do Trimestre', 'Na UF (qtd)', 'Outras UFs', 'Outras UFs (qtd)', 'Exportação (país)', 'Exportação (qtd)', 'Estoque Final'],
+    ...acabados.map(r => {
+      const d = r.dados || {}
+      const g = r.produto.garantias || {}
+      return [r.produto.nome, r.produto.registro ?? '', ...CAMPOS_GARANTIA.map(c => g[c] ?? ''), r.produto.unidade,
+        Number(r.estoque_inicial), d.producao ?? 0, d.na_uf_qtd ?? 0, d.outras_ufs ?? '', d.outras_ufs_qtd ?? 0,
+        d.exportacao_pais ?? '', d.exportacao_qtd ?? 0, Number(r.estoque_final)]
+    })
+  ]
+
+  const linhasMateriaPrima = [
+    ...cabecalho('PARA ESTABELECIMENTOS PRODUTORES, IMPORTADORES E EXPORTADORES DE FERTILIZANTES MINERAIS (Matéria-Prima)'),
+    ['Material/Produto', 'Nº Registro', ...CAMPOS_GARANTIA.map(c => ROTULO_GARANTIA[c]), 'Unidade', 'Estoque Inicial',
+     'Compras Nacional (qtd)', 'Empresa', 'Uso na Produção', 'Venda como Produto', 'Outras Entradas', 'Outras Saídas', 'Estoque Final'],
+    ...materiasPrimas.map(r => {
+      const d = r.dados || {}
+      const g = r.produto.garantias || {}
+      return [r.produto.nome, r.produto.registro ?? '', ...CAMPOS_GARANTIA.map(c => g[c] ?? ''), r.produto.unidade,
+        Number(r.estoque_inicial), d.compras_nacional_qtd ?? 0, d.compras_nacional_empresa ?? '', d.uso_producao_qtd ?? 0,
+        d.venda_produto_qtd ?? 0, d.outras_entradas_qtd ?? 0, d.outras_saidas_qtd ?? 0, Number(r.estoque_final)]
+    })
+  ]
+
+  const wb = XLSX.utils.book_new()
+  if (acabados.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(linhasAcabado), 'Produto Acabado')
+  if (materiasPrimas.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(linhasMateriaPrima), 'Matéria-Prima')
+  XLSX.writeFile(wb, `mapa_${TRIMESTRE_ROMANO[trimestre].slice(0, 1)}_${ano}.xlsx`)
 }
 
 // ---------------------------------------------------------------
