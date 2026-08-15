@@ -890,6 +890,7 @@ function podeEditar (chave) {
 const PAGINAS = {
   visao_geral: { nome: 'Visão geral', render: paginaVisaoGeral, sempre: true },
   solicitacoes: { nome: 'Solicitações', render: paginaSolicitacoes, sempre: true },
+  cadastro:    { nome: 'Cadastro', render: paginaCadastro },
   expedicao:   { nome: 'Faturamento', render: paginaExpedicao },
   compras:     { nome: 'Compras', render: paginaCompras, sempre: true },
   cobranca:    { nome: 'Crédito e Cobrança', render: paginaCobranca },
@@ -916,6 +917,7 @@ const ICONES_MODULO = {
   marketing: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>',
   visao_geral: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5L12 4l9 7.5"/><path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9"/></svg>',
   solicitacoes: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h10M7 13h10M7 17h6"/></svg>',
+  cadastro: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="13" x2="14" y2="13"/><line x1="8" y1="17" x2="12" y2="17"/></svg>',
   expedicao: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="14" height="10"/><path d="M15 8h4l4 4v2h-8z"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/></svg>',
   compras: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="20" r="1.4"/><circle cx="18" cy="20" r="1.4"/><path d="M2 2h3l2.6 13a2 2 0 0 0 2 1.6h9a2 2 0 0 0 2-1.8L22 7H6"/></svg>',
   cobranca: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="13" rx="2"/><path d="M2 10h20"/><circle cx="17" cy="14.5" r="1.2" fill="currentColor" stroke="none"/></svg>',
@@ -4466,6 +4468,44 @@ async function comprasFornecedores (alvo, editavel) {
 }
 
 // ---------------------------------------------------------------
+// Página: Cadastro
+// Um lugar só pra cadastrar Cliente, Fornecedor e Produto, sem
+// precisar entrar em Cobrança/Compras/Estoque só pra isso. Reaproveita
+// exatamente as mesmas telas de lá (mesma função, mesmo formulário) —
+// cadastrar aqui ou lá é o mesmo registro, nada duplicado. É daqui que
+// sai o cliente/produto usado no Faturamento (Novo pedido, Lançar).
+// ---------------------------------------------------------------
+async function paginaCadastro () {
+  $('#subtitulo-pagina').textContent = 'Cliente, fornecedor e produto — tudo num lugar só'
+  const area = areaLivre()
+
+  const abas = [['clientes', 'Clientes'], ['fornecedores', 'Fornecedores'], ['produtos', 'Produtos']]
+  area.innerHTML = `
+    <div class="subabas">
+      ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
+    </div>
+    <div id="sub-cadastro"></div>`
+
+  area.querySelectorAll('.subabas button').forEach(b => {
+    b.onclick = () => {
+      area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
+      abrirCadastro(b.dataset.sub)
+    }
+  })
+  abrirCadastro('clientes')
+}
+
+function abrirCadastro (sub) {
+  const alvo = $('#sub-cadastro')
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  // pode editar aqui quem tem o módulo Cadastro OU já editava a tela
+  // original (Cobrança/Compras/Estoque) — ninguém perde acesso que já tinha
+  if (sub === 'clientes') cobClientes(alvo, podeEditar('cadastro') || podeEditar('cobranca'))
+  if (sub === 'fornecedores') comprasFornecedores(alvo, podeEditar('cadastro') || podeEditar('compras'))
+  if (sub === 'produtos') estProdutos(alvo, podeEditar('cadastro') || podeEditar('estoque'))
+}
+
+// ---------------------------------------------------------------
 // Página: Expedição
 // ---------------------------------------------------------------
 // ---------------------------------------------------------------
@@ -4507,6 +4547,7 @@ async function paginaExpedicao () {
 
   const abas = [['painel', 'Painel'], ['lancamentos', 'Lançamentos']]
   if (editavel) abas.push(['lancar', 'Lançar'], ['ordem', 'Ordem de Carregamento'])
+  abas.push(['ia', 'Fale com a Especialista Contábil'])
 
   area.innerHTML = `
     <div class="subabas">
@@ -4530,6 +4571,7 @@ function abrirExped (sub, editavel) {
   if (sub === 'lancamentos') expedLancamentos(alvo, editavel)
   if (sub === 'lancar') expedLancar(alvo)
   if (sub === 'ordem') expedOrdem(alvo)
+  if (sub === 'ia') expedEspecialistaFiscal(alvo)
 }
 
 // ----- Painel: visão geral das NFs emitidas, por produto -----
@@ -4921,6 +4963,109 @@ function abrirPdfOrdemCarregamento (o) {
   fundo.querySelector('#oc-pdf-fechar').onclick = () => fundo.remove()
   fundo.querySelector('#oc-pdf-imprimir').onclick = () => window.print()
   fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+}
+
+// ----- Fale com a Especialista Contábil -----
+// Chama a edge function 'especialista-fiscal' (Anthropic + busca na web),
+// que segue as regras da Gefoscal: nunca inventa legislação/NCM/CFOP/CST,
+// separa rigorosamente Gefoscal (Lucro Real) e P-TEC (Lucro Presumido),
+// e sinaliza risco/validação humana quando necessário. Aceita anexar um
+// documento (nota fiscal, XML como texto, PDF, imagem) na pergunta.
+let ESPEC_HISTORICO = []
+let ESPEC_ANEXO_PENDENTE = null
+
+function expedEspecialistaFiscal (alvo) {
+  alvo.innerHTML = `
+    <div class="panel" style="padding:0;max-width:900px;">
+      <div style="padding:16px 18px;border-bottom:1px solid var(--line);">
+        <h3 style="font-family:var(--serif);font-size:16px;margin:0 0 4px;">Fale com a Especialista Contábil</h3>
+        <p class="texto-dim2" style="font-size:12px;margin:0;">
+          Tira dúvida sobre nota fiscal, tributação, ICMS/ICMS-ST, incentivo fiscal e operações entre Gefoscal e P-TEC.
+          Não substitui a contabilidade — é apoio e auditoria preventiva.</p>
+      </div>
+      <div id="ef-chat" style="padding:18px;display:flex;flex-direction:column;gap:12px;max-height:480px;overflow-y:auto;"></div>
+      <div style="padding:14px 18px;border-top:1px solid var(--line);">
+        <div id="ef-anexo-info" class="texto-dim2 oculto" style="font-size:11.5px;margin-bottom:8px;"></div>
+        <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+          <textarea id="ef-pergunta" placeholder="Digite sua pergunta..." style="flex:1;min-width:220px;min-height:48px;max-height:120px;"></textarea>
+          <input type="file" id="ef-arquivo" accept="image/*,application/pdf" style="display:none;">
+          <button class="btn-secundario mini" id="ef-anexar" title="Anexar nota fiscal, PDF ou imagem" type="button">📎 Anexar</button>
+          <button class="btn" id="ef-enviar">Enviar</button>
+        </div>
+        <p class="texto-dim2" style="font-size:10.5px;margin:6px 0 0;">Suporta texto, imagem e PDF. Áudio ainda não — descreva por escrito por enquanto.</p>
+      </div>
+    </div>`
+
+  const chat = $('#ef-chat')
+
+  const renderMensagem = (autor, texto, opts = {}) => {
+    const minha = autor === 'user'
+    const bolha = document.createElement('div')
+    bolha.style.cssText = `align-self:${minha ? 'flex-end' : 'flex-start'};max-width:85%;`
+    bolha.innerHTML = `
+      <div class="texto-dim2" style="font-size:10.5px;margin-bottom:3px;${minha ? 'text-align:right;' : ''}">
+        ${minha ? 'Você' : 'Especialista Contábil'}${opts.buscou ? ' · consultou a web' : ''}</div>
+      <div style="background:${minha ? 'var(--rust)' : 'var(--surface2)'};color:${minha ? '#fff' : 'inherit'};
+                  padding:10px 14px;border-radius:10px;font-size:13px;line-height:1.55;white-space:pre-wrap;">${esc(texto)}</div>`
+    chat.appendChild(bolha)
+    chat.scrollTop = chat.scrollHeight
+    return bolha
+  }
+
+  if (!ESPEC_HISTORICO.length) {
+    renderMensagem('assistant',
+      'Olá! Sou a Especialista Contábil, Fiscal e Tributária do Grupo Gefoscal. Posso analisar dúvidas da Gefoscal, da P-TEC ou de operações entre as duas. ' +
+      'Antes de começar, me diga: qual empresa está envolvida, qual é a operação/produto, e se tem nota fiscal ou documento pra eu olhar.')
+  } else {
+    ESPEC_HISTORICO.forEach(m => renderMensagem(m.role === 'user' ? 'user' : 'assistant',
+      typeof m.content === 'string' ? m.content : (m.content.find(c => c.type === 'text')?.text ?? '')))
+  }
+
+  $('#ef-anexar').onclick = () => $('#ef-arquivo').click()
+  $('#ef-arquivo').onchange = () => {
+    const arquivo = $('#ef-arquivo').files[0]
+    if (!arquivo) return
+    const leitor = new FileReader()
+    leitor.onload = e => {
+      const base64 = e.target.result.split(',')[1]
+      ESPEC_ANEXO_PENDENTE = { data: base64, media_type: arquivo.type, filename: arquivo.name }
+      $('#ef-anexo-info').textContent = `📎 ${arquivo.name} anexado — vai junto com a próxima pergunta.`
+      $('#ef-anexo-info').classList.remove('oculto')
+    }
+    leitor.readAsDataURL(arquivo)
+  }
+
+  const enviar = async () => {
+    const texto = $('#ef-pergunta').value.trim()
+    if (!texto) return
+    renderMensagem('user', texto)
+    $('#ef-pergunta').value = ''
+    const btn = $('#ef-enviar'); btn.disabled = true; btn.textContent = 'Consultando...'
+    const carregando = renderMensagem('assistant', 'Analisando...')
+
+    ESPEC_HISTORICO.push({ role: 'user', content: texto })
+    const anexo = ESPEC_ANEXO_PENDENTE
+    ESPEC_ANEXO_PENDENTE = null
+    $('#ef-anexo-info').classList.add('oculto')
+
+    const { data, error } = await db.functions.invoke('especialista-fiscal', {
+      body: { mensagens: ESPEC_HISTORICO, anexo }
+    })
+    btn.disabled = false; btn.textContent = 'Enviar'
+    carregando.remove()
+
+    if (error || data?.erro) {
+      renderMensagem('assistant', (data?.erro || error?.message || 'Erro ao consultar.') + (data?.aviso ? '\n\n' + data.aviso : ''))
+      ESPEC_HISTORICO.pop() // não guarda pergunta sem resposta válida
+      return
+    }
+    ESPEC_HISTORICO.push({ role: 'assistant', content: data.resposta })
+    renderMensagem('assistant', data.resposta, { buscou: data.usou_busca_web })
+  }
+  $('#ef-enviar').onclick = enviar
+  $('#ef-pergunta').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); enviar() }
+  })
 }
 
 // ---------------------------------------------------------------
