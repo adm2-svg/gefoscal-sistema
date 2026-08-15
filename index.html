@@ -912,7 +912,8 @@ const PAGINAS = {
   frota:       { nome: 'Frota', render: paginaFrota },
   juridico:    { nome: 'Jurídico', render: paginaJuridico },
   desempenho:  { nome: 'RH', render: paginaDesempenho },
-  ti:          { nome: 'Administração', render: paginaAdministracao }
+  ti:          { nome: 'Administração', render: paginaAdministracao },
+  gestao_ti:   { nome: 'Gestão de TI', render: paginaGestaoTI }
 }
 
 // ---------------------------------------------------------------
@@ -939,6 +940,7 @@ const ICONES_MODULO = {
   juridico: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M4 7h16"/><path d="M4 7L1 14a3.5 3.5 0 0 0 7 0L5 7"/><path d="M20 7l-3 7a3.5 3.5 0 0 0 7 0l-3-7"/><path d="M8 21h8"/></svg>',
   desempenho: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a8 8 0 0 1 16 0v1"/></svg>',
   ti: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8 3.5v6c0 5-3.4 8.6-8 10.5-4.6-1.9-8-5.5-8-10.5v-6z"/></svg>',
+  gestao_ti: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
   _padrao: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/></svg>'
 }
 
@@ -949,7 +951,7 @@ const ICONES_MODULO = {
 const GRUPOS_MENU = [
   ['Comercial', ['crm', 'cadastro', 'expedicao', 'cobranca', 'marketing']],
   ['Operações', ['estoque', 'combustivel', 'manutencao', 'frota', 'projetos']],
-  ['Gestão', ['financeiro', 'desempenho', 'juridico', 'ferramentas', 'banco']],
+  ['Gestão', ['financeiro', 'desempenho', 'juridico', 'ferramentas', 'banco', 'gestao_ti']],
   ['Administração', ['ti']]
 ]
 
@@ -5107,6 +5109,262 @@ function expedEspecialistaFiscal (alvo) {
   $('#ef-pergunta').addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); enviar() }
   })
+}
+
+// ---------------------------------------------------------------
+// Página: Gestão de TI  (módulo 'gestao_ti')
+// Três frentes: orçamento de TI (assinaturas/infra que o grupo paga
+// pra funcionar — Google Workspace, Anthropic, Supabase etc.), as
+// solicitações internas endereçadas ao setor TI (reaproveita o
+// helpdesk de Solicitações, só filtrado por setor), e uma caixa de
+// sugestão de melhoria que qualquer pessoa da empresa pode mandar.
+// ---------------------------------------------------------------
+const CATEGORIAS_DESPESA_TI = ['ASSINATURA', 'INFRA', 'LICENCA', 'HARDWARE', 'OUTRO']
+const ROTULO_CATEGORIA_TI = { ASSINATURA: 'Assinatura', INFRA: 'Infraestrutura', LICENCA: 'Licença', HARDWARE: 'Hardware', OUTRO: 'Outro' }
+const ROTULO_PERIODICIDADE_TI = { MENSAL: 'Mensal', ANUAL: 'Anual', UNICO: 'Único' }
+const STATUS_MELHORIA = ['NOVA', 'EM_ANALISE', 'PLANEJADA', 'CONCLUIDA', 'RECUSADA']
+const ROTULO_STATUS_MELHORIA = { NOVA: 'Nova', EM_ANALISE: 'Em análise', PLANEJADA: 'Planejada', CONCLUIDA: 'Concluída', RECUSADA: 'Recusada' }
+function corStatusMelhoria (s) {
+  if (s === 'CONCLUIDA') return 'badge-bom'
+  if (s === 'RECUSADA') return 'texto-dim2'
+  if (s === 'PLANEJADA' || s === 'EM_ANALISE') return 'chip'
+  return 'texto-dim'
+}
+
+let SETOR_TI_ID = null
+
+async function paginaGestaoTI () {
+  const editavel = podeEditar('gestao_ti')
+  $('#subtitulo-pagina').textContent = 'Orçamento de TI, solicitações do setor e sugestões de melhoria'
+  const area = areaLivre()
+  area.innerHTML = `<p class="texto-dim2">carregando...</p>`
+
+  if (!SETOR_TI_ID) {
+    const { data: setorTI } = await db.from('setor').select('id').ilike('nome', 'TI').maybeSingle()
+    SETOR_TI_ID = setorTI?.id ?? null
+  }
+
+  const abas = [['orcamento', 'Orçamento'], ['solicitacoes', 'Solicitações'], ['melhorias', 'Melhorias']]
+  area.innerHTML = `
+    <div class="subabas">
+      ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
+    </div>
+    <div id="sub-ti"></div>`
+  area.querySelectorAll('.subabas button').forEach(b => {
+    b.onclick = () => {
+      area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
+      abrirGestaoTI(b.dataset.sub, editavel)
+    }
+  })
+  abrirGestaoTI('orcamento', editavel)
+}
+
+function abrirGestaoTI (sub, editavel) {
+  const alvo = $('#sub-ti')
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  if (sub === 'orcamento') tiOrcamento(alvo, editavel)
+  if (sub === 'solicitacoes') tiSolicitacoes(alvo, editavel)
+  if (sub === 'melhorias') tiMelhorias(alvo, editavel)
+}
+
+// ----- Orçamento -----
+async function tiOrcamento (alvo, editavel) {
+  const { data, error } = await db.from('despesa_ti').select('*').order('status').order('nome')
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  const lista = data || []
+  const ativas = lista.filter(d => d.status === 'ATIVA')
+  const totalMensal = ativas.filter(d => d.periodicidade === 'MENSAL').reduce((s, d) => s + Number(d.valor || 0), 0)
+    + ativas.filter(d => d.periodicidade === 'ANUAL').reduce((s, d) => s + Number(d.valor || 0) / 12, 0)
+  const totalAnual = totalMensal * 12
+
+  alvo.innerHTML = `
+    <div class="resumo-topo" style="margin-bottom:16px;">
+      ${[['Despesas ativas', ativas.length, ''], ['Custo mensal estimado', 'R$ ' + fmtNum(totalMensal), ''],
+         ['Projeção anual', 'R$ ' + fmtNum(totalAnual), '']]
+        .map(([rot, val]) => `<div class="bloco"><div class="rot">${rot}</div><div class="val">${val}</div></div>`).join('')}
+    </div>
+    ${editavel ? `<div class="panel" style="padding:20px;margin-bottom:16px;">
+      <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 14px;">Nova despesa</h3>
+      <div class="form-grade">
+        <div class="campo"><label>Nome *</label><input id="dt-nome" placeholder="ex: Google Workspace"></div>
+        <div class="campo"><label>Categoria</label><select id="dt-categoria">${CATEGORIAS_DESPESA_TI.map(c => `<option value="${c}">${ROTULO_CATEGORIA_TI[c]}</option>`).join('')}</select></div>
+        <div class="campo"><label>Fornecedor</label><input id="dt-fornecedor"></div>
+        <div class="campo"><label>Valor (R$) *</label><input id="dt-valor" inputmode="decimal"></div>
+        <div class="campo"><label>Periodicidade</label><select id="dt-periodicidade">${Object.keys(ROTULO_PERIODICIDADE_TI).map(p => `<option value="${p}">${ROTULO_PERIODICIDADE_TI[p]}</option>`).join('')}</select></div>
+        <div class="campo"><label>Próxima cobrança</label><input type="date" id="dt-data"></div>
+      </div>
+      <div class="campo" style="margin-top:10px;"><label>Observação</label><input id="dt-obs" placeholder="opcional"></div>
+      <div class="acoes" style="margin-top:12px;"><button class="btn" id="dt-salvar">Adicionar</button></div>
+      <div class="recado oculto" id="dt-recado"></div>
+    </div>` : ''}
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>Nome</th><th>Categoria</th><th>Fornecedor</th><th class="num">Valor</th>
+        <th>Periodicidade</th><th>Próxima cobrança</th><th>Status</th>${editavel ? '<th></th>' : ''}
+      </tr></thead><tbody>
+        ${lista.map(d => `<tr>
+          <td><b>${esc(d.nome)}</b>${d.observacoes ? `<div class="texto-dim2" style="font-size:11px;">${esc(d.observacoes)}</div>` : ''}</td>
+          <td class="texto-dim2">${esc(ROTULO_CATEGORIA_TI[d.categoria] ?? d.categoria)}</td>
+          <td class="texto-dim">${esc(d.fornecedor ?? '—')}</td>
+          <td class="num">R$ ${fmtNum(d.valor)}</td>
+          <td class="texto-dim2">${esc(ROTULO_PERIODICIDADE_TI[d.periodicidade] ?? d.periodicidade)}</td>
+          <td class="texto-dim2">${d.proxima_cobranca ? fmtData(d.proxima_cobranca) : '—'}</td>
+          <td>${d.status === 'ATIVA' ? '<span class="badge-bom">Ativa</span>' : '<span class="texto-dim2">Cancelada</span>'}</td>
+          ${editavel ? `<td style="text-align:right;">
+            <button class="btn-secundario mini" data-toggle-desp="${d.id}" data-status="${d.status}">${d.status === 'ATIVA' ? 'Cancelar' : 'Reativar'}</button>
+          </td>` : ''}
+        </tr>`).join('') || `<tr><td colspan="${editavel ? 8 : 7}" class="vazio">Nenhuma despesa cadastrada.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+
+  if (!editavel) return
+  $('#dt-salvar').onclick = async () => {
+    const el = $('#dt-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const nome = $('#dt-nome').value.trim()
+    const valor = numeroBR($('#dt-valor').value)
+    if (!nome) { aviso('Escreva o nome da despesa.'); return }
+    if (valor === null || valor < 0) { aviso('Informe o valor.'); return }
+    const btn = $('#dt-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const { error } = await db.from('despesa_ti').insert({
+      nome, categoria: $('#dt-categoria').value, fornecedor: $('#dt-fornecedor').value.trim() || null,
+      valor, periodicidade: $('#dt-periodicidade').value, proxima_cobranca: $('#dt-data').value || null,
+      observacoes: $('#dt-obs').value.trim() || null, criado_por: PERFIL.pessoaId
+    })
+    btn.disabled = false; btn.textContent = 'Adicionar'
+    if (error) { aviso(error.message); return }
+    tiOrcamento(alvo, editavel)
+  }
+  alvo.querySelectorAll('[data-toggle-desp]').forEach(b => {
+    b.onclick = async () => {
+      const novoStatus = b.dataset.status === 'ATIVA' ? 'CANCELADA' : 'ATIVA'
+      await db.from('despesa_ti').update({ status: novoStatus }).eq('id', b.dataset.toggleDesp)
+      tiOrcamento(alvo, editavel)
+    }
+  })
+}
+
+// ----- Solicitações direcionadas ao setor TI (reaproveita o helpdesk) -----
+async function tiSolicitacoes (alvo, editavel) {
+  if (!SETOR_TI_ID) { alvo.innerHTML = `<p class="vazio">Setor "TI" não encontrado no cadastro de setores — confira em Administração → Cargos e setores.</p>`; return }
+  const { data, error } = await db.from('solicitacao_interna').select(`
+    id, codigo, titulo, descricao, urgencia, status, data_solicitacao, data_limite, resposta,
+    progresso_pct, pontuacao_agilidade, setor_destino_id, responsavel_id,
+    setor:setor_destino_id ( id, nome ), solicitante:solicitante_id ( nome ), responsavel:responsavel_id ( nome )
+  `).eq('setor_destino_id', SETOR_TI_ID).order('data_solicitacao', { ascending: false }).limit(300)
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  const lista = data || []
+  const abertas = lista.filter(s => ['ABERTA', 'EM_ANDAMENTO'].includes(s.status))
+
+  alvo.innerHTML = `
+    <div class="resumo-topo" style="margin-bottom:16px;">
+      ${[['Total', lista.length, ''], ['Em aberto', abertas.length, ''],
+         ['Atrasadas', abertas.filter(estaAtrasadaSolicitacao).length, '']]
+        .map(([rot, val]) => `<div class="bloco"><div class="rot">${rot}</div><div class="val">${val}</div></div>`).join('')}
+    </div>
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>Código</th><th>Título</th><th>Urgência</th><th>Status</th><th>Solicitante</th><th>Responsável</th><th>Progresso</th>
+      </tr></thead><tbody>
+        ${lista.map(s => `<tr style="cursor:pointer;" data-abrir="${s.id}">
+          <td><b>${esc(s.codigo)}</b></td>
+          <td>${esc(s.titulo)}</td>
+          <td><span class="${corUrgenciaSolicitacao(s.urgencia)}">${esc(ROTULO_URGENCIA_SOLICITACAO[s.urgencia])}</span></td>
+          <td><span class="${corStatusSolicitacao(s.status)}">${esc(ROTULO_STATUS_SOLICITACAO[s.status])}</span></td>
+          <td class="texto-dim">${esc(s.solicitante?.nome ?? '—')}</td>
+          <td class="texto-dim">${esc(s.responsavel?.nome ?? '—')}</td>
+          <td class="texto-dim2">${s.progresso_pct ?? 0}%</td>
+        </tr>`).join('') || `<tr><td colspan="7" class="vazio">Nenhuma solicitação pro setor de TI ainda.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+
+  alvo.querySelectorAll('[data-abrir]').forEach(tr => {
+    tr.onclick = () => detalheSolicitacao(lista.find(s => s.id === tr.dataset.abrir), () => tiSolicitacoes(alvo, editavel))
+  })
+}
+
+// ----- Melhorias: qualquer um sugere, TI decide status/resposta -----
+async function tiMelhorias (alvo, editavel) {
+  const { data, error } = await db.from('melhoria_solicitada').select(`
+    id, titulo, descricao, status, prioridade, resposta, criado_em, solicitante:solicitante_id ( nome )
+  `).order('criado_em', { ascending: false }).limit(300)
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  const lista = data || []
+
+  alvo.innerHTML = `
+    <div class="panel" style="padding:20px;margin-bottom:16px;">
+      <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 4px;">Sugerir melhoria</h3>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 12px;">Qualquer pessoa pode mandar — "acho que preciso disso", ideia, ajuste.</p>
+      <div class="campo"><label>Título *</label><input id="ml-titulo" placeholder="ex: filtro por vendedor no relatório de X"></div>
+      <div class="campo" style="margin-top:10px;"><label>Descreva</label><textarea id="ml-descricao" style="min-height:70px;" placeholder="opcional, mas ajuda"></textarea></div>
+      <div class="acoes" style="margin-top:12px;"><button class="btn" id="ml-enviar">Enviar sugestão</button></div>
+      <div class="recado oculto" id="ml-recado"></div>
+    </div>
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>Título</th><th>Quem pediu</th><th>Quando</th><th>Status</th>${editavel ? '<th></th>' : ''}
+      </tr></thead><tbody>
+        ${lista.map(m => `<tr>
+          <td><b>${esc(m.titulo)}</b>${m.descricao ? `<div class="texto-dim2" style="font-size:11.5px;margin-top:2px;">${esc(m.descricao)}</div>` : ''}
+            ${m.resposta ? `<div class="texto-dim2" style="font-size:11px;margin-top:4px;">↳ ${esc(m.resposta)}</div>` : ''}</td>
+          <td class="texto-dim">${esc(m.solicitante?.nome ?? '—')}</td>
+          <td class="texto-dim2">${fmtData(m.criado_em)}</td>
+          <td><span class="${corStatusMelhoria(m.status)}">${esc(ROTULO_STATUS_MELHORIA[m.status] ?? m.status)}</span></td>
+          ${editavel ? `<td><button class="btn-secundario mini" data-gerenciar="${m.id}">Gerenciar</button></td>` : ''}
+        </tr>`).join('') || `<tr><td colspan="${editavel ? 5 : 4}" class="vazio">Nenhuma sugestão ainda.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+
+  $('#ml-enviar').onclick = async () => {
+    const el = $('#ml-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const titulo = $('#ml-titulo').value.trim()
+    if (!titulo) { aviso('Escreva um título.'); return }
+    const btn = $('#ml-enviar'); btn.disabled = true; btn.textContent = 'Enviando...'
+    const { error } = await db.from('melhoria_solicitada').insert({
+      titulo, descricao: $('#ml-descricao').value.trim() || null, solicitante_id: PERFIL.pessoaId
+    })
+    btn.disabled = false; btn.textContent = 'Enviar sugestão'
+    if (error) { aviso(error.message); return }
+    tiMelhorias(alvo, editavel)
+  }
+
+  if (!editavel) return
+  alvo.querySelectorAll('[data-gerenciar]').forEach(b => {
+    b.onclick = () => formGerenciarMelhoria(lista.find(m => m.id === b.dataset.gerenciar), () => tiMelhorias(alvo, editavel))
+  })
+}
+
+function formGerenciarMelhoria (m, aoSalvar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>${esc(m.titulo)}</h3>
+    <p class="texto-dim2" style="font-size:12px;margin:-8px 0 14px;">
+      Pedido por ${esc(m.solicitante?.nome ?? '—')} em ${fmtData(m.criado_em)}</p>
+    ${m.descricao ? `<p class="texto-dim" style="font-size:13px;margin-bottom:14px;">${esc(m.descricao)}</p>` : ''}
+    <div class="form-grade">
+      <div class="campo"><label>Status</label><select id="gm-status">
+        ${STATUS_MELHORIA.map(s => `<option value="${s}" ${s === m.status ? 'selected' : ''}>${ROTULO_STATUS_MELHORIA[s]}</option>`).join('')}</select></div>
+      <div class="campo"><label>Prioridade</label><select id="gm-prioridade">
+        ${['BAIXA', 'MEDIA', 'ALTA'].map(p => `<option value="${p}" ${p === m.prioridade ? 'selected' : ''}>${p === 'BAIXA' ? 'Baixa' : p === 'ALTA' ? 'Alta' : 'Média'}</option>`).join('')}</select></div>
+    </div>
+    <div class="campo" style="margin-top:10px;"><label>Resposta pra quem pediu</label>
+      <textarea id="gm-resposta" style="min-height:70px;">${esc(m.resposta ?? '')}</textarea></div>
+    <div class="acoes" style="margin-top:14px;"><button class="btn" id="gm-salvar">Salvar</button>
+      <button class="btn-secundario" id="gm-fechar">Fechar</button></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#gm-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  fundo.querySelector('#gm-salvar').onclick = async () => {
+    await db.from('melhoria_solicitada').update({
+      status: fundo.querySelector('#gm-status').value, prioridade: fundo.querySelector('#gm-prioridade').value,
+      resposta: fundo.querySelector('#gm-resposta').value.trim() || null, atualizado_em: new Date().toISOString()
+    }).eq('id', m.id)
+    fechar(); aoSalvar()
+  }
 }
 
 // ---------------------------------------------------------------
