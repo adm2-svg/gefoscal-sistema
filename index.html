@@ -313,6 +313,9 @@ tbody tr:hover { background: var(--hover-bg); }
 .chips-cred button:hover { color:var(--txt); }
 .chips-cred button.ativo { border-color:var(--rust); color:var(--rust); background:rgba(var(--rust-rgb),.12); }
 .tag-aging { font-size:11px; padding:2px 8px; border-radius:20px; white-space:nowrap; }
+.chip-filtro { border:1px solid var(--line2); background:var(--surface2); color:var(--dim); border-radius:20px;
+  padding:8px 16px; font-size:12.5px; font-weight:600; cursor:pointer; }
+.chip-filtro.ativo { background:var(--rust); border-color:var(--rust); color:#fff; }
 
 /* ---- Dashboard Diretor ---- */
 .grade-funil-dir { display:flex; gap:10px; }
@@ -17426,7 +17429,7 @@ async function paginaMarketing () {
   const editavel = podeEditar('marketing')
   $('#subtitulo-pagina').textContent = 'Redes sociais, conteúdo e mercado'
   const area = areaLivre()
-  const abas = [['visao', 'Visão Geral'], ['redes', 'Redes Sociais'], ['mercado', 'Mercado'], ['docs', 'Docs'], ['aniversariantes', 'Aniversariantes']]
+  const abas = [['visao', 'Painel'], ['quadro', 'Quadro'], ['redes', 'Redes Sociais'], ['mercado', 'Mercado'], ['docs', 'Docs'], ['aniversariantes', 'Aniversariantes']]
   area.innerHTML = `
     <div class="subabas">${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}</div>
     <div id="sub-marketing"></div>`
@@ -17446,6 +17449,7 @@ function abrirMarketing (sub, editavel) {
   if (sub === 'redes') mktRedesSociais(alvo, editavel)
   if (sub === 'mercado') mktMercado(alvo)
   if (sub === 'docs') mktDocs(alvo, editavel)
+  if (sub === 'quadro') mktQuadro(alvo, editavel)
   if (sub === 'aniversariantes') mktAniversariantes(alvo, editavel)
 }
 
@@ -17769,6 +17773,169 @@ function renderMktDocs (alvo, editavel) {
     mktDocs(alvo, editavel)
   }
 }
+
+// ----- Quadro (Kanban de conteúdo/campanhas) -----
+const COLUNAS_QUADRO_MKT = [['A_FAZER', 'A Fazer'], ['FAZENDO', 'Fazendo'], ['REVISAO', 'Revisão'], ['CONCLUIDO', 'Concluído']]
+const TAGS_EXTRA_QUADRO_MKT = ['Bloqueado', 'Aprovado', 'Atrasado']
+let MKT_QUADRO_CACHE = []
+let MKT_QUADRO_FILTRO_TIPO = ''
+let MKT_QUADRO_FILTRO_CANAL = ''
+let MKT_QUADRO_BUSCA = ''
+
+async function mktQuadro (alvo, editavel) {
+  const { data, error } = await db.from('marketing_card').select('*').order('criado_em', { ascending: false })
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  MKT_QUADRO_CACHE = data || []
+
+  alvo.innerHTML = `
+    <div class="cabeca-secao" style="margin-bottom:6px;">
+      <div>
+        <h3 style="font-family:var(--serif);font-size:20px;margin:0;">Quadro</h3>
+        <p class="texto-dim2" style="font-size:12.5px;margin:2px 0 0;">Como está indo — clica no cartão pra mudar de coluna ou editar.</p>
+      </div>
+      ${editavel ? `<button class="btn" id="mkq-novo">+ Novo cartão</button>` : ''}
+    </div>
+
+    <div class="panel" style="padding:16px 18px;margin:14px 0 18px;" id="mkq-bloco-agenda"></div>
+
+    <div class="filtros" style="margin-bottom:16px;">
+      <button class="chip-filtro ${!MKT_QUADRO_FILTRO_TIPO ? 'ativo' : ''}" data-filtro-tipo="">Todas</button>
+      <button class="chip-filtro ${MKT_QUADRO_FILTRO_TIPO === 'ORGANICO' ? 'ativo' : ''}" data-filtro-tipo="ORGANICO">Orgânico</button>
+      <button class="chip-filtro ${MKT_QUADRO_FILTRO_TIPO === 'PAGO' ? 'ativo' : ''}" data-filtro-tipo="PAGO">Pago</button>
+      <select id="mkq-canal" style="max-width:180px;">
+        <option value="">Todos os canais</option>
+        ${[...new Set(MKT_QUADRO_CACHE.map(c => c.canal).filter(Boolean))].sort().map(c => `<option value="${esc(c)}" ${c === MKT_QUADRO_FILTRO_CANAL ? 'selected' : ''}>${esc(c)}</option>`).join('')}
+      </select>
+      <input id="mkq-busca" placeholder="Buscar por título, código ou responsável" style="flex:1;min-width:220px;" value="${esc(MKT_QUADRO_BUSCA)}">
+    </div>
+
+    <div id="mkq-colunas" style="display:grid;grid-template-columns:repeat(4,minmax(230px,1fr));gap:14px;overflow-x:auto;"></div>`
+
+  await montarAgendaEmbutida($('#mkq-bloco-agenda'), () => mktQuadro(alvo, editavel))
+  renderMktQuadroColunas(alvo, editavel)
+
+  alvo.querySelectorAll('[data-filtro-tipo]').forEach(b => {
+    b.onclick = () => { MKT_QUADRO_FILTRO_TIPO = b.dataset.filtroTipo; mktQuadro(alvo, editavel) }
+  })
+  $('#mkq-canal').onchange = () => { MKT_QUADRO_FILTRO_CANAL = $('#mkq-canal').value; renderMktQuadroColunas(alvo, editavel) }
+  $('#mkq-busca').oninput = () => { MKT_QUADRO_BUSCA = $('#mkq-busca').value; renderMktQuadroColunas(alvo, editavel) }
+  if (editavel) $('#mkq-novo').onclick = () => formMktCard(null, () => mktQuadro(alvo, editavel))
+}
+
+function renderMktQuadroColunas (alvo, editavel) {
+  const termo = MKT_QUADRO_BUSCA.trim().toLowerCase()
+  const filtrados = MKT_QUADRO_CACHE.filter(c =>
+    (!MKT_QUADRO_FILTRO_TIPO || c.tipo === MKT_QUADRO_FILTRO_TIPO) &&
+    (!MKT_QUADRO_FILTRO_CANAL || c.canal === MKT_QUADRO_FILTRO_CANAL) &&
+    (!termo || [c.titulo, c.codigo, c.responsavel].some(v => (v || '').toLowerCase().includes(termo)))
+  )
+
+  const cartao = c => `<div class="cartao-quadro-mkt" data-abrir-card="${c.id}"
+      style="background:var(--panel);border:1px solid var(--line);border-left:3px solid ${c.tipo === 'PAGO' ? 'var(--gold)' : 'var(--rust)'};
+      border-radius:10px;padding:12px 14px;margin-bottom:10px;cursor:pointer;">
+    <div style="font-weight:600;font-size:13.5px;line-height:1.35;">${esc(c.titulo)}</div>
+    <div class="texto-dim2" style="font-size:11px;margin-top:5px;">${esc(c.codigo ?? '')}${c.canal ? ' · ' + esc(c.canal) : ''}${c.responsavel ? ' · ' + esc(c.responsavel) : ''}</div>
+    ${c.data_publicacao ? `<div class="texto-dim2" style="font-size:11px;margin-top:2px;">Publica ${fmtData(c.data_publicacao)}</div>` : ''}
+    ${c.verba ? `<div class="texto-dim2" style="font-size:11px;margin-top:2px;">Verba: R$ ${fmtNum(c.verba)}</div>` : ''}
+    <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:8px;">
+      <span class="chip">${COLUNAS_QUADRO_MKT.find(x => x[0] === c.coluna)?.[1] ?? c.coluna}</span>
+      ${(c.tags || []).map(t => `<span class="${t === 'Bloqueado' || t === 'Atrasado' ? 'badge-alerta' : 'badge-bom'}">${esc(t)}</span>`).join('')}
+    </div>
+  </div>`
+
+  $('#mkq-colunas').innerHTML = COLUNAS_QUADRO_MKT.map(([col, rot]) => {
+    const itens = filtrados.filter(c => c.coluna === col)
+    return `<div class="panel" style="padding:12px;min-height:120px;">
+      <div class="cabeca-secao" style="margin-bottom:10px;">
+        <span class="texto-dim2" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;">${rot}</span>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span class="chip">${itens.length}</span>
+          ${editavel && col === 'CONCLUIDO' && itens.length ? `<button class="btn-secundario mini" id="mkq-limpar">limpar</button>` : ''}
+        </div>
+      </div>
+      ${itens.map(cartao).join('') || '<p class="texto-dim2" style="font-size:12px;padding:6px 2px;">vazio</p>'}
+    </div>`
+  }).join('')
+
+  $('#mkq-colunas').querySelectorAll('[data-abrir-card]').forEach(el => {
+    el.onclick = () => formMktCard(MKT_QUADRO_CACHE.find(c => c.id === el.dataset.abrirCard), () => mktQuadro($('#sub-marketing'), editavel))
+  })
+  const btnLimpar = $('#mkq-limpar')
+  if (btnLimpar) btnLimpar.onclick = async () => {
+    if (!confirm('Apagar todos os cartões concluídos?')) return
+    await db.from('marketing_card').delete().eq('coluna', 'CONCLUIDO')
+    mktQuadro($('#sub-marketing'), editavel)
+  }
+}
+
+function formMktCard (registro, aoSalvar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>${registro ? esc(registro.codigo || 'Editar cartão') : 'Novo cartão'}</h3>
+    <div class="campo"><label>Título *</label><input id="mkq-titulo" value="${esc(registro?.titulo ?? '')}"></div>
+    <div class="form-grade" style="margin-top:10px;">
+      <div class="campo"><label>Tipo</label><select id="mkq-tipo">
+        <option value="ORGANICO" ${(!registro || registro.tipo === 'ORGANICO') ? 'selected' : ''}>Orgânico</option>
+        <option value="PAGO" ${registro?.tipo === 'PAGO' ? 'selected' : ''}>Pago</option>
+      </select></div>
+      <div class="campo"><label>Canal</label><input id="mkq-canal-form" value="${esc(registro?.canal ?? '')}" placeholder="Instagram, Blog, Meta, Google..."></div>
+      <div class="campo"><label>Responsável</label><input id="mkq-resp" value="${esc(registro?.responsavel ?? '')}"></div>
+      <div class="campo"><label>Coluna</label><select id="mkq-coluna">
+        ${COLUNAS_QUADRO_MKT.map(([c, r]) => `<option value="${c}" ${c === (registro?.coluna ?? 'A_FAZER') ? 'selected' : ''}>${r}</option>`).join('')}</select></div>
+      <div class="campo"><label>Data de publicação</label><input type="date" id="mkq-data" value="${registro?.data_publicacao ?? ''}"></div>
+      <div class="campo"><label>Verba (R$, se for pago)</label><input type="number" step="0.01" id="mkq-verba" value="${registro?.verba ?? ''}"></div>
+    </div>
+    <div class="campo" style="margin-top:10px;"><label>Etiquetas extras</label>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:4px;">
+        ${TAGS_EXTRA_QUADRO_MKT.map(t => `<label style="display:flex;align-items:center;gap:6px;font-size:13px;font-weight:400;">
+          <input type="checkbox" data-tag-extra value="${esc(t)}" ${(registro?.tags || []).includes(t) ? 'checked' : ''}> ${t}</label>`).join('')}
+      </div></div>
+    <div class="campo" style="margin-top:10px;"><label>Observações</label><textarea id="mkq-obs" style="min-height:70px;">${esc(registro?.observacoes ?? '')}</textarea></div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="mkq-salvar">Salvar</button>
+      ${registro ? `<button class="btn-secundario" id="mkq-excluir-card" style="color:var(--warn-text);">Excluir</button>` : ''}
+      <button class="btn-secundario" id="mkq-fechar">Fechar</button>
+    </div>
+    <div class="recado oculto" id="mkq-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#mkq-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  if (registro) fundo.querySelector('#mkq-excluir-card').onclick = async () => {
+    if (!confirm('Excluir esse cartão?')) return
+    await db.from('marketing_card').delete().eq('id', registro.id)
+    fechar(); aoSalvar()
+  }
+
+  fundo.querySelector('#mkq-salvar').onclick = async () => {
+    const el = fundo.querySelector('#mkq-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const titulo = fundo.querySelector('#mkq-titulo').value.trim()
+    if (!titulo) { aviso('Escreva o título.'); return }
+    const btn = fundo.querySelector('#mkq-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const tipo = fundo.querySelector('#mkq-tipo').value
+    const tags = [...fundo.querySelectorAll('[data-tag-extra]:checked')].map(c => c.value)
+    const corpo = {
+      titulo, tipo, canal: fundo.querySelector('#mkq-canal-form').value.trim() || null,
+      responsavel: fundo.querySelector('#mkq-resp').value.trim() || null, coluna: fundo.querySelector('#mkq-coluna').value,
+      data_publicacao: fundo.querySelector('#mkq-data').value || null, verba: fundo.querySelector('#mkq-verba').value || null,
+      tags, observacoes: fundo.querySelector('#mkq-obs').value.trim() || null, atualizado_em: new Date().toISOString()
+    }
+    let error
+    if (registro) { ({ error } = await db.from('marketing_card').update(corpo).eq('id', registro.id)) }
+    else {
+      const { data: codigoGerado } = await db.rpc('gerar_codigo_card_marketing', { p_tipo: tipo })
+      ;({ error } = await db.from('marketing_card').insert({ ...corpo, codigo: codigoGerado, criado_por: PERFIL.pessoaId }))
+    }
+    btn.disabled = false; btn.textContent = 'Salvar'
+    if (error) { aviso(error.message); return }
+    fechar(); aoSalvar()
+  }
+}
+
 
 function formMktDoc (registro, aoSalvar) {
   const fundo = document.createElement('div')
