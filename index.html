@@ -4,6 +4,17 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sistema Gefoscal</title>
+
+<!-- PWA: deixa instalar como app no celular, sem passar por loja -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1c5632">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Gefoscal">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icon-192.png">
+
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400..700&family=Roboto:wght@300;400;500;700;900&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="skins_gefoscal.css">
@@ -13,18 +24,39 @@
 .app { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh;
        transition: grid-template-columns .18s ease; }
 .app.nav-colapsada { grid-template-columns: 68px 1fr; }
-@media (max-width: 860px) { .app { grid-template-columns: 1fr; } .nav { display: none; } }
+@media (max-width: 860px) {
+  .app { grid-template-columns: 1fr; }
+  .nav { position: fixed; left: 0; top: 0; height: 100vh; width: 260px; z-index: 1000;
+         transform: translateX(-100%); transition: transform .22s ease; box-shadow: 2px 0 24px rgba(0,0,0,.35); }
+  .nav.aberto { transform: translateX(0); }
+  .fundo-nav-mobile { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 999; }
+  .fundo-nav-mobile.aberto { display: block; }
+  .botao-abrir-menu { display: flex !important; }
+}
+.botao-abrir-menu { display: none; align-items: center; justify-content: center; width: 38px; height: 38px;
+  border-radius: 8px; background: var(--surface2); border: 1px solid var(--line2); color: var(--txt);
+  cursor: pointer; flex: none; }
+.botao-abrir-menu svg { width: 20px; height: 20px; }
+.fundo-nav-mobile { display: none; }
+/* deixa qualquer tabela larga rolar de lado no celular, em vez de estourar a tela */
+@media (max-width: 860px) { .conteudo { padding: 16px 14px; } }
 @media (max-width: 760px) { .grade-painel-comb { grid-template-columns: 1fr !important; } }
 .nav { background: var(--panel); border-right: 1px solid var(--line); padding: 18px 12px;
-       overflow: hidden; }
+       overflow-y: auto; overflow-x: hidden; }
 .nav h1 { font-family: var(--serif); font-size: 19px; margin: 0 0 2px; }
 .nav .sub { color: var(--dim2); font-size: 11px; margin-bottom: 22px; white-space: nowrap; }
+.nav .grupo-titulo { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--dim2);
+       margin: 16px 11px 6px; opacity: .65; white-space: nowrap; }
+.nav .grupo-titulo:first-child { margin-top: 0; }
+.nav .grupo-divisor { height: 1px; background: var(--line); margin: 10px 8px 12px; }
 .nav a { display:flex; align-items:center; gap:11px; padding:9px 11px; border-radius:6px; color:var(--dim);
          text-decoration:none; font-size:14px; margin-bottom:2px; cursor:pointer; white-space:nowrap; }
 .nav a svg { width:18px; height:18px; flex:none; }
 .nav a:hover { background: var(--hover-bg); color: var(--txt); }
 .nav a.ativo { background: var(--hover-bg); color: var(--txt); border-left:3px solid var(--rust); }
 .nav a.bloqueado { opacity:.35; cursor:not-allowed; }
+.app.nav-colapsada .nav .grupo-titulo,
+.app.nav-colapsada .nav .grupo-divisor { display:none; }
 .app.nav-colapsada .nav .rotulo,
 .app.nav-colapsada .nav .sub,
 .app.nav-colapsada #btn-sair .rotulo { display:none; }
@@ -103,13 +135,13 @@ tbody tr:hover { background: var(--hover-bg); }
 .doc-topo img { height:40px; width:auto; }
 .doc-corpo { padding:16px; display:grid; gap:12px; }
 .doc-linha { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); }
-.bloco { border:1px solid var(--borda); border-radius:8px; overflow:hidden; background:#fff; }
-.bloco > h4 { margin:0; background:var(--verde-claro); color:var(--verde);
+.doc .bloco { border:1px solid var(--borda); border-radius:8px; overflow:hidden; background:#fff; }
+.doc .bloco > h4 { margin:0; background:var(--verde-claro); color:var(--verde);
               font-size:11px; letter-spacing:.6px; text-transform:uppercase;
               padding:8px 12px; border-bottom:1px solid var(--borda); font-weight:600; }
-.bloco .conteudo { padding:12px; font-size:13px; line-height:1.65; }
-.bloco .conteudo .rot { color:#5b6b60; }
-.bloco .conteudo b { color:#1b1b1b; }
+.doc .bloco .conteudo { padding:12px; font-size:13px; line-height:1.65; }
+.doc .bloco .conteudo .rot { color:#5b6b60; }
+.doc .bloco .conteudo b { color:#1b1b1b; }
 .doc .valor-caixa { display:flex; justify-content:space-between; align-items:center;
                     gap:12px; border:1px solid var(--borda); border-radius:7px;
                     padding:10px 12px; margin-top:8px; }
@@ -180,13 +212,6 @@ tbody tr:hover { background: var(--hover-bg); }
 .coluna-cronograma-mkt h4 { font-family:var(--serif); font-size:13px; margin:0 0 8px; text-align:center; }
 .bloco-periodo-mkt { margin-bottom:10px; }
 .bloco-periodo-mkt input, .bloco-periodo-mkt textarea { width:100%; }
-
-/* ---- Dashboard Diretor ---- */
-.grade-funil-dir { display:flex; gap:10px; }
-.etapa-funil-dir { flex:1; text-align:center; padding:16px 8px; border-radius:10px; color:#fff; }
-.etapa-funil-dir .n { font-family:var(--serif); font-size:26px; font-weight:700; }
-.etapa-funil-dir .rot { font-size:11.5px; margin-top:3px; opacity:.9; }
-@media (max-width:700px){ .grade-funil-dir { flex-direction:column; } }
 
 @keyframes piscar-amarelo { 0%,100% { background:rgba(var(--gold-rgb),.18); } 50% { background:rgba(var(--gold-rgb),.55); } }
 @keyframes piscar-vermelho { 0%,100% { background:rgba(var(--warn-rgb),.18); } 50% { background:rgba(var(--warn-rgb),.65); } }
@@ -281,14 +306,6 @@ tbody tr:hover { background: var(--hover-bg); }
 .chips-cred button:hover { color:var(--txt); }
 .chips-cred button.ativo { border-color:var(--rust); color:var(--rust); background:rgba(var(--rust-rgb),.12); }
 .tag-aging { font-size:11px; padding:2px 8px; border-radius:20px; white-space:nowrap; }
-
-.segmentado { display:flex; gap:0; border:1px solid var(--line2); border-radius:8px; overflow:hidden; width:fit-content; }
-.segmentado button { font-size:12.5px; padding:8px 16px; cursor:pointer; border:none; background:none;
-                      color:var(--dim); border-right:1px solid var(--line2); transition:.12s; }
-.segmentado button:last-child { border-right:none; }
-.segmentado button:hover { color:var(--txt); background:var(--hover-bg); }
-.segmentado button.ativo { background:var(--rust); color:#fff; font-weight:600; }
-.segmentado button:disabled { cursor:not-allowed; opacity:.6; }
 .tag-aging.critico { background:rgba(var(--warn-rgb),.18); color:var(--warn-text); }
 .tag-aging.alerta  { background:rgba(var(--gold-rgb),.18); color:var(--gold); }
 .tag-aging.ok      { background:rgba(var(--good-rgb),.16); color:var(--good-text); }
@@ -355,18 +372,22 @@ tbody tr:hover { background: var(--hover-bg); }
 
 /* ---- Resumo grande do financeiro ---- */
 .resumo-topo { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr));
-               gap:1px; background:var(--line); border:1px solid var(--line);
-               border-radius:10px; overflow:hidden; margin-bottom:20px; }
-.resumo-topo .bloco { background:var(--panel); padding:20px 22px; }
+               gap:12px; margin-bottom:20px; }
+.resumo-topo .bloco { background:var(--panel); padding:19px 22px; border:1px solid var(--line);
+               border-radius:10px; display:flex; flex-direction:column; justify-content:center;
+               transition:border-color .15s ease, box-shadow .15s ease; }
+.resumo-topo .bloco:hover { border-color:var(--dim2); }
 .resumo-topo .rot { color:var(--dim2); font-size:10.5px; text-transform:uppercase;
-                    letter-spacing:.12em; }
+                    letter-spacing:.12em; display:flex; align-items:center; justify-content:space-between; gap:10px; }
 .resumo-topo .val { font-family:var(--serif); font-size:34px; line-height:1.05;
                     margin-top:10px; letter-spacing:-.01em; }
 .resumo-topo .nota { color:var(--dim); font-size:12.5px; margin-top:7px; }
-.resumo-topo .bloco.destaque { box-shadow:inset 4px 0 0 var(--rust); }
-.resumo-topo .bloco.alerta  { box-shadow:inset 4px 0 0 var(--warn-text); }
+.resumo-topo .bloco.destaque { border-color:var(--rust); box-shadow:inset 3px 0 0 var(--rust); }
+.resumo-topo .bloco.alerta  { border-color:var(--warn-text); box-shadow:inset 3px 0 0 var(--warn-text); }
 .resumo-topo .bloco.alerta .val { color:var(--warn-text); }
 .resumo-topo .bloco.bom .val { color:var(--ok-text, var(--rust)); }
+.resumo-topo .bloco .editar-valor { flex:none; padding:4px 6px; line-height:0; opacity:.55; }
+.resumo-topo .bloco .editar-valor:hover { opacity:1; }
 @media (max-width:640px) { .resumo-topo .val { font-size:26px; } }
 
 
@@ -602,13 +623,20 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
     </div>
     <div id="menu"></div>
     <div class="linha-divisoria" style="margin:18px 0 12px;"></div>
+    <button class="btn-secundario oculto" id="btn-instalar" style="width:100%;margin-bottom:8px;">
+      <span class="rotulo">📲 Instalar app</span>
+    </button>
     <button class="btn-secundario" id="btn-sair" style="width:100%;" onclick="sair()">
       <span class="rotulo">Sair</span>
     </button>
   </nav>
+  <div class="fundo-nav-mobile" id="fundo-nav-mobile"></div>
 
   <main class="conteudo">
     <div class="barra-utilitaria">
+      <button class="botao-abrir-menu" id="btn-abrir-menu" title="Abrir menu">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
       <button class="botao-colapsar" id="btn-colapsar" title="Esconder menu">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
       </button>
@@ -845,13 +873,10 @@ async function abrirApp () {
   if (PERFIL.pessoaId) {
     const { data: setoresGeridos } = await db.from('setor').select('id,nome').eq('gestor_id', PERFIL.pessoaId)
     PERFIL.setoresGeridos = (setoresGeridos || []).map(s => s.id)
-    // CRM (funil/carteira/gestão comercial) libera automático pra quem
-    // gerencia o setor Comercial (chefia de setor) OU pra quem ganhou o
-    // papel GESTOR_COMERCIAL direto em Administração — os dois caminhos
-    // valem. Antes só o primeiro contava, então marcar o papel na tela de
-    // usuário não tinha efeito nenhum na prática.
+    // CRM (funil/carteira/gestão comercial) só libera automático pra quem
+    // gerencia o setor Comercial — gestor de outro setor (Indústria,
+    // Almoxarifado etc.) não tem nada a ver com isso, mesmo sendo gestor
     PERFIL.souGestorComercial = (setoresGeridos || []).some(s => (s.nome || '').trim().toLowerCase() === 'comercial')
-      || PERFIL.papeis.includes('GESTOR_COMERCIAL')
   }
 
   $('#quem-sou-avatar').textContent = iniciais(PERFIL.nome)
@@ -902,10 +927,10 @@ function podeEditar (chave) {
 }
 
 const PAGINAS = {
-  dashboard_diretor: { nome: 'Dashboard Diretor', render: paginaDashboardDiretor },
   visao_geral: { nome: 'Visão geral', render: paginaVisaoGeral, sempre: true },
   solicitacoes: { nome: 'Solicitações', render: paginaSolicitacoes, sempre: true },
-  expedicao:   { nome: 'Expedição', render: paginaExpedicao },
+  cadastro:    { nome: 'Cadastro', render: paginaCadastro },
+  expedicao:   { nome: 'Faturamento', render: paginaExpedicao },
   compras:     { nome: 'Compras', render: paginaCompras, sempre: true },
   cobranca:    { nome: 'Crédito e Cobrança', render: paginaCobranca },
   marketing:   { nome: 'Marketing', render: paginaMarketing },
@@ -920,7 +945,9 @@ const PAGINAS = {
   frota:       { nome: 'Frota', render: paginaFrota },
   juridico:    { nome: 'Jurídico', render: paginaJuridico },
   desempenho:  { nome: 'RH', render: paginaDesempenho },
-  ti:          { nome: 'Administração', render: paginaAdministracao }
+  laboratorio: { nome: 'Laboratório', render: paginaLaboratorio },
+  ti:          { nome: 'Administração', render: paginaAdministracao },
+  gestao_ti:   { nome: 'Gestão de TI', render: paginaGestaoTI }
 }
 
 // ---------------------------------------------------------------
@@ -928,10 +955,10 @@ const PAGINAS = {
 // no modo recolhido (só ícone). Estilo consistente: 24x24, traço fino.
 // ---------------------------------------------------------------
 const ICONES_MODULO = {
-  dashboard_diretor: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>',
   marketing: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>',
   visao_geral: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5L12 4l9 7.5"/><path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9"/></svg>',
   solicitacoes: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h10M7 13h10M7 17h6"/></svg>',
+  cadastro: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="13" x2="14" y2="13"/><line x1="8" y1="17" x2="12" y2="17"/></svg>',
   expedicao: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="14" height="10"/><path d="M15 8h4l4 4v2h-8z"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/></svg>',
   compras: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="20" r="1.4"/><circle cx="18" cy="20" r="1.4"/><path d="M2 2h3l2.6 13a2 2 0 0 0 2 1.6h9a2 2 0 0 0 2-1.8L22 7H6"/></svg>',
   cobranca: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="13" rx="2"/><path d="M2 10h20"/><circle cx="17" cy="14.5" r="1.2" fill="currentColor" stroke="none"/></svg>',
@@ -947,8 +974,21 @@ const ICONES_MODULO = {
   juridico: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M4 7h16"/><path d="M4 7L1 14a3.5 3.5 0 0 0 7 0L5 7"/><path d="M20 7l-3 7a3.5 3.5 0 0 0 7 0l-3-7"/><path d="M8 21h8"/></svg>',
   desempenho: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a8 8 0 0 1 16 0v1"/></svg>',
   ti: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8 3.5v6c0 5-3.4 8.6-8 10.5-4.6-1.9-8-5.5-8-10.5v-6z"/></svg>',
+  gestao_ti: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
+  laboratorio: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6"/><path d="M10 3v6l-5.5 9.5A1.5 1.5 0 0 0 5.8 21h12.4a1.5 1.5 0 0 0 1.3-2.5L14 9V3"/><path d="M7.5 14.5h9"/></svg>',
   _padrao: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/></svg>'
 }
+
+// Agrupamento visual do menu — só organiza a exibição, não mexe em
+// permissão nenhuma (quem não vê um módulo continua não vendo,
+// grupo vazio simplesmente some da tela). Item que não estiver
+// mapeado aqui cai automaticamente em "Outros", pra nunca sumir.
+const GRUPOS_MENU = [
+  ['Comercial', ['crm', 'cadastro', 'expedicao', 'cobranca', 'marketing']],
+  ['Operações', ['estoque', 'combustivel', 'manutencao', 'frota', 'projetos', 'laboratorio']],
+  ['Gestão', ['financeiro', 'desempenho', 'juridico', 'ferramentas', 'banco', 'gestao_ti']],
+  ['Administração', ['ti']]
+]
 
 function montarMenu () {
   // páginas marcadas "sempre" (visão geral, solicitações, compras) aparecem
@@ -958,20 +998,28 @@ function montarMenu () {
   const fixos = chavesSempre.map(chave =>
     `<a data-chave="${chave}" title="${esc(PAGINAS[chave].nome)}">${ICONES_MODULO[chave] || ICONES_MODULO._padrao}<span class="rotulo">${esc(PAGINAS[chave].nome)}</span></a>`
   ).join('')
-  const doBanco = PERFIL.modulos.filter(m => !chavesSempre.includes(m.chave)).map(m => {
+
+  const linkModulo = m => {
     const temPagina = !!PAGINAS[m.chave]
-    const liberado = podeVer(m.chave)
-    if (!liberado) return ''
     const icone = ICONES_MODULO[m.chave] || ICONES_MODULO._padrao
     return `<a data-chave="${m.chave}" class="${temPagina ? '' : 'bloqueado'}" title="${esc(m.nome)}">${icone}<span class="rotulo">${esc(m.nome)}</span></a>`
-  }).join('')
-  $('#menu').innerHTML = fixos + doBanco
+  }
+
+  const disponiveis = PERFIL.modulos.filter(m => !chavesSempre.includes(m.chave) && podeVer(m.chave))
+  const usados = new Set()
+  let doBanco = ''
+  GRUPOS_MENU.forEach(([titulo, chaves]) => {
+    const itens = chaves.map(c => disponiveis.find(m => m.chave === c)).filter(Boolean)
+    if (!itens.length) return
+    itens.forEach(m => usados.add(m.chave))
+    doBanco += `<div class="grupo-titulo">${esc(titulo)}</div>` + itens.map(linkModulo).join('')
+  })
+  const resto = disponiveis.filter(m => !usados.has(m.chave))
+  if (resto.length) doBanco += `<div class="grupo-titulo">Outros</div>` + resto.map(linkModulo).join('')
+
+  $('#menu').innerHTML = fixos + (doBanco ? `<div class="grupo-divisor"></div>${doBanco}` : '')
   $('#menu').querySelectorAll('a').forEach(a => {
-    if (a.classList.contains('bloqueado')) {
-      a.onclick = () => alert(`"${a.title}" ainda não foi construída — o módulo já existe no cadastro, mas a página em si não. Fala com quem está desenvolvendo pra priorizar.`)
-    } else {
-      a.onclick = () => irPara(a.dataset.chave)
-    }
+    if (!a.classList.contains('bloqueado')) a.onclick = () => irPara(a.dataset.chave)
   })
 }
 
@@ -1023,7 +1071,6 @@ function faltaMigracao (erro) {
 // ---------------------------------------------------------------
 async function painelAtencao (area) {
   if (!PERFIL.pessoaId) return
-  if (!PERFIL.papeis.includes('ADMIN')) return
   const hoje = hojeISO()
   const itens = [] // {modulo, chave, titulo, data, urgente, detalhe}
   const tarefas = []
@@ -1095,6 +1142,22 @@ async function painelAtencao (area) {
           data: c.vencimento, urgente: vencido, detalhe: vencido ? 'vencido' : 'vence em breve'
         })
       })
+    })())
+  }
+
+  // lembrete do Mapa de Controle (PF/Exército) do Laboratório — só
+  // avisa a partir do dia 10, pra não incomodar logo no início do mês
+  if (podeVer('laboratorio') && new Date().getDate() >= 10) {
+    tarefas.push((async () => {
+      const hojeD = new Date(); const mes = hojeD.getMonth() + 1; const ano = hojeD.getFullYear()
+      const [{ data: temControlado }, { data: jaGerado }] = await Promise.all([
+        db.from('lab_estoque_movimento').select('controlado_pf,controlado_exercito').or('controlado_pf.eq.true,controlado_exercito.eq.true').limit(1),
+        db.from('lab_mapa_envio').select('tipo').eq('mes_ref', mes).eq('ano_ref', ano)
+      ])
+      if (!temControlado?.length) return
+      const tiposGerados = new Set((jaGerado || []).map(g => g.tipo))
+      if (!tiposGerados.has('PF')) itens.push({ modulo: 'Laboratório', chave: 'laboratorio', titulo: 'Mapa de Controle — Polícia Federal ainda não gerado esse mês', data: null, urgente: true, detalhe: 'mapa mensal' })
+      if (!tiposGerados.has('EXERCITO')) itens.push({ modulo: 'Laboratório', chave: 'laboratorio', titulo: 'Mapa de Controle — Exército ainda não gerado esse mês', data: null, urgente: true, detalhe: 'mapa mensal' })
     })())
   }
 
@@ -1220,6 +1283,21 @@ async function paginaVisaoGeral () {
       Administração → Usuários.</p></div>`
     return
   }
+
+  // saudação com a data por extenso — amarra visualmente todos os
+  // blocos que vêm a seguir, meio que um "hoje é assim" antes de entrar
+  // nos detalhes de cada módulo
+  const agora = new Date()
+  const hora = agora.getHours()
+  const saudacao = hora < 12 ? 'Bom dia' : hora < 18 ? 'Boa tarde' : 'Boa noite'
+  const dataExtenso = agora.toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })
+  const primeiroNome = (PERFIL.nome || '').split(' ')[0]
+  const cabecalho = document.createElement('div')
+  cabecalho.style.cssText = 'margin-bottom:18px;'
+  cabecalho.innerHTML = `
+    <h2 style="font-family:var(--serif);font-size:24px;margin:0;">${saudacao}${primeiroNome ? ', ' + esc(primeiroNome) : ''}</h2>
+    <p class="texto-dim2" style="font-size:13px;margin:3px 0 0;text-transform:capitalize;">${esc(dataExtenso)}</p>`
+  area.appendChild(cabecalho)
 
   // avisos não lidos primeiro
   const { data: avisos } = await db.from('aviso')
@@ -1466,10 +1544,17 @@ async function solicPainel (alvo) {
 }
 
 // ----- Nova solicitação -----
-function solicNova (alvo) {
+async function solicNova (alvo) {
+  if (!SETOR_TI_ID) {
+    const { data: setorTI } = await db.from('setor').select('id').ilike('nome', 'TI').maybeSingle()
+    SETOR_TI_ID = setorTI?.id ?? null
+  }
   alvo.innerHTML = `
     <div class="panel" style="padding:20px;max-width:760px;">
       <h3 style="font-family:var(--serif);font-size:18px;margin:0 0 14px;">Nova solicitação</h3>
+      ${SETOR_TI_ID ? `<div class="acoes" style="margin:0 0 16px;">
+        <button class="btn-secundario mini" id="sn-atalho-melhoria" type="button">💡 Solicitação de melhoria pro sistema</button>
+      </div>` : ''}
       <div class="form-grade">
         <div class="campo"><label>Setor de destino *</label>
           <select id="sn-setor">${SOLIC_CACHE.setores.map(s => `<option value="${s.id}">${esc(s.nome)}</option>`).join('')}</select></div>
@@ -1491,6 +1576,15 @@ function solicNova (alvo) {
       <div class="acoes"><button class="btn" id="sn-salvar">Enviar solicitação</button></div>
       <div class="recado oculto" id="sn-recado"></div>
     </div>`
+
+  if (SETOR_TI_ID) $('#sn-atalho-melhoria').onclick = () => {
+    $('#sn-setor').value = SETOR_TI_ID
+    atualizarResponsaveis()
+    $('#sn-titulo').value = 'Sugestão de melhoria: '
+    $('#sn-titulo').focus()
+    $('#sn-titulo').setSelectionRange($('#sn-titulo').value.length, $('#sn-titulo').value.length)
+    $('#sn-descricao').placeholder = 'Descreva a melhoria que você gostaria de ver no sistema — o que você precisa e por quê'
+  }
 
   // a lista de responsável acompanha o setor escolhido — só faz sentido
   // apontar alguém que já é daquele setor
@@ -1567,8 +1661,10 @@ async function solicLista (alvo, { meuSetor }) {
       ${!meuSetor ? `<div class="campo"><label>Setor</label>
         <select id="sl-setor"><option value="">Todos</option>${SOLIC_CACHE.setores.map(s => `<option value="${s.id}">${esc(s.nome)}</option>`).join('')}</select></div>` : ''}
       <div class="campo"><label>Status</label>
-        <select id="sl-status"><option value="">Todos</option>${STATUS_SOLICITACAO.map(s => `<option value="${s}">${ROTULO_STATUS_SOLICITACAO[s]}</option>`).join('')}</select></div>
+        <select id="sl-status"><option value="">Todos (em andamento)</option>${STATUS_SOLICITACAO.map(s => `<option value="${s}">${ROTULO_STATUS_SOLICITACAO[s]}</option>`).join('')}</select></div>
       <button class="btn" id="sl-buscar">Buscar</button>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:400;color:var(--dim);align-self:center;">
+        <input type="checkbox" id="sl-mostrar-concluidas"> mostrar concluídas/canceladas também</label>
     </div>
     <div id="sl-conteudo"></div>`
 
@@ -1583,6 +1679,10 @@ async function solicLista (alvo, { meuSetor }) {
     if (meuSetor) q = q.eq('setor_destino_id', PERFIL.setorId)
     else if ($('#sl-setor').value) q = q.eq('setor_destino_id', $('#sl-setor').value)
     if ($('#sl-status').value) q = q.eq('status', $('#sl-status').value)
+    // concluída/cancelada não fica acumulando na tela de quem trabalha —
+    // isso vira histórico (já rastreado em RH → Agilidade e prazos),
+    // só aparece aqui se pedir status específico ou marcar o checkbox
+    else if (!$('#sl-mostrar-concluidas').checked) q = q.not('status', 'in', '(CONCLUIDA,CANCELADA)')
 
     const { data, error } = await q
     if (error) { $('#sl-conteudo').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
@@ -1624,6 +1724,7 @@ async function solicLista (alvo, { meuSetor }) {
   }
 
   $('#sl-buscar').onclick = buscar
+  $('#sl-mostrar-concluidas').onchange = buscar
   $('#sl-status').onchange = buscar
   if (!meuSetor) $('#sl-setor').onchange = buscar
   buscar()
@@ -1983,13 +2084,7 @@ async function subUsuarios (alvo, editavel) {
   }
 
   const preDe = e => (pre || []).find(p => p.email === (e || '').toLowerCase())
-  const nivelDe = p => {
-    const ps = p?.papeis || []
-    if (ps.includes('ADMIN')) return 'Administrador'
-    if (ps.includes('DIRETORIA')) return 'Diretoria'
-    if (ps.includes('GESTOR')) return 'Gestor'
-    return 'Usuário'
-  }
+  const nivelDe = p => (p?.papeis || []).includes('ADMIN') ? 'Administrador' : 'Usuário'
 
   alvo.innerHTML = `
     <div class="secao panel" style="padding:20px;">
@@ -2020,23 +2115,16 @@ async function subUsuarios (alvo, editavel) {
             <button class="btn mini" id="criar-setor">criar</button>
           </div>
         </div>
-        <div class="campo" style="grid-column:1/-1;"><label>Nível de acesso</label>
-          <div class="segmentado" id="u-nivel-botoes">
-            <button type="button" data-nivel="administrador" ${editavel ? '' : 'disabled'}>Administrador</button>
-            <button type="button" data-nivel="diretoria" ${editavel ? '' : 'disabled'}>Diretoria</button>
-            <button type="button" data-nivel="gestor" ${editavel ? '' : 'disabled'}>Gestor</button>
-            <button type="button" data-nivel="usuario" class="ativo" ${editavel ? '' : 'disabled'}>Usuário</button>
-          </div>
-          <input type="hidden" id="u-nivel" value="usuario">
-          <p class="texto-dim2" style="font-size:11px;margin:6px 0 0;">
-            Clicar preenche as abas abaixo na hora (dá pra ajustar módulo a módulo depois — o clique é só um ponto de partida).</p>
-        </div>
+        <div class="campo"><label>Nível de acesso</label>
+          <select id="u-nivel" ${editavel ? '' : 'disabled'}>
+            <option value="usuario">Usuário — só consulta</option>
+            <option value="administrador">Administrador — consulta e altera</option>
+          </select></div>
         <div class="campo"><label>&nbsp;</label>
           <label style="display:flex;align-items:center;gap:7px;font-size:13px;font-weight:400;padding-top:7px;">
             <input type="checkbox" id="u-gestor-comercial" ${editavel ? '' : 'disabled'}>
             Gestor comercial (vê a aba Gestão do CRM)
           </label></div>
-        <div></div>
         ${editavel ? `<div class="campo"><label>Senha de acesso</label>
           <input id="u-senha" type="text" autocomplete="off" placeholder="mínimo 8 caracteres">
           <span class="texto-dim2" style="font-size:11px;">deixe vazio para não mexer na senha</span>
@@ -2060,7 +2148,10 @@ async function subUsuarios (alvo, editavel) {
 
     <div class="cabeca-secao">
       <h3 style="font-family:var(--serif);font-size:17px;">Pessoas cadastradas</h3>
-      <span class="texto-dim2" style="font-size:12px;">${(pessoas || []).length} no total</span>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:400;color:var(--dim);">
+        <input type="checkbox" id="u-mostrar-inativos"> mostrar inativos
+        (<span id="u-contagem-inativos">${(pessoas || []).filter(p => p.status === 'INATIVO').length}</span>)</label>
+      <span class="texto-dim2" style="font-size:12px;" id="u-contagem-total"></span>
     </div>
     <div class="lista-pessoas" id="u-lista"></div>`
 
@@ -2085,31 +2176,6 @@ async function subUsuarios (alvo, editavel) {
     c.onchange = () => { if (c.checked) $(`#u-modulos [data-ver="${c.dataset.editar}"]`).checked = true }
   })
 
-  // módulos que o preset "Gestor" deliberadamente deixa de fora
-  const MODULOS_FORA_DO_GESTOR = ['ti', 'dashboard_diretor', 'financeiro']
-
-  function marcarBotaoNivel (nivel) {
-    $('#u-nivel').value = nivel
-    $('#u-nivel-botoes').querySelectorAll('button').forEach(b => b.classList.toggle('ativo', b.dataset.nivel === nivel))
-  }
-
-  // clicar num nível preenche o grid inteiro na hora — ponto de partida
-  // rápido pra testar acesso; dá pra ajustar módulo a módulo depois, o
-  // clique não trava nada.
-  function aplicarPresetAcesso (nivel) {
-    marcarBotaoNivel(nivel)
-    $('#u-modulos').querySelectorAll('[data-ver]').forEach(c => {
-      const m = PERFIL.modulos.find(x => x.id === c.dataset.ver)
-      const editarEl = $(`#u-modulos [data-editar="${c.dataset.ver}"]`)
-      if (nivel === 'usuario') { c.checked = false; editarEl.checked = false; return }
-      if (nivel === 'gestor' && m && MODULOS_FORA_DO_GESTOR.includes(m.chave)) { c.checked = false; editarEl.checked = false; return }
-      c.checked = true; editarEl.checked = true
-    })
-  }
-  $('#u-nivel-botoes').querySelectorAll('button').forEach(b => {
-    b.onclick = () => aplicarPresetAcesso(b.dataset.nivel)
-  })
-
   const recado = (texto, alerta = false) => {
     const el = $('#u-recado'); if (!el) return
     el.textContent = texto
@@ -2124,13 +2190,17 @@ async function subUsuarios (alvo, editavel) {
   ;[...(pessoas || [])].sort((a, b) => new Date(a.criado_em) - new Date(b.criado_em))
     .forEach((p, i) => { numeroPessoa[p.id] = i + 1 })
 
-  $('#u-lista').innerHTML = `
+  function renderizarListaPessoas (mostrarInativos) {
+    const listaFiltrada = mostrarInativos ? (pessoas || []) : (pessoas || []).filter(p => p.status !== 'INATIVO')
+    $('#u-contagem-total').textContent = `${listaFiltrada.length} de ${(pessoas || []).length}`
+
+    $('#u-lista').innerHTML = `
     ${editavel ? `<div class="acoes" id="u-acoes-massa" style="margin-bottom:10px;">
       <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:400;">
         <input type="checkbox" id="u-marcar-todos"> selecionar todos</label>
       <button class="btn-secundario mini oculto" id="u-excluir-selecionados" style="color:var(--warn-text);margin-left:auto;">Excluir selecionados</button>
     </div>` : ''}
-    ${(pessoas || []).map(p => {
+    ${listaFiltrada.map(p => {
     const pc = preDe(p.email)
     const n = (perms || []).filter(x => x.pessoa_id === p.id).length
     const estado = !pc ? 'sem cadastro de acesso'
@@ -2151,7 +2221,7 @@ async function subUsuarios (alvo, editavel) {
       <div class="botoes">
         <button class="btn-secundario mini" data-abrir="${p.id}">abrir</button>
         ${editavel && pc ? `<button class="btn-secundario mini" data-senha="${esc(p.email)}">senha</button>` : ''}
-        ${editavel && !inativa ? `<button class="btn-secundario mini" data-excluir-pessoa="${p.id}" style="color:var(--warn-text);">excluir</button>` : ''}
+        ${editavel ? `<button class="btn-secundario mini" data-excluir-pessoa="${p.id}" style="color:var(--warn-text);">excluir</button>` : ''}
       </div>
     </div>`
   }).join('') || `<p class="vazio">Nenhuma pessoa cadastrada ainda.</p>`}`
@@ -2165,12 +2235,8 @@ async function subUsuarios (alvo, editavel) {
       $('#u-email').value = p.email || ''
       $('#u-cargo').value = p.cargo_id || ''
       $('#u-setor').value = p.setor_id || ''
-      const papeisDela = pc?.papeis || []
-      const nivelReal = papeisDela.includes('ADMIN') ? 'administrador'
-        : papeisDela.includes('DIRETORIA') ? 'diretoria'
-        : papeisDela.includes('GESTOR') ? 'gestor' : 'usuario'
-      marcarBotaoNivel(nivelReal)
-      $('#u-gestor-comercial').checked = papeisDela.includes('GESTOR_COMERCIAL')
+      $('#u-nivel').value = (pc?.papeis || []).includes('ADMIN') ? 'administrador' : 'usuario'
+      $('#u-gestor-comercial').checked = (pc?.papeis || []).includes('GESTOR_COMERCIAL')
       const meus = (perms || []).filter(x => x.pessoa_id === p.id)
       $('#u-modulos').querySelectorAll('[data-ver]').forEach(c => {
         const r = meus.find(x => x.modulo_id === c.dataset.ver)
@@ -2258,6 +2324,10 @@ async function subUsuarios (alvo, editavel) {
       await executarExclusao(marcados.map(c => c.dataset.id))
     }
   }
+  } // fim renderizarListaPessoas
+
+  renderizarListaPessoas(false)
+  $('#u-mostrar-inativos').onchange = e => renderizarListaPessoas(e.target.checked)
 
   // + cargo / + setor, sem prompt do navegador
   const criador = (btnAbrir, linha, campo, tabela, select) => {
@@ -2285,7 +2355,7 @@ async function subUsuarios (alvo, editavel) {
     ;['u-nome','u-email','u-cargo','u-setor','u-senha'].forEach(i => {
       const el = $('#' + i); if (el) el.value = ''
     })
-    marcarBotaoNivel('usuario')
+    $('#u-nivel').value = 'usuario'
     $('#u-gestor-comercial').checked = false
     $('#u-modulos').querySelectorAll('input').forEach(c => c.checked = false)
     $('#u-recado').classList.add('oculto')
@@ -2307,32 +2377,20 @@ async function subUsuarios (alvo, editavel) {
 
     if (e1) { recado(e1.message, true); btn.disabled = false; btn.textContent = 'Salvar cadastro'; return }
 
-    const PAPEIS_POR_NIVEL = {
-      administrador: ['ADMIN', 'DIRETORIA'], diretoria: ['DIRETORIA'],
-      gestor: ['GESTOR'], usuario: ['LEITOR']
-    }
-    const papeis = [...(PAPEIS_POR_NIVEL[$('#u-nivel').value] || ['LEITOR'])]
+    const papeis = $('#u-nivel').value === 'administrador' ? ['ADMIN', 'DIRETORIA'] : ['LEITOR']
     if ($('#u-gestor-comercial').checked) papeis.push('GESTOR_COMERCIAL')
     const { error: e2 } = await db.from('usuario_precadastro').upsert({
       email, papeis, pessoa_id: pessoa.id, setor_id: pessoa.setor_id
     }, { onConflict: 'email' })
     if (e2) { recado(e2.message, true); btn.disabled = false; btn.textContent = 'Salvar cadastro'; return }
 
-    // pra quem já tem login ativo, aplica o nível de acesso e o gestor
-    // comercial na hora — antes só o gestor comercial sincronizava de
-    // verdade, o resto (admin/usuário) ficava só no pré-cadastro sem
-    // nenhum efeito até o próximo login, e por isso o pré-cadastro podia
-    // dizer uma coisa e o acesso real valendo ser outra completamente
-    // diferente. Só mexe nos papéis que ESTE formulário controla — nunca
-    // apaga papéis de outro módulo (ex: COMPRAS, COBRANCA) que a pessoa
-    // tenha ganhado por outro caminho.
-    const PAPEIS_DESTE_FORM = ['ADMIN', 'DIRETORIA', 'GESTOR', 'LEITOR', 'GESTOR_COMERCIAL']
+    // pra quem já tem login ativo, aplica o papel de gestor comercial na hora
+    // (o resto do papeis só pega no próximo login, via o pré-cadastro acima)
     const { data: perfilAtivo } = await db.from('usuario_perfil').select('user_id').eq('pessoa_id', pessoa.id).maybeSingle()
     if (perfilAtivo?.user_id) {
-      await db.from('usuario_papel').delete().eq('user_id', perfilAtivo.user_id).in('papel', PAPEIS_DESTE_FORM)
-      const paraInserir = papeis.filter(p => PAPEIS_DESTE_FORM.includes(p))
-      if (paraInserir.length) {
-        await db.from('usuario_papel').insert(paraInserir.map(p => ({ user_id: perfilAtivo.user_id, papel: p })))
+      await db.from('usuario_papel').delete().eq('user_id', perfilAtivo.user_id).eq('papel', 'GESTOR_COMERCIAL')
+      if ($('#u-gestor-comercial').checked) {
+        await db.from('usuario_papel').insert({ user_id: perfilAtivo.user_id, papel: 'GESTOR_COMERCIAL' })
       }
     }
 
@@ -2564,7 +2622,22 @@ async function areaDeTrabalho (area) {
       <button class="apagar" data-apagar="${t.id}" title="apagar">×</button>
     </div>`
 
-  $('#tf-lista').innerHTML = abertas.map(linhaTarefa).join('') ||
+  // agrupa em seções tipo agenda de verdade, em vez de uma lista corrida —
+  // fica mais fácil bater o olho no que é urgente x no que ainda tem tempo
+  const daqui7dias = new Date(Date.now() + 7 * 864e5).toISOString().slice(0, 10)
+  const grupos = [
+    ['Atrasadas', abertas.filter(t => t.prazo && t.prazo < hoje)],
+    ['Hoje', abertas.filter(t => t.prazo === hoje)],
+    ['Próximos 7 dias', abertas.filter(t => t.prazo && t.prazo > hoje && t.prazo <= daqui7dias)],
+    ['Mais adiante', abertas.filter(t => t.prazo && t.prazo > daqui7dias)],
+    ['Sem data', abertas.filter(t => !t.prazo)]
+  ].filter(([, itens]) => itens.length)
+
+  $('#tf-lista').innerHTML = grupos.length ? grupos.map(([titulo, itens]) => `
+    <div style="margin-top:10px;">
+      <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;margin:8px 0 4px;">${titulo}</div>
+      ${itens.map(linhaTarefa).join('')}
+    </div>`).join('') :
     `<p class="texto-dim2" style="font-size:13px;padding:10px 0;">
       Nada pendente. Escreva acima o que precisa fazer.</p>`
 
@@ -3002,7 +3075,7 @@ const SETORES_COM_COORDENACAO = ['Indústria', 'P-TEC']
 //   aprovação final   -> papel DIRETORIA
 //   ADMIN passa em todas, para destravar o fluxo
 const ehAdminSistema = () => PERFIL.papeis.includes('ADMIN')
-const podeCotar     = () => PERFIL.papeis.includes('COMPRAS') || ehAdminSistema()
+const podeCotar     = () => PERFIL.papeis.includes('COMPRAS') || podeEditar('compras') || ehAdminSistema()
 const podeAprovar   = () => PERFIL.papeis.includes('DIRETORIA') || ehAdminSistema()
 // baixa de pagamento: quem edita o módulo financeiro
 const podePagar     = () => podeEditar('financeiro') || ehAdminSistema()
@@ -3022,7 +3095,7 @@ function podeEditarSolicitacao (s) {
   return false
 }
 
-let COMPRAS_CACHE = { fornecedores: [], setores: [], pessoas: [], meusSetores: [], veiculos: [] }
+let COMPRAS_CACHE = { fornecedores: [], setores: [], pessoas: [], meusSetores: [], veiculos: [], empresas: [] }
 
 async function paginaCompras () {
   const editavel = podeEditar('compras')
@@ -3036,18 +3109,20 @@ async function paginaCompras () {
   area.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
   // carrega antes de montar as abas: quem coordena depende dos setores
-  const [{ data: forn }, { data: setores }, { data: pessoas }, { data: veiculos }] = await Promise.all([
+  const [{ data: forn }, { data: setores }, { data: pessoas }, { data: veiculos }, { data: empresas }] = await Promise.all([
     db.from('fornecedor').select('id,nome,cnpj_cpf,contato,status').order('nome'),
     db.from('setor').select('id,nome,gestor_id').order('nome'),
     db.from('pessoa').select('id,nome').order('nome'),
-    db.from('veiculo').select('id,placa,descricao').order('placa')
+    db.from('veiculo').select('id,placa,descricao').order('placa'),
+    db.from('empresa').select('id,nome').eq('status', 'ATIVO').order('nome')
   ])
   COMPRAS_CACHE = {
     fornecedores: forn || [],
     setores: setores || [],
     pessoas: pessoas || [],
     meusSetores: (setores || []).filter(s => s.gestor_id && s.gestor_id === PERFIL.pessoaId),
-    veiculos: veiculos || []
+    veiculos: veiculos || [],
+    empresas: empresas || []
   }
 
   const abas = [
@@ -3859,6 +3934,8 @@ function formSolicitacao (s = null) {
           <select id="s-veiculo"><option value="">—</option>${COMPRAS_CACHE.veiculos.map(v => `<option value="${v.id}" ${v.id === s?.veiculo_id ? 'selected' : ''}>${esc(v.placa)}${v.descricao ? ' — ' + esc(v.descricao) : ''}</option>`).join('')}</select></div>
         <div class="campo"><label>Setor</label>
           <select id="s-setor">${opc(COMPRAS_CACHE.setores, s?.setor_id)}</select></div>
+        <div class="campo"><label>Empresa</label>
+          <select id="s-empresa">${opc(COMPRAS_CACHE.empresas, s?.empresa_id)}</select></div>
         <div class="campo"><label>Valor estimado (R$)</label>
           <input id="s-valor" inputmode="decimal" value="${s?.valor_estimado ?? ''}" placeholder="80,00"></div>
         <div class="campo"><label>Fornecedor sugerido</label>
@@ -3924,6 +4001,7 @@ function formSolicitacao (s = null) {
       tipo_solicitacao: q('#s-tipo').value || null,
       veiculo_id: q('#s-tipo').value === 'Peça de reposição' ? (q('#s-veiculo').value || null) : null,
       setor_id: q('#s-setor').value || null,
+      empresa_id: q('#s-empresa').value || null,
       valor_estimado: (() => {
         let b = q('#s-valor').value.trim()
         if (!b) return null
@@ -4540,55 +4618,244 @@ async function comprasFornecedores (alvo, editavel) {
 }
 
 // ---------------------------------------------------------------
+// Página: Cadastro
+// Um lugar só pra cadastrar Cliente, Fornecedor e Produto, sem
+// precisar entrar em Cobrança/Compras/Estoque só pra isso. Reaproveita
+// exatamente as mesmas telas de lá (mesma função, mesmo formulário) —
+// cadastrar aqui ou lá é o mesmo registro, nada duplicado. É daqui que
+// sai o cliente/produto usado no Faturamento (Novo pedido, Lançar).
+// ---------------------------------------------------------------
+async function paginaCadastro () {
+  $('#subtitulo-pagina').textContent = 'Cliente, fornecedor e produto — tudo num lugar só'
+  const area = areaLivre()
+
+  const abas = [['clientes', 'Clientes'], ['fornecedores', 'Fornecedores'], ['produtos', 'Produtos']]
+  area.innerHTML = `
+    <div class="subabas">
+      ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
+    </div>
+    <div id="sub-cadastro"></div>`
+
+  area.querySelectorAll('.subabas button').forEach(b => {
+    b.onclick = () => {
+      area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
+      abrirCadastro(b.dataset.sub)
+    }
+  })
+  abrirCadastro('clientes')
+}
+
+function abrirCadastro (sub) {
+  const alvo = $('#sub-cadastro')
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  // pode editar aqui quem tem o módulo Cadastro OU já editava a tela
+  // original (Cobrança/Compras/Estoque) — ninguém perde acesso que já tinha
+  if (sub === 'clientes') cobClientes(alvo, podeEditar('cadastro') || podeEditar('cobranca'))
+  if (sub === 'fornecedores') comprasFornecedores(alvo, podeEditar('cadastro') || podeEditar('compras'))
+  if (sub === 'produtos') estProdutos(alvo, podeEditar('cadastro') || podeEditar('estoque'))
+}
+
+// ---------------------------------------------------------------
 // Página: Expedição
 // ---------------------------------------------------------------
+// ---------------------------------------------------------------
+// Página: Faturamento  (módulo 'expedicao')
+// Antes era só uma listagem read-only dos carregamentos migrados da
+// planilha antiga. Agora vira o centro de faturamento de verdade:
+// - Painel: visão geral das notas fiscais emitidas, por produto
+// - Lançamentos: a listagem original, com filtro e anexos
+// - Lançar: registra um novo carregamento/NF manualmente
+// - Ordem de Carregamento: puxa um pedido já cadastrado em Crédito e
+//   Cobrança, define veículo/motorista/data e gera o PDF pro motorista
+// ---------------------------------------------------------------
+let EXPED_CACHE = { clientes: [], vendedores: [], produtos: [], veiculos: [], empresas: [] }
+const STATUS_CARREGAMENTO = ['PROGRAMADO', 'EM_ANDAMENTO', 'CARREGADO', 'FATURADO', 'CANCELADO']
+const ROTULO_STATUS_CARREGAMENTO = {
+  PROGRAMADO: 'Programado', EM_ANDAMENTO: 'Em andamento', CARREGADO: 'Carregado', FATURADO: 'Faturado', CANCELADO: 'Cancelado'
+}
+function corStatusCarregamento (s) {
+  if (s === 'FATURADO') return 'badge-bom'
+  if (s === 'CANCELADO') return 'texto-dim2'
+  if (s === 'CARREGADO') return 'chip'
+  return 'texto-dim'
+}
+
 async function paginaExpedicao () {
-  $('#subtitulo-pagina').textContent = 'Carregamentos migrados da planilha'
-  $('#filtros').innerHTML = `
-    <div class="campo"><label>Cliente</label><select id="f-cliente"><option value="">todos</option></select></div>
-    <div class="campo"><label>Vendedor</label><select id="f-vendedor"><option value="">todos</option></select></div>
-    <div class="campo"><label>De</label><input type="date" id="f-de"></div>
-    <div class="campo"><label>Até</label><input type="date" id="f-ate"></div>
-    <button class="btn" id="f-aplicar">Filtrar</button>
-    <button class="btn-secundario" id="f-limpar">Limpar</button>`
+  const editavel = podeEditar('expedicao')
+  $('#subtitulo-pagina').textContent = 'Notas fiscais, lançamentos e ordens de carregamento'
+  const area = areaLivre()
+  area.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
-  const [{ data: clientes }, { data: vendedores }] = await Promise.all([
+  const [{ data: clientes }, { data: vendedores }, { data: produtos }, { data: veiculos }, { data: empresas }] = await Promise.all([
     db.from('cliente').select('id,razao_social').order('razao_social'),
-    db.from('pessoa').select('id,nome').eq('eh_vendedor', true).order('nome')
+    db.from('pessoa').select('id,nome').eq('eh_vendedor', true).order('nome'),
+    db.from('produto').select('id,nome,unidade').order('nome'),
+    db.from('veiculo').select('id,placa,descricao').order('placa'),
+    db.from('empresa').select('id,nome,regime_tributario').eq('status', 'ATIVO').order('nome')
   ])
-  ;(clientes || []).forEach(c => $('#f-cliente').add(new Option(c.razao_social, c.id)))
-  ;(vendedores || []).forEach(v => $('#f-vendedor').add(new Option(v.nome, v.id)))
+  EXPED_CACHE = { clientes: clientes || [], vendedores: vendedores || [], produtos: produtos || [], veiculos: veiculos || [], empresas: empresas || [] }
 
-  $('#f-aplicar').onclick = carregar
-  $('#f-limpar').onclick = () => {
-    $('#f-cliente').value = ''; $('#f-vendedor').value = ''
-    $('#f-de').value = ''; $('#f-ate').value = ''; carregar()
+  const abas = [['painel', 'Painel'], ['lancamentos', 'Lançamentos']]
+  if (editavel) abas.push(['lancar', 'Lançar'], ['ordem', 'Ordem de Carregamento'])
+  abas.push(['ia', 'Fale com a Especialista Contábil'])
+
+  area.innerHTML = `
+    <div class="subabas">
+      ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
+    </div>
+    <div id="sub-exped"></div>`
+
+  area.querySelectorAll('.subabas button').forEach(b => {
+    b.onclick = () => {
+      area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
+      abrirExped(b.dataset.sub, editavel)
+    }
+  })
+  abrirExped('painel', editavel)
+}
+
+function abrirExped (sub, editavel) {
+  const alvo = $('#sub-exped')
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  if (sub === 'painel') expedPainel(alvo)
+  if (sub === 'lancamentos') expedLancamentos(alvo, editavel)
+  if (sub === 'lancar') expedLancar(alvo)
+  if (sub === 'ordem') expedOrdem(alvo)
+  if (sub === 'ia') expedEspecialistaFiscal(alvo)
+}
+
+// ----- Painel: visão geral das NFs emitidas, por produto -----
+async function expedPainel (alvo) {
+  const hoje = hojeISO()
+  const de = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10)
+
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>De</label><input type="date" id="ep-de" value="${de}"></div>
+      <div class="campo"><label>Até</label><input type="date" id="ep-ate" value="${hoje}"></div>
+      <button class="btn" id="ep-buscar">Filtrar</button>
+    </div>
+    <div id="ep-conteudo"><p class="texto-dim2">carregando...</p></div>`
+
+  // cada empresa (Gefoscal, P-TEC) tem um tom de azul diferente, pra dar
+  // pra distinguir de relance qual quadro é qual — regime tributário
+  // diferente entre elas, então nunca devem se misturar num total só
+  const TONS = ['#0b3d91,#1560bd', '#0d5c4a,#137a63', '#5b3a99,#7c4dbd', '#8a4b0b,#b8641a']
+
+  const quadroEmpresa = (nome, regime, lista, tom) => {
+    const comNF = lista.filter(c => c.numero_nf)
+    const valorTotal = lista.reduce((s, c) => s + Number(c.valor_nf || 0), 0)
+    const toneladas = lista.reduce((s, c) => s + Number(c.quantidade_t || 0), 0)
+    const nClientes = new Set(lista.map(c => c.cliente?.razao_social).filter(Boolean)).size
+
+    const porProduto = {}
+    lista.forEach(c => {
+      const p = c.produto?.nome ?? 'sem produto'
+      porProduto[p] = porProduto[p] || { qtd: 0, valor: 0, un: c.produto?.unidade ?? 't' }
+      porProduto[p].qtd += Number(c.quantidade_t || 0)
+      porProduto[p].valor += Number(c.valor_nf || 0)
+    })
+    const produtosOrdenados = Object.entries(porProduto).sort((a, b) => b[1].valor - a[1].valor)
+    const corBorda = tom.split(',')[1]
+
+    return `
+      <div style="background:linear-gradient(135deg,${tom});border-radius:14px;padding:24px 26px;margin-bottom:14px;
+                  box-shadow:0 8px 24px rgba(0,0,0,.2);">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:14px;margin-bottom:18px;">
+          <div>
+            <div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:rgba(255,255,255,.7);font-weight:600;">
+              Faturamento${regime ? ' · ' + esc(regime) : ''}</div>
+            <h2 style="margin:4px 0 0;color:#fff;font-family:var(--serif);font-size:22px;">${esc(nome)}</h2>
+          </div>
+          <span style="background:rgba(255,255,255,.15);color:#fff;padding:6px 14px;border-radius:20px;font-size:12px;">
+            ${comNF.length} NF${comNF.length !== 1 ? 's' : ''} no período</span>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:16px;">
+          <div><div style="color:rgba(255,255,255,.65);font-size:11px;text-transform:uppercase;letter-spacing:.08em;">Valor faturado</div>
+            <div style="color:#fff;font-family:var(--serif);font-size:26px;margin-top:4px;">R$ ${fmtNum(valorTotal)}</div></div>
+          <div><div style="color:rgba(255,255,255,.65);font-size:11px;text-transform:uppercase;letter-spacing:.08em;">Toneladas</div>
+            <div style="color:#fff;font-family:var(--serif);font-size:26px;margin-top:4px;">${fmtNum(toneladas, 3)}</div></div>
+          <div><div style="color:rgba(255,255,255,.65);font-size:11px;text-transform:uppercase;letter-spacing:.08em;">Clientes atendidos</div>
+            <div style="color:#fff;font-family:var(--serif);font-size:26px;margin-top:4px;">${nClientes}</div></div>
+          <div><div style="color:rgba(255,255,255,.65);font-size:11px;text-transform:uppercase;letter-spacing:.08em;">Carregamentos</div>
+            <div style="color:#fff;font-family:var(--serif);font-size:26px;margin-top:4px;">${lista.length}</div></div>
+        </div>
+      </div>
+      ${produtosOrdenados.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-bottom:22px;">
+        ${produtosOrdenados.map(([p, v]) => `
+          <div class="panel" style="padding:14px 16px;border-left:3px solid ${corBorda};">
+            <div style="font-weight:600;font-size:13px;margin-bottom:5px;">${esc(p)}</div>
+            <div style="font-family:var(--serif);font-size:19px;">${fmtNum(v.qtd, casasPara(v.un))} <span style="font-size:12px;color:var(--dim2);">${esc(v.un)}</span></div>
+            <div class="texto-dim2" style="font-size:11.5px;margin-top:3px;">R$ ${fmtNum(v.valor)}</div>
+          </div>`).join('')}
+      </div>` : '<p class="vazio" style="margin-bottom:22px;">Sem carregamentos no período.</p>'}`
   }
 
-  $('#cabecalho').innerHTML = `<tr>
-    <th>Linha</th><th>Data</th><th>Cliente</th><th>Vendedor</th>
-    <th>Produto</th><th>Placa</th><th class="num">Qtd (t)</th>
-    <th>NF</th><th>UF</th><th>Anexos</th></tr>`
-  await carregar()
+  const buscar = async () => {
+    const { data, error } = await db.from('carregamento').select(`
+      quantidade_t, valor_nf, numero_nf, status, data_carregamento, empresa_id,
+      produto:produto_id ( nome, unidade ), cliente:cliente_id ( razao_social ),
+      empresa:empresa_id ( nome, regime_tributario )
+    `).gte('data_carregamento', $('#ep-de').value).lte('data_carregamento', $('#ep-ate').value).limit(2000)
+    if (error) { $('#ep-conteudo').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+    const lista = data || []
 
-  async function carregar () {
-    $('#corpo').innerHTML = `<tr><td colspan="10" class="vazio">carregando...</td></tr>`
+    // um quadro por empresa cadastrada (Gefoscal, P-TEC...), na ordem do
+    // cadastro — cada uma só com os carregamentos dela, nunca somadas
+    const semEmpresa = lista.filter(c => !c.empresa_id)
+    let html = EXPED_CACHE.empresas.map((emp, i) =>
+      quadroEmpresa(emp.nome, emp.regime_tributario, lista.filter(c => c.empresa_id === emp.id), TONS[i % TONS.length])
+    ).join('')
+
+    if (semEmpresa.length) {
+      html += `<div class="panel" style="padding:14px 18px;margin-bottom:16px;border-left:3px solid var(--warn-text);">
+        <p class="texto-dim" style="margin:0;font-size:13px;">
+          <b>${semEmpresa.length} carregamento(s)</b> sem empresa definida (a maioria vinda da migração da planilha antiga) —
+          ${fmtNum(semEmpresa.reduce((s, c) => s + Number(c.quantidade_t || 0), 0), 3)} t,
+          R$ ${fmtNum(semEmpresa.reduce((s, c) => s + Number(c.valor_nf || 0), 0))}.
+          Edite o lançamento pra atribuir a Gefoscal ou P-TEC.</p>
+      </div>`
+    }
+    $('#ep-conteudo').innerHTML = html || '<p class="vazio">Nenhum carregamento no período.</p>'
+  }
+  $('#ep-buscar').onclick = buscar
+  buscar()
+}
+
+// ----- Lançamentos: a listagem original (filtro + anexos) -----
+async function expedLancamentos (alvo, editavel) {
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>Empresa</label><select id="f-empresa"><option value="">todas</option>
+        ${EXPED_CACHE.empresas.map(e => `<option value="${e.id}">${esc(e.nome)}</option>`).join('')}</select></div>
+      <div class="campo"><label>Cliente</label><select id="f-cliente"><option value="">todos</option>
+        ${EXPED_CACHE.clientes.map(c => `<option value="${c.id}">${esc(c.razao_social)}</option>`).join('')}</select></div>
+      <div class="campo"><label>Vendedor</label><select id="f-vendedor"><option value="">todos</option>
+        ${EXPED_CACHE.vendedores.map(v => `<option value="${v.id}">${esc(v.nome)}</option>`).join('')}</select></div>
+      <div class="campo"><label>De</label><input type="date" id="f-de"></div>
+      <div class="campo"><label>Até</label><input type="date" id="f-ate"></div>
+      <button class="btn" id="f-aplicar">Filtrar</button>
+      <button class="btn-secundario" id="f-limpar">Limpar</button>
+    </div>
+    <div id="lc-conteudo"><p class="texto-dim2">carregando...</p></div>`
+
+  const carregar = async () => {
+    $('#lc-conteudo').innerHTML = `<p class="texto-dim2">carregando...</p>`
     let q = db.from('carregamento').select(`
-      origem_linha, data_carregamento, quantidade_t, numero_nf, uf_destino,
-      cliente:cliente_id ( razao_social ),
-      vendedor:vendedor_id ( nome ),
-      produto:produto_id ( nome ),
-      veiculo:veiculo_id ( placa )
+      id, origem_linha, data_carregamento, quantidade_t, numero_nf, uf_destino, status,
+      cliente:cliente_id ( razao_social ), vendedor:vendedor_id ( nome ),
+      produto:produto_id ( nome ), veiculo:veiculo_id ( placa ), empresa:empresa_id ( nome )
     `).order('data_carregamento', { ascending: false }).limit(500)
 
     if ($('#f-cliente').value) q = q.eq('cliente_id', $('#f-cliente').value)
     if ($('#f-vendedor').value) q = q.eq('vendedor_id', $('#f-vendedor').value)
+    if ($('#f-empresa').value) q = q.eq('empresa_id', $('#f-empresa').value)
     if ($('#f-de').value) q = q.gte('data_carregamento', $('#f-de').value)
     if ($('#f-ate').value) q = q.lte('data_carregamento', $('#f-ate').value)
 
     const { data, error } = await q
-    if (error) { $('#corpo').innerHTML = `<tr><td colspan="10" class="vazio">${esc(error.message)}</td></tr>`; return }
-    if (!data.length) { $('#corpo').innerHTML = `<tr><td colspan="10" class="vazio">Nenhum carregamento no filtro.</td></tr>`; return }
+    if (error) { $('#lc-conteudo').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+    if (!data.length) { $('#lc-conteudo').innerHTML = `<p class="vazio">Nenhum carregamento no filtro.</p>`; return }
 
     const total = data.reduce((s, c) => s + Number(c.quantidade_t || 0), 0)
     const nClientes = new Set(data.map(c => c.cliente?.razao_social)).size
@@ -4598,31 +4865,1469 @@ async function paginaExpedicao () {
       kpi('Clientes', nClientes) +
       kpi('Média por carga', fmtNum(total / data.length) + ' t')
 
-    $('#corpo').innerHTML = data.map(c => `<tr>
-      <td class="texto-dim2">${c.origem_linha ?? '—'}</td>
-      <td>${fmtData(c.data_carregamento)}</td>
-      <td>${esc(c.cliente?.razao_social)}</td>
-      <td>${c.vendedor?.nome ? esc(c.vendedor.nome) : '<span class="badge-alerta">sem vendedor</span>'}</td>
-      <td><span class="chip">${esc(c.produto?.nome ?? '—')}</span></td>
-      <td>${esc(c.veiculo?.placa ?? '—')}</td>
-      <td class="num">${fmtNum(c.quantidade_t, 3)}</td>
-      <td>${esc(c.numero_nf ?? '—')}</td>
-      <td>${esc(c.uf_destino ?? '—')}</td>
-      <td><a class="anexo-link" data-linha="${c.origem_linha}">ver</a></td>
-    </tr>`).join('')
+    $('#lc-conteudo').innerHTML = `
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>Linha</th><th>Data</th><th>Empresa</th><th>Cliente</th><th>Vendedor</th>
+        <th>Produto</th><th>Placa</th><th class="num">Qtd (t)</th>
+        <th>NF</th><th>Status</th><th>UF</th><th>Anexos</th></tr></thead><tbody>
+      ${data.map(c => `<tr>
+        <td class="texto-dim2">${c.origem_linha ?? '—'}</td>
+        <td>${fmtData(c.data_carregamento)}</td>
+        <td>${c.empresa?.nome ? `<span class="chip">${esc(c.empresa.nome)}</span>` : '<span class="badge-alerta">sem empresa</span>'}</td>
+        <td>${esc(c.cliente?.razao_social)}</td>
+        <td>${c.vendedor?.nome ? esc(c.vendedor.nome) : '<span class="badge-alerta">sem vendedor</span>'}</td>
+        <td><span class="chip">${esc(c.produto?.nome ?? '—')}</span></td>
+        <td>${esc(c.veiculo?.placa ?? '—')}</td>
+        <td class="num">${fmtNum(c.quantidade_t, 3)}</td>
+        <td>${esc(c.numero_nf ?? '—')}</td>
+        <td><span class="${corStatusCarregamento(c.status)}">${esc(ROTULO_STATUS_CARREGAMENTO[c.status] ?? c.status ?? '—')}</span></td>
+        <td>${esc(c.uf_destino ?? '—')}</td>
+        <td><a href="#" class="anexo-link" data-id="${c.id}">ver</a></td>
+      </tr>`).join('')}
+      </tbody></table></div></div>`
 
-    $('#corpo').querySelectorAll('.anexo-link').forEach(a => { a.onclick = () => verAnexos(a.dataset.linha) })
+    $('#lc-conteudo').querySelectorAll('.anexo-link').forEach(a => {
+      a.onclick = e => { e.preventDefault(); verAnexosCarregamento(a.dataset.id) }
+    })
     $('#rodape').textContent = `${data.length} registros · ${fmtNum(total)} t`
   }
 
-  async function verAnexos (linha) {
-    const { data: c } = await db.from('carregamento').select('id').eq('origem_linha', linha).maybeSingle()
-    if (!c) return
-    const { data: anexos } = await db.from('anexo').select('tipo, drive_file_id')
-      .eq('entidade', 'CARREGAMENTO').eq('registro_id', c.id)
-    if (!anexos?.length) { alert('Sem anexos nesta linha.'); return }
-    anexos.forEach(a => window.open('https://drive.google.com/open?id=' + a.drive_file_id, '_blank'))
+  $('#f-aplicar').onclick = carregar
+  $('#f-limpar').onclick = () => {
+    $('#f-empresa').value = ''; $('#f-cliente').value = ''; $('#f-vendedor').value = ''
+    $('#f-de').value = ''; $('#f-ate').value = ''; carregar()
   }
+  await carregar()
+}
+
+async function verAnexosCarregamento (carregamentoId) {
+  const { data: anexos } = await db.from('anexo').select('tipo, drive_file_id')
+    .eq('entidade', 'CARREGAMENTO').eq('registro_id', carregamentoId)
+  if (!anexos?.length) { alert('Sem anexos nesta linha.'); return }
+  anexos.forEach(a => window.open('https://drive.google.com/open?id=' + a.drive_file_id, '_blank'))
+}
+
+// ----- Lançar: registra um novo carregamento/NF manualmente -----
+function expedLancar (alvo) {
+  alvo.innerHTML = `
+    <div class="panel" style="padding:20px;max-width:900px;">
+      <h3 style="font-family:var(--serif);font-size:16px;margin:0 0 14px;">Novo lançamento</h3>
+      <div class="form-grade">
+        <div class="campo"><label>Empresa *</label><select id="el-empresa"><option value="">selecione...</option>
+          ${EXPED_CACHE.empresas.map(e => `<option value="${e.id}" ${e.nome === 'Gefoscal' ? 'selected' : ''}>${esc(e.nome)}${e.regime_tributario ? ' — ' + esc(e.regime_tributario) : ''}</option>`).join('')}</select></div>
+        <div class="campo"><label>Cliente *</label><select id="el-cliente"><option value="">selecione...</option>
+          ${EXPED_CACHE.clientes.map(c => `<option value="${c.id}">${esc(c.razao_social)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Vendedor</label><select id="el-vendedor"><option value="">—</option>
+          ${EXPED_CACHE.vendedores.map(v => `<option value="${v.id}">${esc(v.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Produto *</label><select id="el-produto"><option value="">selecione...</option>
+          ${EXPED_CACHE.produtos.map(p => `<option value="${p.id}" data-un="${esc(p.unidade)}">${esc(p.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Veículo</label><select id="el-veiculo"><option value="">—</option>
+          ${EXPED_CACHE.veiculos.map(v => `<option value="${v.id}">${esc(v.placa)}${v.descricao ? ' — ' + esc(v.descricao) : ''}</option>`).join('')}</select></div>
+        <div class="campo"><label>Motorista</label><input id="el-motorista"></div>
+        <div class="campo"><label>Quantidade *</label><input id="el-qtd" inputmode="decimal" placeholder="ex: 32,5"></div>
+        <div class="campo"><label>Preço unitário</label><input id="el-preco" inputmode="decimal" placeholder="R$/t"></div>
+        <div class="campo"><label>Número da NF</label><input id="el-nf"></div>
+        <div class="campo"><label>UF destino</label><input id="el-uf" maxlength="2" style="text-transform:uppercase;"></div>
+        <div class="campo"><label>Data *</label><input type="date" id="el-data" value="${hojeISO()}"></div>
+        <div class="campo"><label>Status</label><select id="el-status">
+          ${STATUS_CARREGAMENTO.map(s => `<option value="${s}" ${s === 'FATURADO' ? 'selected' : ''}>${ROTULO_STATUS_CARREGAMENTO[s]}</option>`).join('')}</select></div>
+      </div>
+      <div class="campo" style="margin-top:10px;"><label>Observação</label><input id="el-obs" placeholder="opcional"></div>
+      <div class="acoes" style="margin-top:14px;"><button class="btn" id="el-salvar">Salvar lançamento</button></div>
+      <div class="recado oculto" id="el-recado"></div>
+    </div>`
+
+  $('#el-salvar').onclick = async () => {
+    const el = $('#el-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const empresaId = $('#el-empresa').value
+    const clienteId = $('#el-cliente').value
+    const produtoSel = $('#el-produto').selectedOptions[0]
+    let qtd = numeroBR($('#el-qtd').value)
+    if (!empresaId) { aviso('Escolha a empresa (Gefoscal ou P-TEC).'); return }
+    if (!clienteId) { aviso('Escolha o cliente.'); return }
+    if (!produtoSel?.value) { aviso('Escolha o produto.'); return }
+    if (qtd === null || qtd <= 0) { aviso('Informe a quantidade.'); return }
+    if (casasPara(produtoSel.dataset.un) === 0) qtd = Math.round(qtd)
+    const preco = numeroBR($('#el-preco').value) || 0
+
+    const btn = $('#el-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const { error } = await db.from('carregamento').insert({
+      empresa_id: empresaId, cliente_id: clienteId, vendedor_id: $('#el-vendedor').value || null,
+      produto_id: produtoSel.value, veiculo_id: $('#el-veiculo').value || null,
+      motorista: $('#el-motorista').value.trim() || null,
+      quantidade_t: qtd, preco_unitario: preco || null, valor_nf: preco ? qtd * preco : null,
+      numero_nf: $('#el-nf').value.trim() || null, uf_destino: $('#el-uf').value.trim().toUpperCase() || null,
+      data_carregamento: $('#el-data').value, status: $('#el-status').value,
+      observacoes: $('#el-obs').value.trim() || null, registrado_por: PERFIL.pessoaId
+    })
+    btn.disabled = false; btn.textContent = 'Salvar lançamento'
+    if (error) { aviso(error.message); return }
+    el.textContent = 'Lançamento salvo.'; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--good-text)'; el.style.color = 'var(--good-text)'
+    ;['el-motorista', 'el-qtd', 'el-preco', 'el-nf', 'el-uf', 'el-obs'].forEach(id => { $('#' + id).value = '' })
+    $('#el-empresa').value = ''; $('#el-cliente').value = ''; $('#el-produto').value = ''; $('#el-veiculo').value = ''
+  }
+}
+
+// ----- Ordem de Carregamento: puxa um pedido de Crédito e Cobrança,
+// define veículo/motorista/data e gera o PDF pro motorista -----
+async function expedOrdem (alvo) {
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo" style="flex:1;min-width:220px;"><label>Buscar pedido</label>
+        <input id="oc-busca" placeholder="número do pedido ou cliente"></div>
+      <button class="btn" id="oc-buscar">Buscar</button>
+    </div>
+    <p class="texto-dim2" style="font-size:12px;margin:-8px 0 14px;">
+      Pedidos ainda não totalmente carregados aparecem aqui — escolha um pra montar a ordem de carregamento.</p>
+    <div id="oc-lista"><p class="texto-dim2">carregando...</p></div>`
+
+  const buscar = async () => {
+    let q = db.from('pedido').select(`
+      id, numero, quantidade_t, preco_unitario, data_pedido, local_entrega, empresa_id,
+      cliente:cliente_id ( id, razao_social ), produto:produto_id ( id, nome, unidade )
+    `).neq('status', 'CANCELADO').order('data_pedido', { ascending: false }).limit(100)
+    const termo = $('#oc-busca').value.trim()
+    if (termo) q = q.or(`numero.ilike.%${termo}%`)
+    const { data, error } = await q
+    if (error) { $('#oc-lista').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+    let lista = data || []
+    if (termo) {
+      const t = termo.toLowerCase()
+      lista = lista.filter(p => (p.numero ?? '').toLowerCase().includes(t) || (p.cliente?.razao_social ?? '').toLowerCase().includes(t))
+    }
+
+    $('#oc-lista').innerHTML = lista.length ? `
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr><th>PD</th><th>Cliente</th><th>Produto</th><th class="num">Qtd</th><th>Data</th><th></th></tr></thead><tbody>
+          ${lista.map(p => `<tr>
+            <td><b>${esc(p.numero ?? '—')}</b></td>
+            <td>${esc(p.cliente?.razao_social ?? '—')}</td>
+            <td>${esc(p.produto?.nome ?? '—')}</td>
+            <td class="num">${fmtNum(p.quantidade_t, casasPara(p.produto?.unidade))} ${esc(p.produto?.unidade ?? 't')}</td>
+            <td class="texto-dim2">${fmtData(p.data_pedido)}</td>
+            <td><button class="btn-secundario mini" data-montar="${p.id}">Montar ordem</button></td>
+          </tr>`).join('')}
+        </tbody></table>
+      </div></div>` : `<p class="vazio">Nenhum pedido encontrado.</p>`
+
+    $('#oc-lista').querySelectorAll('[data-montar]').forEach(b => {
+      b.onclick = () => formOrdemCarregamento(lista.find(p => p.id === b.dataset.montar))
+    })
+  }
+  $('#oc-buscar').onclick = buscar
+  $('#oc-busca').addEventListener('keydown', e => { if (e.key === 'Enter') buscar() })
+  buscar()
+}
+
+function formOrdemCarregamento (pedido) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>Ordem de carregamento — PD ${esc(pedido.numero ?? '—')}</h3>
+    <p class="texto-dim2" style="font-size:12.5px;margin:-8px 0 14px;">
+      ${esc(pedido.cliente?.razao_social ?? '—')} · ${esc(pedido.produto?.nome ?? '—')}</p>
+    <div class="form-grade">
+      <div class="campo"><label>Empresa *</label><select id="oc-empresa"><option value="">selecione...</option>
+        ${EXPED_CACHE.empresas.map(e => `<option value="${e.id}" ${e.id === (pedido.empresa_id || EXPED_CACHE.empresas.find(x => x.nome === 'Gefoscal')?.id) ? 'selected' : ''}>${esc(e.nome)}${e.regime_tributario ? ' — ' + esc(e.regime_tributario) : ''}</option>`).join('')}</select></div>
+      <div class="campo"><label>Veículo *</label><select id="oc-veiculo"><option value="">selecione...</option>
+        ${EXPED_CACHE.veiculos.map(v => `<option value="${v.id}">${esc(v.placa)}${v.descricao ? ' — ' + esc(v.descricao) : ''}</option>`).join('')}</select></div>
+      <div class="campo"><label>Motorista *</label><input id="oc-motorista"></div>
+      <div class="campo"><label>Quantidade *</label>
+        <input id="oc-qtd" inputmode="decimal" value="${String(pedido.quantidade_t ?? '').replace('.', ',')}"></div>
+      <div class="campo"><label>Data programada *</label><input type="datetime-local" id="oc-data"></div>
+      <div class="campo" style="grid-column:1/-1;"><label>Local de entrega</label>
+        <input id="oc-local" value="${esc(pedido.local_entrega ?? '')}"></div>
+    </div>
+    <div class="campo" style="margin-top:10px;"><label>Observação pro motorista</label>
+      <textarea id="oc-obs" style="min-height:70px;" placeholder="opcional"></textarea></div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="oc-salvar">Criar ordem e gerar PDF</button>
+      <button class="btn-secundario" id="oc-cancelar">Cancelar</button>
+    </div>
+    <div class="recado oculto" id="oc-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#oc-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  fundo.querySelector('#oc-salvar').onclick = async () => {
+    const el = fundo.querySelector('#oc-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const veiculoId = fundo.querySelector('#oc-veiculo').value
+    const empresaId = fundo.querySelector('#oc-empresa').value
+    const motorista = fundo.querySelector('#oc-motorista').value.trim()
+    let qtd = numeroBR(fundo.querySelector('#oc-qtd').value)
+    const dataProg = fundo.querySelector('#oc-data').value
+    if (!empresaId) { aviso('Escolha a empresa (Gefoscal ou P-TEC).'); return }
+    if (!veiculoId) { aviso('Escolha o veículo.'); return }
+    if (!motorista) { aviso('Informe o motorista.'); return }
+    if (qtd === null || qtd <= 0) { aviso('Informe a quantidade.'); return }
+    if (!dataProg) { aviso('Informe a data programada.'); return }
+    if (casasPara(pedido.produto?.unidade) === 0) qtd = Math.round(qtd)
+
+    const btn = fundo.querySelector('#oc-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const { data: novo, error } = await db.from('carregamento').insert({
+      pedido_id: pedido.id, empresa_id: empresaId, cliente_id: pedido.cliente?.id, produto_id: pedido.produto?.id,
+      veiculo_id: veiculoId, motorista, quantidade_t: qtd,
+      preco_unitario: pedido.preco_unitario || null,
+      valor_nf: pedido.preco_unitario ? qtd * pedido.preco_unitario : null,
+      data_programada: new Date(dataProg).toISOString(), data_carregamento: dataProg.slice(0, 10),
+      status: 'PROGRAMADO', observacoes: fundo.querySelector('#oc-obs').value.trim() || null,
+      registrado_por: PERFIL.pessoaId
+    }).select('id').single()
+    btn.disabled = false; btn.textContent = 'Criar ordem e gerar PDF'
+    if (error) { aviso(error.message); return }
+
+    const veiculo = EXPED_CACHE.veiculos.find(v => v.id === veiculoId)
+    const empresa = EXPED_CACHE.empresas.find(e => e.id === empresaId)
+    fechar()
+    abrirPdfOrdemCarregamento({
+      numeroPedido: pedido.numero, empresa: empresa?.nome, cliente: pedido.cliente?.razao_social, produto: pedido.produto?.nome,
+      quantidade: qtd, unidade: pedido.produto?.unidade ?? 't', placa: veiculo?.placa, motorista,
+      dataProgramada: dataProg, local: fundo.querySelector('#oc-local').value.trim(),
+      observacao: fundo.querySelector('#oc-obs').value.trim(), carregamentoId: novo?.id
+    })
+  }
+}
+
+function abrirPdfOrdemCarregamento (o) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = documentoPDF({
+    titulo: 'Ordem de Carregamento',
+    subtitulo: `${o.empresa ? o.empresa + ' · ' : ''}PD ${o.numeroPedido ?? '—'}`,
+    corpo: `
+      ${docBloco('Cliente e produto', docLinha('Empresa emitente', o.empresa) + docLinha('Cliente', o.cliente) + docLinha('Produto', o.produto) +
+        docLinha('Quantidade', `${fmtNum(o.quantidade, casasPara(o.unidade))} ${o.unidade}`))}
+      ${docBloco('Transporte', docLinha('Veículo', o.placa) + docLinha('Motorista', o.motorista) +
+        docLinha('Data programada', fmtQuando(o.dataProgramada)) + docLinha('Local de entrega', o.local || '—'))}
+      ${o.observacao ? docTexto('Observação', o.observacao) : ''}`,
+    acoes: `<button class="btn" id="oc-pdf-imprimir">Baixar / imprimir PDF</button>
+            <button class="btn-secundario" id="oc-pdf-fechar">Fechar</button>`
+  })
+  document.body.appendChild(fundo)
+  fundo.querySelector('#oc-pdf-fechar').onclick = () => fundo.remove()
+  fundo.querySelector('#oc-pdf-imprimir').onclick = () => window.print()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+}
+
+// ----- Fale com a Especialista Contábil -----
+// Chama a edge function 'especialista-fiscal' (Anthropic + busca na web),
+// que segue as regras da Gefoscal: nunca inventa legislação/NCM/CFOP/CST,
+// separa rigorosamente Gefoscal (Lucro Real) e P-TEC (Lucro Presumido),
+// e sinaliza risco/validação humana quando necessário. Aceita anexar um
+// documento (nota fiscal, XML como texto, PDF, imagem) na pergunta.
+let ESPEC_HISTORICO = []
+let ESPEC_ANEXO_PENDENTE = null
+
+function expedEspecialistaFiscal (alvo) {
+  alvo.innerHTML = `
+    <div class="panel" style="padding:0;max-width:900px;">
+      <div style="padding:16px 18px;border-bottom:1px solid var(--line);">
+        <h3 style="font-family:var(--serif);font-size:16px;margin:0 0 4px;">Fale com a Especialista Contábil</h3>
+        <p class="texto-dim2" style="font-size:12px;margin:0;">
+          Tira dúvida sobre nota fiscal, tributação, ICMS/ICMS-ST, incentivo fiscal e operações entre Gefoscal e P-TEC.
+          Não substitui a contabilidade — é apoio e auditoria preventiva.</p>
+      </div>
+      <div id="ef-chat" style="padding:18px;display:flex;flex-direction:column;gap:12px;max-height:480px;overflow-y:auto;"></div>
+      <div style="padding:14px 18px;border-top:1px solid var(--line);">
+        <div id="ef-anexo-info" class="texto-dim2 oculto" style="font-size:11.5px;margin-bottom:8px;"></div>
+        <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+          <textarea id="ef-pergunta" placeholder="Digite sua pergunta..." style="flex:1;min-width:220px;min-height:48px;max-height:120px;"></textarea>
+          <input type="file" id="ef-arquivo" accept="image/*,application/pdf" style="display:none;">
+          <button class="btn-secundario mini" id="ef-anexar" title="Anexar nota fiscal, PDF ou imagem" type="button">📎 Anexar</button>
+          <button class="btn" id="ef-enviar">Enviar</button>
+        </div>
+        <p class="texto-dim2" style="font-size:10.5px;margin:6px 0 0;">Suporta texto, imagem e PDF. Áudio ainda não — descreva por escrito por enquanto.</p>
+      </div>
+    </div>`
+
+  const chat = $('#ef-chat')
+
+  const renderMensagem = (autor, texto, opts = {}) => {
+    const minha = autor === 'user'
+    const bolha = document.createElement('div')
+    bolha.style.cssText = `align-self:${minha ? 'flex-end' : 'flex-start'};max-width:85%;`
+    bolha.innerHTML = `
+      <div class="texto-dim2" style="font-size:10.5px;margin-bottom:3px;${minha ? 'text-align:right;' : ''}">
+        ${minha ? 'Você' : 'Especialista Contábil'}${opts.buscou ? ' · consultou a web' : ''}</div>
+      <div style="background:${minha ? 'var(--rust)' : 'var(--surface2)'};color:${minha ? '#fff' : 'inherit'};
+                  padding:10px 14px;border-radius:10px;font-size:13px;line-height:1.55;white-space:pre-wrap;">${esc(texto)}</div>`
+    chat.appendChild(bolha)
+    chat.scrollTop = chat.scrollHeight
+    return bolha
+  }
+
+  if (!ESPEC_HISTORICO.length) {
+    renderMensagem('assistant',
+      'Olá! Sou a Especialista Contábil, Fiscal e Tributária do Grupo Gefoscal. Posso analisar dúvidas da Gefoscal, da P-TEC ou de operações entre as duas. ' +
+      'Antes de começar, me diga: qual empresa está envolvida, qual é a operação/produto, e se tem nota fiscal ou documento pra eu olhar.')
+  } else {
+    ESPEC_HISTORICO.forEach(m => renderMensagem(m.role === 'user' ? 'user' : 'assistant',
+      typeof m.content === 'string' ? m.content : (m.content.find(c => c.type === 'text')?.text ?? '')))
+  }
+
+  $('#ef-anexar').onclick = () => $('#ef-arquivo').click()
+  $('#ef-arquivo').onchange = () => {
+    const arquivo = $('#ef-arquivo').files[0]
+    if (!arquivo) return
+    const leitor = new FileReader()
+    leitor.onload = e => {
+      const base64 = e.target.result.split(',')[1]
+      ESPEC_ANEXO_PENDENTE = { data: base64, media_type: arquivo.type, filename: arquivo.name }
+      $('#ef-anexo-info').textContent = `📎 ${arquivo.name} anexado — vai junto com a próxima pergunta.`
+      $('#ef-anexo-info').classList.remove('oculto')
+    }
+    leitor.readAsDataURL(arquivo)
+  }
+
+  const enviar = async () => {
+    const texto = $('#ef-pergunta').value.trim()
+    if (!texto) return
+    renderMensagem('user', texto)
+    $('#ef-pergunta').value = ''
+    const btn = $('#ef-enviar'); btn.disabled = true; btn.textContent = 'Consultando...'
+    const carregando = renderMensagem('assistant', 'Analisando...')
+
+    ESPEC_HISTORICO.push({ role: 'user', content: texto })
+    const anexo = ESPEC_ANEXO_PENDENTE
+    ESPEC_ANEXO_PENDENTE = null
+    $('#ef-anexo-info').classList.add('oculto')
+
+    const { data, error } = await db.functions.invoke('especialista-fiscal', {
+      body: { mensagens: ESPEC_HISTORICO, anexo }
+    })
+    btn.disabled = false; btn.textContent = 'Enviar'
+    carregando.remove()
+
+    if (error || data?.erro) {
+      let detalhe = data?.erro || error?.message || 'Erro ao consultar.'
+      let aviso = data?.aviso
+      // supabase-js não expõe o corpo JSON do erro direto em error.message
+      // (só um texto genérico "non-2xx status code") — o corpo de verdade
+      // fica em error.context, que é a Response original da função
+      if (error?.context?.json) {
+        try {
+          const corpo = await error.context.json()
+          detalhe = corpo?.erro || detalhe
+          aviso = corpo?.aviso || corpo?.detalhe || aviso
+        } catch { /* corpo não veio em JSON, mantém a mensagem genérica */ }
+      }
+      renderMensagem('assistant', detalhe + (aviso ? '\n\n' + aviso : ''))
+      ESPEC_HISTORICO.pop() // não guarda pergunta sem resposta válida
+      return
+    }
+    ESPEC_HISTORICO.push({ role: 'assistant', content: data.resposta })
+    renderMensagem('assistant', data.resposta, { buscou: data.usou_busca_web })
+  }
+  $('#ef-enviar').onclick = enviar
+  $('#ef-pergunta').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); enviar() }
+  })
+}
+
+// ---------------------------------------------------------------
+// Página: Gestão de TI  (módulo 'gestao_ti')
+// Três frentes: orçamento de TI (assinaturas/infra que o grupo paga
+// pra funcionar — Google Workspace, Anthropic, Supabase etc.), as
+// solicitações internas endereçadas ao setor TI (reaproveita o
+// helpdesk de Solicitações, só filtrado por setor), e uma caixa de
+// sugestão de melhoria que qualquer pessoa da empresa pode mandar.
+// ---------------------------------------------------------------
+const CATEGORIAS_DESPESA_TI = ['ASSINATURA', 'INFRA', 'LICENCA', 'HARDWARE', 'OUTRO']
+const ROTULO_CATEGORIA_TI = { ASSINATURA: 'Assinatura', INFRA: 'Infraestrutura', LICENCA: 'Licença', HARDWARE: 'Hardware', OUTRO: 'Outro' }
+const ROTULO_PERIODICIDADE_TI = { MENSAL: 'Mensal', ANUAL: 'Anual', UNICO: 'Único' }
+const STATUS_MELHORIA = ['NOVA', 'EM_ANALISE', 'PLANEJADA', 'CONCLUIDA', 'RECUSADA']
+const ROTULO_STATUS_MELHORIA = { NOVA: 'Nova', EM_ANALISE: 'Em análise', PLANEJADA: 'Planejada', CONCLUIDA: 'Concluída', RECUSADA: 'Recusada' }
+function corStatusMelhoria (s) {
+  if (s === 'CONCLUIDA') return 'badge-bom'
+  if (s === 'RECUSADA') return 'texto-dim2'
+  if (s === 'PLANEJADA' || s === 'EM_ANALISE') return 'chip'
+  return 'texto-dim'
+}
+
+let SETOR_TI_ID = null
+
+async function paginaGestaoTI () {
+  const editavel = podeEditar('gestao_ti')
+  $('#subtitulo-pagina').textContent = 'Orçamento de TI, solicitações do setor e sugestões de melhoria'
+  const area = areaLivre()
+  area.innerHTML = `<p class="texto-dim2">carregando...</p>`
+
+  if (!SETOR_TI_ID) {
+    const { data: setorTI } = await db.from('setor').select('id').ilike('nome', 'TI').maybeSingle()
+    SETOR_TI_ID = setorTI?.id ?? null
+  }
+
+  const abas = [['orcamento', 'Orçamento'], ['solicitacoes', 'Solicitações'], ['mapa', 'Mapa (MAPA/Trimestral)']]
+  area.innerHTML = `
+    <div class="subabas">
+      ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
+    </div>
+    <div id="sub-ti"></div>`
+  area.querySelectorAll('.subabas button').forEach(b => {
+    b.onclick = () => {
+      area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
+      abrirGestaoTI(b.dataset.sub, editavel)
+    }
+  })
+  abrirGestaoTI('orcamento', editavel)
+}
+
+function abrirGestaoTI (sub, editavel) {
+  const alvo = $('#sub-ti')
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  if (sub === 'orcamento') tiOrcamento(alvo, editavel)
+  if (sub === 'solicitacoes') tiSolicitacoes(alvo, editavel)
+  if (sub === 'mapa') tiMapa(alvo)
+}
+
+// ----- Orçamento -----
+async function tiOrcamento (alvo, editavel) {
+  const { data, error } = await db.from('despesa_ti').select('*').order('status').order('nome')
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  const lista = data || []
+  const ativas = lista.filter(d => d.status === 'ATIVA')
+  const totalMensal = ativas.filter(d => d.periodicidade === 'MENSAL').reduce((s, d) => s + Number(d.valor || 0), 0)
+    + ativas.filter(d => d.periodicidade === 'ANUAL').reduce((s, d) => s + Number(d.valor || 0) / 12, 0)
+  const totalAnual = totalMensal * 12
+
+  alvo.innerHTML = `
+    <div class="resumo-topo" style="margin-bottom:16px;">
+      ${[['Despesas ativas', ativas.length, ''], ['Custo mensal estimado', 'R$ ' + fmtNum(totalMensal), ''],
+         ['Projeção anual', 'R$ ' + fmtNum(totalAnual), '']]
+        .map(([rot, val]) => `<div class="bloco"><div class="rot">${rot}</div><div class="val">${val}</div></div>`).join('')}
+    </div>
+    ${editavel ? `<div class="panel" style="padding:20px;margin-bottom:16px;">
+      <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 14px;">Nova despesa</h3>
+      <div class="form-grade">
+        <div class="campo"><label>Nome *</label><input id="dt-nome" placeholder="ex: Google Workspace"></div>
+        <div class="campo"><label>Categoria</label><select id="dt-categoria">${CATEGORIAS_DESPESA_TI.map(c => `<option value="${c}">${ROTULO_CATEGORIA_TI[c]}</option>`).join('')}</select></div>
+        <div class="campo"><label>Fornecedor</label><input id="dt-fornecedor"></div>
+        <div class="campo"><label>Valor (R$) *</label><input id="dt-valor" inputmode="decimal"></div>
+        <div class="campo"><label>Periodicidade</label><select id="dt-periodicidade">${Object.keys(ROTULO_PERIODICIDADE_TI).map(p => `<option value="${p}">${ROTULO_PERIODICIDADE_TI[p]}</option>`).join('')}</select></div>
+        <div class="campo"><label>Próxima cobrança</label><input type="date" id="dt-data"></div>
+      </div>
+      <div class="campo" style="margin-top:10px;"><label>Observação</label><input id="dt-obs" placeholder="opcional"></div>
+      <div class="acoes" style="margin-top:12px;"><button class="btn" id="dt-salvar">Adicionar</button></div>
+      <div class="recado oculto" id="dt-recado"></div>
+    </div>` : ''}
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>Nome</th><th>Categoria</th><th>Fornecedor</th><th class="num">Valor</th>
+        <th>Periodicidade</th><th>Próxima cobrança</th><th>Status</th>${editavel ? '<th></th>' : ''}
+      </tr></thead><tbody>
+        ${lista.map(d => `<tr>
+          <td><b>${esc(d.nome)}</b>${d.observacoes ? `<div class="texto-dim2" style="font-size:11px;">${esc(d.observacoes)}</div>` : ''}</td>
+          <td class="texto-dim2">${esc(ROTULO_CATEGORIA_TI[d.categoria] ?? d.categoria)}</td>
+          <td class="texto-dim">${esc(d.fornecedor ?? '—')}</td>
+          <td class="num">R$ ${fmtNum(d.valor)}</td>
+          <td class="texto-dim2">${esc(ROTULO_PERIODICIDADE_TI[d.periodicidade] ?? d.periodicidade)}</td>
+          <td class="texto-dim2">${d.proxima_cobranca ? fmtData(d.proxima_cobranca) : '—'}</td>
+          <td>${d.status === 'ATIVA' ? '<span class="badge-bom">Ativa</span>' : '<span class="texto-dim2">Cancelada</span>'}</td>
+          ${editavel ? `<td style="text-align:right;">
+            <button class="btn-secundario mini" data-toggle-desp="${d.id}" data-status="${d.status}">${d.status === 'ATIVA' ? 'Cancelar' : 'Reativar'}</button>
+          </td>` : ''}
+        </tr>`).join('') || `<tr><td colspan="${editavel ? 8 : 7}" class="vazio">Nenhuma despesa cadastrada.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+
+  if (!editavel) return
+  $('#dt-salvar').onclick = async () => {
+    const el = $('#dt-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const nome = $('#dt-nome').value.trim()
+    const valor = numeroBR($('#dt-valor').value)
+    if (!nome) { aviso('Escreva o nome da despesa.'); return }
+    if (valor === null || valor < 0) { aviso('Informe o valor.'); return }
+    const btn = $('#dt-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const { error } = await db.from('despesa_ti').insert({
+      nome, categoria: $('#dt-categoria').value, fornecedor: $('#dt-fornecedor').value.trim() || null,
+      valor, periodicidade: $('#dt-periodicidade').value, proxima_cobranca: $('#dt-data').value || null,
+      observacoes: $('#dt-obs').value.trim() || null, criado_por: PERFIL.pessoaId
+    })
+    btn.disabled = false; btn.textContent = 'Adicionar'
+    if (error) { aviso(error.message); return }
+    tiOrcamento(alvo, editavel)
+  }
+  alvo.querySelectorAll('[data-toggle-desp]').forEach(b => {
+    b.onclick = async () => {
+      const novoStatus = b.dataset.status === 'ATIVA' ? 'CANCELADA' : 'ATIVA'
+      await db.from('despesa_ti').update({ status: novoStatus }).eq('id', b.dataset.toggleDesp)
+      tiOrcamento(alvo, editavel)
+    }
+  })
+}
+
+// ----- Solicitações direcionadas ao setor TI (reaproveita o helpdesk) -----
+async function tiSolicitacoes (alvo, editavel) {
+  if (!SETOR_TI_ID) { alvo.innerHTML = `<p class="vazio">Setor "TI" não encontrado no cadastro de setores — confira em Administração → Cargos e setores.</p>`; return }
+  const { data, error } = await db.from('solicitacao_interna').select(`
+    id, codigo, titulo, descricao, urgencia, status, data_solicitacao, data_limite, resposta,
+    progresso_pct, pontuacao_agilidade, setor_destino_id, responsavel_id,
+    setor:setor_destino_id ( id, nome ), solicitante:solicitante_id ( nome ), responsavel:responsavel_id ( nome )
+  `).eq('setor_destino_id', SETOR_TI_ID).order('data_solicitacao', { ascending: false }).limit(300)
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  const lista = data || []
+  const abertas = lista.filter(s => ['ABERTA', 'EM_ANDAMENTO'].includes(s.status))
+
+  alvo.innerHTML = `
+    <div class="resumo-topo" style="margin-bottom:16px;">
+      ${[['Total', lista.length, ''], ['Em aberto', abertas.length, ''],
+         ['Atrasadas', abertas.filter(estaAtrasadaSolicitacao).length, '']]
+        .map(([rot, val]) => `<div class="bloco"><div class="rot">${rot}</div><div class="val">${val}</div></div>`).join('')}
+    </div>
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>Código</th><th>Título</th><th>Urgência</th><th>Status</th><th>Solicitante</th><th>Responsável</th><th>Progresso</th>
+      </tr></thead><tbody>
+        ${lista.map(s => `<tr style="cursor:pointer;" data-abrir="${s.id}">
+          <td><b>${esc(s.codigo)}</b></td>
+          <td>${esc(s.titulo)}</td>
+          <td><span class="${corUrgenciaSolicitacao(s.urgencia)}">${esc(ROTULO_URGENCIA_SOLICITACAO[s.urgencia])}</span></td>
+          <td><span class="${corStatusSolicitacao(s.status)}">${esc(ROTULO_STATUS_SOLICITACAO[s.status])}</span></td>
+          <td class="texto-dim">${esc(s.solicitante?.nome ?? '—')}</td>
+          <td class="texto-dim">${esc(s.responsavel?.nome ?? '—')}</td>
+          <td class="texto-dim2">${s.progresso_pct ?? 0}%</td>
+        </tr>`).join('') || `<tr><td colspan="7" class="vazio">Nenhuma solicitação pro setor de TI ainda.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+
+  alvo.querySelectorAll('[data-abrir]').forEach(tr => {
+    tr.onclick = () => detalheSolicitacao(lista.find(s => s.id === tr.dataset.abrir), () => tiSolicitacoes(alvo, editavel))
+  })
+}
+
+// ----- Melhorias: qualquer um sugere, TI decide status/resposta -----
+async function tiMelhorias (alvo, editavel) {
+  const { data, error } = await db.from('melhoria_solicitada').select(`
+    id, titulo, descricao, status, prioridade, resposta, criado_em, solicitante:solicitante_id ( nome )
+  `).order('criado_em', { ascending: false }).limit(300)
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  const lista = data || []
+
+  alvo.innerHTML = `
+    <div class="panel" style="padding:20px;margin-bottom:16px;">
+      <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 4px;">Sugerir melhoria</h3>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 12px;">Qualquer pessoa pode mandar — "acho que preciso disso", ideia, ajuste.</p>
+      <div class="campo"><label>Título *</label><input id="ml-titulo" placeholder="ex: filtro por vendedor no relatório de X"></div>
+      <div class="campo" style="margin-top:10px;"><label>Descreva</label><textarea id="ml-descricao" style="min-height:70px;" placeholder="opcional, mas ajuda"></textarea></div>
+      <div class="acoes" style="margin-top:12px;"><button class="btn" id="ml-enviar">Enviar sugestão</button></div>
+      <div class="recado oculto" id="ml-recado"></div>
+    </div>
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>Título</th><th>Quem pediu</th><th>Quando</th><th>Status</th>${editavel ? '<th></th>' : ''}
+      </tr></thead><tbody>
+        ${lista.map(m => `<tr>
+          <td><b>${esc(m.titulo)}</b>${m.descricao ? `<div class="texto-dim2" style="font-size:11.5px;margin-top:2px;">${esc(m.descricao)}</div>` : ''}
+            ${m.resposta ? `<div class="texto-dim2" style="font-size:11px;margin-top:4px;">↳ ${esc(m.resposta)}</div>` : ''}</td>
+          <td class="texto-dim">${esc(m.solicitante?.nome ?? '—')}</td>
+          <td class="texto-dim2">${fmtData(m.criado_em)}</td>
+          <td><span class="${corStatusMelhoria(m.status)}">${esc(ROTULO_STATUS_MELHORIA[m.status] ?? m.status)}</span></td>
+          ${editavel ? `<td><button class="btn-secundario mini" data-gerenciar="${m.id}">Gerenciar</button></td>` : ''}
+        </tr>`).join('') || `<tr><td colspan="${editavel ? 5 : 4}" class="vazio">Nenhuma sugestão ainda.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+
+  $('#ml-enviar').onclick = async () => {
+    const el = $('#ml-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const titulo = $('#ml-titulo').value.trim()
+    if (!titulo) { aviso('Escreva um título.'); return }
+    const btn = $('#ml-enviar'); btn.disabled = true; btn.textContent = 'Enviando...'
+    const { error } = await db.from('melhoria_solicitada').insert({
+      titulo, descricao: $('#ml-descricao').value.trim() || null, solicitante_id: PERFIL.pessoaId
+    })
+    btn.disabled = false; btn.textContent = 'Enviar sugestão'
+    if (error) { aviso(error.message); return }
+    tiMelhorias(alvo, editavel)
+  }
+
+  if (!editavel) return
+  alvo.querySelectorAll('[data-gerenciar]').forEach(b => {
+    b.onclick = () => formGerenciarMelhoria(lista.find(m => m.id === b.dataset.gerenciar), () => tiMelhorias(alvo, editavel))
+  })
+}
+
+function formGerenciarMelhoria (m, aoSalvar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>${esc(m.titulo)}</h3>
+    <p class="texto-dim2" style="font-size:12px;margin:-8px 0 14px;">
+      Pedido por ${esc(m.solicitante?.nome ?? '—')} em ${fmtData(m.criado_em)}</p>
+    ${m.descricao ? `<p class="texto-dim" style="font-size:13px;margin-bottom:14px;">${esc(m.descricao)}</p>` : ''}
+    <div class="form-grade">
+      <div class="campo"><label>Status</label><select id="gm-status">
+        ${STATUS_MELHORIA.map(s => `<option value="${s}" ${s === m.status ? 'selected' : ''}>${ROTULO_STATUS_MELHORIA[s]}</option>`).join('')}</select></div>
+      <div class="campo"><label>Prioridade</label><select id="gm-prioridade">
+        ${['BAIXA', 'MEDIA', 'ALTA'].map(p => `<option value="${p}" ${p === m.prioridade ? 'selected' : ''}>${p === 'BAIXA' ? 'Baixa' : p === 'ALTA' ? 'Alta' : 'Média'}</option>`).join('')}</select></div>
+    </div>
+    <div class="campo" style="margin-top:10px;"><label>Resposta pra quem pediu</label>
+      <textarea id="gm-resposta" style="min-height:70px;">${esc(m.resposta ?? '')}</textarea></div>
+    <div class="acoes" style="margin-top:14px;"><button class="btn" id="gm-salvar">Salvar</button>
+      <button class="btn-secundario" id="gm-fechar">Fechar</button></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#gm-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  fundo.querySelector('#gm-salvar').onclick = async () => {
+    await db.from('melhoria_solicitada').update({
+      status: fundo.querySelector('#gm-status').value, prioridade: fundo.querySelector('#gm-prioridade').value,
+      resposta: fundo.querySelector('#gm-resposta').value.trim() || null, atualizado_em: new Date().toISOString()
+    }).eq('id', m.id)
+    fechar(); aoSalvar()
+  }
+}
+
+// ----- Mapa (matéria-prima) -----
+// Relatório que a Amanda manda a cada 3 meses: quanto de matéria-prima
+// (minério/rocha fosfática vinda da P-TEC) entrou no estoque, e quanto
+// foi expedido por estado — hoje espalhado entre Estoque e Faturamento,
+// aqui junta tudo automaticamente, sem precisar caçar em dois lugares.
+// Relatório Trimestral do MAPA (Ministério da Agricultura) — produto
+// acabado e matéria-prima. O estoque inicial de um trimestre é sempre
+// o estoque final do trimestre anterior do mesmo produto — isso é
+// buscado sozinho, não precisa digitar de novo. No fim, exporta um
+// .xlsx com as mesmas colunas do relatório que a Amanda já manda.
+const TRIMESTRE_ROMANO = { 1: 'I (Primeiro)', 2: 'II (Segundo)', 3: 'III (Terceiro)', 4: 'IV (Quarto)' }
+const CAMPOS_GARANTIA = ['N', 'P2O5_total', 'P2O5_soluvel', 'K2O', 'Ca', 'Mg', 'S', 'B', 'Cl', 'Co', 'Cu', 'Fe', 'Mn', 'Mo', 'Ni', 'Se', 'Si', 'Zn', 'COT']
+const ROTULO_GARANTIA = { N: 'N', P2O5_total: 'P2O5 Total', P2O5_soluvel: 'P2O5 Solúvel', K2O: 'K2O', Ca: 'Ca', Mg: 'Mg', S: 'S', B: 'B', Cl: 'Cl', Co: 'Co', Cu: 'Cu', Fe: 'Fe', Mn: 'Mn', Mo: 'Mo', Ni: 'Ni', Se: 'Se', Si: 'Si', Zn: 'Zn', COT: 'COT' }
+
+let MAPA_PRODUTOS = []
+
+async function tiMapa (alvo) {
+  const hoje = new Date()
+  const anoAtual = hoje.getFullYear()
+  const trimestreAtual = Math.floor(hoje.getMonth() / 3) + 1
+
+  const { data: produtos, error } = await db.from('mapa_produto').select('*').eq('ativo', true).order('tipo').order('nome')
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  MAPA_PRODUTOS = produtos || []
+
+  alvo.innerHTML = `
+    <p class="texto-dim2" style="font-size:12px;margin:0 0 14px;">
+      Relatório Trimestral do MAPA (produto acabado e matéria-prima). O estoque inicial de cada produto já vem
+      sozinho do estoque final do trimestre anterior — só preenche o que entrou/saiu nesse trimestre.</p>
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>Ano</label><input type="number" id="mp-ano" value="${anoAtual}" style="width:90px;"></div>
+      <div class="campo"><label>Trimestre</label><select id="mp-trimestre">
+        ${[1, 2, 3, 4].map(t => `<option value="${t}" ${t === trimestreAtual ? 'selected' : ''}>${TRIMESTRE_ROMANO[t]}</option>`).join('')}</select></div>
+      <button class="btn" id="mp-carregar">Carregar</button>
+      <button class="btn-secundario" id="mp-produto-novo">+ Produto</button>
+      <button class="btn-secundario" id="mp-exportar">Exportar Excel</button>
+    </div>
+    <div id="mp-conteudo"><p class="texto-dim2">carregando...</p></div>`
+
+  $('#mp-carregar').onclick = carregarTrimestre
+  $('#mp-produto-novo').onclick = () => formMapaProduto(() => tiMapa(alvo))
+  $('#mp-exportar').onclick = () => exportarMapaExcel(Number($('#mp-ano').value), Number($('#mp-trimestre').value))
+
+  async function carregarTrimestre () {
+    const ano = Number($('#mp-ano').value)
+    const trimestre = Number($('#mp-trimestre').value)
+    $('#mp-conteudo').innerHTML = `<p class="texto-dim2">carregando...</p>`
+
+    const [linhas, referenciaHtml] = await Promise.all([
+      Promise.all(MAPA_PRODUTOS.map(async p => {
+        const { data: atual } = await db.from('mapa_trimestre').select('*')
+          .eq('produto_id', p.id).eq('ano', ano).eq('trimestre', trimestre).maybeSingle()
+        if (atual) return { produto: p, registro: atual, novo: false }
+        // busca o trimestre anterior pra herdar o estoque final como inicial
+        let anoAnt = ano, triAnt = trimestre - 1
+        if (triAnt < 1) { triAnt = 4; anoAnt = ano - 1 }
+        const { data: anterior } = await db.from('mapa_trimestre').select('estoque_final')
+          .eq('produto_id', p.id).eq('ano', anoAnt).eq('trimestre', triAnt).maybeSingle()
+        return { produto: p, registro: { estoque_inicial: anterior?.estoque_final ?? 0, dados: {}, estoque_final: anterior?.estoque_final ?? 0 }, novo: true }
+      })),
+      referenciaEstoqueProducao(ano, trimestre)
+    ])
+
+    $('#mp-conteudo').innerHTML = referenciaHtml + (MAPA_PRODUTOS.length
+      ? `<div style="display:flex;flex-direction:column;gap:12px;">${linhas.map((l, i) => cartaoProdutoMapa(l, i)).join('')}</div>`
+      : `<p class="vazio">Nenhum produto cadastrado ainda — clique em "+ Produto" pra começar.</p>`)
+
+    linhas.forEach((l, i) => ligarCartaoMapa(l, i, ano, trimestre))
+  }
+
+  // Cards de referência: o que entrou/saiu no Estoque e Produção durante
+  // o trimestre, pra cruzar com o que você vai digitar no Mapa — não
+  // preenche nada sozinho (as categorias do MAPA são diferentes das do
+  // estoque), é só consulta rápida sem precisar abrir a outra aba.
+  async function referenciaEstoqueProducao (ano, trimestre) {
+    const mesInicio = (trimestre - 1) * 3
+    const de = new Date(ano, mesInicio, 1).toISOString().slice(0, 10)
+    const ate = new Date(ano, mesInicio + 3, 0).toISOString().slice(0, 10)
+
+    const { data, error } = await db.from('movimentacao_estoque').select(`
+      tipo, quantidade, produto:produto_id ( nome, unidade )
+    `).gte('data_mov', de).lte('data_mov', ate).limit(3000)
+    if (error || !data?.length) return ''
+
+    const porProduto = {}
+    data.forEach(m => {
+      const nome = m.produto?.nome ?? 'sem produto'
+      porProduto[nome] = porProduto[nome] || { entrada: 0, saida: 0, un: m.produto?.unidade ?? 't' }
+      if (m.tipo === 'ENTRADA') porProduto[nome].entrada += Number(m.quantidade || 0)
+      if (m.tipo === 'SAIDA') porProduto[nome].saida += Number(m.quantidade || 0)
+    })
+    const ordenado = Object.entries(porProduto).sort((a, b) => b[1].entrada - a[1].entrada)
+
+    return `
+      <div class="cabeca-secao" style="margin-bottom:10px;">
+        <h3 style="font-family:var(--serif);font-size:15px;">Referência — Estoque e Produção do período</h3>
+        <span class="texto-dim2" style="font-size:11px;">${fmtData(de)} a ${fmtData(ate)}</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-bottom:20px;">
+        ${ordenado.map(([nome, v]) => `
+          <div class="panel" style="padding:14px 16px;border-left:3px solid var(--dim2);">
+            <div style="font-weight:600;font-size:12.5px;margin-bottom:5px;">${esc(nome)}</div>
+            <div class="texto-dim2" style="font-size:11.5px;">entrada: <b style="color:var(--txt);">${fmtNum(v.entrada, casasPara(v.un))} ${esc(v.un)}</b></div>
+            <div class="texto-dim2" style="font-size:11.5px;">saída: ${fmtNum(v.saida, casasPara(v.un))} ${esc(v.un)}</div>
+          </div>`).join('')}
+      </div>`
+  }
+
+  function cartaoProdutoMapa (l, i) {
+    const p = l.produto, r = l.registro, d = r.dados || {}
+    const camposComuns = `
+      <div class="campo"><label>Estoque inicial</label><input value="${fmtNum(r.estoque_inicial, 3)}" disabled></div>`
+    const camposAcabado = `
+      <div class="campo"><label>Produção do trimestre</label><input id="mp-producao-${i}" inputmode="decimal" value="${d.producao ?? ''}"></div>
+      <div class="campo"><label>Na UF (quantidade)</label><input id="mp-nauf-${i}" inputmode="decimal" value="${d.na_uf_qtd ?? ''}"></div>
+      <div class="campo"><label>Outras UFs (quais)</label><input id="mp-ufs-${i}" value="${esc(d.outras_ufs ?? '')}" placeholder="ex: BA, GO, SP"></div>
+      <div class="campo"><label>Outras UFs (quantidade)</label><input id="mp-ufsqtd-${i}" inputmode="decimal" value="${d.outras_ufs_qtd ?? ''}"></div>
+      <div class="campo"><label>Exportação (país)</label><input id="mp-exppais-${i}" value="${esc(d.exportacao_pais ?? '')}"></div>
+      <div class="campo"><label>Exportação (quantidade)</label><input id="mp-expqtd-${i}" inputmode="decimal" value="${d.exportacao_qtd ?? ''}"></div>`
+    const camposMateriaPrima = `
+      <div class="campo"><label>Compras nacional (quantidade)</label><input id="mp-comprasqtd-${i}" inputmode="decimal" value="${d.compras_nacional_qtd ?? ''}"></div>
+      <div class="campo"><label>Compras nacional (empresa)</label><input id="mp-comprasemp-${i}" value="${esc(d.compras_nacional_empresa ?? '')}"></div>
+      <div class="campo"><label>Uso na produção</label><input id="mp-uso-${i}" inputmode="decimal" value="${d.uso_producao_qtd ?? ''}"></div>
+      <div class="campo"><label>Venda como produto</label><input id="mp-venda-${i}" inputmode="decimal" value="${d.venda_produto_qtd ?? ''}"></div>
+      <div class="campo"><label>Outras entradas</label><input id="mp-outent-${i}" inputmode="decimal" value="${d.outras_entradas_qtd ?? ''}"></div>
+      <div class="campo"><label>Outras saídas</label><input id="mp-outsai-${i}" inputmode="decimal" value="${d.outras_saidas_qtd ?? ''}"></div>`
+
+    return `<div class="panel" style="padding:18px 20px;">
+      <div class="cabeca-secao" style="margin-bottom:12px;">
+        <h3 style="font-family:var(--serif);font-size:15px;">${esc(p.nome)}
+          <span class="chip" style="margin-left:8px;">${p.tipo === 'ACABADO' ? 'Produto acabado' : 'Matéria-prima'}</span></h3>
+        <span class="texto-dim2" style="font-size:11px;">${esc(p.registro ?? 'sem registro')}</span>
+      </div>
+      <div class="form-grade">
+        ${camposComuns}${p.tipo === 'ACABADO' ? camposAcabado : camposMateriaPrima}
+        <div class="campo"><label>Estoque final <span class="texto-dim2">(calcule e confirme)</span></label>
+          <input id="mp-final-${i}" inputmode="decimal" value="${fmtNum(r.estoque_final, 3)}"></div>
+      </div>
+      <div class="acoes" style="margin-top:12px;"><button class="btn-secundario mini" id="mp-calcular-${i}">Calcular estoque final</button>
+        <button class="btn" id="mp-salvar-${i}">Salvar trimestre</button></div>
+      <div class="recado oculto" id="mp-recado-${i}"></div>
+    </div>`
+  }
+
+  function lerCampos (i, tipo) {
+    if (tipo === 'ACABADO') return {
+      producao: numeroBR($(`#mp-producao-${i}`).value) || 0,
+      na_uf_qtd: numeroBR($(`#mp-nauf-${i}`).value) || 0,
+      outras_ufs: $(`#mp-ufs-${i}`).value.trim() || null,
+      outras_ufs_qtd: numeroBR($(`#mp-ufsqtd-${i}`).value) || 0,
+      exportacao_pais: $(`#mp-exppais-${i}`).value.trim() || null,
+      exportacao_qtd: numeroBR($(`#mp-expqtd-${i}`).value) || 0
+    }
+    return {
+      compras_nacional_qtd: numeroBR($(`#mp-comprasqtd-${i}`).value) || 0,
+      compras_nacional_empresa: $(`#mp-comprasemp-${i}`).value.trim() || null,
+      uso_producao_qtd: numeroBR($(`#mp-uso-${i}`).value) || 0,
+      venda_produto_qtd: numeroBR($(`#mp-venda-${i}`).value) || 0,
+      outras_entradas_qtd: numeroBR($(`#mp-outent-${i}`).value) || 0,
+      outras_saidas_qtd: numeroBR($(`#mp-outsai-${i}`).value) || 0
+    }
+  }
+
+  function calcularFinal (inicial, tipo, d) {
+    if (tipo === 'ACABADO') return inicial + (d.producao || 0) - (d.na_uf_qtd || 0) - (d.outras_ufs_qtd || 0) - (d.exportacao_qtd || 0)
+    return inicial + (d.compras_nacional_qtd || 0) + (d.outras_entradas_qtd || 0) - (d.uso_producao_qtd || 0) - (d.venda_produto_qtd || 0) - (d.outras_saidas_qtd || 0)
+  }
+
+  function ligarCartaoMapa (l, i, ano, trimestre) {
+    const p = l.produto
+    $(`#mp-calcular-${i}`).onclick = () => {
+      const d = lerCampos(i, p.tipo)
+      const final = calcularFinal(l.registro.estoque_inicial, p.tipo, d)
+      $(`#mp-final-${i}`).value = String(final.toFixed(3)).replace('.', ',')
+    }
+    $(`#mp-salvar-${i}`).onclick = async () => {
+      const d = lerCampos(i, p.tipo)
+      const final = numeroBR($(`#mp-final-${i}`).value)
+      const el = $(`#mp-recado-${i}`)
+      const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+      if (final === null) { aviso('Calcule ou digite o estoque final.'); return }
+      const btn = $(`#mp-salvar-${i}`); btn.disabled = true; btn.textContent = 'Salvando...'
+      const { error } = await db.from('mapa_trimestre').upsert({
+        produto_id: p.id, ano, trimestre, estoque_inicial: l.registro.estoque_inicial,
+        dados: d, estoque_final: final, preenchido_por: PERFIL.pessoaId, atualizado_em: new Date().toISOString()
+      }, { onConflict: 'produto_id,ano,trimestre' })
+      btn.disabled = false; btn.textContent = 'Salvar trimestre'
+      if (error) { aviso(error.message); return }
+      el.textContent = 'Salvo.'; el.classList.remove('oculto'); el.style.borderColor = 'var(--good-text)'; el.style.color = 'var(--good-text)'
+    }
+  }
+
+  carregarTrimestre()
+}
+
+function formMapaProduto (aoSalvar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>Novo produto no Mapa MAPA</h3>
+    <div class="form-grade">
+      <div class="campo" style="grid-column:1/-1;"><label>Nome *</label><input id="fp-nome"></div>
+      <div class="campo"><label>Tipo</label><select id="fp-tipo"><option value="ACABADO">Produto acabado</option><option value="MATERIA_PRIMA">Matéria-prima</option></select></div>
+      <div class="campo"><label>Nº Registro</label><input id="fp-registro"></div>
+      <div class="campo"><label>Unidade</label><input id="fp-unidade" value="Tonelada"></div>
+    </div>
+    <p class="texto-dim2" style="font-size:11.5px;margin:12px 0 4px;">Garantias (nutrientes, em %) — deixa em branco o que não se aplica</p>
+    <div class="form-grade">
+      ${CAMPOS_GARANTIA.map(c => `<div class="campo"><label>${ROTULO_GARANTIA[c]}</label><input id="fp-g-${c}" inputmode="decimal"></div>`).join('')}
+    </div>
+    <div class="acoes" style="margin-top:14px;"><button class="btn" id="fp-salvar">Salvar</button>
+      <button class="btn-secundario" id="fp-fechar">Fechar</button></div>
+    <div class="recado oculto" id="fp-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#fp-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  fundo.querySelector('#fp-salvar').onclick = async () => {
+    const el = fundo.querySelector('#fp-recado')
+    const nome = fundo.querySelector('#fp-nome').value.trim()
+    if (!nome) { el.textContent = 'Escreva o nome.'; el.classList.remove('oculto'); return }
+    const garantias = {}
+    CAMPOS_GARANTIA.forEach(c => {
+      const v = numeroBR(fundo.querySelector(`#fp-g-${c}`).value)
+      if (v !== null) garantias[c] = v
+    })
+    const { error } = await db.from('mapa_produto').insert({
+      nome, tipo: fundo.querySelector('#fp-tipo').value, registro: fundo.querySelector('#fp-registro').value.trim() || null,
+      unidade: fundo.querySelector('#fp-unidade').value.trim() || 'Tonelada', garantias
+    })
+    if (error) { el.textContent = error.message; el.classList.remove('oculto'); return }
+    fechar(); aoSalvar()
+  }
+}
+
+// Exporta o trimestre inteiro num .xlsx no mesmo layout dos relatórios
+// que a Amanda já manda — uma aba "Produto Acabado" e uma "Matéria-Prima"
+async function exportarMapaExcel (ano, trimestre) {
+  const { data: registros, error } = await db.from('mapa_trimestre').select(`
+    *, produto:produto_id ( nome, tipo, registro, unidade, garantias )
+  `).eq('ano', ano).eq('trimestre', trimestre)
+  if (error || !registros?.length) { alert('Nada salvo pra esse trimestre ainda.'); return }
+
+  const cabecalho = titulo1 => ([
+    ['MINISTÉRIO DA AGRICULTURA, PECUÁRIA E ABASTECIMENTO – MAPA'],
+    ['COORDENAÇÃO DE FERTILIZANTES, INOCULANTES E CORRETIVOS - CFIC'],
+    [],
+    ['Relatório Trimestral de Produção, Importação e Exportação'],
+    [titulo1],
+    [],
+    ['Estabelecimento:', 'GEFOSCAL COMERCIO, INDUSTRIA, REPRESENTACOES E TRANSPORTES DE PRODUTOS AGROPECUARIOS LTDA', '', '', 'Registro nº:', 'TO-000802-8', 'UF:', 'TO'],
+    ['Trimestre:', TRIMESTRE_ROMANO[trimestre], '', '', 'Ano:', ano],
+    []
+  ])
+
+  const acabados = registros.filter(r => r.produto.tipo === 'ACABADO')
+  const materiasPrimas = registros.filter(r => r.produto.tipo === 'MATERIA_PRIMA')
+
+  const linhasAcabado = [
+    ...cabecalho('PARA ESTABELECIMENTOS PRODUTORES, IMPORTADORES E EXPORTADORES DE FERTILIZANTES MINERAIS (Produto Acabado)'),
+    ['Tipo', 'Nº Registro', ...CAMPOS_GARANTIA.map(c => ROTULO_GARANTIA[c]), 'Unidade', 'Estoque Inicial',
+     'Produção do Trimestre', 'Na UF (qtd)', 'Outras UFs', 'Outras UFs (qtd)', 'Exportação (país)', 'Exportação (qtd)', 'Estoque Final'],
+    ...acabados.map(r => {
+      const d = r.dados || {}
+      const g = r.produto.garantias || {}
+      return [r.produto.nome, r.produto.registro ?? '', ...CAMPOS_GARANTIA.map(c => g[c] ?? ''), r.produto.unidade,
+        Number(r.estoque_inicial), d.producao ?? 0, d.na_uf_qtd ?? 0, d.outras_ufs ?? '', d.outras_ufs_qtd ?? 0,
+        d.exportacao_pais ?? '', d.exportacao_qtd ?? 0, Number(r.estoque_final)]
+    })
+  ]
+
+  const linhasMateriaPrima = [
+    ...cabecalho('PARA ESTABELECIMENTOS PRODUTORES, IMPORTADORES E EXPORTADORES DE FERTILIZANTES MINERAIS (Matéria-Prima)'),
+    ['Material/Produto', 'Nº Registro', ...CAMPOS_GARANTIA.map(c => ROTULO_GARANTIA[c]), 'Unidade', 'Estoque Inicial',
+     'Compras Nacional (qtd)', 'Empresa', 'Uso na Produção', 'Venda como Produto', 'Outras Entradas', 'Outras Saídas', 'Estoque Final'],
+    ...materiasPrimas.map(r => {
+      const d = r.dados || {}
+      const g = r.produto.garantias || {}
+      return [r.produto.nome, r.produto.registro ?? '', ...CAMPOS_GARANTIA.map(c => g[c] ?? ''), r.produto.unidade,
+        Number(r.estoque_inicial), d.compras_nacional_qtd ?? 0, d.compras_nacional_empresa ?? '', d.uso_producao_qtd ?? 0,
+        d.venda_produto_qtd ?? 0, d.outras_entradas_qtd ?? 0, d.outras_saidas_qtd ?? 0, Number(r.estoque_final)]
+    })
+  ]
+
+  const wb = XLSX.utils.book_new()
+  if (acabados.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(linhasAcabado), 'Produto Acabado')
+  if (materiasPrimas.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(linhasMateriaPrima), 'Matéria-Prima')
+  XLSX.writeFile(wb, `mapa_${TRIMESTRE_ROMANO[trimestre].slice(0, 1)}_${ano}.xlsx`)
+}
+
+// ---------------------------------------------------------------
+// Página: Laboratório  (módulo 'laboratorio')
+// Fica na Indústria: testa amostra de matéria-prima e produto. Três
+// frentes: Amostras (com filtro diário puxando direto do Faturamento
+// — cliente/placa/produto do caminhão que carregou naquele dia, sem
+// digitar de novo), Reagentes (uso químico) e Estoque (com controle
+// regulatório de Polícia Federal e Exército Brasileiro, que gera o
+// mapa em PDF pra declarar).
+// ---------------------------------------------------------------
+const ORIGENS_AMOSTRA = ['EXPEDICAO', 'PRODUCAO', 'SONDA', 'ROM', 'CANALETA', 'CAMPO', 'OUTRO']
+const ROTULO_ORIGEM_AMOSTRA = { EXPEDICAO: 'Expedição', PRODUCAO: 'Produção', SONDA: 'Sonda', ROM: 'ROM', CANALETA: 'Canaleta', CAMPO: 'Campo', OUTRO: 'Outro' }
+const STATUS_AMOSTRA = ['PENDENTE', 'APROVADA', 'REPROVADA']
+const ROTULO_STATUS_AMOSTRA = { PENDENTE: 'Pendente', APROVADA: 'Aprovada', REPROVADA: 'Reprovada' }
+function corStatusAmostra (s) {
+  if (s === 'APROVADA') return 'badge-bom'
+  if (s === 'REPROVADA') return 'badge-alerta'
+  return 'texto-dim'
+}
+const REAGENTES_LAB = [
+  'Molibdato de Amônio', 'Metavanadato de Amônio', 'Fenolftaleína', 'Hidróxido de Amônio',
+  'Hidróxido de Potássio', 'Cloreto de Bário', 'Oxalato de Amônio', 'Ácido Cítrico',
+  'Hidróxido de Sódio', 'Ácido Clorídrico 37%', 'Ácido Nítrico 65%', 'Acetona',
+  'Álcool Etílico', 'Peróxido de Hidrogênio', 'Fosfato de Potássio'
+]
+
+async function paginaLaboratorio () {
+  const editavel = podeEditar('laboratorio')
+  $('#subtitulo-pagina').textContent = 'Amostras, reagentes e estoque controlado'
+  const area = areaLivre()
+  area.innerHTML = `<p class="texto-dim2">carregando...</p>`
+
+  const abas = [['painel', 'Painel'], ['amostras', 'Amostras'], ['reagentes', 'Reagentes'], ['estoque', 'Estoque']]
+  area.innerHTML = `
+    <div class="subabas">
+      ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
+    </div>
+    <div id="sub-lab"></div>`
+  area.querySelectorAll('.subabas button').forEach(b => {
+    b.onclick = () => {
+      area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
+      abrirLab(b.dataset.sub, editavel)
+    }
+  })
+  abrirLab('painel', editavel)
+}
+
+function abrirLab (sub, editavel) {
+  const alvo = $('#sub-lab')
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  if (sub === 'painel') labPainel(alvo)
+  if (sub === 'amostras') labAmostras(alvo, editavel)
+  if (sub === 'reagentes') labReagentes(alvo, editavel)
+  if (sub === 'estoque') labEstoque(alvo, editavel)
+}
+
+// ----- Painel -----
+async function labPainel (alvo) {
+  const hoje = new Date()
+  const mesInicio = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString().slice(0, 10)
+
+  const [{ data: amostras }, { data: amostrasMes }, { data: reagentesMes }, { data: estoque }] = await Promise.all([
+    db.from('lab_amostra').select('id'),
+    db.from('lab_amostra').select('id, origem, status').gte('data_amostra', mesInicio),
+    db.from('lab_reagente_uso').select('id, reagente, quantidade').gte('data', mesInicio),
+    db.from('lab_estoque_movimento').select('material, saldo_apos, controlado_pf, controlado_exercito, criado_em').order('criado_em', { ascending: false })
+  ])
+
+  const porMaterial = {}
+  ;(estoque || []).forEach(m => { if (!porMaterial[m.material]) porMaterial[m.material] = m })
+  const itensEstoque = Object.values(porMaterial)
+  const controladosPF = itensEstoque.filter(i => i.controlado_pf).length
+  const controladosExercito = itensEstoque.filter(i => i.controlado_exercito).length
+
+  const porOrigem = {}
+  ;(amostrasMes || []).forEach(a => { porOrigem[a.origem] = (porOrigem[a.origem] || 0) + 1 })
+
+  const porReagente = {}
+  ;(reagentesMes || []).forEach(r => { porReagente[r.reagente] = (porReagente[r.reagente] || 0) + Number(r.quantidade || 0) })
+
+  alvo.innerHTML = `
+    <div class="resumo-topo" style="margin-bottom:18px;">
+      ${[['Amostras (total)', (amostras || []).length, ''],
+         ['Amostras no mês', (amostrasMes || []).length, ''],
+         ['Reagentes usados no mês', fmtNum((reagentesMes || []).reduce((s, r) => s + Number(r.quantidade || 0), 0)), ''],
+         ['Itens em estoque', itensEstoque.length, ''],
+         ['Controlados PF', controladosPF, controladosPF ? 'alerta' : ''],
+         ['Controlados Exército', controladosExercito, controladosExercito ? 'alerta' : '']]
+        .map(([rot, val, cl]) => `<div class="bloco ${cl}"><div class="rot">${rot}</div><div class="val">${val}</div></div>`).join('')}
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;" class="grade-painel-comb">
+      <div class="panel" style="padding:18px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Amostras do mês, por origem</h3>
+        ${barrasHorizontais(Object.entries(porOrigem).map(([o, n]) => ({ rotulo: ROTULO_ORIGEM_AMOSTRA[o] ?? o, valor: n })), { unidade: '', casas: 0 })}
+      </div>
+      <div class="panel" style="padding:18px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Consumo por reagente no mês</h3>
+        ${Object.keys(porReagente).length
+          ? barrasHorizontais(Object.entries(porReagente).sort((a, b) => b[1] - a[1]).map(([r, q]) => ({ rotulo: r, valor: q })), { unidade: '', casas: 2 })
+          : '<p class="vazio">Nenhum reagente lançado no mês.</p>'}
+      </div>
+    </div>`
+}
+
+// ----- Amostras (filtro diário ligado ao Faturamento) -----
+async function labAmostras (alvo, editavel) {
+  const hoje = hojeISO()
+  alvo.innerHTML = `
+    ${editavel ? `
+    <div class="panel" style="padding:18px 20px;margin-bottom:16px;">
+      <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 4px;">Caminhões do dia</h3>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 12px;">Escolhe o dia e já aparecem os carregamentos do Faturamento — clica em "Coletar amostra" e o cliente e a placa já vêm preenchidos.</p>
+      <div class="filtros" style="margin-bottom:0;">
+        <div class="campo"><label>Data</label><input type="date" id="la-data-dia" value="${hoje}"></div>
+        <button class="btn" id="la-buscar-dia">Buscar</button>
+        <button class="btn-secundario" id="la-nova-avulsa">+ Amostra avulsa (produção, sonda, campo...)</button>
+      </div>
+      <div id="la-caminhoes-dia" style="margin-top:14px;"></div>
+    </div>` : ''}
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>Origem</label><select id="la-f-origem"><option value="">todas</option>
+        ${ORIGENS_AMOSTRA.map(o => `<option value="${o}">${ROTULO_ORIGEM_AMOSTRA[o]}</option>`).join('')}</select></div>
+      <div class="campo" style="flex:1;min-width:180px;"><label>Buscar</label><input id="la-f-busca" placeholder="nº amostra, produtor, placa..."></div>
+      <button class="btn-secundario" id="la-f-aplicar">Filtrar</button>
+    </div>
+    <div id="la-lista"><p class="texto-dim2">carregando...</p></div>`
+
+  const buscarDia = async () => {
+    const data = $('#la-data-dia').value
+    const { data: carregamentos, error } = await db.from('carregamento').select(`
+      id, numero_nf, cliente:cliente_id ( razao_social, nome_fantasia ), produto:produto_id ( nome ), veiculo:veiculo_id ( placa )
+    `).eq('data_carregamento', data).limit(200)
+    if (error) { $('#la-caminhoes-dia').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+    const { data: jaColetadas } = await db.from('lab_amostra').select('carregamento_id').eq('data_amostra', data)
+    const coletados = new Set((jaColetadas || []).map(a => a.carregamento_id))
+
+    $('#la-caminhoes-dia').innerHTML = carregamentos?.length ? `
+      <div style="display:flex;flex-direction:column;gap:6px;">
+        ${carregamentos.map(c => `<div class="passo">
+          <span><b>${esc(c.cliente?.nome_fantasia || c.cliente?.razao_social || '—')}</b>
+            <span class="texto-dim2" style="font-size:11px;">— ${esc(c.veiculo?.placa ?? 'sem placa')} · ${esc(c.produto?.nome ?? '—')}${c.numero_nf ? ' · NF ' + esc(c.numero_nf) : ''}</span></span>
+          ${coletados.has(c.id)
+            ? '<span class="badge-bom" style="font-size:10.5px;">amostra coletada</span>'
+            : `<button class="btn-secundario mini" data-coletar="${c.id}">Coletar amostra</button>`}
+        </div>`).join('')}
+      </div>` : '<p class="vazio">Nenhum carregamento nessa data.</p>'
+
+    $('#la-caminhoes-dia').querySelectorAll('[data-coletar]').forEach(b => {
+      b.onclick = () => {
+        const c = carregamentos.find(x => x.id === b.dataset.coletar)
+        formAmostra(null, c, data, () => { buscarDia(); buscarLista() })
+      }
+    })
+  }
+
+  const buscarLista = async () => {
+    $('#la-lista').innerHTML = `<p class="texto-dim2">carregando...</p>`
+    let q = db.from('lab_amostra').select(`
+      id, numero_amostra, produtor_nome, placa_caminhao, produto_nome, data_amostra, horario_amostra,
+      quantidade, origem, status, resultado, observacoes, carregamento_id,
+      recebida:recebida_por ( nome )
+    `).order('data_amostra', { ascending: false }).limit(500)
+    if ($('#la-f-origem').value) q = q.eq('origem', $('#la-f-origem').value)
+    const { data, error } = await q
+    if (error) { $('#la-lista').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+    let lista = data || []
+    const termo = $('#la-f-busca').value.trim().toLowerCase()
+    if (termo) lista = lista.filter(a => [a.numero_amostra, a.produtor_nome, a.placa_caminhao, a.produto_nome]
+      .some(campo => (campo || '').toLowerCase().includes(termo)))
+
+    $('#la-lista').innerHTML = `
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr>
+          <th>Nº Amostra</th><th>Data</th><th>Origem</th><th>Produtor</th><th>Placa</th>
+          <th>Produto</th><th class="num">Qtd</th><th>Status</th>${editavel ? '<th></th>' : ''}
+        </tr></thead><tbody>
+          ${lista.map(a => `<tr>
+            <td><b>${esc(a.numero_amostra)}</b></td>
+            <td class="texto-dim2">${fmtData(a.data_amostra)}${a.horario_amostra ? ' ' + a.horario_amostra.slice(0, 5) : ''}</td>
+            <td><span class="chip">${esc(ROTULO_ORIGEM_AMOSTRA[a.origem] ?? a.origem)}</span></td>
+            <td>${esc(a.produtor_nome ?? '—')}</td>
+            <td class="texto-dim">${esc(a.placa_caminhao ?? '—')}</td>
+            <td class="texto-dim2">${esc(a.produto_nome ?? '—')}</td>
+            <td class="num">${a.quantidade != null ? fmtNum(a.quantidade, 2) : '—'}</td>
+            <td><span class="${corStatusAmostra(a.status)}">${esc(ROTULO_STATUS_AMOSTRA[a.status] ?? a.status)}</span></td>
+            ${editavel ? `<td style="white-space:nowrap;">
+              <button class="btn-secundario mini" data-editar-am="${a.id}">editar</button>
+              <button class="btn-secundario mini" data-ticket-am="${a.id}">ticket</button></td>` : ''}
+          </tr>`).join('') || `<tr><td colspan="${editavel ? 9 : 8}" class="vazio">Nenhuma amostra no filtro.</td></tr>`}
+        </tbody></table>
+      </div></div>`
+
+    $('#la-lista').querySelectorAll('[data-editar-am]').forEach(b => {
+      b.onclick = () => formAmostra(lista.find(a => a.id === b.dataset.editarAm), null, null, () => { buscarDia?.(); buscarLista() })
+    })
+    $('#la-lista').querySelectorAll('[data-ticket-am]').forEach(b => {
+      b.onclick = () => abrirTicketAmostra(lista.find(a => a.id === b.dataset.ticketAm))
+    })
+  }
+
+  if (editavel) {
+    $('#la-buscar-dia').onclick = buscarDia
+    $('#la-nova-avulsa').onclick = () => formAmostra(null, null, $('#la-data-dia').value, () => { buscarDia(); buscarLista() })
+    buscarDia()
+  }
+  $('#la-f-aplicar').onclick = buscarLista
+  buscarLista()
+}
+
+// c = carregamento (se veio do filtro diário) | l = amostra existente (edição)
+function formAmostra (l, c, dataSugerida, aoSalvar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  const produtor = l?.produtor_nome ?? (c?.cliente?.nome_fantasia || c?.cliente?.razao_social) ?? ''
+  const placa = l?.placa_caminhao ?? c?.veiculo?.placa ?? ''
+  const produtoNome = l?.produto_nome ?? c?.produto?.nome ?? ''
+  fundo.innerHTML = `<div class="modal">
+    <h3>${l ? 'Editar amostra' : 'Nova amostra'}</h3>
+    ${c ? `<p class="texto-dim2" style="font-size:12px;margin:-8px 0 14px;">Vinculada ao carregamento — cliente e placa vieram do Faturamento.</p>` : ''}
+    <div class="form-grade">
+      <div class="campo"><label>Nº da amostra *</label><input id="fa-numero" value="${esc(l?.numero_amostra ?? '')}"></div>
+      <div class="campo"><label>Origem</label><select id="fa-origem" ${c ? 'disabled' : ''}>
+        ${ORIGENS_AMOSTRA.map(o => `<option value="${o}" ${(l?.origem ?? (c ? 'EXPEDICAO' : 'PRODUCAO')) === o ? 'selected' : ''}>${ROTULO_ORIGEM_AMOSTRA[o]}</option>`).join('')}</select></div>
+      <div class="campo"><label>Produtor / Cliente</label><input id="fa-produtor" value="${esc(produtor)}" ${c ? 'disabled' : ''}></div>
+      <div class="campo"><label>Placa do caminhão</label><input id="fa-placa" value="${esc(placa)}" ${c ? 'disabled' : ''}></div>
+      <div class="campo"><label>Produto</label><input id="fa-produto" value="${esc(produtoNome)}" ${c ? 'disabled' : ''}></div>
+      <div class="campo"><label>Data da amostra *</label><input type="date" id="fa-data" value="${l?.data_amostra ?? dataSugerida ?? hojeISO()}"></div>
+      <div class="campo"><label>Horário *</label><input type="time" id="fa-hora" value="${l?.horario_amostra?.slice(0, 5) ?? ''}"></div>
+      <div class="campo"><label>Quantidade</label><input id="fa-qtd" inputmode="decimal" value="${l?.quantidade ?? ''}"></div>
+      <div class="campo"><label>Recebida por</label><select id="fa-recebida"><option value="">carregando...</option></select></div>
+      <div class="campo"><label>Entregue por (motorista)</label><input id="fa-entregue" value="${esc(l?.entregue_por ?? '')}"></div>
+      <div class="campo"><label>Status</label><select id="fa-status">
+        ${STATUS_AMOSTRA.map(s => `<option value="${s}" ${(l?.status ?? 'PENDENTE') === s ? 'selected' : ''}>${ROTULO_STATUS_AMOSTRA[s]}</option>`).join('')}</select></div>
+    </div>
+    <div class="campo" style="margin-top:10px;"><label>Resultado</label><input id="fa-resultado" value="${esc(l?.resultado ?? '')}" placeholder="ex: teor, umidade, laudo..."></div>
+    <div class="campo" style="margin-top:10px;"><label>Observações</label><textarea id="fa-obs" style="min-height:70px;">${esc(l?.observacoes ?? '')}</textarea></div>
+    <div class="acoes" style="margin-top:14px;"><button class="btn" id="fa-salvar">Salvar</button>
+      <button class="btn-secundario" id="fa-fechar">Fechar</button></div>
+    <div class="recado oculto" id="fa-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#fa-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  // carrega pessoas pro select de "recebida por" (função definida abaixo)
+  carregarPessoasLab(fundo.querySelector('#fa-recebida'), l?.recebida_por)
+
+  fundo.querySelector('#fa-salvar').onclick = async () => {
+    const el = fundo.querySelector('#fa-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const numero = fundo.querySelector('#fa-numero').value.trim()
+    if (!numero) { aviso('Informe o número da amostra.'); return }
+    if (!fundo.querySelector('#fa-data').value) { aviso('Informe a data.'); return }
+    const btn = fundo.querySelector('#fa-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const corpo = {
+      numero_amostra: numero, carregamento_id: c?.id ?? l?.carregamento_id ?? null,
+      origem: fundo.querySelector('#fa-origem').value,
+      produtor_nome: fundo.querySelector('#fa-produtor').value.trim() || null,
+      placa_caminhao: fundo.querySelector('#fa-placa').value.trim() || null,
+      produto_nome: fundo.querySelector('#fa-produto').value.trim() || null,
+      data_amostra: fundo.querySelector('#fa-data').value,
+      horario_amostra: fundo.querySelector('#fa-hora').value || null,
+      quantidade: numeroBR(fundo.querySelector('#fa-qtd').value),
+      recebida_por: fundo.querySelector('#fa-recebida').value || null,
+      entregue_por: fundo.querySelector('#fa-entregue').value.trim() || null,
+      status: fundo.querySelector('#fa-status').value,
+      resultado: fundo.querySelector('#fa-resultado').value.trim() || null,
+      observacoes: fundo.querySelector('#fa-obs').value.trim() || null
+    }
+    let error, novaAmostra = null
+    if (l) { ({ error } = await db.from('lab_amostra').update(corpo).eq('id', l.id)) }
+    else { ({ data: novaAmostra, error } = await db.from('lab_amostra').insert({ ...corpo, criado_por: PERFIL.pessoaId }).select().single()) }
+    btn.disabled = false; btn.textContent = 'Salvar'
+    if (error) { aviso(error.message); return }
+    fechar(); aoSalvar()
+    if (novaAmostra) abrirTicketAmostra(novaAmostra) // "salvar amostra + ticket", igual o sistema antigo
+  }
+}
+
+// cache simples de pessoas ativas pra popular o select de "recebida por"
+let LAB_PESSOAS_CACHE = null
+async function carregarPessoasLab (select, selecionadoId) {
+  if (!LAB_PESSOAS_CACHE) {
+    const { data } = await db.from('pessoa').select('id,nome').eq('status', 'ATIVO').order('nome')
+    LAB_PESSOAS_CACHE = data || []
+  }
+  select.innerHTML = '<option value="">—</option>' + LAB_PESSOAS_CACHE.map(p =>
+    `<option value="${p.id}" ${p.id === selecionadoId ? 'selected' : ''}>${esc(p.nome)}</option>`).join('')
+}
+
+function abrirTicketAmostra (a) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = documentoPDF({
+    titulo: 'Laboratório Gefoscal',
+    subtitulo: 'Etiqueta da amostra — colar no frasco',
+    corpo: `
+      <div style="border:2px solid var(--rust);border-radius:12px;padding:18px 20px;max-width:320px;">
+        <div style="font-size:28px;font-weight:800;color:var(--rust);margin-bottom:10px;">#${esc(a.numero_amostra)}</div>
+        ${docLinha('Origem', ROTULO_ORIGEM_AMOSTRA[a.origem] ?? a.origem)}
+        ${docLinha('Data', fmtData(a.data_amostra))}
+        ${docLinha('Horário', a.horario_amostra ? a.horario_amostra.slice(0, 5) : '—')}
+        ${docLinha('Produtor', a.produtor_nome || '—')}
+        ${docLinha('Placa', a.placa_caminhao || '—')}
+        ${docLinha('Quantidade', a.quantidade != null ? fmtNum(a.quantidade, 2) : '—')}
+      </div>`,
+    acoes: `<button class="btn" id="tk-imprimir">Baixar / imprimir</button>
+            <button class="btn-secundario" id="tk-fechar">Fechar</button>`
+  })
+  document.body.appendChild(fundo)
+  fundo.querySelector('#tk-fechar').onclick = () => fundo.remove()
+  fundo.querySelector('#tk-imprimir').onclick = () => window.print()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+}
+
+// ----- Reagentes -----
+async function labReagentes (alvo, editavel) {
+  const hoje = new Date()
+  alvo.innerHTML = `
+    ${editavel ? `<div class="panel" style="padding:20px;margin-bottom:16px;">
+      <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 14px;">Lançar uso de reagente</h3>
+      <div class="form-grade">
+        <div class="campo"><label>Data *</label><input type="date" id="lr-data" value="${hojeISO()}"></div>
+        <div class="campo"><label>Reagente *</label><select id="lr-reagente">${REAGENTES_LAB.map(r => `<option value="${esc(r)}">${esc(r)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Quantidade *</label><input id="lr-qtd" inputmode="decimal"></div>
+        <div class="campo"><label>Analista</label><select id="lr-analista"></select></div>
+      </div>
+      <div class="campo" style="margin-top:10px;"><label>Uso</label><input id="lr-uso" placeholder="ex: análise de teor de P2O5"></div>
+      <div class="acoes" style="margin-top:12px;"><button class="btn" id="lr-salvar">Lançar</button></div>
+      <div class="recado oculto" id="lr-recado"></div>
+    </div>` : ''}
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>Mês</label><input type="number" id="lr-f-mes" min="1" max="12" value="${hoje.getMonth() + 1}" style="width:70px;"></div>
+      <div class="campo"><label>Ano</label><input type="number" id="lr-f-ano" value="${hoje.getFullYear()}" style="width:90px;"></div>
+      <button class="btn-secundario" id="lr-f-aplicar">Filtrar</button>
+    </div>
+    <div id="lr-lista"><p class="texto-dim2">carregando...</p></div>`
+
+  if (editavel) carregarPessoasLab($('#lr-analista'))
+
+  const buscar = async () => {
+    $('#lr-lista').innerHTML = `<p class="texto-dim2">carregando...</p>`
+    const mes = Number($('#lr-f-mes').value), ano = Number($('#lr-f-ano').value)
+    const de = new Date(ano, mes - 1, 1).toISOString().slice(0, 10)
+    const ate = new Date(ano, mes, 0).toISOString().slice(0, 10)
+    const { data, error } = await db.from('lab_reagente_uso').select(`
+      id, data, reagente, quantidade, uso, analista:analista_id ( nome )
+    `).gte('data', de).lte('data', ate).order('data', { ascending: false })
+    if (error) { $('#lr-lista').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+    const lista = data || []
+    const totalQtd = lista.reduce((s, r) => s + Number(r.quantidade || 0), 0)
+
+    $('#kpis').innerHTML = kpi('Lançamentos no mês', lista.length) + kpi('Quantidade total', fmtNum(totalQtd))
+
+    $('#lr-lista').innerHTML = `
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr><th>Data</th><th>Reagente</th><th class="num">Qtd</th><th>Uso</th><th>Analista</th></tr></thead><tbody>
+          ${lista.map(r => `<tr>
+            <td class="texto-dim2">${fmtData(r.data)}</td>
+            <td>${esc(r.reagente)}</td>
+            <td class="num">${fmtNum(r.quantidade)}</td>
+            <td class="texto-dim">${esc(r.uso ?? '—')}</td>
+            <td class="texto-dim">${esc(r.analista?.nome ?? '—')}</td>
+          </tr>`).join('') || `<tr><td colspan="5" class="vazio">Nenhum lançamento no período.</td></tr>`}
+        </tbody></table>
+      </div></div>`
+  }
+
+  if (editavel) $('#lr-salvar').onclick = async () => {
+    const el = $('#lr-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const qtd = numeroBR($('#lr-qtd').value)
+    if (qtd === null || qtd <= 0) { aviso('Informe a quantidade.'); return }
+    const btn = $('#lr-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const { error } = await db.from('lab_reagente_uso').insert({
+      data: $('#lr-data').value, reagente: $('#lr-reagente').value, quantidade: qtd,
+      uso: $('#lr-uso').value.trim() || null, analista_id: $('#lr-analista').value || null
+    })
+    btn.disabled = false; btn.textContent = 'Lançar'
+    if (error) { aviso(error.message); return }
+    $('#lr-qtd').value = ''; $('#lr-uso').value = ''
+    buscar()
+  }
+  $('#lr-f-aplicar').onclick = buscar
+  buscar()
+}
+
+// ----- Estoque (com controle regulatório PF / Exército) -----
+async function labEstoque (alvo, editavel) {
+  alvo.innerHTML = `
+    ${editavel ? `<div class="panel" style="padding:20px;margin-bottom:16px;">
+      <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 14px;">Movimentar estoque</h3>
+      <div class="form-grade">
+        <div class="campo"><label>Data *</label><input type="date" id="le-data" value="${hojeISO()}"></div>
+        <div class="campo"><label>Material *</label><input id="le-material" placeholder="ex: Ácido Nítrico 65%"></div>
+        <div class="campo"><label>Categoria</label><input id="le-categoria"></div>
+        <div class="campo"><label>Unidade</label><input id="le-unidade" value="L"></div>
+        <div class="campo"><label>Tipo</label><select id="le-tipo"><option value="ENTRADA">Entrada</option><option value="SAIDA">Saída</option></select></div>
+        <div class="campo"><label>Quantidade *</label><input id="le-qtd" inputmode="decimal"></div>
+        <div class="campo"><label>Lote</label><input id="le-lote"></div>
+        <div class="campo"><label>Validade</label><input type="date" id="le-validade"></div>
+        <div class="campo"><label>Fornecedor</label><input id="le-fornecedor"></div>
+      </div>
+      <div style="display:flex;gap:18px;margin-top:10px;">
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;"><input type="checkbox" id="le-pf"> Controlado — Polícia Federal</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;"><input type="checkbox" id="le-exercito"> Controlado — Exército</label>
+      </div>
+      <div class="campo" style="margin-top:10px;"><label>Observação</label><input id="le-obs"></div>
+      <div class="acoes" style="margin-top:12px;"><button class="btn" id="le-salvar">Registrar movimentação</button></div>
+      <div class="recado oculto" id="le-recado"></div>
+    </div>` : ''}
+
+    <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Saldo atual por material</h3></div>
+    <div id="le-resumo" style="margin-bottom:18px;"><p class="texto-dim2">carregando...</p></div>
+
+    <div class="acoes" style="margin-bottom:14px;">
+      <button class="btn-secundario" id="le-mapa-pf">Gerar Mapa — Polícia Federal</button>
+      <button class="btn-secundario" id="le-mapa-exercito">Gerar Mapa — Exército</button>
+    </div>
+
+    <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Movimentações</h3></div>
+    <div id="le-lista"><p class="texto-dim2">carregando...</p></div>`
+
+  const carregarResumo = async () => {
+    const { data, error } = await db.from('lab_estoque_movimento').select('*').order('criado_em', { ascending: false }).limit(3000)
+    if (error) { $('#le-resumo').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return [] }
+    const porMaterial = {}
+    ;(data || []).forEach(m => { if (!porMaterial[m.material]) porMaterial[m.material] = m })
+    const itens = Object.values(porMaterial).sort((a, b) => a.material.localeCompare(b.material))
+
+    $('#le-resumo').innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;">
+        ${itens.map(m => `<div class="panel" style="padding:14px 16px;border-left:3px solid ${m.controlado_pf || m.controlado_exercito ? 'var(--warn-text)' : 'var(--dim2)'};">
+          <div style="font-weight:600;font-size:13px;margin-bottom:4px;">${esc(m.material)}
+            ${m.controlado_pf ? '<span class="badge-alerta" style="font-size:9px;margin-left:4px;">PF</span>' : ''}
+            ${m.controlado_exercito ? '<span class="badge-alerta" style="font-size:9px;margin-left:4px;">EXÉRCITO</span>' : ''}</div>
+          <div style="font-family:var(--serif);font-size:19px;">${fmtNum(m.saldo_apos)} <span style="font-size:12px;color:var(--dim2);">${esc(m.unidade_medida)}</span></div>
+          ${m.validade ? `<div class="texto-dim2" style="font-size:11px;margin-top:3px;">validade: ${fmtData(m.validade)}</div>` : ''}
+        </div>`).join('') || '<p class="vazio">Nenhum material em estoque ainda.</p>'}
+      </div>`
+    return data || []
+  }
+
+  const carregarLista = async () => {
+    const { data, error } = await db.from('lab_estoque_movimento').select('*').order('data', { ascending: false }).limit(300)
+    if (error) { $('#le-lista').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+    $('#le-lista').innerHTML = `
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr><th>Data</th><th>Material</th><th>Tipo</th><th class="num">Qtd</th><th class="num">Saldo após</th><th>Controlado</th></tr></thead><tbody>
+          ${(data || []).map(m => `<tr>
+            <td class="texto-dim2">${fmtData(m.data)}</td>
+            <td>${esc(m.material)}</td>
+            <td><span class="${m.tipo_mov === 'ENTRADA' ? 'badge-bom' : 'texto-dim'}">${m.tipo_mov === 'ENTRADA' ? 'Entrada' : 'Saída'}</span></td>
+            <td class="num">${fmtNum(m.quantidade)} ${esc(m.unidade_medida)}</td>
+            <td class="num">${fmtNum(m.saldo_apos)} ${esc(m.unidade_medida)}</td>
+            <td class="texto-dim2">${[m.controlado_pf ? 'PF' : null, m.controlado_exercito ? 'Exército' : null].filter(Boolean).join(', ') || '—'}</td>
+          </tr>`).join('') || `<tr><td colspan="6" class="vazio">Nenhuma movimentação ainda.</td></tr>`}
+        </tbody></table>
+      </div></div>`
+  }
+
+  if (editavel) $('#le-salvar').onclick = async () => {
+    const el = $('#le-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const material = $('#le-material').value.trim()
+    const qtd = numeroBR($('#le-qtd').value)
+    if (!material) { aviso('Informe o material.'); return }
+    if (qtd === null || qtd <= 0) { aviso('Informe a quantidade.'); return }
+
+    const { data: ultimo } = await db.from('lab_estoque_movimento').select('saldo_apos')
+      .eq('material', material).order('criado_em', { ascending: false }).limit(1).maybeSingle()
+    const saldoAnterior = Number(ultimo?.saldo_apos ?? 0)
+    const tipo = $('#le-tipo').value
+    const saldoApos = tipo === 'SAIDA' ? saldoAnterior - qtd : saldoAnterior + qtd
+    if (saldoApos < 0) { aviso('Essa saída deixaria o saldo negativo — confere a quantidade.'); return }
+
+    const btn = $('#le-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const { error } = await db.from('lab_estoque_movimento').insert({
+      data: $('#le-data').value, material, categoria: $('#le-categoria').value.trim() || null,
+      unidade_medida: $('#le-unidade').value.trim() || 'L', tipo_mov: tipo, quantidade: qtd, saldo_apos: saldoApos,
+      controlado_pf: $('#le-pf').checked, controlado_exercito: $('#le-exercito').checked,
+      numero_lote: $('#le-lote').value.trim() || null, validade: $('#le-validade').value || null,
+      fornecedor: $('#le-fornecedor').value.trim() || null, observacoes: $('#le-obs').value.trim() || null,
+      criado_por: PERFIL.pessoaId
+    })
+    btn.disabled = false; btn.textContent = 'Registrar movimentação'
+    if (error) { aviso(error.message); return }
+    ;['le-material', 'le-categoria', 'le-qtd', 'le-lote', 'le-fornecedor', 'le-obs'].forEach(id => { $('#' + id).value = '' })
+    $('#le-pf').checked = false; $('#le-exercito').checked = false
+    carregarResumo(); carregarLista()
+  }
+
+  $('#le-mapa-pf').onclick = async () => gerarMapaControlado('controlado_pf', 'Polícia Federal')
+  $('#le-mapa-exercito').onclick = async () => gerarMapaControlado('controlado_exercito', 'Exército Brasileiro')
+
+  carregarResumo(); carregarLista()
+}
+
+// Mapa de controle de produtos químicos (PF / Exército) — mesmo espírito
+// do Mapa MAPA: lista os controlados com estoque anterior/entrada/saída/atual
+// do mês corrente, pronto pra declarar.
+async function gerarMapaControlado (campo, orgao) {
+  const hoje = new Date()
+  const de = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString().slice(0, 10)
+  const { data, error } = await db.from('lab_estoque_movimento').select('*').eq(campo, true).order('material').order('criado_em')
+  if (error || !data?.length) { alert(`Nenhum material controlado por ${orgao} no estoque.`); return }
+
+  db.from('lab_mapa_envio').insert({
+    tipo: campo === 'controlado_pf' ? 'PF' : 'EXERCITO',
+    mes_ref: hoje.getMonth() + 1, ano_ref: hoje.getFullYear(), gerado_por: PERFIL.pessoaId
+  }) // registra em segundo plano, não trava a geração do PDF se falhar
+
+  const porMaterial = {}
+  data.forEach(m => {
+    porMaterial[m.material] = porMaterial[m.material] || { entradaAntes: 0, saidaAntes: 0, entradaMes: 0, saidaMes: 0, saldoAtual: 0, unidade: m.unidade_medida }
+    const g = porMaterial[m.material]
+    const noMes = m.data >= de
+    if (m.tipo_mov === 'ENTRADA') { if (noMes) g.entradaMes += Number(m.quantidade); else g.entradaAntes += Number(m.quantidade) }
+    else { if (noMes) g.saidaMes += Number(m.quantidade); else g.saidaAntes += Number(m.quantidade) }
+    g.saldoAtual = Number(m.saldo_apos)
+    g.unidade = m.unidade_medida
+  })
+
+  const linhas = Object.entries(porMaterial)
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = documentoPDF({
+    titulo: `Mapa de Controle de Produtos Químicos — ${orgao}`,
+    subtitulo: `Grupo Gefoscal · Mês de referência: ${hoje.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}`,
+    corpo: docBloco('Materiais controlados', `
+      <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+        <thead><tr style="text-align:left;border-bottom:1px solid var(--borda, #ccc);">
+          <th style="padding:6px 4px;">Produto</th><th style="padding:6px 4px;">Estoque anterior</th>
+          <th style="padding:6px 4px;">Entrada (mês)</th><th style="padding:6px 4px;">Saída (mês)</th><th style="padding:6px 4px;">Estoque atual</th>
+        </tr></thead><tbody>
+          ${linhas.map(([nome, v]) => `<tr>
+            <td style="padding:6px 4px;">${esc(nome)}</td>
+            <td style="padding:6px 4px;">${fmtNum(v.entradaAntes - v.saidaAntes)} ${esc(v.unidade)}</td>
+            <td style="padding:6px 4px;">${fmtNum(v.entradaMes)} ${esc(v.unidade)}</td>
+            <td style="padding:6px 4px;">${fmtNum(v.saidaMes)} ${esc(v.unidade)}</td>
+            <td style="padding:6px 4px;"><b>${fmtNum(v.saldoAtual)} ${esc(v.unidade)}</b></td>
+          </tr>`).join('')}
+        </tbody></table>`) + docTexto('Finalidade do consumo', 'Análises laboratoriais.'),
+    acoes: `<button class="btn" id="gm-pdf-imprimir">Baixar / imprimir PDF</button>
+            <button class="btn-secundario" id="gm-pdf-fechar">Fechar</button>`
+  })
+  document.body.appendChild(fundo)
+  fundo.querySelector('#gm-pdf-fechar').onclick = () => fundo.remove()
+  fundo.querySelector('#gm-pdf-imprimir').onclick = () => window.print()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
 }
 
 // ---------------------------------------------------------------
@@ -4725,7 +6430,7 @@ function abrirCrm (sub, editavel, gerencia) {
   const alvo = $('#sub-crm')
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
   $('#kpis').innerHTML = ''
-  if (sub === 'painel') crmPainel(alvo, editavel, gerencia)
+  if (sub === 'painel') crmPainel(alvo, gerencia)
   if (sub === 'funil') crmFunil(alvo, editavel, gerencia)
   if (sub === 'atribuir') crmAtribuir(alvo)
   if (sub === 'progresso') crmLeads(alvo, editavel, gerencia)
@@ -4772,11 +6477,10 @@ function renderFunil (alvo, editavel, gerencia) {
       </div></div>`
   }
 
-  const podeNovo = editavel // qualquer vendedor pode prospectar e criar o próprio lead;
-  // só reatribuir/gerenciar o pool de leads vindos de SDR/IA continua exclusivo de quem gerencia
+  const podeNovo = editavel && gerencia // criar lead do zero é ação de quem gerencia; vendedor só trabalha o que chega
   alvo.innerHTML =
     (podeNovo ? `<div class="acoes" style="margin:0 0 16px;"><button class="btn" id="crm-novo">Novo lead</button></div>` : '') +
-    (!gerencia && !lista.length ? `<p class="vazio">Nenhum lead seu ainda. Adicione um com "Novo lead" ou espere a gerência atribuir um pra você.</p>` : '') +
+    (!gerencia && !lista.length ? `<p class="vazio">Nenhum lead atribuído a você ainda. Assim que a gerência mandar um cliente pra você, ele aparece aqui.</p>` : '') +
     `<div class="kanban" style="grid-template-columns:repeat(${ETAPAS_LEAD.length},1fr);overflow-x:auto;">
       ${ETAPAS_LEAD.map(et => `<div class="coluna-kanban" style="min-width:170px;"><h4>${ROTULO_ETAPA_LEAD[et]}
         <span class="texto-dim2">${lista.filter(l => l.etapa === et).length}</span></h4>
@@ -4872,7 +6576,7 @@ async function crmLeads (alvo, editavel, gerencia) {
 }
 
 // ----- Painel (KPIs e distribuição) -----
-async function crmPainel (alvo, editavel, gerencia) {
+async function crmPainel (alvo, gerencia) {
   const { data, error } = await filtrarPorDono(db.from('lead').select(`
     id, etapa, origem, valor_estimado, vendedor_id, criado_em, atualizado_em, vendedor:vendedor_id ( nome )
   `), gerencia).order('criado_em', { ascending: false }).limit(1000)
@@ -4905,7 +6609,6 @@ async function crmPainel (alvo, editavel, gerencia) {
   }
 
   alvo.innerHTML = `
-    ${editavel ? `<div class="acoes" style="margin:0 0 16px;"><button class="btn" id="crm-painel-novo-lead">Novo lead</button></div>` : ''}
     <div class="resumo-topo" style="margin-bottom:16px;">
       ${[['Leads em aberto', emAberto.length, ''], ['Valor em funil', 'R$ ' + fmtNum(valorPipeline), ''],
          ['Taxa de conversão', taxaConversao != null ? taxaConversao + '%' : '—', ''], ['Parados há +7 dias', parados, parados ? 'alerta' : '']]
@@ -4922,8 +6625,6 @@ async function crmPainel (alvo, editavel, gerencia) {
       <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Leads por origem</h3>
       ${barrasHorizontais(barrasOrigem, { unidade: '', casas: 0 })}
     </div>`
-
-  if (editavel) $('#crm-painel-novo-lead').onclick = () => formLead(null, editavel, gerencia, () => abrirCrm('painel', editavel, gerencia))
 
   await crmCardNovoPedido(alvo, gerencia)
 }
@@ -5249,9 +6950,7 @@ function formLead (l, editavel, gerencia, aoFechar) {
     if (l) {
       ;({ error } = await db.from('lead').update(corpo).eq('id', l.id))
     } else {
-      // quem gerencia pode deixar sem vendedor (fica no pool pra distribuir depois);
-      // um vendedor comum criando o próprio lead já nasce atribuído a ele mesmo
-      corpo.vendedor_id = podeReatribuir ? (fundo.querySelector('#ld-vendedor').value || null) : PERFIL.pessoaId
+      corpo.vendedor_id = fundo.querySelector('#ld-vendedor').value || null
       const { data: novo, error: e2 } = await db.from('lead').insert(corpo).select('id').single()
       error = e2; leadId = novo?.id
     }
@@ -5906,7 +7605,7 @@ async function carregarCarregamentosCliente (clienteId) {
 
   if (!data?.length) { alvo.innerHTML = '<p class="texto-dim2" style="font-size:12px;">nenhum carregamento faturado sem pedido vinculado pra este cliente.</p>'; return }
 
-  alvo.innerHTML = `<label class="texto-dim2" style="font-size:11px;">puxar de um carregamento da Expedição (opcional)</label>` +
+  alvo.innerHTML = `<label class="texto-dim2" style="font-size:11px;">puxar de um carregamento do Faturamento (opcional)</label>` +
     data.map(c => `<div class="carreg-disponivel" data-carregamento="${c.id}">
       <span>NF ${esc(c.numero_nf || '—')} · ${fmtData(c.data_carregamento)} · ${fmtNum(c.quantidade_t)} t</span>
       <span class="texto-dim2">R$ ${fmtNum(c.valor_nf)}</span></div>`).join('')
@@ -9680,9 +11379,18 @@ async function estAtual (alvo, editavel) {
   const bicas = lista.filter(x => /Bica 0/.test(x.produto))
   const totalBicas = bicas.reduce((s,x) => s + Number(x.saldo||0), 0)
 
-  const card = (rot, val, un, nota, classe) => `
+  const iconeLapis = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>`
+
+  // cartão do resumo topo — só tem botão de editar quando representa uma
+  // linha exata (produto+local); o "total nas bicas" é soma de duas, não dá
+  // pra editar direto (edita cada bica na tabela de baixo, ou pelo próprio card dela)
+  const card = (rot, val, un, nota, classe, item) => `
     <div class="bloco ${classe ?? ''}">
-      <div class="rot">${esc(rot)}</div>
+      <div class="rot">
+        <span>${esc(rot)}</span>
+        ${editavel && item ? `<button class="btn-secundario mini editar-valor" data-editar-saldo='${JSON.stringify(item)}' title="Editar valor">
+            <span style="width:12px;height:12px;display:block;">${iconeLapis}</span></button>` : ''}
+      </div>
       <div class="val">${fmtNum(val, casasPara(un))} <span style="font-size:15px;color:var(--dim2);">${esc(un)}</span></div>
       ${nota ? `<div class="nota">${esc(nota)}</div>` : ''}
     </div>`
@@ -9691,8 +11399,9 @@ async function estAtual (alvo, editavel) {
     <div class="resumo-topo">
       ${bicas.length ? card('Gefoscal — total nas bicas', totalBicas, 't',
         bicas.map(b => `${b.local}: ${fmtNum(b.saldo,2)}`).join(' · '), 'destaque') : ''}
-      ${lista.filter(x => !/Bica 0/.test(x.produto))
-        .map(x => card(x.produto, x.saldo, x.unidade, x.local)).join('')}
+      ${lista.filter(x => !/Bica 0/.test(x.produto)).map(x => card(x.produto, x.saldo, x.unidade, x.local, '', {
+        produtoId: x.produto_id, localId: x.local_id, produto: x.produto, local: x.local, unidade: x.unidade, saldo: Number(x.saldo || 0)
+      })).join('')}
     </div>
 
     <div class="cabeca-secao" style="margin-top:6px;">
@@ -9701,16 +11410,92 @@ async function estAtual (alvo, editavel) {
     </div>
     <div class="panel" style="padding:0;"><div class="tabela-scroll">
       <table><thead><tr>
-        <th>Produto</th><th>Local</th><th>Unidade</th><th class="num">Saldo</th>
+        <th>Produto</th><th>Local</th><th>Unidade</th><th class="num">Saldo</th>${editavel ? '<th></th>' : ''}
       </tr></thead><tbody>
         ${lista.map(x => `<tr>
           <td>${esc(x.produto)}</td>
           <td><span class="chip">${esc(x.local ?? '—')}</span></td>
           <td class="texto-dim">${esc(x.unidade)}</td>
           <td class="num">${fmtNum(x.saldo, casasPara(x.unidade))}</td>
-        </tr>`).join('') || `<tr><td colspan="4" class="vazio">Nenhum saldo registrado.</td></tr>`}
+          ${editavel ? `<td style="text-align:right;"><button class="btn-secundario mini" data-editar-saldo='${JSON.stringify({
+            produtoId: x.produto_id, localId: x.local_id, produto: x.produto, local: x.local, unidade: x.unidade, saldo: Number(x.saldo || 0)
+          })}' title="Editar valor" style="padding:5px;line-height:0;"><span style="width:13px;height:13px;display:block;">${iconeLapis}</span></button></td>` : ''}
+        </tr>`).join('') || `<tr><td colspan="${editavel ? 5 : 4}" class="vazio">Nenhum saldo registrado.</td></tr>`}
       </tbody></table>
     </div></div>`
+
+  if (!editavel) return
+  alvo.querySelectorAll('[data-editar-saldo]').forEach(b => {
+    b.onclick = () => formAjusteEstoque(JSON.parse(b.dataset.editarSaldo), () => estAtual(alvo, editavel))
+  })
+}
+
+// ----- Ajuste manual de saldo (com motivo obrigatório) -----
+// Não escreve direto num "saldo" — o saldo é sempre soma dos lançamentos.
+// Então calculamos a diferença entre o valor novo e o atual e gravamos
+// isso como um lançamento tipo AJUSTE, com o motivo na observação —
+// assim o histórico continua íntegro e dá pra auditar depois.
+function formAjusteEstoque (item, aoSalvar) {
+  const casas = casasPara(item.unidade)
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>Ajustar saldo</h3>
+    <p class="texto-dim2" style="font-size:12.5px;margin:-8px 0 14px;">
+      ${esc(item.produto)} ${item.local ? '· ' + esc(item.local) : ''}</p>
+    <div class="form-grade">
+      <div class="campo"><label>Saldo atual</label>
+        <input value="${fmtNum(item.saldo, casas)} ${esc(item.unidade)}" disabled></div>
+      <div class="campo"><label>Novo saldo *</label>
+        <input id="aj-novo" inputmode="decimal" value="${String(item.saldo).replace('.', ',')}"></div>
+    </div>
+    <div class="campo" style="margin-top:10px;"><label>Motivo do ajuste *</label>
+      <textarea id="aj-motivo" style="min-height:70px;" placeholder="Ex: contagem física encontrou valor diferente do sistema"></textarea></div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="aj-salvar">Salvar ajuste</button>
+      <button class="btn-secundario" id="aj-cancelar">Cancelar</button>
+    </div>
+    <div class="recado oculto" id="aj-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#aj-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  fundo.querySelector('#aj-salvar').onclick = async () => {
+    const el = fundo.querySelector('#aj-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    let novo = numeroBR(fundo.querySelector('#aj-novo').value)
+    const motivo = fundo.querySelector('#aj-motivo').value.trim()
+    if (novo === null) { aviso('Informe o novo saldo.'); return }
+    if (!motivo) { aviso('Escreva o motivo do ajuste.'); return }
+    if (casas === 0) novo = Math.round(novo)
+
+    if (!item.localId) { aviso('Esse produto ainda não tem um local definido — lance pela aba "Lançar" escolhendo o local primeiro.'); return }
+
+    const btn = fundo.querySelector('#aj-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+
+    // busca o saldo mais atual na hora de salvar (não o que ficou na tela
+    // quando o formulário abriu) — assim o valor novo sempre SOBRESCREVE
+    // de vez o que está no banco agora, não soma/subtrai em cima de um
+    // saldo que pode já ter mudado nesse meio-tempo
+    const { data: atual, error: e0 } = await db.from('saldo_estoque_por_local')
+      .select('saldo').eq('produto_id', item.produtoId).eq('local_id', item.localId).maybeSingle()
+    if (e0) { btn.disabled = false; btn.textContent = 'Salvar ajuste'; aviso(e0.message); return }
+    const saldoReal = Number(atual?.saldo ?? 0)
+    const diferenca = novo - saldoReal
+    if (diferenca === 0) { btn.disabled = false; btn.textContent = 'Salvar ajuste'; aviso('O valor novo é igual ao que já está no sistema — nada pra ajustar.'); return }
+
+    const { error } = await db.from('movimentacao_estoque').insert({
+      produto_id: item.produtoId, tipo: 'AJUSTE', quantidade: diferenca, unidade: item.unidade,
+      data_mov: hojeISO(), local_id: item.localId, local_estoque: item.local,
+      observacoes: `Ajuste manual — sobrescreveu para ${fmtNum(novo, casas)} ${item.unidade}: ${motivo}`,
+      registrado_por: PERFIL.pessoaId
+    })
+    btn.disabled = false; btn.textContent = 'Salvar ajuste'
+    if (error) { aviso(error.message); return }
+    fechar(); aoSalvar()
+  }
 }
 
 // ----- Lançar -----
@@ -11195,7 +12980,7 @@ function combVeiculos (alvo, editavel) {
       <div style="padding:16px 18px;">
         <h3 style="font-family:var(--serif);font-size:17px;margin:0 0 4px;">Frota cadastrada</h3>
         <p class="texto-dim" style="font-size:12.5px;margin:0;">
-          Mesmo cadastro de veículo usado na Expedição para vincular carregamentos.</p>
+          Mesmo cadastro de veículo usado no Faturamento para vincular carregamentos.</p>
       </div>
       <table><thead><tr><th>Placa</th><th>Descrição</th><th>Tipo</th>${editavel ? '<th></th>' : ''}</tr></thead><tbody>
         ${COMB_CACHE.veiculos.map(v => `<tr>
@@ -13790,7 +15575,7 @@ function frotaCalculadora (alvo) {
 // Notificações/autuações podem virar um Projeto com 1 clique, pra
 // tocar o trabalho no Kanban/Progresso que já existe.
 // ---------------------------------------------------------------
-let JUR_CACHE = { pessoas: [] }
+let JUR_CACHE = { pessoas: [], empresas: [] }
 const CATEGORIAS_LICENCA = ['Ambiental', 'Sanitária/Bombeiros', 'Municipal/Alvará', 'Fiscal/Certidões', 'Seguros', 'Trabalhista', 'Outra']
 const CATEGORIAS_CONTRATO = ['Fornecedor', 'Cliente', 'Locação', 'Prestação de serviço', 'PJ', 'Parceria', 'Financeiro', 'Outro']
 const ROTULO_TIPO_PJ = { PJ_INTERNO: 'PJ interno (faz parte do time)', PJ_PRESTADOR_SERVICOS: 'PJ prestador de serviços (externo)' }
@@ -13808,8 +15593,12 @@ async function paginaJuridico () {
   const area = areaLivre()
   area.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
-  const { data: pessoas } = await db.from('pessoa').select('id,nome').eq('status', 'ATIVO').order('nome')
+  const [{ data: pessoas }, { data: empresas }] = await Promise.all([
+    db.from('pessoa').select('id,nome').eq('status', 'ATIVO').order('nome'),
+    db.from('empresa').select('id,nome').eq('status', 'ATIVO').order('nome')
+  ])
   JUR_CACHE.pessoas = pessoas || []
+  JUR_CACHE.empresas = empresas || []
 
   const abas = [['painel', 'Painel'], ['contratos', 'Contratos'], ['licencas', 'Licenças e certidões'],
     ['processos', 'Processos'], ['notificacoes', 'Notificações e autuações'], ['documentos', 'Documentos']]
@@ -13989,6 +15778,8 @@ function formContrato (c) {
           </select></div>
         <div class="campo"><label>Responsável</label>
           <select id="ct-resp">${opcoesFin(JUR_CACHE.pessoas, 'sem responsável', c?.responsavel_id)}</select></div>
+        <div class="campo"><label>Empresa</label>
+          <select id="ct-empresa">${opcoesFin(JUR_CACHE.empresas, '—', c?.empresa_id)}</select></div>
         <div class="campo" style="grid-column:1/-1;"><label>Link do anexo</label>
           <input id="ct-anexo" value="${v('anexo_link')}" placeholder="link do Drive"></div>
       </div>
@@ -14047,6 +15838,7 @@ function formContrato (c) {
       renovacao: q('#ct-renov').value,
       status: q('#ct-status').value,
       responsavel_id: q('#ct-resp').value || null,
+      empresa_id: q('#ct-empresa').value || null,
       anexo_link: q('#ct-anexo').value.trim() || null,
       observacoes: q('#ct-obs').value.trim() || null
     }
@@ -14175,6 +15967,8 @@ function formLicenca (l) {
           </select></div>
         <div class="campo"><label>Responsável</label>
           <select id="lc-resp">${opcoesFin(JUR_CACHE.pessoas, 'sem responsável', l?.responsavel_id)}</select></div>
+        <div class="campo"><label>Empresa</label>
+          <select id="lc-empresa">${opcoesFin(JUR_CACHE.empresas, '—', l?.empresa_id)}</select></div>
         <div class="campo" style="grid-column:1/-1;"><label>Link do anexo</label>
           <input id="lc-anexo" value="${v('anexo_link')}" placeholder="link do Drive"></div>
       </div>
@@ -14210,6 +16004,7 @@ function formLicenca (l) {
       data_validade: q('#lc-validade').value || null,
       status: q('#lc-status').value,
       responsavel_id: q('#lc-resp').value || null,
+      empresa_id: q('#lc-empresa').value || null,
       anexo_link: q('#lc-anexo').value.trim() || null,
       observacoes: q('#lc-obs').value.trim() || null
     }
@@ -14327,6 +16122,8 @@ function formProcesso (p) {
             <option value="SUSPENSO" ${p?.status === 'SUSPENSO' ? 'selected' : ''}>suspenso</option>
             <option value="ENCERRADO" ${p?.status === 'ENCERRADO' ? 'selected' : ''}>encerrado</option>
           </select></div>
+        <div class="campo"><label>Empresa</label>
+          <select id="pr-empresa">${opcoesFin(JUR_CACHE.empresas, '—', p?.empresa_id)}</select></div>
       </div>
       <div class="campo" style="margin-top:12px;"><label>Observações</label>
         <textarea id="pr-obs" style="min-height:64px;">${v('observacoes')}</textarea></div>
@@ -14362,6 +16159,7 @@ function formProcesso (p) {
       responsavel: q('#pr-resp').value.trim() || null,
       proxima_data: q('#pr-prox').value || null,
       status: q('#pr-status').value,
+      empresa_id: q('#pr-empresa').value || null,
       observacoes: q('#pr-obs').value.trim() || null
     }
     let error
@@ -14462,6 +16260,8 @@ function formNotificacao (n) {
             <option value="RESPONDIDA" ${n?.status === 'RESPONDIDA' ? 'selected' : ''}>respondida</option>
             <option value="ENCERRADA" ${n?.status === 'ENCERRADA' ? 'selected' : ''}>encerrada</option>
           </select></div>
+        <div class="campo"><label>Empresa</label>
+          <select id="nt-empresa">${opcoesFin(JUR_CACHE.empresas, '—', n?.empresa_id)}</select></div>
         <div class="campo" style="grid-column:1/-1;"><label>Link do anexo</label><input id="nt-anexo" value="${v('anexo_link')}" placeholder="link do Drive"></div>
       </div>
       <div class="campo" style="margin-top:12px;"><label>Descrição *</label><input id="nt-desc" value="${v('descricao')}" placeholder="o que a notificação/autuação diz"></div>
@@ -14495,6 +16295,7 @@ function formNotificacao (n) {
       prazo_resposta: q('#nt-prazo').value || null,
       responsavel_id: q('#nt-resp').value || null,
       status: q('#nt-status').value,
+      empresa_id: q('#nt-empresa').value || null,
       anexo_link: q('#nt-anexo').value.trim() || null,
       descricao: desc,
       observacoes: q('#nt-obs').value.trim() || null
@@ -14567,6 +16368,7 @@ function formDocumentoJuridico (d) {
       <div class="campo"><label>Categoria</label>
         <select id="dc-cat">${CATEGORIAS_DOC.map(x => `<option ${d?.categoria === x ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
       <div class="campo"><label>Responsável</label><select id="dc-resp">${opcoesFin(JUR_CACHE.pessoas, 'sem responsável', d?.responsavel_id)}</select></div>
+      <div class="campo"><label>Empresa</label><select id="dc-empresa">${opcoesFin(JUR_CACHE.empresas, '—', d?.empresa_id)}</select></div>
       <div class="campo" style="grid-column:1/-1;"><label>Link (Drive)</label><input id="dc-link" value="${v('link')}"></div>
     </div>
     <div class="campo" style="margin-top:10px;"><label>Observações</label><textarea id="dc-obs" style="min-height:64px;">${v('observacoes')}</textarea></div>
@@ -14592,6 +16394,7 @@ function formDocumentoJuridico (d) {
     if (!nome) { aviso('Escreva o nome do documento.'); return }
     const corpo = {
       nome, categoria: q('#dc-cat').value, responsavel_id: q('#dc-resp').value || null,
+      empresa_id: q('#dc-empresa').value || null,
       link: q('#dc-link').value.trim() || null, observacoes: q('#dc-obs').value.trim() || null,
       atualizado_em: new Date().toISOString()
     }
@@ -15312,6 +17115,25 @@ $('#btn-colapsar').onclick = () => {
 }
 
 // ---------------------------------------------------------------
+// Menu no celular: abre como painel deslizante (antes só sumia sem
+// nenhum jeito de abrir de novo). Fecha sozinho ao escolher uma
+// página, ou clicando fora dele.
+// ---------------------------------------------------------------
+function abrirMenuMobile () {
+  $('.nav')?.classList.add('aberto')
+  $('#fundo-nav-mobile')?.classList.add('aberto')
+}
+function fecharMenuMobile () {
+  $('.nav')?.classList.remove('aberto')
+  $('#fundo-nav-mobile')?.classList.remove('aberto')
+}
+$('#btn-abrir-menu').onclick = abrirMenuMobile
+$('#fundo-nav-mobile').onclick = fecharMenuMobile
+$('.nav').addEventListener('click', (e) => {
+  if (e.target.closest('a[data-chave]')) fecharMenuMobile()
+})
+
+// ---------------------------------------------------------------
 // Status de conexão (canto superior do conteúdo) — navigator.onLine
 // cobre a rede; a cada 20s testamos o Supabase de verdade, porque dá
 // pra estar "online" na rede e mesmo assim o banco estar fora do ar.
@@ -15745,336 +17567,38 @@ function formAniversarianteMkt (alvoPai, editavel) {
 }
 
 // ---------------------------------------------------------------
-// Página: Dashboard Diretor  (módulo 'dashboard_diretor')
-// Só ADMIN/DIRETORIA acessam. Reaproveita os componentes visuais que já
-// existem no sistema (kpi/svgDonut/svgLinha/barrasHorizontais) — nada de
-// paleta nova. Cor de resultado segue o mesmo padrão de tag-aging já usado
-// em todo o sistema: verde (ok) = positivo, dourado (alerta) = neutro,
-// vermelho (critico) = negativo.
-//
-// Onde ainda falta dado estruturado no banco pra calcular de verdade
-// (CPV por componente, margem por produto/cliente, custo de produção por
-// tonelada, energia por tonelada), a seção mostra um aviso honesto em vez
-// de inventar número — "vai enchendo com o tempo", como o Adão pediu.
-// ---------------------------------------------------------------
-
-function statusCor (valor, limiteBom, limiteRuim, invertido = false) {
-  // invertido=true quando "maior é pior" (ex: inadimplência, OS em atraso)
-  if (invertido) {
-    if (valor <= limiteBom) return 'ok'
-    if (valor <= limiteRuim) return 'alerta'
-    return 'critico'
-  }
-  if (valor >= limiteBom) return 'ok'
-  if (valor >= limiteRuim) return 'alerta'
-  return 'critico'
-}
-
-function kpiCor (rotulo, valor, nota, cor) {
-  return `<div class="card kpi" style="border-left:4px solid var(--${cor === 'ok' ? 'good-text' : cor === 'critico' ? 'warn-text' : 'gold'});">
-    <div class="rotulo">${esc(rotulo)}</div>
-    <div class="valor" style="color:var(--${cor === 'ok' ? 'good-text' : cor === 'critico' ? 'warn-text' : 'gold'});">${valor}</div>
-    <div class="nota">${esc(nota)}</div>
-  </div>`
-}
-
-function semDadosAinda (motivo) {
-  return `<div class="aviso-bloqueio">Ainda sem dado suficiente pra calcular isso. ${esc(motivo)}</div>`
-}
-
-async function paginaDashboardDiretor () {
-  if (!ehTotal()) { areaLivre().innerHTML =
-    `<div class="panel" style="padding:22px;"><p class="texto-dim">Painel restrito à diretoria.</p></div>`; return }
-
-  $('#subtitulo-pagina').textContent = 'Visão executiva — Gefoscal e Fazenda Ouro Branco'
-  const area = areaLivre()
-  area.innerHTML = `
-    <div class="subabas">
-      <button data-sub="gefoscal" class="ativo">Gefoscal</button>
-      <button data-sub="fazenda">Fazenda Ouro Branco</button>
-    </div>
-    <div id="sub-dashdir"></div>`
-  area.querySelectorAll('.subabas button').forEach(b => {
-    b.onclick = () => {
-      area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
-      abrirDashboardDiretor(b.dataset.sub)
-    }
-  })
-  abrirDashboardDiretor('gefoscal')
-}
-
-function abrirDashboardDiretor (sub) {
-  const alvo = $('#sub-dashdir')
-  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
-  if (sub === 'gefoscal') dashDiretorGefoscal(alvo)
-  if (sub === 'fazenda') dashDiretorFazenda(alvo)
-}
-
-async function dashDiretorGefoscal (alvo) {
-  const hoje = new Date()
-  const inicioAno = `${hoje.getFullYear()}-01-01`
-  const seiseMesesAtras = new Date(hoje.getFullYear(), hoje.getMonth() - 5, 1).toISOString().slice(0, 10)
-
-  const [
-    { data: contasGef }, { data: lancamentos }, { data: pedidos },
-    { data: metaProducao }, { data: metaCapacidade }, { data: producao },
-    { data: leads }, { data: estoques }, { data: osList }, { data: carregamentos },
-    { data: abastecimentos }
-  ] = await Promise.all([
-    db.from('conta_financeira').select('id').eq('empresa_id', (await db.from('empresa').select('id').eq('nome', 'Gefoscal').single()).data?.id),
-    db.from('lancamento_financeiro').select('tipo,valor,data_lancamento').eq('situacao', 'EFETIVADO').gte('data_lancamento', seiseMesesAtras),
-    db.from('pedido').select('quantidade_t,valor_total,valor_recebido,situacao_pagamento,vencimento,data_pedido'),
-    db.from('plano_meta').select('valor_alvo').eq('tipo', 'PRODUCAO_ANUAL').maybeSingle(),
-    db.from('plano_meta').select('valor_alvo').eq('tipo', 'CAPACIDADE_NOMINAL').maybeSingle(),
-    db.from('producao_diaria').select('day,qtd'),
-    db.from('lead').select('etapa').eq('arquivado', false),
-    db.from('produto').select('nome,unidade,estoque_minimo').not('estoque_minimo', 'is', null),
-    db.from('ordem_servico').select('status,data_limite'),
-    db.from('carregamento').select('status'),
-    db.from('abastecimento').select('litros,data_abastecimento')
-  ])
-
-  const { data: saldoConta } = await db.from('saldo_conta').select('saldo, conta_id')
-  const idsContasGef = new Set((contasGef || []).map(c => c.id))
-  const caixaGefoscal = (saldoConta || []).filter(s => idsContasGef.has(s.conta_id)).reduce((s, c) => s + Number(c.saldo || 0), 0)
-
-  // entradas/saídas por mês (6 meses)
-  const porMes = {}
-  ;(lancamentos || []).forEach(l => {
-    const m = l.data_lancamento.slice(0, 7)
-    porMes[m] = porMes[m] || { entrada: 0, saida: 0 }
-    porMes[m][l.tipo === 'ENTRADA' ? 'entrada' : 'saida'] += Number(l.valor)
-  })
-  const mesesOrdenados = Object.keys(porMes).sort()
-  const entradasMesAtual = porMes[hoje.toISOString().slice(0, 7)]?.entrada || 0
-  const saidasMesAtual = porMes[hoje.toISOString().slice(0, 7)]?.saida || 0
-
-  // projeção simples: fluxo líquido médio dos últimos 30 dias, projetado
-  const ultimos30 = (lancamentos || []).filter(l => new Date(l.data_lancamento) >= new Date(Date.now() - 30 * 86400000))
-  const fluxoLiquido30 = ultimos30.reduce((s, l) => s + (l.tipo === 'ENTRADA' ? Number(l.valor) : -Number(l.valor)), 0)
-  const fluxoDiario = fluxoLiquido30 / 30
-
-  // recebíveis
-  const abertos = (pedidos || []).filter(p => p.situacao_pagamento !== 'QUITADO')
-  const saldoAberto = p => Math.max(0, Number(p.valor_total || 0) - Number(p.valor_recebido || 0))
-  const totalCarteira = abertos.reduce((s, p) => s + saldoAberto(p), 0)
-  const vencido = abertos.filter(p => p.vencimento && p.vencimento < hoje.toISOString().slice(0, 10))
-  const totalVencido = vencido.reduce((s, p) => s + saldoAberto(p), 0)
-  const pctInadimplencia = totalCarteira ? (totalVencido / totalCarteira * 100) : 0
-
-  // volume vendido vs meta
-  const volumeAno = (pedidos || []).filter(p => p.data_pedido >= inicioAno).reduce((s, p) => s + Number(p.quantidade_t || 0), 0)
-  const metaVolume = Number(metaProducao?.valor_alvo || 50000)
-  const pctMeta = metaVolume ? (volumeAno / metaVolume * 100) : 0
-  const pctAnoDecorrido = (hoje - new Date(hoje.getFullYear(), 0, 1)) / (365 * 86400000) * 100
-
-  // capacidade industrial (produção do ano vs capacidade pro-rata)
-  const producaoAno = (producao || []).filter(p => p.day >= inicioAno).reduce((s, p) => s + Number(p.qtd || 0), 0)
-  const capacidadeNominal = Number(metaCapacidade?.valor_alvo || 600000)
-  const capacidadeProRata = capacidadeNominal * (pctAnoDecorrido / 100)
-  const pctCapacidade = capacidadeProRata ? (producaoAno / capacidadeProRata * 100) : 0
-
-  // funil comercial
-  const contarEtapa = etapas => (leads || []).filter(l => etapas.includes(l.etapa)).length
-  const funilDados = [
-    { rot: 'Leads gerados', n: (leads || []).length, cor: '#0B4F3A' },
-    { rot: 'Em contato/reunião', n: contarEtapa(['CONTATO', 'QUALIFICADO']), cor: '#4C7A62' },
-    { rot: 'Propostas', n: contarEtapa(['PROPOSTA', 'NEGOCIACAO']), cor: 'var(--gold)' },
-    { rot: 'Fechamentos', n: contarEtapa(['GANHO']), cor: 'var(--good-text)' }
-  ]
-
-  // OS manutenção
-  const osAbertas = (osList || []).filter(o => !['CONCLUIDA', 'CANCELADA'].includes(o.status))
-  const osAtrasadas = osAbertas.filter(o => o.data_limite && o.data_limite < hoje.toISOString().slice(0, 10))
-  const osConcluidas = (osList || []).filter(o => o.status === 'CONCLUIDA')
-
-  // expedição
-  const contarCarga = st => (carregamentos || []).filter(c => c.status === st).length
-
-  // combustível por tonelada (mês atual)
-  const litrosMes = (abastecimentos || []).filter(a => a.data_abastecimento.slice(0, 7) === hoje.toISOString().slice(0, 7))
-    .reduce((s, a) => s + Number(a.litros || 0), 0)
-  const producaoMes = (producao || []).filter(p => p.day.slice(0, 7) === hoje.toISOString().slice(0, 7)).reduce((s, p) => s + Number(p.qtd || 0), 0)
-  const combustivelPorTon = producaoMes ? litrosMes / producaoMes : null
-
-  alvo.innerHTML = `
-    <div class="secao">
-      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Caixa e resultado</h3></div>
-      <div class="kpis">
-        ${kpiCor('Posição de caixa hoje', 'R$ ' + fmtNum(caixaGefoscal), '', statusCor(caixaGefoscal, 1, -1))}
-        ${kpiCor('Entradas — mês atual', 'R$ ' + fmtNum(entradasMesAtual), '', 'ok')}
-        ${kpiCor('Saídas — mês atual', 'R$ ' + fmtNum(saidasMesAtual), '', entradasMesAtual >= saidasMesAtual ? 'ok' : 'critico')}
-        ${kpiCor('Projeção 30 dias', 'R$ ' + fmtNum(caixaGefoscal + fluxoDiario * 30), 'linear, baseado nos últimos 30 dias', statusCor(fluxoDiario, 0, -1000))}
-      </div>
-      <div class="panel" style="padding:16px 18px;margin-top:14px;">
-        <h4 style="font-family:var(--serif);font-size:14px;margin:0 0 10px;">Entradas × Saídas — por mês</h4>
-        ${mesesOrdenados.length ? barrasHorizontais(mesesOrdenados.map(m => ({ rotulo: m, valor: porMes[m].entrada })), { unidade: 'R$', casas: 0 })
-          : semDadosAinda('Financeiro ainda tem poucos lançamentos migrados.')}
-      </div>
-    </div>
-
-    <div class="secao">
-      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Carteira de recebíveis</h3></div>
-      <div class="kpis">
-        ${kpiCor('Total em carteira', 'R$ ' + fmtNum(totalCarteira), abertos.length + ' pedidos em aberto', 'alerta')}
-        ${kpiCor('Valor vencido', 'R$ ' + fmtNum(totalVencido), '', statusCor(totalVencido, 0, totalCarteira * 0.3, true))}
-        ${kpiCor('Inadimplência', fmtNum(pctInadimplencia, 1) + '%', 'do total em carteira', statusCor(pctInadimplencia, 10, 25, true))}
-      </div>
-    </div>
-
-    <div class="secao">
-      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Produção e vendas</h3></div>
-      <div class="kpis">
-        ${kpiCor('Volume vendido (ano)', fmtNum(volumeAno, 0) + ' t', fmtNum(pctMeta, 0) + '% da meta de ' + fmtNum(metaVolume, 0) + ' t', statusCor(pctMeta - pctAnoDecorrido, -5, -20, true))}
-        ${kpiCor('Capacidade industrial utilizada', fmtNum(pctCapacidade, 0) + '%', 'de ' + fmtNum(capacidadeNominal, 0) + ' t/ano nominal', statusCor(pctCapacidade, 70, 30))}
-      </div>
-    </div>
-
-    <div class="secao">
-      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Funil comercial</h3></div>
-      <div class="panel" style="padding:18px;"><div class="grade-funil-dir">
-        ${funilDados.map(f => `<div class="etapa-funil-dir" style="background:${f.cor};">
-          <div class="n">${f.n}</div><div class="rot">${esc(f.rot)}</div></div>`).join('')}
-      </div></div>
-    </div>
-
-    <div class="secao">
-      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Custo e margem</h3></div>
-      ${semDadosAinda('Falta ligar centro de custo em cada lançamento (matéria-prima, energia, mão de obra, manutenção, depreciação) pra separar isso automaticamente. Dá pra fazer, mas precisa desse cadastro andar primeiro.')}
-    </div>
-
-    <div class="secao">
-      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Estoque — comparado ao mínimo</h3></div>
-      <div class="panel" style="padding:16px 18px;">
-        ${(estoques || []).length ? estoques.map(p => {
-          // já busco o saldo real abaixo, via segunda consulta
-          return `<div class="linha-estoque-dir" data-produto="${esc(p.nome)}"></div>`
-        }).join('') : semDadosAinda('Nenhum produto com mínimo definido ainda.')}
-      </div>
-      <p class="texto-dim2" style="font-size:11px;margin-top:6px;">Mínimos cadastrados como ponto de partida — ajuste se não bater com o real.</p>
-    </div>
-
-    <div class="secao">
-      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Manutenção e expedição</h3></div>
-      <div class="kpis">
-        ${kpiCor('OS em atraso', String(osAtrasadas.length), 'de ' + osAbertas.length + ' abertas', statusCor(osAtrasadas.length, 0, 5, true))}
-        ${kpiCor('OS concluídas', String(osConcluidas.length), '', 'ok')}
-        ${kpiCor('Carregados', String(contarCarga('CARREGADO') + contarCarga('FATURADO')), '', 'ok')}
-        ${kpiCor('Pendentes de carregar', String(contarCarga('PROGRAMADO') + contarCarga('EM_ANDAMENTO')), '', statusCor(contarCarga('PROGRAMADO') + contarCarga('EM_ANDAMENTO'), 0, 10, true))}
-      </div>
-      <div class="kpis" style="margin-top:12px;">
-        ${kpiCor('Combustível por tonelada', combustivelPorTon != null ? fmtNum(combustivelPorTon, 2) + ' L/t' : '—', producaoMes ? '' : 'sem produção no mês pra dividir', 'alerta')}
-      </div>
-      ${semDadosAinda('Energia por tonelada — não achei tabela de consumo de energia elétrica no banco ainda. Tempo médio de carregamento também não dá: falta registrar hora de início/fim, só tem a data.')}
-    </div>`
-
-  // estoque real, produto a produto (segunda leva, porque precisa do saldo por local)
-  const { data: saldos } = await db.from('saldo_estoque_por_local').select('produto_id,saldo, produto:produto_id(nome,unidade,estoque_minimo)')
-  const porProduto = {}
-  ;(saldos || []).forEach(s => {
-    if (!s.produto?.estoque_minimo) return
-    porProduto[s.produto.nome] = (porProduto[s.produto.nome] || 0) + Number(s.saldo || 0)
-  })
-  alvo.querySelectorAll('.linha-estoque-dir').forEach(div => {
-    const nome = div.dataset.produto
-    const p = (estoques || []).find(e => e.nome === nome)
-    const saldo = porProduto[nome] || 0
-    const min = Number(p.estoque_minimo)
-    const unidade = p.unidade === 'kg' ? 't' : p.unidade
-    const saldoConv = p.unidade === 'kg' ? saldo / 1000 : saldo
-    const minConv = p.unidade === 'kg' ? min / 1000 : min
-    const pct = minConv ? Math.min(100, saldoConv / (minConv * 2) * 100) : 50
-    const cor = statusCor(saldoConv, minConv * 1.3, minConv)
-    div.className = 'linha-estoque'
-    div.innerHTML = `<div class="cab"><span>${esc(nome)}
-        <span class="chip ${cor}" style="margin-left:6px;">${cor === 'ok' ? 'acima do mínimo' : cor === 'alerta' ? 'perto do mínimo' : 'abaixo do mínimo'}</span></span>
-      <b>${fmtNum(saldoConv, 0)} ${unidade}</b></div>
-      <div class="trilho"><div class="preenchido" style="width:${pct}%;background:var(--${cor === 'ok' ? 'good-text' : cor === 'critico' ? 'warn-text' : 'gold'});"></div>
-      <div class="marca-min" style="left:50%;"></div></div>`
-  })
-}
-
-async function dashDiretorFazenda (alvo) {
-  const hoje = new Date()
-  const seiseMesesAtras = new Date(hoje.getFullYear(), hoje.getMonth() - 5, 1).toISOString().slice(0, 10)
-
-  const [{ data: receitas }, { data: lotes }, { data: pesagens }, { data: movimentacoes }] = await Promise.all([
-    db.from('fazenda_receita').select('data,valor_liquido').gte('data', seiseMesesAtras),
-    db.from('fazenda_lote').select('id,nome,qtde_inicial,status,data_entrada,peso_medio_entrada'),
-    db.from('fazenda_pesagem').select('lote_id,data,peso_medio,gmd').order('data', { ascending: false }),
-    db.from('fazenda_movimentacao').select('lote_id,tipo_mov,qtde,data')
-  ])
-
-  const lotesAtivos = (lotes || []).filter(l => l.status === 'ATIVO' || l.status === 'CONFINAMENTO')
-
-  // animais em confinamento = qtde_inicial - saídas registradas, por lote ativo
-  const saidasPorLote = {}
-  ;(movimentacoes || []).forEach(m => {
-    if (m.tipo_mov === 'SAIDA' || m.tipo_mov === 'VENDA' || m.tipo_mov === 'MORTE') {
-      saidasPorLote[m.lote_id] = (saidasPorLote[m.lote_id] || 0) + Number(m.qtde || 0)
-    }
-  })
-  const animaisConfinamento = lotesAtivos.reduce((s, l) => s + Math.max(0, Number(l.qtde_inicial || 0) - (saidasPorLote[l.id] || 0)), 0)
-
-  // peso médio geral = média da pesagem mais recente por lote ativo
-  const pesagemMaisRecentePorLote = {}
-  ;(pesagens || []).forEach(p => { if (!pesagemMaisRecentePorLote[p.lote_id]) pesagemMaisRecentePorLote[p.lote_id] = p })
-  const pesosRecentes = lotesAtivos.map(l => pesagemMaisRecentePorLote[l.id]?.peso_medio).filter(Boolean).map(Number)
-  const pesoMedioGeral = pesosRecentes.length ? pesosRecentes.reduce((a, b) => a + b, 0) / pesosRecentes.length : null
-  const gmdValores = lotesAtivos.map(l => pesagemMaisRecentePorLote[l.id]?.gmd).filter(Boolean).map(Number)
-  const gmdMedio = gmdValores.length ? gmdValores.reduce((a, b) => a + b, 0) / gmdValores.length : null
-
-  // entradas (receita) por mês
-  const porMes = {}
-  ;(receitas || []).forEach(r => { const m = r.data.slice(0, 7); porMes[m] = (porMes[m] || 0) + Number(r.valor_liquido || 0) })
-  const mesesOrdenados = Object.keys(porMes).sort()
-
-  alvo.innerHTML = `
-    <div class="secao">
-      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Caixa</h3></div>
-      <p class="texto-dim2" style="font-size:12px;margin:-6px 0 12px;">Entradas vêm das vendas de gado (fazenda_receita). Saídas ainda não têm uma tabela própria separada do financeiro geral — mostro isso assim que o cadastro de despesas da fazenda estiver andando.</p>
-      <div class="kpis">
-        ${kpiCor('Entradas — mês atual', 'R$ ' + fmtNum(porMes[hoje.toISOString().slice(0, 7)] || 0), 'venda de gado', 'ok')}
-      </div>
-      <div class="panel" style="padding:16px 18px;margin-top:14px;">
-        <h4 style="font-family:var(--serif);font-size:14px;margin:0 0 10px;">Receita — por mês</h4>
-        ${mesesOrdenados.length ? barrasHorizontais(mesesOrdenados.map(m => ({ rotulo: m, valor: porMes[m] })), { unidade: 'R$', casas: 0 })
-          : semDadosAinda('Sem receita lançada nos últimos 6 meses.')}
-      </div>
-    </div>
-
-    <div class="secao">
-      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Rebanho</h3></div>
-      <div class="kpis">
-        ${kpiCor('Animais em confinamento', String(animaisConfinamento), '', 'ok')}
-        ${kpiCor('Lotes ativos', String(lotesAtivos.length), '', 'ok')}
-        ${kpiCor('Peso médio geral', pesoMedioGeral != null ? fmtNum(pesoMedioGeral, 0) + ' kg' : '—', pesoMedioGeral != null ? '' : 'sem pesagem recente', 'alerta')}
-        ${kpiCor('GMD médio', gmdMedio != null ? fmtNum(gmdMedio, 2) + ' kg/dia' : '—', '', statusCor(gmdMedio || 0, 1.2, 0.8))}
-      </div>
-    </div>
-
-    <div class="secao">
-      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Lotes</h3></div>
-      <div class="panel" style="padding:0;"><div class="tabela-scroll">
-        <table><thead><tr><th>Lote</th><th class="num">Cab. estimada</th><th class="num">Peso médio</th><th class="num">GMD</th><th>Entrada</th></tr></thead><tbody>
-          ${lotesAtivos.map(l => {
-            const p = pesagemMaisRecentePorLote[l.id]
-            const cab = Math.max(0, Number(l.qtde_inicial || 0) - (saidasPorLote[l.id] || 0))
-            return `<tr><td><b>${esc(l.nome)}</b></td><td class="num">${cab}</td>
-              <td class="num">${p ? fmtNum(p.peso_medio, 0) + ' kg' : '—'}</td>
-              <td class="num">${p?.gmd ? fmtNum(p.gmd, 2) : '—'}</td>
-              <td class="texto-dim">${fmtData(l.data_entrada)}</td></tr>`
-          }).join('') || `<tr><td colspan="5" class="vazio">Nenhum lote ativo.</td></tr>`}
-        </tbody></table>
-      </div></div>
-    </div>`
-}
-
-// ---------------------------------------------------------------
 // Se já houver sessão salva, entra direto
 // ---------------------------------------------------------------
 const { data: { session } } = await db.auth.getSession()
 if (session) await abrirApp()
+
+// PWA: registra o service worker (silencioso — se falhar, o sistema
+// continua funcionando normal, só não vira "app instalável")
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./service-worker.js').catch(() => {})
+  })
+}
+
+// botão "Instalar app" — só aparece quando o navegador (Chrome/Android,
+// Edge etc.) sinaliza que dá pra instalar. No iPhone/Safari não existe
+// esse evento — lá é "Compartilhar → Adicionar à Tela de Início".
+let promptInstalacao = null
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault()
+  promptInstalacao = e
+  document.getElementById('btn-instalar')?.classList.remove('oculto')
+})
+document.getElementById('btn-instalar')?.addEventListener('click', async () => {
+  if (!promptInstalacao) return
+  promptInstalacao.prompt()
+  await promptInstalacao.userChoice
+  promptInstalacao = null
+  document.getElementById('btn-instalar')?.classList.add('oculto')
+})
+window.addEventListener('appinstalled', () => {
+  document.getElementById('btn-instalar')?.classList.add('oculto')
+})
 </script>
 </body>
 </html>
