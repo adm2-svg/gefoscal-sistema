@@ -14762,7 +14762,7 @@ async function paginaFrota () {
   ])
   FROTA_CACHE = { pessoas: pessoas || [], processos: processos || [], fornecedores: fornecedores || [] }
 
-  const abas = [['painel', 'Painel'], ['itens', 'Itens'], ['acoes', 'Ações'], ['calc', 'Calculadora de ágio/deságio']]
+  const abas = [['painel', 'Painel'], ['itens', 'Itens'], ['acoes', 'Ações'], ['calc', 'Calculadora de ágio/deságio'], ['zapay', 'Débitos (Zapay)']]
   area.innerHTML = `
     <div class="subabas">
       ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
@@ -14785,6 +14785,121 @@ function abrirFrota (sub, editavel) {
   if (sub === 'itens') frotaItens(alvo, editavel)
   if (sub === 'acoes') frotaAcoes(alvo, editavel)
   if (sub === 'calc') frotaCalculadora(alvo)
+  if (sub === 'zapay') frotaZapay(alvo, editavel)
+}
+
+// ----- Débitos veiculares (Zapay) -----
+// Pede a consulta via edge function (frota-zapay-consultar); o
+// resultado chega depois via webhook, então essa tela sempre reflete
+// o que já foi respondido — dá pra clicar em "atualizar" pra ver se
+// chegou algo novo.
+async function frotaZapay (alvo, editavel) {
+  const [{ data: veiculos }, { data: consultas }, { data: debitos }] = await Promise.all([
+    db.from('veiculo').select('id,placa,descricao,uf,renavam,chassi').order('placa'),
+    db.from('frota_zapay_consulta').select('*, veiculo:veiculo_id(placa,descricao)').order('solicitado_em', { ascending: false }).limit(100),
+    db.from('frota_debito_veiculo').select('*, veiculo:veiculo_id(placa,descricao)').order('atualizado_em', { ascending: false }).limit(300)
+  ])
+  window.__FROTA_ZAPAY_VEICULOS = veiculos || []
+  const ROTULO_STATUS_CONSULTA = { AGUARDANDO: 'Aguardando resultado', CONCLUIDA: 'Concluída', PRECISA_DADOS: 'Precisa de dados extra', ERRO: 'Erro' }
+  const corStatusConsulta = s => s === 'CONCLUIDA' ? 'badge-bom' : s === 'ERRO' ? 'badge-alerta' : 'chip'
+  const totalDebitos = (debitos || []).reduce((s, d) => s + Number(d.valor || 0), 0)
+  const UFS = ['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MG','MT','MS','PA','PB','PE','PI','PR','RJ','RN','RS','RO','RR','SC','SP','TO']
+
+  alvo.innerHTML = `
+    ${editavel ? `<div class="panel" style="padding:18px;margin-bottom:16px;">
+      <div class="cabeca-secao" style="margin-bottom:12px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0;">Consultar débitos de um veículo</h3>
+        <button class="btn-secundario mini" id="zp-registrar-webhook">Registrar webhook na Zapay (fazer 1x)</button>
+      </div>
+      <div class="form-grade">
+        <div class="campo"><label>Veículo</label>
+          <select id="zp-veiculo">${(veiculos || []).map(v => `<option value="${v.id}">${esc(v.placa)}${v.descricao ? ' — ' + esc(v.descricao) : ''}</option>`).join('')}</select></div>
+        <div class="campo"><label>UF *</label><select id="zp-uf"><option value="">selecione...</option>
+          ${UFS.map(uf => `<option value="${uf}">${uf}</option>`).join('')}</select></div>
+        <div class="campo"><label>CPF/CNPJ do proprietário (alguns estados exigem)</label><input id="zp-documento" placeholder="opcional na maioria dos estados"></div>
+      </div>
+      <div class="acoes" style="margin-top:12px;"><button class="btn" id="zp-consultar">Consultar na Zapay</button></div>
+      <div class="recado oculto" id="zp-recado"></div>
+    </div>` : ''}
+
+    <div class="resumo-topo" style="margin-bottom:16px;">
+      <div class="bloco"><div class="rot">Débitos encontrados</div><div class="val">${(debitos || []).length}</div></div>
+      <div class="bloco"><div class="rot">Valor total em aberto</div><div class="val">R$ ${fmtNum(totalDebitos)}</div></div>
+    </div>
+
+    <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Débitos encontrados</h3></div>
+    <div class="panel" style="padding:0;margin-bottom:20px;"><div class="tabela-scroll">
+      <table><thead><tr><th>Veículo</th><th>Tipo</th><th>Descrição</th><th class="num">Valor</th><th>Vencimento</th><th>Órgão</th><th>Situação</th></tr></thead><tbody>
+        ${(debitos || []).map(d => `<tr>
+          <td><b>${esc(d.veiculo?.placa ?? '—')}</b></td>
+          <td><span class="chip">${esc(d.tipo)}</span></td>
+          <td class="texto-dim">${esc(d.descricao ?? '—')}</td>
+          <td class="num">R$ ${fmtNum(d.valor)}</td>
+          <td class="texto-dim2">${d.vencimento ? fmtData(d.vencimento) : '—'}</td>
+          <td class="texto-dim2">${esc(d.orgao_emissor ?? '—')}</td>
+          <td>${d.situacao === 'PAGO' ? '<span class="badge-bom">pago</span>' : '<span class="badge-alerta">' + esc(d.situacao ?? 'aberto') + '</span>'}</td>
+        </tr>`).join('') || `<tr><td colspan="7" class="vazio">Nenhum débito encontrado ainda — faça uma consulta acima.</td></tr>`}
+      </tbody></table>
+    </div></div>
+
+    <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Consultas realizadas</h3>
+      <button class="btn-secundario mini" id="zp-atualizar">atualizar</button></div>
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr><th>Quando</th><th>Veículo</th><th>Status</th><th>Mensagem</th></tr></thead><tbody>
+        ${(consultas || []).map(c => `<tr>
+          <td class="texto-dim2">${fmtQuando(c.solicitado_em)}</td>
+          <td>${esc(c.veiculo?.placa ?? c.placa)}</td>
+          <td><span class="${corStatusConsulta(c.status)}">${esc(ROTULO_STATUS_CONSULTA[c.status] ?? c.status)}</span></td>
+          <td class="texto-dim2">${esc(c.mensagem ?? '—')}</td>
+        </tr>`).join('') || `<tr><td colspan="4" class="vazio">Nenhuma consulta feita ainda.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+
+  $('#zp-atualizar').onclick = () => frotaZapay(alvo, editavel)
+  if (!editavel) return
+
+  const preencherUf = () => {
+    const v = (window.__FROTA_ZAPAY_VEICULOS || []).find(x => x.id === $('#zp-veiculo').value)
+    $('#zp-uf').value = v?.uf || ''
+  }
+  $('#zp-veiculo').onchange = preencherUf
+  preencherUf()
+
+  $('#zp-registrar-webhook').onclick = async () => {
+    const el = $('#zp-recado')
+    const aviso = (t, ok) => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = ok ? 'var(--good-text)' : 'var(--warn-text)'; el.style.color = ok ? 'var(--good-text)' : 'var(--warn-text)' }
+    const btn = $('#zp-registrar-webhook'); btn.disabled = true; btn.textContent = 'Registrando...'
+    const { data, error } = await db.functions.invoke('frota-zapay-registrar-webhook', { body: {} })
+    btn.disabled = false; btn.textContent = 'Registrar webhook na Zapay (fazer 1x)'
+    if (error || data?.erro) {
+      let msg = data?.erro || error?.message
+      if (error?.context?.json) { try { const c = await error.context.json(); msg = c?.erro || msg } catch {} }
+      aviso(msg, false)
+      return
+    }
+    aviso('Webhook registrado na Zapay com sucesso: ' + data.webhookUrl, true)
+  }
+
+  $('#zp-consultar').onclick = async () => {
+    const el = $('#zp-recado')
+    const aviso = (t, ok) => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = ok ? 'var(--good-text)' : 'var(--warn-text)'; el.style.color = ok ? 'var(--good-text)' : 'var(--warn-text)' }
+    if (!$('#zp-uf').value) { aviso('Escolha a UF do veículo.', false); return }
+    const btn = $('#zp-consultar'); btn.disabled = true; btn.textContent = 'Consultando...'
+    // salva a UF no cadastro do veículo, se ainda não tinha, pra não pedir de novo da próxima vez
+    await db.from('veiculo').update({ uf: $('#zp-uf').value }).eq('id', $('#zp-veiculo').value).is('uf', null)
+    const { data, error } = await db.functions.invoke('frota-zapay-consultar', {
+      body: { veiculoId: $('#zp-veiculo').value, uf: $('#zp-uf').value, documento: $('#zp-documento').value.trim() || null }
+    })
+    btn.disabled = false; btn.textContent = 'Consultar na Zapay'
+    if (error || data?.erro) {
+      let msg = data?.erro || error?.message
+      if (error?.context?.json) { try { const c = await error.context.json(); msg = c?.erro || msg } catch {} }
+      aviso(msg + (data?.aviso ? '\n\n' + data.aviso : ''), false)
+      return
+    }
+    aviso('Consulta pedida com sucesso — o resultado chega em instantes. Clica em "atualizar" na lista de baixo daqui a pouco.', true)
+    frotaZapay(alvo, editavel)
+  }
 }
 
 function custoTotalFrota (item, custosDoc, custosManut, custosComb, custosPecas) {
@@ -15059,6 +15174,7 @@ function formFrotaItem (item) {
           </select></div>
         <div class="campo"><label>Ano/Modelo</label><input id="fr-ano" value="${v('ano_modelo')}" placeholder="2020/2020"></div>
         <div class="campo"><label>Placa</label><input id="fr-placa" value="${v('placa')}"></div>
+        <div class="campo"><label>UF</label><input id="fr-uf" value="${v('uf')}" maxlength="2" style="text-transform:uppercase;" placeholder="ex: TO"></div>
         <div class="campo"><label>Renavam</label><input id="fr-renavam" value="${v('renavam')}"></div>
         <div class="campo"><label>Chassi</label><input id="fr-chassi" value="${v('chassi')}"></div>
         <div class="campo"><label>Vencimento do IPVA</label><input type="date" id="fr-ipva" value="${item?.ipva_vencimento ?? ''}"></div>
@@ -15131,6 +15247,7 @@ function formFrotaItem (item) {
       eh_proprio: q('#fr-tipo').value === '1',
       ano_modelo: q('#fr-ano').value.trim() || null,
       placa: q('#fr-placa').value.trim() || null,
+      uf: q('#fr-uf').value.trim().toUpperCase() || null,
       renavam: q('#fr-renavam').value.trim() || null,
       chassi: q('#fr-chassi').value.trim() || null,
       ipva_vencimento: q('#fr-ipva').value || null,
