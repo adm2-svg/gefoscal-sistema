@@ -2257,13 +2257,21 @@ async function subUsuarios (alvo, editavel) {
     }, { onConflict: 'email' })
     if (e2) { recado(e2.message, true); btn.disabled = false; btn.textContent = 'Salvar cadastro'; return }
 
-    // pra quem já tem login ativo, aplica o papel de gestor comercial na hora
-    // (o resto do papeis só pega no próximo login, via o pré-cadastro acima)
+    // pra quem já tem login ativo, aplica o nível de acesso e o gestor
+    // comercial na hora — antes só o gestor comercial sincronizava de
+    // verdade, o resto (admin/usuário) ficava só no pré-cadastro sem
+    // nenhum efeito até o próximo login, e por isso o pré-cadastro podia
+    // dizer uma coisa e o acesso real valendo ser outra completamente
+    // diferente. Só mexe nos papéis que ESTE formulário controla — nunca
+    // apaga papéis de outro módulo (ex: COMPRAS, COBRANCA) que a pessoa
+    // tenha ganhado por outro caminho.
+    const PAPEIS_DESTE_FORM = ['ADMIN', 'DIRETORIA', 'LEITOR', 'GESTOR_COMERCIAL']
     const { data: perfilAtivo } = await db.from('usuario_perfil').select('user_id').eq('pessoa_id', pessoa.id).maybeSingle()
     if (perfilAtivo?.user_id) {
-      await db.from('usuario_papel').delete().eq('user_id', perfilAtivo.user_id).eq('papel', 'GESTOR_COMERCIAL')
-      if ($('#u-gestor-comercial').checked) {
-        await db.from('usuario_papel').insert({ user_id: perfilAtivo.user_id, papel: 'GESTOR_COMERCIAL' })
+      await db.from('usuario_papel').delete().eq('user_id', perfilAtivo.user_id).in('papel', PAPEIS_DESTE_FORM)
+      const paraInserir = papeis.filter(p => PAPEIS_DESTE_FORM.includes(p))
+      if (paraInserir.length) {
+        await db.from('usuario_papel').insert(paraInserir.map(p => ({ user_id: perfilAtivo.user_id, papel: p })))
       }
     }
 
@@ -4656,7 +4664,7 @@ function abrirCrm (sub, editavel, gerencia) {
   const alvo = $('#sub-crm')
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
   $('#kpis').innerHTML = ''
-  if (sub === 'painel') crmPainel(alvo, gerencia)
+  if (sub === 'painel') crmPainel(alvo, editavel, gerencia)
   if (sub === 'funil') crmFunil(alvo, editavel, gerencia)
   if (sub === 'atribuir') crmAtribuir(alvo)
   if (sub === 'progresso') crmLeads(alvo, editavel, gerencia)
@@ -4703,10 +4711,11 @@ function renderFunil (alvo, editavel, gerencia) {
       </div></div>`
   }
 
-  const podeNovo = editavel && gerencia // criar lead do zero é ação de quem gerencia; vendedor só trabalha o que chega
+  const podeNovo = editavel // qualquer vendedor pode prospectar e criar o próprio lead;
+  // só reatribuir/gerenciar o pool de leads vindos de SDR/IA continua exclusivo de quem gerencia
   alvo.innerHTML =
     (podeNovo ? `<div class="acoes" style="margin:0 0 16px;"><button class="btn" id="crm-novo">Novo lead</button></div>` : '') +
-    (!gerencia && !lista.length ? `<p class="vazio">Nenhum lead atribuído a você ainda. Assim que a gerência mandar um cliente pra você, ele aparece aqui.</p>` : '') +
+    (!gerencia && !lista.length ? `<p class="vazio">Nenhum lead seu ainda. Adicione um com "Novo lead" ou espere a gerência atribuir um pra você.</p>` : '') +
     `<div class="kanban" style="grid-template-columns:repeat(${ETAPAS_LEAD.length},1fr);overflow-x:auto;">
       ${ETAPAS_LEAD.map(et => `<div class="coluna-kanban" style="min-width:170px;"><h4>${ROTULO_ETAPA_LEAD[et]}
         <span class="texto-dim2">${lista.filter(l => l.etapa === et).length}</span></h4>
@@ -4802,7 +4811,7 @@ async function crmLeads (alvo, editavel, gerencia) {
 }
 
 // ----- Painel (KPIs e distribuição) -----
-async function crmPainel (alvo, gerencia) {
+async function crmPainel (alvo, editavel, gerencia) {
   const { data, error } = await filtrarPorDono(db.from('lead').select(`
     id, etapa, origem, valor_estimado, vendedor_id, criado_em, atualizado_em, vendedor:vendedor_id ( nome )
   `), gerencia).order('criado_em', { ascending: false }).limit(1000)
@@ -4835,6 +4844,7 @@ async function crmPainel (alvo, gerencia) {
   }
 
   alvo.innerHTML = `
+    ${editavel ? `<div class="acoes" style="margin:0 0 16px;"><button class="btn" id="crm-painel-novo-lead">Novo lead</button></div>` : ''}
     <div class="resumo-topo" style="margin-bottom:16px;">
       ${[['Leads em aberto', emAberto.length, ''], ['Valor em funil', 'R$ ' + fmtNum(valorPipeline), ''],
          ['Taxa de conversão', taxaConversao != null ? taxaConversao + '%' : '—', ''], ['Parados há +7 dias', parados, parados ? 'alerta' : '']]
@@ -4851,6 +4861,8 @@ async function crmPainel (alvo, gerencia) {
       <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Leads por origem</h3>
       ${barrasHorizontais(barrasOrigem, { unidade: '', casas: 0 })}
     </div>`
+
+  if (editavel) $('#crm-painel-novo-lead').onclick = () => formLead(null, editavel, gerencia, () => abrirCrm('painel', editavel, gerencia))
 
   await crmCardNovoPedido(alvo, gerencia)
 }
@@ -5176,7 +5188,9 @@ function formLead (l, editavel, gerencia, aoFechar) {
     if (l) {
       ;({ error } = await db.from('lead').update(corpo).eq('id', l.id))
     } else {
-      corpo.vendedor_id = fundo.querySelector('#ld-vendedor').value || null
+      // quem gerencia pode deixar sem vendedor (fica no pool pra distribuir depois);
+      // um vendedor comum criando o próprio lead já nasce atribuído a ele mesmo
+      corpo.vendedor_id = podeReatribuir ? (fundo.querySelector('#ld-vendedor').value || null) : PERFIL.pessoaId
       const { data: novo, error: e2 } = await db.from('lead').insert(corpo).select('id').single()
       error = e2; leadId = novo?.id
     }
