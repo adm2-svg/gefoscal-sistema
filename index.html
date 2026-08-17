@@ -2591,52 +2591,10 @@ async function subVisao (alvo, editavel) {
 const ROTULO_RECORRENCIA_TAREFA = { diaria: 'diária', semanal: 'semanal', mensal: 'mensal' }
 
 async function areaDeTrabalho (area) {
-  const hoje = new Date().toISOString().slice(0, 10)
-
-  const [{ data: tarefas }, { data: notas }] = await Promise.all([
-    db.from('tarefa').select('*').order('concluida_em', { nullsFirst: true })
-      .order('prazo', { nullsFirst: false }).limit(60),
-    db.from('nota_pessoal').select('*')
-      .order('fixada', { ascending: false }).order('atualizado_em', { ascending: false })
-  ])
-
-  const abertas = (tarefas || []).filter(t => !t.concluida_em)
-  const feitas = (tarefas || []).filter(t => t.concluida_em)
-  const feitasHoje = feitas.filter(t => t.concluida_em.slice(0, 10) === hoje)
-  const atrasadas = abertas.filter(t => t.prazo && t.prazo < hoje)
-
   const bloco = document.createElement('div')
   bloco.className = 'grade-trabalho'
   bloco.innerHTML = `
-    <div class="panel" style="padding:18px;">
-      <div class="cabeca-secao">
-        <h3 style="font-family:var(--serif);font-size:17px;">Minha agenda</h3>
-        <span class="texto-dim2" style="font-size:12px;">
-          ${abertas.length} aberta(s)${atrasadas.length ? ` · ${atrasadas.length} atrasada(s)` : ''}
-          ${feitasHoje.length ? ` · ${feitasHoje.length} concluída(s) hoje` : ''}</span>
-      </div>
-
-      <div class="linha-add">
-        <input id="tf-nova" placeholder="O que precisa ser feito?">
-        <input type="date" id="tf-prazo" style="flex:none;width:145px;">
-        <select id="tf-recorrencia" style="flex:none;width:130px;">
-          <option value="">Não repete</option>
-          <option value="diaria">Todo dia</option>
-          <option value="semanal">Toda semana</option>
-          <option value="mensal">Todo mês</option>
-        </select>
-        <button class="btn mini" id="tf-add">Adicionar</button>
-      </div>
-
-      <div id="tf-lista"></div>
-
-      ${feitas.length ? `<div style="margin-top:14px;">
-        <button class="btn-secundario mini" id="tf-ver-feitas">
-          ver ${feitas.length} concluída(s)</button>
-        <div id="tf-feitas" class="oculto" style="margin-top:8px;"></div>
-      </div>` : ''}
-    </div>
-
+    <div class="panel" style="padding:18px;" id="bloco-agenda-visaogeral"></div>
     <div class="panel" style="padding:18px;">
       <div class="cabeca-secao">
         <h3 style="font-family:var(--serif);font-size:17px;">Bloco de notas</h3>
@@ -2646,10 +2604,67 @@ async function areaDeTrabalho (area) {
       <p class="aviso">Só você enxerga estas notas. Ainda assim, evite guardar aqui
       senha de banco ou de sistema crítico — para isso o certo é um cofre de senhas.</p>
     </div>`
-
   area.appendChild(bloco)
 
-  // ---- tarefas ----
+  await montarAgendaEmbutida($('#bloco-agenda-visaogeral'), () => irPara('visao_geral'))
+
+  const { data: notas } = await db.from('nota_pessoal').select('*')
+    .order('fixada', { ascending: false }).order('atualizado_em', { ascending: false })
+
+  // ---- notas ----
+  $('#nt-lista').innerHTML = (notas || []).map(n => `
+    <div class="nota ${n.fixada ? 'fixa' : ''}" data-nota="${n.id}">
+      <div class="tit">${esc(n.titulo)}
+        ${n.categoria && n.categoria !== 'geral'
+          ? `<span class="marca">${esc(n.categoria)}</span>` : ''}</div>
+      <div class="prev ${n.categoria === 'senha' ? 'oculto-senha' : ''}">${esc(n.conteudo ?? '')}</div>
+    </div>`).join('') ||
+    `<p class="texto-dim2" style="font-size:13px;padding:10px 0;">
+      Nenhuma nota ainda. Use para guardar procedimentos, contatos e lembretes.</p>`
+
+  bloco.querySelectorAll('[data-nota]').forEach(el => {
+    el.onclick = () => formNota((notas || []).find(n => n.id === el.dataset.nota))
+  })
+  $('#nt-nova').onclick = () => formNota(null)
+}
+
+// "Minha agenda" — usada na Visão Geral e também embutida no Painel do
+// Marketing. É sempre pessoal (cada um só vê suas próprias tarefas),
+// só muda ONDE aparece na tela — não duplica tabela nem dado nenhum.
+async function montarAgendaEmbutida (container, aoRecarregar) {
+  const hoje = new Date().toISOString().slice(0, 10)
+  const { data: tarefas } = await db.from('tarefa').select('*').order('concluida_em', { nullsFirst: true })
+    .order('prazo', { nullsFirst: false }).limit(60)
+
+  const abertas = (tarefas || []).filter(t => !t.concluida_em)
+  const feitas = (tarefas || []).filter(t => t.concluida_em)
+  const feitasHoje = feitas.filter(t => t.concluida_em.slice(0, 10) === hoje)
+  const atrasadas = abertas.filter(t => t.prazo && t.prazo < hoje)
+
+  container.innerHTML = `
+    <div class="cabeca-secao">
+      <h3 style="font-family:var(--serif);font-size:17px;">Minha agenda</h3>
+      <span class="texto-dim2" style="font-size:12px;">
+        ${abertas.length} aberta(s)${atrasadas.length ? ` · ${atrasadas.length} atrasada(s)` : ''}
+        ${feitasHoje.length ? ` · ${feitasHoje.length} concluída(s) hoje` : ''}</span>
+    </div>
+    <div class="linha-add">
+      <input id="tf-nova" placeholder="O que precisa ser feito?">
+      <input type="date" id="tf-prazo" style="flex:none;width:145px;">
+      <select id="tf-recorrencia" style="flex:none;width:130px;">
+        <option value="">Não repete</option>
+        <option value="diaria">Todo dia</option>
+        <option value="semanal">Toda semana</option>
+        <option value="mensal">Todo mês</option>
+      </select>
+      <button class="btn mini" id="tf-add">Adicionar</button>
+    </div>
+    <div id="tf-lista"></div>
+    ${feitas.length ? `<div style="margin-top:14px;">
+      <button class="btn-secundario mini" id="tf-ver-feitas">ver ${feitas.length} concluída(s)</button>
+      <div id="tf-feitas" class="oculto" style="margin-top:8px;"></div>
+    </div>` : ''}`
+
   const marcaPrazo = t => {
     if (!t.prazo) return ''
     const classe = t.prazo < hoje ? 'atrasada' : t.prazo === hoje ? 'hoje' : ''
@@ -2669,8 +2684,6 @@ async function areaDeTrabalho (area) {
       <button class="apagar" data-apagar="${t.id}" title="apagar">×</button>
     </div>`
 
-  // agrupa em seções tipo agenda de verdade, em vez de uma lista corrida —
-  // fica mais fácil bater o olho no que é urgente x no que ainda tem tempo
   const daqui7dias = new Date(Date.now() + 7 * 864e5).toISOString().slice(0, 10)
   const grupos = [
     ['Atrasadas', abertas.filter(t => t.prazo && t.prazo < hoje)],
@@ -2680,25 +2693,22 @@ async function areaDeTrabalho (area) {
     ['Sem data', abertas.filter(t => !t.prazo)]
   ].filter(([, itens]) => itens.length)
 
-  $('#tf-lista').innerHTML = grupos.length ? grupos.map(([titulo, itens]) => `
+  container.querySelector('#tf-lista').innerHTML = grupos.length ? grupos.map(([titulo, itens]) => `
     <div style="margin-top:10px;">
       <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;margin:8px 0 4px;">${titulo}</div>
       ${itens.map(linhaTarefa).join('')}
     </div>`).join('') :
-    `<p class="texto-dim2" style="font-size:13px;padding:10px 0;">
-      Nada pendente. Escreva acima o que precisa fazer.</p>`
+    `<p class="texto-dim2" style="font-size:13px;padding:10px 0;">Nada pendente. Escreva acima o que precisa fazer.</p>`
 
   if (feitas.length) {
-    $('#tf-feitas').innerHTML = feitas.map(linhaTarefa).join('')
-    $('#tf-ver-feitas').onclick = () => {
-      const el = $('#tf-feitas')
+    container.querySelector('#tf-feitas').innerHTML = feitas.map(linhaTarefa).join('')
+    container.querySelector('#tf-ver-feitas').onclick = () => {
+      const el = container.querySelector('#tf-feitas')
       el.classList.toggle('oculto')
-      $('#tf-ver-feitas').textContent = el.classList.contains('oculto')
+      container.querySelector('#tf-ver-feitas').textContent = el.classList.contains('oculto')
         ? `ver ${feitas.length} concluída(s)` : 'esconder concluídas'
     }
   }
-
-  const recarregar = () => irPara('visao_geral')
 
   const proximaData = (prazo, recorrencia) => {
     const base = prazo ? new Date(prazo + 'T00:00:00') : new Date()
@@ -2708,13 +2718,10 @@ async function areaDeTrabalho (area) {
     return base.toISOString().slice(0, 10)
   }
 
-  bloco.querySelectorAll('[data-check]').forEach(c => {
+  container.querySelectorAll('[data-check]').forEach(c => {
     c.onchange = async () => {
       const t = (tarefas || []).find(x => x.id === c.dataset.check)
-      await db.from('tarefa').update({
-        concluida_em: c.checked ? new Date().toISOString() : null
-      }).eq('id', c.dataset.check)
-      // tarefa recorrente: ao concluir, já nasce a próxima ocorrência
+      await db.from('tarefa').update({ concluida_em: c.checked ? new Date().toISOString() : null }).eq('id', c.dataset.check)
       if (c.checked && t?.recorrencia) {
         await db.from('tarefa').insert({
           pessoa_id: PERFIL.pessoaId, titulo: t.titulo, detalhe: t.detalhe,
@@ -2722,44 +2729,25 @@ async function areaDeTrabalho (area) {
           prazo: proximaData(t.prazo, t.recorrencia)
         })
       }
-      recarregar()
+      aoRecarregar()
     }
   })
-  bloco.querySelectorAll('[data-apagar]').forEach(b => {
-    b.onclick = async () => {
-      await db.from('tarefa').delete().eq('id', b.dataset.apagar)
-      recarregar()
-    }
+  container.querySelectorAll('[data-apagar]').forEach(b => {
+    b.onclick = async () => { await db.from('tarefa').delete().eq('id', b.dataset.apagar); aoRecarregar() }
   })
 
   const adicionar = async () => {
-    const titulo = $('#tf-nova').value.trim()
+    const titulo = container.querySelector('#tf-nova').value.trim()
     if (!titulo) return
     await db.from('tarefa').insert({
       pessoa_id: PERFIL.pessoaId, titulo,
-      prazo: $('#tf-prazo').value || null,
-      recorrencia: $('#tf-recorrencia').value || null
+      prazo: container.querySelector('#tf-prazo').value || null,
+      recorrencia: container.querySelector('#tf-recorrencia').value || null
     })
-    recarregar()
+    aoRecarregar()
   }
-  $('#tf-add').onclick = adicionar
-  $('#tf-nova').onkeydown = e => { if (e.key === 'Enter') adicionar() }
-
-  // ---- notas ----
-  $('#nt-lista').innerHTML = (notas || []).map(n => `
-    <div class="nota ${n.fixada ? 'fixa' : ''}" data-nota="${n.id}">
-      <div class="tit">${esc(n.titulo)}
-        ${n.categoria && n.categoria !== 'geral'
-          ? `<span class="marca">${esc(n.categoria)}</span>` : ''}</div>
-      <div class="prev ${n.categoria === 'senha' ? 'oculto-senha' : ''}">${esc(n.conteudo ?? '')}</div>
-    </div>`).join('') ||
-    `<p class="texto-dim2" style="font-size:13px;padding:10px 0;">
-      Nenhuma nota ainda. Use para guardar procedimentos, contatos e lembretes.</p>`
-
-  bloco.querySelectorAll('[data-nota]').forEach(el => {
-    el.onclick = () => formNota((notas || []).find(n => n.id === el.dataset.nota))
-  })
-  $('#nt-nova').onclick = () => formNota(null)
+  container.querySelector('#tf-add').onclick = adicionar
+  container.querySelector('#tf-nova').onkeydown = e => { if (e.key === 'Enter') adicionar() }
 }
 
 function formNota (n) {
@@ -17438,7 +17426,7 @@ async function paginaMarketing () {
   const editavel = podeEditar('marketing')
   $('#subtitulo-pagina').textContent = 'Redes sociais, conteúdo e mercado'
   const area = areaLivre()
-  const abas = [['visao', 'Visão Geral'], ['redes', 'Redes Sociais'], ['mercado', 'Mercado'], ['cronograma', 'Cronograma'], ['aniversariantes', 'Aniversariantes']]
+  const abas = [['visao', 'Visão Geral'], ['redes', 'Redes Sociais'], ['mercado', 'Mercado'], ['docs', 'Docs'], ['aniversariantes', 'Aniversariantes']]
   area.innerHTML = `
     <div class="subabas">${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}</div>
     <div id="sub-marketing"></div>`
@@ -17457,43 +17445,32 @@ function abrirMarketing (sub, editavel) {
   if (sub === 'visao') mktVisaoGeral(alvo, editavel)
   if (sub === 'redes') mktRedesSociais(alvo, editavel)
   if (sub === 'mercado') mktMercado(alvo)
-  if (sub === 'cronograma') mktCronograma(alvo, editavel)
+  if (sub === 'docs') mktDocs(alvo, editavel)
   if (sub === 'aniversariantes') mktAniversariantes(alvo, editavel)
 }
 
 // ----- Visão Geral -----
 async function mktVisaoGeral (alvo, editavel) {
   const hoje = new Date()
-  const [{ data: demandas }, { data: postits }, { data: datasRelevantes } ] = await Promise.all([
+  const [{ data: demandas }, { data: postits } ] = await Promise.all([
     db.from('marketing_demanda').select('id,descricao,categoria,prazo,concluida').eq('concluida', false).order('prazo', { ascending: true, nullsFirst: false }),
-    db.from('marketing_postit').select('id,texto,cor,criado_em').order('criado_em', { ascending: false }),
-    db.from('marketing_data_relevante').select('mes,dia,titulo,orientacao').eq('mes', hoje.getMonth() + 1)
+    db.from('marketing_postit').select('id,texto,cor,criado_em').order('criado_em', { ascending: false })
   ])
 
   const listaDemandas = demandas || []
-  const diasNoMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0).getDate()
-  const datasPorDia = {}
-  ;(datasRelevantes || []).forEach(d => { (datasPorDia[d.dia] = datasPorDia[d.dia] || []).push(d) })
+  const atrasadas = listaDemandas.filter(d => d.prazo && d.prazo < hoje.toISOString().slice(0, 10))
+  const hojeMesmo = listaDemandas.filter(d => d.prazo === hoje.toISOString().slice(0, 10))
 
   alvo.innerHTML = `
+    <div class="resumo-topo" style="margin-bottom:16px;">
+      <div class="bloco"><div class="rot">Demandas em aberto</div><div class="val">${listaDemandas.length}</div></div>
+      <div class="bloco ${atrasadas.length ? 'alerta' : ''}"><div class="rot">Atrasadas</div><div class="val">${atrasadas.length}</div></div>
+      <div class="bloco"><div class="rot">Vencem hoje</div><div class="val">${hojeMesmo.length}</div></div>
+      <div class="bloco"><div class="rot">Post-its</div><div class="val">${(postits || []).length}</div></div>
+    </div>
+
     <div class="duas-colunas" style="margin-bottom:16px;align-items:start;">
-      <div class="panel" style="padding:16px 18px;">
-        <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:15px;">Calendário — ${MESES_MKT[hoje.getMonth()]} de ${hoje.getFullYear()}</h3></div>
-        <div class="grade-calendario">
-          ${Array.from({ length: diasNoMes }, (_, i) => i + 1).map(d => `
-            <div class="dia-cal ${d === hoje.getDate() ? 'hoje' : ''} ${datasPorDia[d] ? 'tem-data' : ''}"
-              title="${(datasPorDia[d] || []).map(x => x.titulo).join(', ')}">
-              <span class="num">${d}</span>
-              ${datasPorDia[d] ? `<span class="marca"></span>` : ''}
-            </div>`).join('')}
-        </div>
-        ${Object.keys(datasPorDia).length ? `<div style="margin-top:12px;">
-          ${(datasRelevantes || []).sort((a, b) => a.dia - b.dia).map(d => `<div class="passo">
-            <span class="quando">${String(d.dia).padStart(2, '0')}/${String(d.mes).padStart(2, '0')}</span>
-            <span><b>${esc(d.titulo)}</b>${d.orientacao ? ` <span class="texto-dim2">— ${esc(d.orientacao)}</span>` : ''}</span>
-          </div>`).join('')}
-        </div>` : ''}
-      </div>
+      <div class="panel" style="padding:18px;" id="mk-bloco-agenda"></div>
 
       <div class="panel" style="padding:16px 18px;">
         <div class="cabeca-secao">
@@ -17539,6 +17516,8 @@ async function mktVisaoGeral (alvo, editavel) {
         ${editavel ? `<button class="fechar" data-del-postit="${p.id}">×</button>` : ''}
       </div>`).join('') || '<p class="texto-dim2" style="font-size:12.5px;">nenhum post-it colado.</p>'}
     </div>`
+
+  await montarAgendaEmbutida($('#mk-bloco-agenda'), () => mktVisaoGeral(alvo, editavel))
 
   alvo.querySelectorAll('[data-concluir-demanda]').forEach(cb => {
     cb.onchange = async () => {
@@ -17716,48 +17695,88 @@ async function mktMercado (alvo) {
     </div>`
 }
 
-// ----- Cronograma (pilares semanais de conteúdo) -----
-async function mktCronograma (alvo, editavel) {
-  const { data, error } = await db.from('marketing_pilar_semanal').select('id,dia_semana,periodo,titulo,descricao')
+// ----- Docs (documentos e textos do Marketing, com anexo opcional) -----
+async function mktDocs (alvo, editavel) {
+  const { data, error } = await db.from('marketing_doc').select('*, autor:criado_por(nome)').order('atualizado_em', { ascending: false })
   if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
   const lista = data || []
-  const de = (dia, periodo) => lista.find(x => x.dia_semana === dia && x.periodo === periodo)
 
   alvo.innerHTML = `
-    <p class="texto-dim2" style="font-size:12.5px;margin:0 0 14px;">Estratégia de conteúdo por dia da semana — o pilar de cada manhã/tarde.</p>
-    <div class="grade-cronograma-mkt">
-      ${DIAS_SEMANA_MKT.map((nome, i) => { const dia = i + 1
-        return `<div class="coluna-cronograma-mkt"><h4>${nome}</h4>
-          ${['MANHA', 'TARDE'].map(periodo => {
-            const p = de(dia, periodo)
-            return `<div class="bloco-periodo-mkt">
-              <div class="texto-dim2" style="font-size:10px;text-transform:uppercase;letter-spacing:.4px;">${periodo === 'MANHA' ? 'manhã' : 'tarde'}</div>
-              ${editavel ? `<input data-titulo data-dia="${dia}" data-periodo="${periodo}" value="${esc(p?.titulo ?? '')}" placeholder="título do pilar" style="margin-top:4px;font-size:12px;">
-                <textarea data-desc data-dia="${dia}" data-periodo="${periodo}" style="margin-top:4px;min-height:70px;font-size:11.5px;">${esc(p?.descricao ?? '')}</textarea>`
-                : `<div style="font-size:12.5px;margin-top:4px;"><b>${esc(p?.titulo || '—')}</b></div>
-                   <div class="texto-dim2" style="font-size:11.5px;margin-top:3px;">${esc(p?.descricao || '')}</div>`}
-            </div>`
-          }).join('')}
-        </div>`
-      }).join('')}
-    </div>
-    ${editavel ? `<div class="acoes" style="margin-top:14px;"><button class="btn mini" id="mk-salvar-cronograma">Salvar alterações</button></div>` : ''}`
+    ${editavel ? `<div class="acoes" style="margin-bottom:16px;"><button class="btn" id="mkd-novo">+ Novo documento</button></div>` : ''}
+    ${lista.map(d => `<div class="panel" style="padding:16px 18px;margin-bottom:12px;">
+      <div class="cabeca-secao">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0;">${esc(d.titulo)}</h3>
+        <span class="texto-dim2" style="font-size:11px;">${esc(d.autor?.nome ?? '—')} · ${fmtQuando(d.atualizado_em)}</span>
+      </div>
+      ${d.conteudo ? `<p style="font-size:13.5px;white-space:pre-wrap;margin:10px 0;">${esc(d.conteudo)}</p>` : ''}
+      ${d.arquivo_url ? `<button class="btn-secundario mini" data-abrir-doc="${esc(d.arquivo_url)}">📎 ${esc(d.nome_arquivo || 'abrir anexo')}</button>` : ''}
+      ${editavel ? `<div class="acoes" style="margin-top:10px;"><button class="btn-secundario mini" data-editar-doc="${d.id}">editar</button></div>` : ''}
+    </div>`).join('') || `<p class="vazio">Nenhum documento ainda.</p>`}`
 
+  alvo.querySelectorAll('[data-abrir-doc]').forEach(b => { b.onclick = () => abrirArquivo(b.dataset.abrirDoc) })
   if (!editavel) return
-  $('#mk-salvar-cronograma').onclick = async () => {
-    const btn = $('#mk-salvar-cronograma'); btn.disabled = true
-    for (let dia = 1; dia <= 5; dia++) {
-      for (const periodo of ['MANHA', 'TARDE']) {
-        const titulo = alvo.querySelector(`[data-titulo][data-dia="${dia}"][data-periodo="${periodo}"]`).value.trim()
-        const descricao = alvo.querySelector(`[data-desc][data-dia="${dia}"][data-periodo="${periodo}"]`).value.trim()
-        if (!titulo) continue
-        await db.from('marketing_pilar_semanal').upsert({
-          dia_semana: dia, periodo, titulo, descricao: descricao || null, atualizado_em: new Date().toISOString()
-        }, { onConflict: 'dia_semana,periodo' })
-      }
+  $('#mkd-novo').onclick = () => formMktDoc(null, () => mktDocs(alvo, editavel))
+  alvo.querySelectorAll('[data-editar-doc]').forEach(b => {
+    b.onclick = () => formMktDoc(lista.find(d => d.id === b.dataset.editarDoc), () => mktDocs(alvo, editavel))
+  })
+}
+
+function formMktDoc (registro, aoSalvar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>${registro ? 'Editar' : 'Novo'} documento</h3>
+    <div class="campo"><label>Título *</label><input id="mkd-titulo" value="${esc(registro?.titulo ?? '')}"></div>
+    <div class="campo" style="margin-top:10px;"><label>Texto</label>
+      <textarea id="mkd-conteudo" style="min-height:200px;">${esc(registro?.conteudo ?? '')}</textarea></div>
+    <div class="campo" style="margin-top:10px;"><label>Anexar arquivo (opcional)</label>
+      <input type="file" id="mkd-arquivo">
+      ${registro?.arquivo_url ? `<span class="texto-dim2" style="font-size:11.5px;">já tem: ${esc(registro.nome_arquivo || 'arquivo')} — escolher outro substitui</span>` : ''}</div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="mkd-salvar">Salvar</button>
+      ${registro ? `<button class="btn-secundario" id="mkd-excluir" style="color:var(--warn-text);">Excluir</button>` : ''}
+      <button class="btn-secundario" id="mkd-fechar">Fechar</button>
+    </div>
+    <div class="recado oculto" id="mkd-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#mkd-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  if (registro) fundo.querySelector('#mkd-excluir').onclick = async () => {
+    if (!confirm('Excluir esse documento?')) return
+    await db.from('marketing_doc').delete().eq('id', registro.id)
+    fechar(); aoSalvar()
+  }
+
+  fundo.querySelector('#mkd-salvar').onclick = async () => {
+    const el = fundo.querySelector('#mkd-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const titulo = fundo.querySelector('#mkd-titulo').value.trim()
+    if (!titulo) { aviso('Escreva o título.'); return }
+    const btn = fundo.querySelector('#mkd-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+
+    let arquivoUrl = registro?.arquivo_url ?? null
+    let nomeArquivo = registro?.nome_arquivo ?? null
+    const arquivo = fundo.querySelector('#mkd-arquivo').files[0]
+    if (arquivo) {
+      try {
+        const enviado = await enviarArquivo(arquivo, 'marketing-docs')
+        arquivoUrl = enviado.caminho; nomeArquivo = enviado.nome
+      } catch (e) { aviso('Não deu pra enviar o arquivo: ' + e.message); btn.disabled = false; btn.textContent = 'Salvar'; return }
     }
-    btn.disabled = false
-    mktCronograma(alvo, editavel)
+
+    const corpo = {
+      titulo, conteudo: fundo.querySelector('#mkd-conteudo').value.trim() || null,
+      arquivo_url: arquivoUrl, nome_arquivo: nomeArquivo, atualizado_em: new Date().toISOString()
+    }
+    let error
+    if (registro) { ({ error } = await db.from('marketing_doc').update(corpo).eq('id', registro.id)) }
+    else { ({ error } = await db.from('marketing_doc').insert({ ...corpo, criado_por: PERFIL.pessoaId })) }
+    btn.disabled = false; btn.textContent = 'Salvar'
+    if (error) { aviso(error.message); return }
+    fechar(); aoSalvar()
   }
 }
 
