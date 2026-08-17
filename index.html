@@ -306,6 +306,21 @@ tbody tr:hover { background: var(--hover-bg); }
 .chips-cred button:hover { color:var(--txt); }
 .chips-cred button.ativo { border-color:var(--rust); color:var(--rust); background:rgba(var(--rust-rgb),.12); }
 .tag-aging { font-size:11px; padding:2px 8px; border-radius:20px; white-space:nowrap; }
+
+/* ---- Dashboard Diretor ---- */
+.grade-funil-dir { display:flex; gap:10px; }
+.etapa-funil-dir { flex:1; text-align:center; padding:16px 8px; border-radius:10px; color:#fff; }
+.etapa-funil-dir .n { font-family:var(--serif); font-size:26px; font-weight:700; }
+.etapa-funil-dir .rot { font-size:11.5px; margin-top:3px; opacity:.9; }
+@media (max-width:700px){ .grade-funil-dir { flex-direction:column; } }
+
+.segmentado { display:flex; gap:0; border:1px solid var(--line2); border-radius:8px; overflow:hidden; width:fit-content; }
+.segmentado button { font-size:12.5px; padding:8px 16px; cursor:pointer; border:none; background:none;
+                      color:var(--dim); border-right:1px solid var(--line2); transition:.12s; }
+.segmentado button:last-child { border-right:none; }
+.segmentado button:hover { color:var(--txt); background:var(--hover-bg); }
+.segmentado button.ativo { background:var(--rust); color:#fff; font-weight:600; }
+.segmentado button:disabled { cursor:not-allowed; opacity:.6; }
 .tag-aging.critico { background:rgba(var(--warn-rgb),.18); color:var(--warn-text); }
 .tag-aging.alerta  { background:rgba(var(--gold-rgb),.18); color:var(--gold); }
 .tag-aging.ok      { background:rgba(var(--good-rgb),.16); color:var(--good-text); }
@@ -929,6 +944,7 @@ function podeEditar (chave) {
 const PAGINAS = {
   visao_geral: { nome: 'Visão geral', render: paginaVisaoGeral, sempre: true },
   solicitacoes: { nome: 'Solicitações', render: paginaSolicitacoes, sempre: true },
+  dashboard_diretor: { nome: 'Dashboard Diretor', render: paginaDashboardDiretor },
   cadastro:    { nome: 'Cadastro', render: paginaCadastro },
   expedicao:   { nome: 'Faturamento', render: paginaExpedicao },
   compras:     { nome: 'Compras', render: paginaCompras, sempre: true },
@@ -955,6 +971,7 @@ const PAGINAS = {
 // no modo recolhido (só ícone). Estilo consistente: 24x24, traço fino.
 // ---------------------------------------------------------------
 const ICONES_MODULO = {
+  dashboard_diretor: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>',
   marketing: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>',
   visao_geral: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5L12 4l9 7.5"/><path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9"/></svg>',
   solicitacoes: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h10M7 13h10M7 17h6"/></svg>',
@@ -986,7 +1003,7 @@ const ICONES_MODULO = {
 const GRUPOS_MENU = [
   ['Comercial', ['crm', 'cadastro', 'expedicao', 'cobranca', 'marketing']],
   ['Operações', ['estoque', 'combustivel', 'manutencao', 'frota', 'projetos', 'laboratorio']],
-  ['Gestão', ['financeiro', 'desempenho', 'juridico', 'ferramentas', 'banco', 'gestao_ti']],
+  ['Gestão', ['financeiro', 'desempenho', 'juridico', 'ferramentas', 'banco', 'gestao_ti', 'dashboard_diretor']],
   ['Administração', ['ti']]
 ]
 
@@ -17127,9 +17144,9 @@ function fecharMenuMobile () {
   $('.nav')?.classList.remove('aberto')
   $('#fundo-nav-mobile')?.classList.remove('aberto')
 }
-$('#btn-abrir-menu').onclick = abrirMenuMobile
-$('#fundo-nav-mobile').onclick = fecharMenuMobile
-$('.nav').addEventListener('click', (e) => {
+$('#btn-abrir-menu')?.addEventListener('click', abrirMenuMobile)
+$('#fundo-nav-mobile')?.addEventListener('click', fecharMenuMobile)
+$('.nav')?.addEventListener('click', (e) => {
   if (e.target.closest('a[data-chave]')) fecharMenuMobile()
 })
 
@@ -17565,6 +17582,332 @@ function formAniversarianteMkt (alvoPai, editavel) {
     fechar(); mktAniversariantes(alvoPai, editavel)
   }
 }
+
+// Página: Dashboard Diretor  (módulo 'dashboard_diretor')
+// Só ADMIN/DIRETORIA acessam. Reaproveita os componentes visuais que já
+// existem no sistema (kpi/svgDonut/svgLinha/barrasHorizontais) — nada de
+// paleta nova. Cor de resultado segue o mesmo padrão de tag-aging já usado
+// em todo o sistema: verde (ok) = positivo, dourado (alerta) = neutro,
+// vermelho (critico) = negativo.
+//
+// Onde ainda falta dado estruturado no banco pra calcular de verdade
+// (CPV por componente, margem por produto/cliente, custo de produção por
+// tonelada, energia por tonelada), a seção mostra um aviso honesto em vez
+// de inventar número — "vai enchendo com o tempo", como o Adão pediu.
+// ---------------------------------------------------------------
+
+function statusCor (valor, limiteBom, limiteRuim, invertido = false) {
+  // invertido=true quando "maior é pior" (ex: inadimplência, OS em atraso)
+  if (invertido) {
+    if (valor <= limiteBom) return 'ok'
+    if (valor <= limiteRuim) return 'alerta'
+    return 'critico'
+  }
+  if (valor >= limiteBom) return 'ok'
+  if (valor >= limiteRuim) return 'alerta'
+  return 'critico'
+}
+
+function kpiCor (rotulo, valor, nota, cor) {
+  return `<div class="card kpi" style="border-left:4px solid var(--${cor === 'ok' ? 'good-text' : cor === 'critico' ? 'warn-text' : 'gold'});">
+    <div class="rotulo">${esc(rotulo)}</div>
+    <div class="valor" style="color:var(--${cor === 'ok' ? 'good-text' : cor === 'critico' ? 'warn-text' : 'gold'});">${valor}</div>
+    <div class="nota">${esc(nota)}</div>
+  </div>`
+}
+
+function semDadosAinda (motivo) {
+  return `<div class="aviso-bloqueio">Ainda sem dado suficiente pra calcular isso. ${esc(motivo)}</div>`
+}
+
+async function paginaDashboardDiretor () {
+  if (!ehTotal()) { areaLivre().innerHTML =
+    `<div class="panel" style="padding:22px;"><p class="texto-dim">Painel restrito à diretoria.</p></div>`; return }
+
+  $('#subtitulo-pagina').textContent = 'Visão executiva — Gefoscal e Fazenda Ouro Branco'
+  const area = areaLivre()
+  area.innerHTML = `
+    <div class="subabas">
+      <button data-sub="gefoscal" class="ativo">Gefoscal</button>
+      <button data-sub="fazenda">Fazenda Ouro Branco</button>
+    </div>
+    <div id="sub-dashdir"></div>`
+  area.querySelectorAll('.subabas button').forEach(b => {
+    b.onclick = () => {
+      area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
+      abrirDashboardDiretor(b.dataset.sub)
+    }
+  })
+  abrirDashboardDiretor('gefoscal')
+}
+
+function abrirDashboardDiretor (sub) {
+  const alvo = $('#sub-dashdir')
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  if (sub === 'gefoscal') dashDiretorGefoscal(alvo)
+  if (sub === 'fazenda') dashDiretorFazenda(alvo)
+}
+
+async function dashDiretorGefoscal (alvo) {
+  const hoje = new Date()
+  const inicioAno = `${hoje.getFullYear()}-01-01`
+  const seiseMesesAtras = new Date(hoje.getFullYear(), hoje.getMonth() - 5, 1).toISOString().slice(0, 10)
+
+  const [
+    { data: contasGef }, { data: lancamentos }, { data: pedidos },
+    { data: metaProducao }, { data: metaCapacidade }, { data: producao },
+    { data: leads }, { data: estoques }, { data: osList }, { data: carregamentos },
+    { data: abastecimentos }
+  ] = await Promise.all([
+    db.from('conta_financeira').select('id').eq('empresa_id', (await db.from('empresa').select('id').eq('nome', 'Gefoscal').single()).data?.id),
+    db.from('lancamento_financeiro').select('tipo,valor,data_lancamento').eq('situacao', 'EFETIVADO').gte('data_lancamento', seiseMesesAtras),
+    db.from('pedido').select('quantidade_t,valor_total,valor_recebido,situacao_pagamento,vencimento,data_pedido'),
+    db.from('plano_meta').select('valor_alvo').eq('tipo', 'PRODUCAO_ANUAL').maybeSingle(),
+    db.from('plano_meta').select('valor_alvo').eq('tipo', 'CAPACIDADE_NOMINAL').maybeSingle(),
+    db.from('producao_diaria').select('day,qtd'),
+    db.from('lead').select('etapa').eq('arquivado', false),
+    db.from('produto').select('nome,unidade,estoque_minimo').not('estoque_minimo', 'is', null),
+    db.from('ordem_servico').select('status,data_limite'),
+    db.from('carregamento').select('status'),
+    db.from('abastecimento').select('litros,data_abastecimento')
+  ])
+
+  const { data: saldoConta } = await db.from('saldo_conta').select('saldo, conta_id')
+  const idsContasGef = new Set((contasGef || []).map(c => c.id))
+  const caixaGefoscal = (saldoConta || []).filter(s => idsContasGef.has(s.conta_id)).reduce((s, c) => s + Number(c.saldo || 0), 0)
+
+  // entradas/saídas por mês (6 meses)
+  const porMes = {}
+  ;(lancamentos || []).forEach(l => {
+    const m = l.data_lancamento.slice(0, 7)
+    porMes[m] = porMes[m] || { entrada: 0, saida: 0 }
+    porMes[m][l.tipo === 'ENTRADA' ? 'entrada' : 'saida'] += Number(l.valor)
+  })
+  const mesesOrdenados = Object.keys(porMes).sort()
+  const entradasMesAtual = porMes[hoje.toISOString().slice(0, 7)]?.entrada || 0
+  const saidasMesAtual = porMes[hoje.toISOString().slice(0, 7)]?.saida || 0
+
+  // projeção simples: fluxo líquido médio dos últimos 30 dias, projetado
+  const ultimos30 = (lancamentos || []).filter(l => new Date(l.data_lancamento) >= new Date(Date.now() - 30 * 86400000))
+  const fluxoLiquido30 = ultimos30.reduce((s, l) => s + (l.tipo === 'ENTRADA' ? Number(l.valor) : -Number(l.valor)), 0)
+  const fluxoDiario = fluxoLiquido30 / 30
+
+  // recebíveis
+  const abertos = (pedidos || []).filter(p => p.situacao_pagamento !== 'QUITADO')
+  const saldoAberto = p => Math.max(0, Number(p.valor_total || 0) - Number(p.valor_recebido || 0))
+  const totalCarteira = abertos.reduce((s, p) => s + saldoAberto(p), 0)
+  const vencido = abertos.filter(p => p.vencimento && p.vencimento < hoje.toISOString().slice(0, 10))
+  const totalVencido = vencido.reduce((s, p) => s + saldoAberto(p), 0)
+  const pctInadimplencia = totalCarteira ? (totalVencido / totalCarteira * 100) : 0
+
+  // volume vendido vs meta
+  const volumeAno = (pedidos || []).filter(p => p.data_pedido >= inicioAno).reduce((s, p) => s + Number(p.quantidade_t || 0), 0)
+  const metaVolume = Number(metaProducao?.valor_alvo || 50000)
+  const pctMeta = metaVolume ? (volumeAno / metaVolume * 100) : 0
+  const pctAnoDecorrido = (hoje - new Date(hoje.getFullYear(), 0, 1)) / (365 * 86400000) * 100
+
+  // capacidade industrial (produção do ano vs capacidade pro-rata)
+  const producaoAno = (producao || []).filter(p => p.day >= inicioAno).reduce((s, p) => s + Number(p.qtd || 0), 0)
+  const capacidadeNominal = Number(metaCapacidade?.valor_alvo || 600000)
+  const capacidadeProRata = capacidadeNominal * (pctAnoDecorrido / 100)
+  const pctCapacidade = capacidadeProRata ? (producaoAno / capacidadeProRata * 100) : 0
+
+  // funil comercial
+  const contarEtapa = etapas => (leads || []).filter(l => etapas.includes(l.etapa)).length
+  const funilDados = [
+    { rot: 'Leads gerados', n: (leads || []).length, cor: '#0B4F3A' },
+    { rot: 'Em contato/reunião', n: contarEtapa(['CONTATO', 'QUALIFICADO']), cor: '#4C7A62' },
+    { rot: 'Propostas', n: contarEtapa(['PROPOSTA', 'NEGOCIACAO']), cor: 'var(--gold)' },
+    { rot: 'Fechamentos', n: contarEtapa(['GANHO']), cor: 'var(--good-text)' }
+  ]
+
+  // OS manutenção
+  const osAbertas = (osList || []).filter(o => !['CONCLUIDA', 'CANCELADA'].includes(o.status))
+  const osAtrasadas = osAbertas.filter(o => o.data_limite && o.data_limite < hoje.toISOString().slice(0, 10))
+  const osConcluidas = (osList || []).filter(o => o.status === 'CONCLUIDA')
+
+  // expedição
+  const contarCarga = st => (carregamentos || []).filter(c => c.status === st).length
+
+  // combustível por tonelada (mês atual)
+  const litrosMes = (abastecimentos || []).filter(a => a.data_abastecimento.slice(0, 7) === hoje.toISOString().slice(0, 7))
+    .reduce((s, a) => s + Number(a.litros || 0), 0)
+  const producaoMes = (producao || []).filter(p => p.day.slice(0, 7) === hoje.toISOString().slice(0, 7)).reduce((s, p) => s + Number(p.qtd || 0), 0)
+  const combustivelPorTon = producaoMes ? litrosMes / producaoMes : null
+
+  alvo.innerHTML = `
+    <div class="secao">
+      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Caixa e resultado</h3></div>
+      <div class="kpis">
+        ${kpiCor('Posição de caixa hoje', 'R$ ' + fmtNum(caixaGefoscal), '', statusCor(caixaGefoscal, 1, -1))}
+        ${kpiCor('Entradas — mês atual', 'R$ ' + fmtNum(entradasMesAtual), '', 'ok')}
+        ${kpiCor('Saídas — mês atual', 'R$ ' + fmtNum(saidasMesAtual), '', entradasMesAtual >= saidasMesAtual ? 'ok' : 'critico')}
+        ${kpiCor('Projeção 30 dias', 'R$ ' + fmtNum(caixaGefoscal + fluxoDiario * 30), 'linear, baseado nos últimos 30 dias', statusCor(fluxoDiario, 0, -1000))}
+      </div>
+      <div class="panel" style="padding:16px 18px;margin-top:14px;">
+        <h4 style="font-family:var(--serif);font-size:14px;margin:0 0 10px;">Entradas × Saídas — por mês</h4>
+        ${mesesOrdenados.length ? barrasHorizontais(mesesOrdenados.map(m => ({ rotulo: m, valor: porMes[m].entrada })), { unidade: 'R$', casas: 0 })
+          : semDadosAinda('Financeiro ainda tem poucos lançamentos migrados.')}
+      </div>
+    </div>
+
+    <div class="secao">
+      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Carteira de recebíveis</h3></div>
+      <div class="kpis">
+        ${kpiCor('Total em carteira', 'R$ ' + fmtNum(totalCarteira), abertos.length + ' pedidos em aberto', 'alerta')}
+        ${kpiCor('Valor vencido', 'R$ ' + fmtNum(totalVencido), '', statusCor(totalVencido, 0, totalCarteira * 0.3, true))}
+        ${kpiCor('Inadimplência', fmtNum(pctInadimplencia, 1) + '%', 'do total em carteira', statusCor(pctInadimplencia, 10, 25, true))}
+      </div>
+    </div>
+
+    <div class="secao">
+      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Produção e vendas</h3></div>
+      <div class="kpis">
+        ${kpiCor('Volume vendido (ano)', fmtNum(volumeAno, 0) + ' t', fmtNum(pctMeta, 0) + '% da meta de ' + fmtNum(metaVolume, 0) + ' t', statusCor(pctMeta - pctAnoDecorrido, -5, -20, true))}
+        ${kpiCor('Capacidade industrial utilizada', fmtNum(pctCapacidade, 0) + '%', 'de ' + fmtNum(capacidadeNominal, 0) + ' t/ano nominal', statusCor(pctCapacidade, 70, 30))}
+      </div>
+    </div>
+
+    <div class="secao">
+      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Funil comercial</h3></div>
+      <div class="panel" style="padding:18px;"><div class="grade-funil-dir">
+        ${funilDados.map(f => `<div class="etapa-funil-dir" style="background:${f.cor};">
+          <div class="n">${f.n}</div><div class="rot">${esc(f.rot)}</div></div>`).join('')}
+      </div></div>
+    </div>
+
+    <div class="secao">
+      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Custo e margem</h3></div>
+      ${semDadosAinda('Falta ligar centro de custo em cada lançamento (matéria-prima, energia, mão de obra, manutenção, depreciação) pra separar isso automaticamente. Dá pra fazer, mas precisa desse cadastro andar primeiro.')}
+    </div>
+
+    <div class="secao">
+      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Estoque — comparado ao mínimo</h3></div>
+      <div class="panel" style="padding:16px 18px;">
+        ${(estoques || []).length ? estoques.map(p => {
+          // já busco o saldo real abaixo, via segunda consulta
+          return `<div class="linha-estoque-dir" data-produto="${esc(p.nome)}"></div>`
+        }).join('') : semDadosAinda('Nenhum produto com mínimo definido ainda.')}
+      </div>
+      <p class="texto-dim2" style="font-size:11px;margin-top:6px;">Mínimos cadastrados como ponto de partida — ajuste se não bater com o real.</p>
+    </div>
+
+    <div class="secao">
+      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Manutenção e expedição</h3></div>
+      <div class="kpis">
+        ${kpiCor('OS em atraso', String(osAtrasadas.length), 'de ' + osAbertas.length + ' abertas', statusCor(osAtrasadas.length, 0, 5, true))}
+        ${kpiCor('OS concluídas', String(osConcluidas.length), '', 'ok')}
+        ${kpiCor('Carregados', String(contarCarga('CARREGADO') + contarCarga('FATURADO')), '', 'ok')}
+        ${kpiCor('Pendentes de carregar', String(contarCarga('PROGRAMADO') + contarCarga('EM_ANDAMENTO')), '', statusCor(contarCarga('PROGRAMADO') + contarCarga('EM_ANDAMENTO'), 0, 10, true))}
+      </div>
+      <div class="kpis" style="margin-top:12px;">
+        ${kpiCor('Combustível por tonelada', combustivelPorTon != null ? fmtNum(combustivelPorTon, 2) + ' L/t' : '—', producaoMes ? '' : 'sem produção no mês pra dividir', 'alerta')}
+      </div>
+      ${semDadosAinda('Energia por tonelada — não achei tabela de consumo de energia elétrica no banco ainda. Tempo médio de carregamento também não dá: falta registrar hora de início/fim, só tem a data.')}
+    </div>`
+
+  // estoque real, produto a produto (segunda leva, porque precisa do saldo por local)
+  const { data: saldos } = await db.from('saldo_estoque_por_local').select('produto_id,saldo, produto:produto_id(nome,unidade,estoque_minimo)')
+  const porProduto = {}
+  ;(saldos || []).forEach(s => {
+    if (!s.produto?.estoque_minimo) return
+    porProduto[s.produto.nome] = (porProduto[s.produto.nome] || 0) + Number(s.saldo || 0)
+  })
+  alvo.querySelectorAll('.linha-estoque-dir').forEach(div => {
+    const nome = div.dataset.produto
+    const p = (estoques || []).find(e => e.nome === nome)
+    const saldo = porProduto[nome] || 0
+    const min = Number(p.estoque_minimo)
+    const unidade = p.unidade === 'kg' ? 't' : p.unidade
+    const saldoConv = p.unidade === 'kg' ? saldo / 1000 : saldo
+    const minConv = p.unidade === 'kg' ? min / 1000 : min
+    const pct = minConv ? Math.min(100, saldoConv / (minConv * 2) * 100) : 50
+    const cor = statusCor(saldoConv, minConv * 1.3, minConv)
+    div.className = 'linha-estoque'
+    div.innerHTML = `<div class="cab"><span>${esc(nome)}
+        <span class="chip ${cor}" style="margin-left:6px;">${cor === 'ok' ? 'acima do mínimo' : cor === 'alerta' ? 'perto do mínimo' : 'abaixo do mínimo'}</span></span>
+      <b>${fmtNum(saldoConv, 0)} ${unidade}</b></div>
+      <div class="trilho"><div class="preenchido" style="width:${pct}%;background:var(--${cor === 'ok' ? 'good-text' : cor === 'critico' ? 'warn-text' : 'gold'});"></div>
+      <div class="marca-min" style="left:50%;"></div></div>`
+  })
+}
+
+async function dashDiretorFazenda (alvo) {
+  const hoje = new Date()
+  const seiseMesesAtras = new Date(hoje.getFullYear(), hoje.getMonth() - 5, 1).toISOString().slice(0, 10)
+
+  const [{ data: receitas }, { data: lotes }, { data: pesagens }, { data: movimentacoes }] = await Promise.all([
+    db.from('fazenda_receita').select('data,valor_liquido').gte('data', seiseMesesAtras),
+    db.from('fazenda_lote').select('id,nome,qtde_inicial,status,data_entrada,peso_medio_entrada'),
+    db.from('fazenda_pesagem').select('lote_id,data,peso_medio,gmd').order('data', { ascending: false }),
+    db.from('fazenda_movimentacao').select('lote_id,tipo_mov,qtde,data')
+  ])
+
+  const lotesAtivos = (lotes || []).filter(l => l.status === 'ATIVO' || l.status === 'CONFINAMENTO')
+
+  // animais em confinamento = qtde_inicial - saídas registradas, por lote ativo
+  const saidasPorLote = {}
+  ;(movimentacoes || []).forEach(m => {
+    if (m.tipo_mov === 'SAIDA' || m.tipo_mov === 'VENDA' || m.tipo_mov === 'MORTE') {
+      saidasPorLote[m.lote_id] = (saidasPorLote[m.lote_id] || 0) + Number(m.qtde || 0)
+    }
+  })
+  const animaisConfinamento = lotesAtivos.reduce((s, l) => s + Math.max(0, Number(l.qtde_inicial || 0) - (saidasPorLote[l.id] || 0)), 0)
+
+  // peso médio geral = média da pesagem mais recente por lote ativo
+  const pesagemMaisRecentePorLote = {}
+  ;(pesagens || []).forEach(p => { if (!pesagemMaisRecentePorLote[p.lote_id]) pesagemMaisRecentePorLote[p.lote_id] = p })
+  const pesosRecentes = lotesAtivos.map(l => pesagemMaisRecentePorLote[l.id]?.peso_medio).filter(Boolean).map(Number)
+  const pesoMedioGeral = pesosRecentes.length ? pesosRecentes.reduce((a, b) => a + b, 0) / pesosRecentes.length : null
+  const gmdValores = lotesAtivos.map(l => pesagemMaisRecentePorLote[l.id]?.gmd).filter(Boolean).map(Number)
+  const gmdMedio = gmdValores.length ? gmdValores.reduce((a, b) => a + b, 0) / gmdValores.length : null
+
+  // entradas (receita) por mês
+  const porMes = {}
+  ;(receitas || []).forEach(r => { const m = r.data.slice(0, 7); porMes[m] = (porMes[m] || 0) + Number(r.valor_liquido || 0) })
+  const mesesOrdenados = Object.keys(porMes).sort()
+
+  alvo.innerHTML = `
+    <div class="secao">
+      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Caixa</h3></div>
+      <p class="texto-dim2" style="font-size:12px;margin:-6px 0 12px;">Entradas vêm das vendas de gado (fazenda_receita). Saídas ainda não têm uma tabela própria separada do financeiro geral — mostro isso assim que o cadastro de despesas da fazenda estiver andando.</p>
+      <div class="kpis">
+        ${kpiCor('Entradas — mês atual', 'R$ ' + fmtNum(porMes[hoje.toISOString().slice(0, 7)] || 0), 'venda de gado', 'ok')}
+      </div>
+      <div class="panel" style="padding:16px 18px;margin-top:14px;">
+        <h4 style="font-family:var(--serif);font-size:14px;margin:0 0 10px;">Receita — por mês</h4>
+        ${mesesOrdenados.length ? barrasHorizontais(mesesOrdenados.map(m => ({ rotulo: m, valor: porMes[m] })), { unidade: 'R$', casas: 0 })
+          : semDadosAinda('Sem receita lançada nos últimos 6 meses.')}
+      </div>
+    </div>
+
+    <div class="secao">
+      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Rebanho</h3></div>
+      <div class="kpis">
+        ${kpiCor('Animais em confinamento', String(animaisConfinamento), '', 'ok')}
+        ${kpiCor('Lotes ativos', String(lotesAtivos.length), '', 'ok')}
+        ${kpiCor('Peso médio geral', pesoMedioGeral != null ? fmtNum(pesoMedioGeral, 0) + ' kg' : '—', pesoMedioGeral != null ? '' : 'sem pesagem recente', 'alerta')}
+        ${kpiCor('GMD médio', gmdMedio != null ? fmtNum(gmdMedio, 2) + ' kg/dia' : '—', '', statusCor(gmdMedio || 0, 1.2, 0.8))}
+      </div>
+    </div>
+
+    <div class="secao">
+      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Lotes</h3></div>
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr><th>Lote</th><th class="num">Cab. estimada</th><th class="num">Peso médio</th><th class="num">GMD</th><th>Entrada</th></tr></thead><tbody>
+          ${lotesAtivos.map(l => {
+            const p = pesagemMaisRecentePorLote[l.id]
+            const cab = Math.max(0, Number(l.qtde_inicial || 0) - (saidasPorLote[l.id] || 0))
+            return `<tr><td><b>${esc(l.nome)}</b></td><td class="num">${cab}</td>
+              <td class="num">${p ? fmtNum(p.peso_medio, 0) + ' kg' : '—'}</td>
+              <td class="num">${p?.gmd ? fmtNum(p.gmd, 2) : '—'}</td>
+              <td class="texto-dim">${fmtData(l.data_entrada)}</td></tr>`
+          }).join('') || `<tr><td colspan="5" class="vazio">Nenhum lote ativo.</td></tr>`}
+        </tbody></table>
+      </div></div>
+    </div>`
+}
+
 
 // ---------------------------------------------------------------
 // Se já houver sessão salva, entra direto
