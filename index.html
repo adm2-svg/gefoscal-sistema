@@ -3955,13 +3955,7 @@ function formSolicitacao (s = null) {
     <div class="modal">
       <h3>${s ? 'Editar solicitação' : 'Nova solicitação de compra'}</h3>
       <div class="form-grade">
-        <div class="campo"><label>Produto ou serviço *</label>
-          <input id="s-produto" value="${esc(s?.produto_servico ?? '')}"></div>
-        <div class="campo"><label>Quantidade</label>
-          <input id="s-qtd" value="${esc(s?.quantidade ?? '')}"></div>
-        <div class="campo"><label>Unidade</label>
-          <select id="s-unid">${opcTexto(UNIDADES, s?.unidade)}</select></div>
-        <div class="campo"><label>Urgência</label>
+        <div class="campo" style="grid-column:1/-1;"><label>Urgência</label>
           <select id="s-urg">
             <option value="NAO_URGENTE_5D" ${s?.urgencia === 'NAO_URGENTE_5D' ? 'selected' : ''}>Normal — 5 dias</option>
             <option value="URGENTE_4H" ${s?.urgencia === 'URGENTE_4H' ? 'selected' : ''}>Urgente — 4 horas</option>
@@ -3974,7 +3968,7 @@ function formSolicitacao (s = null) {
           <select id="s-setor">${opc(COMPRAS_CACHE.setores, s?.setor_id)}</select></div>
         <div class="campo"><label>Empresa</label>
           <select id="s-empresa">${opc(COMPRAS_CACHE.empresas, s?.empresa_id)}</select></div>
-        <div class="campo"><label>Valor estimado (R$)</label>
+        <div class="campo"><label>Valor estimado total (R$)</label>
           <input id="s-valor" inputmode="decimal" value="${s?.valor_estimado ?? ''}" placeholder="80,00"></div>
         <div class="campo"><label>Fornecedor sugerido</label>
           <select id="s-forn">${opc(COMPRAS_CACHE.fornecedores, s?.fornecedor_id)}</select></div>
@@ -3983,6 +3977,12 @@ function formSolicitacao (s = null) {
         <div class="campo"><label>Recorrência</label>
           <select id="s-recor">${opcTexto(RECORRENCIAS, s?.recorrencia)}</select></div>
       </div>
+
+      <div class="cabeca-secao" style="margin-top:16px;">
+        <h4 style="font-size:13px;margin:0;">Produtos/serviços *</h4>
+        <button class="btn-secundario mini" id="s-add-item" type="button">+ item</button>
+      </div>
+      <div id="s-itens"></div>
 
       <div class="campo" style="margin-top:12px;"><label>Finalidade</label>
         <textarea id="s-final" style="min-height:70px;">${esc(s?.finalidade ?? '')}</textarea></div>
@@ -3997,6 +3997,10 @@ function formSolicitacao (s = null) {
       <div class="campo ${s?.tem_risco ? '' : 'oculto'}" id="s-linha-risco" style="margin-top:8px;">
         <label>Qual o risco</label>
         <textarea id="s-descrisco" style="min-height:60px;">${esc(s?.descricao_risco ?? '')}</textarea></div>
+
+      <div class="campo" style="margin-top:10px;"><label>Anexo (cotação, ficha técnica, print...)</label>
+        <input type="file" id="s-anexo">
+        ${s?.anexo_url ? `<span class="texto-dim2" style="font-size:11.5px;">já tem: ${esc(s.nome_anexo || 'arquivo')} — escolher outro substitui</span>` : ''}</div>
 
       <div class="acoes">
         <button class="btn" id="s-salvar">${s ? 'Salvar alterações' : 'Enviar solicitação'}</button>
@@ -4017,6 +4021,32 @@ function formSolicitacao (s = null) {
   q('#s-tipo').onchange = alternarPlaca
   alternarPlaca()
 
+  // ---- itens (produto/qtde/unidade) — repetível, com pelo menos 1 linha ----
+  const linhaItem = (produto = '', qtde = '', unidade = '') => `<div class="form-grade item-solic" style="margin-bottom:8px;padding:10px;background:var(--surface2);border-radius:8px;">
+    <div class="campo" style="grid-column:span 2;"><label>Produto/serviço</label><input class="si-produto" value="${esc(produto)}"></div>
+    <div class="campo"><label>Qtde</label><input class="si-qtd" value="${esc(qtde)}"></div>
+    <div class="campo"><label>Unidade</label><select class="si-unid">${opcTexto(UNIDADES, unidade)}</select></div>
+    <button class="btn-secundario mini" type="button" data-remover-item style="align-self:end;">remover</button>
+  </div>`
+  const addItem = (produto, qtde, unidade) => {
+    const div = document.createElement('div')
+    div.innerHTML = linhaItem(produto, qtde, unidade)
+    fundo.querySelector('#s-itens').appendChild(div.firstElementChild)
+    fundo.querySelectorAll('[data-remover-item]').forEach(b => {
+      b.onclick = () => { if (fundo.querySelectorAll('.item-solic').length > 1) b.closest('.item-solic').remove() }
+    })
+  }
+  fundo.querySelector('#s-add-item').onclick = () => addItem()
+
+  if (s) {
+    db.from('solicitacao_compra_item').select('*').eq('solicitacao_id', s.id).order('ordem').then(({ data: itensExistentes }) => {
+      if (itensExistentes?.length) itensExistentes.forEach(it => addItem(it.produto_servico, it.quantidade, it.unidade))
+      else addItem(s.produto_servico, s.quantidade, s.unidade)
+    })
+  } else {
+    addItem()
+  }
+
   const aviso = (t, alerta = false) => {
     const el = q('#s-recado'); el.textContent = t; el.classList.remove('oculto')
     el.style.borderColor = alerta ? 'var(--warn-text)' : 'var(--line2)'
@@ -4024,17 +4054,36 @@ function formSolicitacao (s = null) {
   }
 
   q('#s-salvar').onclick = async () => {
-    const produto = q('#s-produto').value.trim()
-    if (!produto) { aviso('Escreva o produto ou serviço.', true); return }
+    const itens = [...fundo.querySelectorAll('.item-solic')].map((div, i) => ({
+      produto_servico: div.querySelector('.si-produto').value.trim(),
+      quantidade: div.querySelector('.si-qtd').value.trim() || null,
+      unidade: div.querySelector('.si-unid').value || null,
+      ordem: i
+    })).filter(it => it.produto_servico)
+    if (!itens.length) { aviso('Adicione ao menos um produto ou serviço.', true); return }
     if (q('#s-tipo').value === 'Peça de reposição' && !q('#s-veiculo').value) {
       aviso('Peça de reposição precisa estar vinculada à placa do veículo.', true); return
     }
 
     const btn = q('#s-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+
+    let anexoUrl = s?.anexo_url ?? null, nomeAnexo = s?.nome_anexo ?? null
+    const arquivoAnexo = q('#s-anexo').files[0]
+    if (arquivoAnexo) {
+      try {
+        const enviado = await enviarArquivo(arquivoAnexo, 'compras-anexos')
+        anexoUrl = enviado.caminho; nomeAnexo = enviado.nome
+      } catch (e) { aviso('Não deu pra enviar o anexo: ' + e.message, true); btn.disabled = false; btn.textContent = s ? 'Salvar alterações' : 'Enviar solicitação'; return }
+    }
+
+    // produto_servico/quantidade/unidade continuam existindo (resumo dos
+    // itens), pra não quebrar telas antigas que ainda leem direto daqui
+    const resumo = itens.length === 1 ? itens[0].produto_servico : `${itens.length} itens: ${itens.map(i => i.produto_servico).join(', ')}`
     const corpo = {
-      produto_servico: produto,
-      quantidade: q('#s-qtd').value.trim() || null,
-      unidade: q('#s-unid').value || null,
+      produto_servico: resumo.slice(0, 500),
+      quantidade: itens.length === 1 ? itens[0].quantidade : null,
+      unidade: itens.length === 1 ? itens[0].unidade : null,
+      anexo_url: anexoUrl, nome_anexo: nomeAnexo,
       urgencia: q('#s-urg').value,
       tipo_solicitacao: q('#s-tipo').value || null,
       veiculo_id: q('#s-tipo').value === 'Peça de reposição' ? (q('#s-veiculo').value || null) : null,
@@ -4070,9 +4119,20 @@ function formSolicitacao (s = null) {
         : 'AGUARDANDO_COTACAO'
     }
 
-    const { error } = s
-      ? await db.from('solicitacao_compra').update(corpo).eq('id', s.id)
-      : await db.from('solicitacao_compra').insert(corpo)
+    let solicId = s?.id
+    let error
+    if (s) {
+      ({ error } = await db.from('solicitacao_compra').update(corpo).eq('id', s.id))
+    } else {
+      const resultado = await db.from('solicitacao_compra').insert(corpo).select('id').single()
+      error = resultado.error
+      solicId = resultado.data?.id
+    }
+
+    if (!error && solicId) {
+      await db.from('solicitacao_compra_item').delete().eq('solicitacao_id', solicId)
+      await db.from('solicitacao_compra_item').insert(itens.map(it => ({ ...it, solicitacao_id: solicId })))
+    }
 
     btn.disabled = false; btn.textContent = s ? 'Salvar alterações' : 'Enviar solicitação'
     if (error) { aviso(error.message, true); return }
@@ -4502,6 +4562,9 @@ function telaDecisao (s, nomeEtapa) {
         <div class="item"><div class="rot">Urgência</div>
           <div class="val">${esc(URGENCIA[s.urgencia] ?? '—')}</div></div>
       </div>
+      ${s.anexo_url ? `<div class="acoes" style="margin:-8px 0 16px;">
+        <button class="btn-secundario mini" id="td-abrir-anexo">📎 ${esc(s.nome_anexo || 'ver anexo')}</button></div>` : ''}
+      <div id="td-itens" class="secao" style="margin-bottom:14px;"></div>
 
       ${s.justificativa ? `<div class="secao">
         <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;">Justificativa do solicitante</div>
@@ -4538,6 +4601,17 @@ function telaDecisao (s, nomeEtapa) {
   const fechar = () => fundo.remove()
   q('#d-cancelar').onclick = fechar
   fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  if (s.anexo_url) q('#td-abrir-anexo').onclick = () => abrirArquivo(s.anexo_url)
+  db.from('solicitacao_compra_item').select('*').eq('solicitacao_id', s.id).order('ordem').then(({ data: itens }) => {
+    if (itens?.length > 1) {
+      q('#td-itens').innerHTML = `<div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;">Itens (${itens.length})</div>
+        <table style="width:100%;margin-top:6px;"><tbody>
+          ${itens.map(it => `<tr><td style="padding:3px 0;font-size:13px;">${esc(it.produto_servico)}</td>
+            <td style="padding:3px 0;font-size:13px;text-align:right;color:var(--dim2);">${esc(it.quantidade ?? '')} ${esc(it.unidade ?? '')}</td></tr>`).join('')}
+        </tbody></table>`
+    }
+  })
 
   const aviso = t => {
     const el = q('#d-recado'); el.textContent = t; el.classList.remove('oculto')
@@ -18421,12 +18495,28 @@ async function paginaDpSeguranca () {
     `<div class="panel" style="padding:22px;"><p class="texto-dim">Você não tem acesso a DP e Segurança.</p></div>`; return }
   $('#subtitulo-pagina').textContent = 'Funcionários, documentos, exames e ocorrências'
   const area = areaLivre()
+  area.innerHTML = `<p class="texto-dim2">carregando...</p>`
+
+  const hoje = hojeISO()
+  const [{ count: totalPessoas }, { data: docs }, { data: exames }, { count: totalOcorrAbertas }] = await Promise.all([
+    db.from('pessoa').select('id', { count: 'exact', head: true }).or('data_admissao.not.is.null,cpf.not.is.null'),
+    db.from('dp_documento').select('data_validade').lt('data_validade', hoje),
+    db.from('dp_exame').select('data_validade').lt('data_validade', hoje),
+    db.from('dp_ocorrencia').select('id', { count: 'exact', head: true }).neq('status', 'ENCERRADA')
+  ])
+
   area.innerHTML = `
+    <div class="resumo-topo" style="margin-bottom:18px;">
+      ${kpiDp('👥', 'Funcionários', totalPessoas ?? 0)}
+      ${kpiDp('📄', 'Documentos vencidos', (docs || []).length, (docs || []).length ? 'alerta' : '')}
+      ${kpiDp('🩺', 'Exames vencidos', (exames || []).length, (exames || []).length ? 'alerta' : '')}
+      ${kpiDp('📌', 'Ocorrências abertas', totalOcorrAbertas ?? 0)}
+    </div>
     <div class="subabas">
-      <button data-sub="funcionarios" class="ativo">Funcionários</button>
-      <button data-sub="documentos">Documentos</button>
-      <button data-sub="exames">Exames</button>
-      <button data-sub="ocorrencias">Ocorrências</button>
+      <button data-sub="funcionarios" class="ativo">👥 Funcionários</button>
+      <button data-sub="documentos">📄 Documentos</button>
+      <button data-sub="exames">🩺 Exames</button>
+      <button data-sub="ocorrencias">📌 Ocorrências</button>
     </div>
     <div id="sub-dp"></div>`
   area.querySelectorAll('.subabas button').forEach(b => {
@@ -18436,6 +18526,9 @@ async function paginaDpSeguranca () {
     }
   })
   abrirDp('funcionarios', editavel)
+}
+function kpiDp (icone, rot, val, classe = '') {
+  return `<div class="bloco ${classe}"><div class="rot">${icone} ${esc(rot)}</div><div class="val">${val}</div></div>`
 }
 function abrirDp (sub, editavel) {
   const alvo = $('#sub-dp')
@@ -18677,30 +18770,65 @@ async function dpExames (alvo, editavel) {
 }
 
 // ----- Ocorrências -----
+const ICONE_TIPO_OCORRENCIA = {
+  'Acidente': '🚨', 'Quase-acidente': '⚠️', 'Advertência': '📋', 'Elogio': '⭐', 'Outro': '📝'
+}
+const COR_TIPO_OCORRENCIA = {
+  'Acidente': 'var(--critico-text)', 'Quase-acidente': 'var(--warn-text)',
+  'Advertência': 'var(--warn-text)', 'Elogio': 'var(--good-text)', 'Outro': 'var(--dim2)'
+}
+
 async function dpOcorrencias (alvo, editavel) {
-  const { data } = await db.from('dp_ocorrencia').select('*, pessoa:pessoa_id(nome)').order('data_ocorrencia', { ascending: false })
+  const { data } = await db.from('dp_ocorrencia').select('*, pessoa:pessoa_id(nome,cargo)').order('data_ocorrencia', { ascending: false })
   const lista = data || []
   const corStatusOcorr = s => s === 'ENCERRADA' ? 'badge-bom' : s === 'EM_ANDAMENTO' ? 'chip' : 'badge-alerta'
+  const abertas = lista.filter(o => o.status !== 'ENCERRADA')
+  const acidentes = lista.filter(o => o.tipo === 'Acidente')
 
   alvo.innerHTML = `
+    <div class="resumo-topo" style="margin-bottom:18px;">
+      <div class="bloco"><div class="rot">Total de ocorrências</div><div class="val">${lista.length}</div></div>
+      <div class="bloco ${abertas.length ? 'alerta' : ''}"><div class="rot">Em aberto</div><div class="val">${abertas.length}</div></div>
+      <div class="bloco"><div class="rot">Acidentes registrados</div><div class="val">${acidentes.length}</div></div>
+    </div>
     ${editavel ? `<div class="acoes" style="margin-bottom:16px;"><button class="btn" id="dpo-novo">+ Registrar ocorrência</button></div>` : ''}
-    ${lista.map(o => `<div class="panel" style="padding:16px 18px;margin-bottom:12px;">
+    ${lista.map(o => `<div class="panel" style="padding:18px 20px;margin-bottom:14px;border-left:4px solid ${COR_TIPO_OCORRENCIA[o.tipo] || 'var(--line2)'};">
       <div class="cabeca-secao">
-        <div><b>${esc(o.pessoa?.nome ?? 'sem pessoa vinculada')}</b> — <span class="chip">${esc(o.tipo)}</span></div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <span style="font-size:20px;">${ICONE_TIPO_OCORRENCIA[o.tipo] || '📝'}</span>
+          <div>
+            <div style="font-weight:600;font-size:14.5px;">${esc(o.pessoa?.nome ?? 'sem pessoa vinculada')}</div>
+            <div class="texto-dim2" style="font-size:11.5px;">${esc(o.pessoa?.cargo ?? '')}${o.pessoa?.cargo ? ' · ' : ''}${esc(o.tipo)}</div>
+          </div>
+        </div>
         <div style="display:flex;gap:8px;align-items:center;">
           <span class="texto-dim2" style="font-size:12px;">${fmtData(o.data_ocorrencia)}</span>
-          <span class="${corStatusOcorr(o.status)}">${esc(o.status)}</span>
+          <span class="${corStatusOcorr(o.status)}">${o.status === 'ENCERRADA' ? 'encerrada' : o.status === 'EM_ANDAMENTO' ? 'em andamento' : 'aberta'}</span>
         </div>
       </div>
-      <p style="font-size:13px;white-space:pre-wrap;margin:10px 0;">${esc(o.descricao ?? '—')}</p>
-      ${o.acao_tomada ? `<p class="texto-dim2" style="font-size:12.5px;white-space:pre-wrap;"><b>Ação tomada:</b> ${esc(o.acao_tomada)}</p>` : ''}
-      ${editavel ? `<div class="acoes" style="margin-top:10px;"><button class="btn-secundario mini" data-editar-ocorr="${o.id}">editar</button></div>` : ''}
+      <p style="font-size:13.5px;white-space:pre-wrap;margin:12px 0;line-height:1.55;">${esc(o.descricao ?? '—')}</p>
+      ${o.acao_tomada ? `<p class="texto-dim2" style="font-size:12.5px;white-space:pre-wrap;line-height:1.5;background:var(--surface2);padding:10px 12px;border-radius:8px;"><b style="color:var(--txt);">Ação tomada:</b> ${esc(o.acao_tomada)}</p>` : ''}
+      <div class="acoes" style="margin-top:12px;">
+        ${editavel ? `<button class="btn-secundario mini" data-editar-ocorr="${o.id}">editar</button>` : ''}
+        ${editavel && o.status !== 'ENCERRADA' ? `<button class="btn-secundario mini" data-concluir-ocorr="${o.id}">✓ concluir</button>` : ''}
+        <button class="btn-secundario mini" data-pdf-ocorr="${o.id}">📄 gerar PDF pra assinatura</button>
+      </div>
     </div>`).join('') || `<p class="vazio">Nenhuma ocorrência registrada.</p>`}`
 
+  alvo.querySelectorAll('[data-pdf-ocorr]').forEach(b => {
+    b.onclick = () => dpGerarPdfOcorrencia(lista.find(o => o.id === b.dataset.pdfOcorr))
+  })
   if (editavel) {
     $('#dpo-novo').onclick = () => formDpOcorrencia(null, () => dpOcorrencias(alvo, editavel))
     alvo.querySelectorAll('[data-editar-ocorr]').forEach(b => {
       b.onclick = () => formDpOcorrencia(lista.find(o => o.id === b.dataset.editarOcorr), () => dpOcorrencias(alvo, editavel))
+    })
+    alvo.querySelectorAll('[data-concluir-ocorr]').forEach(b => {
+      b.onclick = async () => {
+        if (!confirm('Marcar essa ocorrência como encerrada?')) return
+        await db.from('dp_ocorrencia').update({ status: 'ENCERRADA' }).eq('id', b.dataset.concluirOcorr)
+        dpOcorrencias(alvo, editavel)
+      }
     })
   }
 }
@@ -18857,6 +18985,40 @@ function formDpFolha (pessoa, registro, aoSalvar) {
 }
 
 // ----- PDF completo da ficha (documentos + exames + folha + ocorrências) -----
+// ----- PDF de uma ocorrência, formatado pra colher assinatura do funcionário -----
+function dpGerarPdfOcorrencia (o) {
+  if (!o) return
+  const corpo = `
+    <div class="grade-doc" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;">
+      ${docLinha('Funcionário', o.pessoa?.nome ?? '—')}${docLinha('Cargo', o.pessoa?.cargo ?? '—')}
+      ${docLinha('Data da ocorrência', fmtData(o.data_ocorrencia))}${docLinha('Tipo', o.tipo)}
+    </div>
+    <h3 style="margin-top:16px;">Descrição</h3>
+    <p style="white-space:pre-wrap;line-height:1.6;">${esc(o.descricao ?? '—')}</p>
+    ${o.acao_tomada ? `<h3 style="margin-top:16px;">Ação tomada</h3><p style="white-space:pre-wrap;line-height:1.6;">${esc(o.acao_tomada)}</p>` : ''}
+    <div style="margin-top:60px;display:grid;grid-template-columns:1fr 1fr;gap:40px;">
+      <div style="text-align:center;">
+        <div style="border-top:1px solid #333;padding-top:6px;">Assinatura do funcionário</div>
+      </div>
+      <div style="text-align:center;">
+        <div style="border-top:1px solid #333;padding-top:6px;">Assinatura do responsável / RH</div>
+      </div>
+    </div>
+    <p style="margin-top:24px;font-size:11px;color:#666;">Documento gerado em ${fmtData(hojeISO())} pelo Sistema Gefoscal.</p>`
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = documentoPDF({
+    titulo: 'REGISTRO DE OCORRÊNCIA', subtitulo: o.pessoa?.nome ?? '', corpo,
+    acoes: `<button class="btn" id="dpo-pdf-imprimir">Gerar PDF</button>
+      <button class="btn-secundario" id="dpo-pdf-fechar">Fechar</button>`
+  })
+  document.body.appendChild(fundo)
+  fundo.querySelector('#dpo-pdf-fechar').onclick = () => fundo.remove()
+  fundo.querySelector('#dpo-pdf-imprimir').onclick = () => window.print()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+}
+
 function dpGerarPdfFicha (pessoa, docs, exames, ocorr, folhas) {
   const valorLiquido = f => f.valor_liquido != null ? Number(f.valor_liquido)
     : Number(f.salario_base || 0) + Number(f.horas_extras || 0) + Number(f.beneficios || 0) - Number(f.descontos || 0)
