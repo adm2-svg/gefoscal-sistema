@@ -17696,29 +17696,78 @@ async function mktMercado (alvo) {
 }
 
 // ----- Docs (documentos e textos do Marketing, com anexo opcional) -----
+const CATEGORIAS_DOC_MKT = { POP: 'POPs', DIRETRIZ: 'Diretrizes', BRIEFING: 'Briefings' }
+let MKT_DOCS_CACHE = []
+let MKT_DOC_ABERTO = null
+
 async function mktDocs (alvo, editavel) {
-  const { data, error } = await db.from('marketing_doc').select('*, autor:criado_por(nome)').order('atualizado_em', { ascending: false })
+  const { data, error } = await db.from('marketing_doc').select('*, autor:criado_por(nome)').order('titulo')
   if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-  const lista = data || []
+  MKT_DOCS_CACHE = data || []
+  if (!MKT_DOC_ABERTO || !MKT_DOCS_CACHE.some(d => d.id === MKT_DOC_ABERTO)) {
+    MKT_DOC_ABERTO = MKT_DOCS_CACHE[0]?.id ?? null
+  }
+  renderMktDocs(alvo, editavel)
+}
+
+function renderMktDocs (alvo, editavel) {
+  const grupos = Object.keys(CATEGORIAS_DOC_MKT).map(cat => [cat, MKT_DOCS_CACHE.filter(d => d.categoria === cat)]).filter(([, l]) => l.length)
+  const atual = MKT_DOCS_CACHE.find(d => d.id === MKT_DOC_ABERTO)
 
   alvo.innerHTML = `
-    ${editavel ? `<div class="acoes" style="margin-bottom:16px;"><button class="btn" id="mkd-novo">+ Novo documento</button></div>` : ''}
-    ${lista.map(d => `<div class="panel" style="padding:16px 18px;margin-bottom:12px;">
-      <div class="cabeca-secao">
-        <h3 style="font-family:var(--serif);font-size:15px;margin:0;">${esc(d.titulo)}</h3>
-        <span class="texto-dim2" style="font-size:11px;">${esc(d.autor?.nome ?? '—')} · ${fmtQuando(d.atualizado_em)}</span>
+    <div class="cabeca-secao" style="margin-bottom:14px;">
+      <div>
+        <h3 style="font-family:var(--serif);font-size:20px;margin:0;">Docs</h3>
+        <p class="texto-dim2" style="font-size:12.5px;margin:2px 0 0;">POPs, diretrizes e briefings. Sem prazo, sem Kanban — só consulta.</p>
       </div>
-      ${d.conteudo ? `<p style="font-size:13.5px;white-space:pre-wrap;margin:10px 0;">${esc(d.conteudo)}</p>` : ''}
-      ${d.arquivo_url ? `<button class="btn-secundario mini" data-abrir-doc="${esc(d.arquivo_url)}">📎 ${esc(d.nome_arquivo || 'abrir anexo')}</button>` : ''}
-      ${editavel ? `<div class="acoes" style="margin-top:10px;"><button class="btn-secundario mini" data-editar-doc="${d.id}">editar</button></div>` : ''}
-    </div>`).join('') || `<p class="vazio">Nenhum documento ainda.</p>`}`
+      ${editavel ? `<button class="btn" id="mkd-novo">+ Novo documento</button>` : ''}
+    </div>
+    <div class="duas-colunas-docs" style="display:grid;grid-template-columns:280px 1fr;gap:16px;align-items:start;">
+      <div class="panel" style="padding:14px;">
+        ${grupos.map(([cat, itens]) => `
+          <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;margin:12px 4px 8px;">${CATEGORIAS_DOC_MKT[cat]} (${itens.length})</div>
+          ${itens.map(d => `<div class="linha-doc-mkt ${d.id === MKT_DOC_ABERTO ? 'ativa' : ''}" data-abrir-doc-mkt="${d.id}"
+              style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:9px 10px;border-radius:8px;cursor:pointer;margin-bottom:4px;${d.id === MKT_DOC_ABERTO ? 'background:var(--hover-bg);' : ''}">
+            <span style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(d.titulo)}</span>
+            <span class="${d.status === 'VIGENTE' ? 'badge-bom' : 'badge-alerta'}" style="flex:none;">${d.status === 'VIGENTE' ? 'Vigente' : 'Revisar'}</span>
+          </div>`).join('')}
+        `).join('') || '<p class="texto-dim2" style="font-size:12.5px;padding:8px;">Nenhum documento ainda.</p>'}
+      </div>
 
-  alvo.querySelectorAll('[data-abrir-doc]').forEach(b => { b.onclick = () => abrirArquivo(b.dataset.abrirDoc) })
+      <div class="panel" style="padding:20px;min-height:300px;">
+        ${atual ? `
+          <div class="cabeca-secao">
+            <h3 style="font-family:var(--serif);font-size:19px;margin:0;">${esc(atual.titulo)}</h3>
+            <div style="display:flex;gap:8px;">
+              <span class="${atual.status === 'VIGENTE' ? 'badge-bom' : 'badge-alerta'}">${atual.status === 'VIGENTE' ? 'Vigente' : 'Revisar'}</span>
+              ${editavel ? `<button class="btn-secundario mini" id="mkd-editar">editar</button>
+                <button class="btn-secundario mini" id="mkd-excluir" style="color:var(--warn-text);">excluir</button>` : ''}
+            </div>
+          </div>
+          <p class="texto-dim2" style="font-size:12px;margin:4px 0 16px;">
+            ${CATEGORIAS_DOC_MKT[atual.categoria]}${atual.dono ? ` · Dono: <b style="color:var(--txt);">${esc(atual.dono)}</b>` : ''} · Atualizado em ${fmtData(atual.atualizado_em?.slice(0, 10))}</p>
+          ${atual.conteudo ? `<p style="font-size:14px;white-space:pre-wrap;line-height:1.6;">${esc(atual.conteudo)}</p>` : '<p class="texto-dim2">Sem texto — só anexo.</p>'}
+          ${atual.arquivo_url ? `<button class="btn-secundario mini" data-abrir-anexo="${esc(atual.arquivo_url)}" style="margin-top:12px;">📎 ${esc(atual.nome_arquivo || 'abrir anexo')}</button>` : ''}
+        ` : '<p class="vazio">Escolha um documento na lista ao lado, ou crie um novo.</p>'}
+      </div>
+    </div>`
+
+  alvo.querySelectorAll('[data-abrir-doc-mkt]').forEach(el => {
+    el.onclick = () => { MKT_DOC_ABERTO = el.dataset.abrirDocMkt; renderMktDocs(alvo, editavel) }
+  })
+  const btnAnexo = alvo.querySelector('[data-abrir-anexo]')
+  if (btnAnexo) btnAnexo.onclick = () => abrirArquivo(btnAnexo.dataset.abrirAnexo)
   if (!editavel) return
   $('#mkd-novo').onclick = () => formMktDoc(null, () => mktDocs(alvo, editavel))
-  alvo.querySelectorAll('[data-editar-doc]').forEach(b => {
-    b.onclick = () => formMktDoc(lista.find(d => d.id === b.dataset.editarDoc), () => mktDocs(alvo, editavel))
-  })
+  const btnEditar = $('#mkd-editar')
+  if (btnEditar) btnEditar.onclick = () => formMktDoc(atual, () => mktDocs(alvo, editavel))
+  const btnExcluir = $('#mkd-excluir')
+  if (btnExcluir) btnExcluir.onclick = async () => {
+    if (!confirm('Excluir esse documento?')) return
+    await db.from('marketing_doc').delete().eq('id', atual.id)
+    MKT_DOC_ABERTO = null
+    mktDocs(alvo, editavel)
+  }
 }
 
 function formMktDoc (registro, aoSalvar) {
@@ -17727,6 +17776,15 @@ function formMktDoc (registro, aoSalvar) {
   fundo.innerHTML = `<div class="modal">
     <h3>${registro ? 'Editar' : 'Novo'} documento</h3>
     <div class="campo"><label>Título *</label><input id="mkd-titulo" value="${esc(registro?.titulo ?? '')}"></div>
+    <div class="form-grade" style="margin-top:10px;">
+      <div class="campo"><label>Categoria</label><select id="mkd-categoria">
+        ${Object.entries(CATEGORIAS_DOC_MKT).map(([k, v]) => `<option value="${k}" ${k === (registro?.categoria ?? 'POP') ? 'selected' : ''}>${v.replace(/s$/, '')}</option>`).join('')}</select></div>
+      <div class="campo"><label>Status</label><select id="mkd-status">
+        <option value="VIGENTE" ${(!registro || registro.status === 'VIGENTE') ? 'selected' : ''}>Vigente</option>
+        <option value="REVISAR" ${registro?.status === 'REVISAR' ? 'selected' : ''}>Revisar</option>
+      </select></div>
+      <div class="campo"><label>Dono</label><input id="mkd-dono" value="${esc(registro?.dono ?? '')}" placeholder="responsável por esse documento"></div>
+    </div>
     <div class="campo" style="margin-top:10px;"><label>Texto</label>
       <textarea id="mkd-conteudo" style="min-height:200px;">${esc(registro?.conteudo ?? '')}</textarea></div>
     <div class="campo" style="margin-top:10px;"><label>Anexar arquivo (opcional)</label>
@@ -17734,7 +17792,7 @@ function formMktDoc (registro, aoSalvar) {
       ${registro?.arquivo_url ? `<span class="texto-dim2" style="font-size:11.5px;">já tem: ${esc(registro.nome_arquivo || 'arquivo')} — escolher outro substitui</span>` : ''}</div>
     <div class="acoes" style="margin-top:14px;">
       <button class="btn" id="mkd-salvar">Salvar</button>
-      ${registro ? `<button class="btn-secundario" id="mkd-excluir" style="color:var(--warn-text);">Excluir</button>` : ''}
+      ${registro ? `<button class="btn-secundario" id="mkd-excluir-modal" style="color:var(--warn-text);">Excluir</button>` : ''}
       <button class="btn-secundario" id="mkd-fechar">Fechar</button>
     </div>
     <div class="recado oculto" id="mkd-recado"></div>
@@ -17744,7 +17802,7 @@ function formMktDoc (registro, aoSalvar) {
   fundo.querySelector('#mkd-fechar').onclick = fechar
   fundo.onclick = e => { if (e.target === fundo) fechar() }
 
-  if (registro) fundo.querySelector('#mkd-excluir').onclick = async () => {
+  if (registro) fundo.querySelector('#mkd-excluir-modal').onclick = async () => {
     if (!confirm('Excluir esse documento?')) return
     await db.from('marketing_doc').delete().eq('id', registro.id)
     fechar(); aoSalvar()
@@ -17769,6 +17827,8 @@ function formMktDoc (registro, aoSalvar) {
 
     const corpo = {
       titulo, conteudo: fundo.querySelector('#mkd-conteudo').value.trim() || null,
+      categoria: fundo.querySelector('#mkd-categoria').value, status: fundo.querySelector('#mkd-status').value,
+      dono: fundo.querySelector('#mkd-dono').value.trim() || null,
       arquivo_url: arquivoUrl, nome_arquivo: nomeArquivo, atualizado_em: new Date().toISOString()
     }
     let error
