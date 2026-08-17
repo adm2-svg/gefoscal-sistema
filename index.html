@@ -281,6 +281,14 @@ tbody tr:hover { background: var(--hover-bg); }
 .chips-cred button:hover { color:var(--txt); }
 .chips-cred button.ativo { border-color:var(--rust); color:var(--rust); background:rgba(var(--rust-rgb),.12); }
 .tag-aging { font-size:11px; padding:2px 8px; border-radius:20px; white-space:nowrap; }
+
+.segmentado { display:flex; gap:0; border:1px solid var(--line2); border-radius:8px; overflow:hidden; width:fit-content; }
+.segmentado button { font-size:12.5px; padding:8px 16px; cursor:pointer; border:none; background:none;
+                      color:var(--dim); border-right:1px solid var(--line2); transition:.12s; }
+.segmentado button:last-child { border-right:none; }
+.segmentado button:hover { color:var(--txt); background:var(--hover-bg); }
+.segmentado button.ativo { background:var(--rust); color:#fff; font-weight:600; }
+.segmentado button:disabled { cursor:not-allowed; opacity:.6; }
 .tag-aging.critico { background:rgba(var(--warn-rgb),.18); color:var(--warn-text); }
 .tag-aging.alerta  { background:rgba(var(--gold-rgb),.18); color:var(--gold); }
 .tag-aging.ok      { background:rgba(var(--good-rgb),.16); color:var(--good-text); }
@@ -837,10 +845,13 @@ async function abrirApp () {
   if (PERFIL.pessoaId) {
     const { data: setoresGeridos } = await db.from('setor').select('id,nome').eq('gestor_id', PERFIL.pessoaId)
     PERFIL.setoresGeridos = (setoresGeridos || []).map(s => s.id)
-    // CRM (funil/carteira/gestão comercial) só libera automático pra quem
-    // gerencia o setor Comercial — gestor de outro setor (Indústria,
-    // Almoxarifado etc.) não tem nada a ver com isso, mesmo sendo gestor
+    // CRM (funil/carteira/gestão comercial) libera automático pra quem
+    // gerencia o setor Comercial (chefia de setor) OU pra quem ganhou o
+    // papel GESTOR_COMERCIAL direto em Administração — os dois caminhos
+    // valem. Antes só o primeiro contava, então marcar o papel na tela de
+    // usuário não tinha efeito nenhum na prática.
     PERFIL.souGestorComercial = (setoresGeridos || []).some(s => (s.nome || '').trim().toLowerCase() === 'comercial')
+      || PERFIL.papeis.includes('GESTOR_COMERCIAL')
   }
 
   $('#quem-sou-avatar').textContent = iniciais(PERFIL.nome)
@@ -956,7 +967,11 @@ function montarMenu () {
   }).join('')
   $('#menu').innerHTML = fixos + doBanco
   $('#menu').querySelectorAll('a').forEach(a => {
-    if (!a.classList.contains('bloqueado')) a.onclick = () => irPara(a.dataset.chave)
+    if (a.classList.contains('bloqueado')) {
+      a.onclick = () => alert(`"${a.title}" ainda não foi construída — o módulo já existe no cadastro, mas a página em si não. Fala com quem está desenvolvendo pra priorizar.`)
+    } else {
+      a.onclick = () => irPara(a.dataset.chave)
+    }
   })
 }
 
@@ -1968,7 +1983,13 @@ async function subUsuarios (alvo, editavel) {
   }
 
   const preDe = e => (pre || []).find(p => p.email === (e || '').toLowerCase())
-  const nivelDe = p => (p?.papeis || []).includes('ADMIN') ? 'Administrador' : 'Usuário'
+  const nivelDe = p => {
+    const ps = p?.papeis || []
+    if (ps.includes('ADMIN')) return 'Administrador'
+    if (ps.includes('DIRETORIA')) return 'Diretoria'
+    if (ps.includes('GESTOR')) return 'Gestor'
+    return 'Usuário'
+  }
 
   alvo.innerHTML = `
     <div class="secao panel" style="padding:20px;">
@@ -1999,16 +2020,23 @@ async function subUsuarios (alvo, editavel) {
             <button class="btn mini" id="criar-setor">criar</button>
           </div>
         </div>
-        <div class="campo"><label>Nível de acesso</label>
-          <select id="u-nivel" ${editavel ? '' : 'disabled'}>
-            <option value="usuario">Usuário — só consulta</option>
-            <option value="administrador">Administrador — consulta e altera</option>
-          </select></div>
+        <div class="campo" style="grid-column:1/-1;"><label>Nível de acesso</label>
+          <div class="segmentado" id="u-nivel-botoes">
+            <button type="button" data-nivel="administrador" ${editavel ? '' : 'disabled'}>Administrador</button>
+            <button type="button" data-nivel="diretoria" ${editavel ? '' : 'disabled'}>Diretoria</button>
+            <button type="button" data-nivel="gestor" ${editavel ? '' : 'disabled'}>Gestor</button>
+            <button type="button" data-nivel="usuario" class="ativo" ${editavel ? '' : 'disabled'}>Usuário</button>
+          </div>
+          <input type="hidden" id="u-nivel" value="usuario">
+          <p class="texto-dim2" style="font-size:11px;margin:6px 0 0;">
+            Clicar preenche as abas abaixo na hora (dá pra ajustar módulo a módulo depois — o clique é só um ponto de partida).</p>
+        </div>
         <div class="campo"><label>&nbsp;</label>
           <label style="display:flex;align-items:center;gap:7px;font-size:13px;font-weight:400;padding-top:7px;">
             <input type="checkbox" id="u-gestor-comercial" ${editavel ? '' : 'disabled'}>
             Gestor comercial (vê a aba Gestão do CRM)
           </label></div>
+        <div></div>
         ${editavel ? `<div class="campo"><label>Senha de acesso</label>
           <input id="u-senha" type="text" autocomplete="off" placeholder="mínimo 8 caracteres">
           <span class="texto-dim2" style="font-size:11px;">deixe vazio para não mexer na senha</span>
@@ -2055,6 +2083,31 @@ async function subUsuarios (alvo, editavel) {
   // "editar" implica "ver"
   $('#u-modulos').querySelectorAll('[data-editar]').forEach(c => {
     c.onchange = () => { if (c.checked) $(`#u-modulos [data-ver="${c.dataset.editar}"]`).checked = true }
+  })
+
+  // módulos que o preset "Gestor" deliberadamente deixa de fora
+  const MODULOS_FORA_DO_GESTOR = ['ti', 'dashboard_diretor', 'financeiro']
+
+  function marcarBotaoNivel (nivel) {
+    $('#u-nivel').value = nivel
+    $('#u-nivel-botoes').querySelectorAll('button').forEach(b => b.classList.toggle('ativo', b.dataset.nivel === nivel))
+  }
+
+  // clicar num nível preenche o grid inteiro na hora — ponto de partida
+  // rápido pra testar acesso; dá pra ajustar módulo a módulo depois, o
+  // clique não trava nada.
+  function aplicarPresetAcesso (nivel) {
+    marcarBotaoNivel(nivel)
+    $('#u-modulos').querySelectorAll('[data-ver]').forEach(c => {
+      const m = PERFIL.modulos.find(x => x.id === c.dataset.ver)
+      const editarEl = $(`#u-modulos [data-editar="${c.dataset.ver}"]`)
+      if (nivel === 'usuario') { c.checked = false; editarEl.checked = false; return }
+      if (nivel === 'gestor' && m && MODULOS_FORA_DO_GESTOR.includes(m.chave)) { c.checked = false; editarEl.checked = false; return }
+      c.checked = true; editarEl.checked = true
+    })
+  }
+  $('#u-nivel-botoes').querySelectorAll('button').forEach(b => {
+    b.onclick = () => aplicarPresetAcesso(b.dataset.nivel)
   })
 
   const recado = (texto, alerta = false) => {
@@ -2112,8 +2165,12 @@ async function subUsuarios (alvo, editavel) {
       $('#u-email').value = p.email || ''
       $('#u-cargo').value = p.cargo_id || ''
       $('#u-setor').value = p.setor_id || ''
-      $('#u-nivel').value = (pc?.papeis || []).includes('ADMIN') ? 'administrador' : 'usuario'
-      $('#u-gestor-comercial').checked = (pc?.papeis || []).includes('GESTOR_COMERCIAL')
+      const papeisDela = pc?.papeis || []
+      const nivelReal = papeisDela.includes('ADMIN') ? 'administrador'
+        : papeisDela.includes('DIRETORIA') ? 'diretoria'
+        : papeisDela.includes('GESTOR') ? 'gestor' : 'usuario'
+      marcarBotaoNivel(nivelReal)
+      $('#u-gestor-comercial').checked = papeisDela.includes('GESTOR_COMERCIAL')
       const meus = (perms || []).filter(x => x.pessoa_id === p.id)
       $('#u-modulos').querySelectorAll('[data-ver]').forEach(c => {
         const r = meus.find(x => x.modulo_id === c.dataset.ver)
@@ -2228,7 +2285,7 @@ async function subUsuarios (alvo, editavel) {
     ;['u-nome','u-email','u-cargo','u-setor','u-senha'].forEach(i => {
       const el = $('#' + i); if (el) el.value = ''
     })
-    $('#u-nivel').value = 'usuario'
+    marcarBotaoNivel('usuario')
     $('#u-gestor-comercial').checked = false
     $('#u-modulos').querySelectorAll('input').forEach(c => c.checked = false)
     $('#u-recado').classList.add('oculto')
@@ -2250,7 +2307,11 @@ async function subUsuarios (alvo, editavel) {
 
     if (e1) { recado(e1.message, true); btn.disabled = false; btn.textContent = 'Salvar cadastro'; return }
 
-    const papeis = $('#u-nivel').value === 'administrador' ? ['ADMIN', 'DIRETORIA'] : ['LEITOR']
+    const PAPEIS_POR_NIVEL = {
+      administrador: ['ADMIN', 'DIRETORIA'], diretoria: ['DIRETORIA'],
+      gestor: ['GESTOR'], usuario: ['LEITOR']
+    }
+    const papeis = [...(PAPEIS_POR_NIVEL[$('#u-nivel').value] || ['LEITOR'])]
     if ($('#u-gestor-comercial').checked) papeis.push('GESTOR_COMERCIAL')
     const { error: e2 } = await db.from('usuario_precadastro').upsert({
       email, papeis, pessoa_id: pessoa.id, setor_id: pessoa.setor_id
@@ -2265,7 +2326,7 @@ async function subUsuarios (alvo, editavel) {
     // diferente. Só mexe nos papéis que ESTE formulário controla — nunca
     // apaga papéis de outro módulo (ex: COMPRAS, COBRANCA) que a pessoa
     // tenha ganhado por outro caminho.
-    const PAPEIS_DESTE_FORM = ['ADMIN', 'DIRETORIA', 'LEITOR', 'GESTOR_COMERCIAL']
+    const PAPEIS_DESTE_FORM = ['ADMIN', 'DIRETORIA', 'GESTOR', 'LEITOR', 'GESTOR_COMERCIAL']
     const { data: perfilAtivo } = await db.from('usuario_perfil').select('user_id').eq('pessoa_id', pessoa.id).maybeSingle()
     if (perfilAtivo?.user_id) {
       await db.from('usuario_papel').delete().eq('user_id', perfilAtivo.user_id).in('papel', PAPEIS_DESTE_FORM)
