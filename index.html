@@ -21,6 +21,13 @@
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
 /* Layout do app. Usa só os tokens das skins — nenhuma cor fixa aqui. */
+:root {
+  /* --warn-text já é usado em vários lugares pra "alerta" (tom âmbar) —
+     "crítico" precisa de vermelho de verdade, senão fica parecido
+     demais com alerta e a cor perde o sentido no Dashboard Diretor */
+  --critico-text: #d14949;
+  --critico-rgb: 209, 73, 73;
+}
 .app { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh;
        transition: grid-template-columns .18s ease; }
 .app.nav-colapsada { grid-template-columns: 68px 1fr; }
@@ -952,7 +959,7 @@ const PAGINAS = {
   marketing:   { nome: 'Marketing', render: paginaMarketing },
   crm:         { nome: 'CRM Comercial', render: paginaCrm },
   financeiro:  { nome: 'Financeiro', render: paginaFinanceiro },
-  projetos:    { nome: 'Projetos', render: paginaProjetos },
+  projetos:    { nome: 'Projetos', render: paginaProjetos, sempre: true },
   ferramentas: { nome: 'Ferramentas', render: paginaFerramentas },
   banco:       { nome: 'Banco de Informações', render: paginaBancoInformacoes },
   estoque:     { nome: 'Estoque e Produção', render: paginaEstoque },
@@ -961,6 +968,7 @@ const PAGINAS = {
   frota:       { nome: 'Frota', render: paginaFrota },
   juridico:    { nome: 'Jurídico', render: paginaJuridico },
   desempenho:  { nome: 'RH', render: paginaDesempenho },
+  dp:          { nome: 'DP e Segurança', render: paginaDpSeguranca },
   laboratorio: { nome: 'Laboratório', render: paginaLaboratorio },
   ti:          { nome: 'Administração', render: paginaAdministracao },
   gestao_ti:   { nome: 'Gestão de TI', render: paginaGestaoTI }
@@ -971,6 +979,7 @@ const PAGINAS = {
 // no modo recolhido (só ícone). Estilo consistente: 24x24, traço fino.
 // ---------------------------------------------------------------
 const ICONES_MODULO = {
+  dp: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/><path d="M9 12l2 2 4-4"/></svg>',
   dashboard_diretor: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>',
   marketing: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>',
   visao_geral: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5L12 4l9 7.5"/><path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9"/></svg>',
@@ -1002,8 +1011,8 @@ const ICONES_MODULO = {
 // mapeado aqui cai automaticamente em "Outros", pra nunca sumir.
 const GRUPOS_MENU = [
   ['Comercial', ['crm', 'cadastro', 'expedicao', 'cobranca', 'marketing']],
-  ['Operações', ['estoque', 'combustivel', 'manutencao', 'frota', 'projetos', 'laboratorio']],
-  ['Gestão', ['financeiro', 'desempenho', 'juridico', 'ferramentas', 'banco', 'gestao_ti', 'dashboard_diretor']],
+  ['Operações', ['estoque', 'combustivel', 'manutencao', 'frota', 'laboratorio']],
+  ['Gestão', ['financeiro', 'desempenho', 'dp', 'juridico', 'ferramentas', 'banco', 'gestao_ti', 'dashboard_diretor']],
   ['Administração', ['ti']]
 ]
 
@@ -2086,7 +2095,7 @@ function abrirSub (sub, editavel) {
 async function subUsuarios (alvo, editavel) {
   const [{ data: pessoas }, { data: cargos, error: erroCargo },
          { data: setores }, { data: pre }, { data: perms }] = await Promise.all([
-    db.from('pessoa').select('id,nome,email,cargo_id,setor_id,status,criado_em').order('nome'),
+    db.from('pessoa').select('id,nome,email,cargo_id,setor_id,status,criado_em,eh_vendedor').order('nome'),
     db.from('cargo').select('id,nome').order('nome'),
     db.from('setor').select('id,nome').order('nome'),
     db.from('usuario_precadastro').select('email,papeis,pessoa_id,usado_em,convite_enviado_em'),
@@ -2141,6 +2150,11 @@ async function subUsuarios (alvo, editavel) {
           <label style="display:flex;align-items:center;gap:7px;font-size:13px;font-weight:400;padding-top:7px;">
             <input type="checkbox" id="u-gestor-comercial" ${editavel ? '' : 'disabled'}>
             Gestor comercial (vê a aba Gestão do CRM)
+          </label></div>
+        <div class="campo"><label>&nbsp;</label>
+          <label style="display:flex;align-items:center;gap:7px;font-size:13px;font-weight:400;padding-top:7px;">
+            <input type="checkbox" id="u-pode-vender" ${editavel ? '' : 'disabled'}>
+            Também pode atuar com vendas (libera o CRM, mesmo não sendo vendedor de cargo)
           </label></div>
         ${editavel ? `<div class="campo"><label>Senha de acesso</label>
           <input id="u-senha" type="text" autocomplete="off" placeholder="mínimo 8 caracteres">
@@ -2254,6 +2268,7 @@ async function subUsuarios (alvo, editavel) {
       $('#u-setor').value = p.setor_id || ''
       $('#u-nivel').value = (pc?.papeis || []).includes('ADMIN') ? 'administrador' : 'usuario'
       $('#u-gestor-comercial').checked = (pc?.papeis || []).includes('GESTOR_COMERCIAL')
+      $('#u-pode-vender').checked = !!p.eh_vendedor
       const meus = (perms || []).filter(x => x.pessoa_id === p.id)
       $('#u-modulos').querySelectorAll('[data-ver]').forEach(c => {
         const r = meus.find(x => x.modulo_id === c.dataset.ver)
@@ -2374,6 +2389,7 @@ async function subUsuarios (alvo, editavel) {
     })
     $('#u-nivel').value = 'usuario'
     $('#u-gestor-comercial').checked = false
+    $('#u-pode-vender').checked = false
     $('#u-modulos').querySelectorAll('input').forEach(c => c.checked = false)
     $('#u-recado').classList.add('oculto')
   }
@@ -2389,7 +2405,8 @@ async function subUsuarios (alvo, editavel) {
     const { data: pessoa, error: e1 } = await db.from('pessoa').upsert({
       nome, email,
       cargo_id: $('#u-cargo').value || null,
-      setor_id: $('#u-setor').value || null
+      setor_id: $('#u-setor').value || null,
+      eh_vendedor: $('#u-pode-vender').checked
     }, { onConflict: 'email' }).select('id,setor_id').single()
 
     if (e1) { recado(e1.message, true); btn.disabled = false; btn.textContent = 'Salvar cadastro'; return }
@@ -2408,6 +2425,19 @@ async function subUsuarios (alvo, editavel) {
       await db.from('usuario_papel').delete().eq('user_id', perfilAtivo.user_id).eq('papel', 'GESTOR_COMERCIAL')
       if ($('#u-gestor-comercial').checked) {
         await db.from('usuario_papel').insert({ user_id: perfilAtivo.user_id, papel: 'GESTOR_COMERCIAL' })
+      }
+    }
+
+    // "pode vender" libera o módulo CRM automaticamente, pra não ter que
+    // marcar em dois lugares — se a pessoa marcou o checkbox mas esqueceu
+    // de marcar CRM na grade de módulos, marcamos aqui antes de salvar
+    if ($('#u-pode-vender').checked) {
+      const moduloCrm = PERFIL.modulos.find(m => m.chave === 'crm')
+      if (moduloCrm) {
+        const verCrm = $(`#u-modulos [data-ver="${moduloCrm.id}"]`)
+        const editarCrm = $(`#u-modulos [data-editar="${moduloCrm.id}"]`)
+        if (verCrm) verCrm.checked = true
+        if (editarCrm) editarCrm.checked = true
       }
     }
 
@@ -4646,7 +4676,7 @@ async function paginaCadastro () {
   $('#subtitulo-pagina').textContent = 'Cliente, fornecedor e produto — tudo num lugar só'
   const area = areaLivre()
 
-  const abas = [['clientes', 'Clientes'], ['fornecedores', 'Fornecedores'], ['produtos', 'Produtos']]
+  const abas = [['clientes', 'Clientes'], ['fornecedores', 'Fornecedores'], ['produtos', 'Produtos'], ['funcionarios', 'Funcionários']]
   area.innerHTML = `
     <div class="subabas">
       ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
@@ -4666,10 +4696,11 @@ function abrirCadastro (sub) {
   const alvo = $('#sub-cadastro')
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
   // pode editar aqui quem tem o módulo Cadastro OU já editava a tela
-  // original (Cobrança/Compras/Estoque) — ninguém perde acesso que já tinha
+  // original (Cobrança/Compras/Estoque/DP) — ninguém perde acesso que já tinha
   if (sub === 'clientes') cobClientes(alvo, podeEditar('cadastro') || podeEditar('cobranca'))
   if (sub === 'fornecedores') comprasFornecedores(alvo, podeEditar('cadastro') || podeEditar('compras'))
   if (sub === 'produtos') estProdutos(alvo, podeEditar('cadastro') || podeEditar('estoque'))
+  if (sub === 'funcionarios') dpFuncionarios(alvo, podeEditar('cadastro') || podeEditar('dp'))
 }
 
 // ---------------------------------------------------------------
@@ -6407,19 +6438,14 @@ async function paginaCrm () {
   const area = areaLivre()
   area.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
-  const [{ data: pessoas }, { data: papeisComercial }] = await Promise.all([
-    db.from('pessoa').select('id,nome').eq('status', 'ATIVO').order('nome'),
-    db.from('usuario_papel').select('user_id').eq('papel', 'COMERCIAL')
+  const [{ data: pessoas }] = await Promise.all([
+    db.from('pessoa').select('id,nome,eh_vendedor').eq('status', 'ATIVO').order('nome')
   ])
   CRM_CACHE.pessoas = pessoas || []
-  // vendedor = quem tem o papel COMERCIAL; se ninguém tiver ainda,
-  // cai pra lista geral de pessoas (sistema ainda sendo configurado)
-  if (papeisComercial?.length) {
-    const { data: perfisComercial } = await db.from('usuario_perfil')
-      .select('pessoa_id').in('user_id', papeisComercial.map(p => p.user_id))
-    const idsComercial = new Set((perfisComercial || []).map(p => p.pessoa_id))
-    CRM_CACHE.vendedores = CRM_CACHE.pessoas.filter(p => idsComercial.has(p.id))
-  }
+  // vendedor = quem tem "eh_vendedor" marcado (inclui vendedor de cargo E
+  // qualquer outra pessoa liberada pra vendas em Administração → Usuários);
+  // se ninguém tiver ainda marcado, cai pra lista geral (sistema em configuração)
+  CRM_CACHE.vendedores = CRM_CACHE.pessoas.filter(p => p.eh_vendedor)
   if (!CRM_CACHE.vendedores.length) CRM_CACHE.vendedores = CRM_CACHE.pessoas
 
   const abas = [['painel', 'Painel'], ['funil', 'Funil'], ['progresso', 'Progresso'], ['historico', 'Histórico']]
@@ -14241,8 +14267,6 @@ function bandCor (p) {
 }
 
 async function paginaProjetos () {
-  if (!podeVer('projetos')) { areaLivre().innerHTML =
-    `<div class="panel" style="padding:22px;"><p class="texto-dim">Você não tem acesso a Projetos.</p></div>`; return }
   if (!PERFIL.pessoaId) { areaLivre().innerHTML =
     `<div class="panel" style="padding:22px;"><p class="texto-dim">
      Seu login ainda não está ligado a uma pessoa do cadastro, então você
@@ -14254,19 +14278,7 @@ async function paginaProjetos () {
     : 'Somente leitura — você pode consultar, mas não alterar'
 
   const area = areaLivre()
-  area.innerHTML = `
-    <div class="subabas">
-      <button data-sub="progresso" class="ativo">Progresso</button>
-      <button data-sub="kanban">Kanban</button>
-    </div>
-    <div id="sub-projetos"></div>`
-
-  area.querySelectorAll('.subabas button').forEach(b => {
-    b.onclick = () => {
-      area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
-      abrirProjetos(b.dataset.sub, editModulo)
-    }
-  })
+  area.innerHTML = `<div id="sub-projetos"></div>`
 
   const [{ data: pessoas }, { data: setores }] = await Promise.all([
     db.from('pessoa').select('id,nome').eq('status', 'ATIVO').order('nome'),
@@ -14275,14 +14287,7 @@ async function paginaProjetos () {
   PESSOAS_CACHE = pessoas || []
   SETORES_CACHE = setores || []
 
-  abrirProjetos('progresso', editModulo)
-}
-
-function abrirProjetos (sub, editModulo) {
-  const alvo = $('#sub-projetos')
-  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
-  if (sub === 'progresso') projProgresso(alvo, editModulo)
-  if (sub === 'kanban') projKanban(alvo, editModulo)
+  projProgresso($('#sub-projetos'), editModulo)
 }
 
 // ----- Projetos › Progresso -----
@@ -14455,6 +14460,7 @@ function detalheProjeto (p, todos, editavel) {
   if (editavel && p.pausado) acoes += `<button class="btn-secundario mini" data-retomar="${p.id}">retomar</button>`
   if (editavel) acoes += `<button class="btn-secundario mini" data-mudarplano="${p.id}">mudança de planos</button>`
   if (editavel && (p.pausado || p.progresso === 100) && !p.arquivado) acoes += `<button class="btn-secundario mini" data-arquivar="${p.id}">arquivar</button>`
+  if (ehTotal()) acoes += `<button class="btn-secundario mini" data-excluir-projeto="${p.id}" style="color:var(--warn-text);">excluir</button>`
   if (acoes) h += `<div class="acoes" style="margin-top:14px;">${acoes}</div>`
 
   h += '</div>'
@@ -14539,6 +14545,14 @@ function ligarProjeto (alvo, editModulo) {
   })
   alvo.querySelectorAll('[data-mudarplano]').forEach(b => {
     b.onclick = async e => { e.stopPropagation(); await mudarPlanoProjeto(b.dataset.mudarplano, alvo, editModulo) }
+  })
+  alvo.querySelectorAll('[data-excluir-projeto]').forEach(b => {
+    b.onclick = async e => { e.stopPropagation()
+      if (!confirm('Excluir esse projeto de vez? Não dá pra desfazer — apaga o histórico e as tarefas dele também.')) return
+      const { error } = await db.from('projeto').delete().eq('id', b.dataset.excluirProjeto)
+      if (error) { alert('Não deu pra excluir: ' + error.message); return }
+      projProgresso(alvo, editModulo)
+    }
   })
 }
 
@@ -14762,7 +14776,7 @@ async function paginaFrota () {
   ])
   FROTA_CACHE = { pessoas: pessoas || [], processos: processos || [], fornecedores: fornecedores || [] }
 
-  const abas = [['painel', 'Painel'], ['itens', 'Itens'], ['acoes', 'Ações'], ['calc', 'Calculadora de ágio/deságio'], ['zapay', 'Débitos (Zapay)']]
+  const abas = [['painel', 'Painel'], ['itens', 'Itens'], ['transicao', 'Veículos em transição'], ['acoes', 'Ações'], ['calc', 'Calculadora de ágio/deságio'], ['zapay', 'Débitos (Zapay)']]
   area.innerHTML = `
     <div class="subabas">
       ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
@@ -14786,6 +14800,7 @@ function abrirFrota (sub, editavel) {
   if (sub === 'acoes') frotaAcoes(alvo, editavel)
   if (sub === 'calc') frotaCalculadora(alvo)
   if (sub === 'zapay') frotaZapay(alvo, editavel)
+  if (sub === 'transicao') frotaTransicao(alvo, editavel)
 }
 
 // ----- Débitos veiculares (Zapay) -----
@@ -14899,6 +14914,114 @@ async function frotaZapay (alvo, editavel) {
     }
     aviso('Consulta pedida com sucesso — o resultado chega em instantes. Clica em "atualizar" na lista de baixo daqui a pouco.', true)
     frotaZapay(alvo, editavel)
+  }
+}
+
+// ----- Veículos em transição (recebidos em pagamento, ainda não no
+// nome da Gefoscal — fica registrado desde já, e quando a transferência
+// sair, "converte" pra um item de verdade na Frota, sem redigitar nada) -----
+async function frotaTransicao (alvo, editavel) {
+  const { data: itens } = await db.from('veiculo_transicao').select('*, veiculo:veiculo_id(id,descricao)').order('criado_em', { ascending: false })
+  const lista = itens || []
+  const ROTULO_STATUS = { AGUARDANDO: 'Aguardando transferência', TRANSFERIDO: 'Já transferido', DEVOLVIDO: 'Devolvido/desfeito' }
+  const corStatus = s => s === 'TRANSFERIDO' ? 'badge-bom' : s === 'DEVOLVIDO' ? 'chip' : 'badge-alerta'
+
+  alvo.innerHTML = `
+    <p class="texto-dim2" style="font-size:12px;margin:0 0 14px;">
+      Veículos recebidos em pagamento/negócio, mas que ainda não passaram pro nome da Gefoscal.
+      Fica registrado aqui desde já — quando a transferência sair, converte pra um item de verdade na Frota.</p>
+    ${editavel ? `<div class="acoes" style="margin-bottom:16px;"><button class="btn" id="tr-novo">+ Registrar veículo em transição</button></div>` : ''}
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr><th>Descrição</th><th>Placa</th><th>De quem veio</th><th class="num">Valor</th><th>Recebido em</th><th>Status</th>${editavel ? '<th></th>' : ''}</tr></thead><tbody>
+        ${lista.map(t => `<tr>
+          <td><b>${esc(t.descricao)}</b></td><td class="texto-dim">${esc(t.placa ?? '—')}</td>
+          <td class="texto-dim2">${esc(t.contraparte ?? '—')}</td>
+          <td class="num">${t.valor_referencia ? 'R$ ' + fmtNum(t.valor_referencia) : '—'}</td>
+          <td class="texto-dim2">${fmtData(t.data_recebimento)}</td>
+          <td><span class="${corStatus(t.status)}">${esc(ROTULO_STATUS[t.status] ?? t.status)}</span></td>
+          ${editavel ? `<td>
+            ${t.status === 'AGUARDANDO' ? `<button class="btn-secundario mini" data-converter="${t.id}">converter pra Frota</button>` : ''}
+            <button class="btn-secundario mini" data-editar-transicao="${t.id}">editar</button>
+          </td>` : ''}
+        </tr>`).join('') || `<tr><td colspan="${editavel ? 7 : 6}" class="vazio">Nenhum veículo em transição registrado.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+
+  if (!editavel) return
+  $('#tr-novo').onclick = () => formVeiculoTransicao(null, () => frotaTransicao(alvo, editavel))
+  alvo.querySelectorAll('[data-editar-transicao]').forEach(b => {
+    b.onclick = () => formVeiculoTransicao(lista.find(x => x.id === b.dataset.editarTransicao), () => frotaTransicao(alvo, editavel))
+  })
+  alvo.querySelectorAll('[data-converter]').forEach(b => {
+    b.onclick = async () => {
+      const t = lista.find(x => x.id === b.dataset.converter)
+      if (!confirm(`Confirmar a transferência de "${t.descricao}" pro nome da Gefoscal? Isso cria o item de verdade na Frota, com os dados já preenchidos.`)) return
+      const { data: novoVeiculo, error } = await db.from('veiculo').insert({
+        descricao: t.descricao, placa: t.placa || null, contraparte: t.contraparte || null,
+        valor_entrada: t.valor_referencia || null, data_entrada: t.data_recebimento, eh_proprio: true,
+        processo_id: t.processo_id || null, observacoes: t.observacoes || null, status_frota: 'ATIVO'
+      }).select('id').single()
+      if (error) { alert('Não deu pra converter: ' + error.message); return }
+      await db.from('veiculo_transicao').update({ status: 'TRANSFERIDO', veiculo_id: novoVeiculo.id }).eq('id', t.id)
+      alert('Convertido! Já aparece na aba "Itens" da Frota.')
+      frotaTransicao(alvo, editavel)
+    }
+  })
+}
+
+function formVeiculoTransicao (registro, aoSalvar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>${registro ? 'Editar' : 'Novo'} veículo em transição</h3>
+    <div class="form-grade">
+      <div class="campo" style="grid-column:1/-1;"><label>Descrição *</label><input id="vt-descricao" value="${esc(registro?.descricao ?? '')}" placeholder="ex: Caminhão Volvo FH 540 2019"></div>
+      <div class="campo"><label>Placa</label><input id="vt-placa" value="${esc(registro?.placa ?? '')}"></div>
+      <div class="campo"><label>Recebido em</label><input type="date" id="vt-data" value="${registro?.data_recebimento ?? hojeISO()}"></div>
+      <div class="campo"><label>De quem veio</label><input id="vt-contraparte" value="${esc(registro?.contraparte ?? '')}"></div>
+      <div class="campo"><label>Valor de referência (R$)</label><input id="vt-valor" type="number" step="0.01" value="${registro?.valor_referencia ?? ''}"></div>
+      <div class="campo"><label>Status</label><select id="vt-status">
+        <option value="AGUARDANDO" ${(!registro || registro.status === 'AGUARDANDO') ? 'selected' : ''}>Aguardando transferência</option>
+        <option value="DEVOLVIDO" ${registro?.status === 'DEVOLVIDO' ? 'selected' : ''}>Devolvido/desfeito</option>
+      </select></div>
+    </div>
+    <div class="campo" style="margin-top:10px;"><label>Observações</label><textarea id="vt-obs" style="min-height:64px;">${esc(registro?.observacoes ?? '')}</textarea></div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="vt-salvar">Salvar</button>
+      ${registro ? `<button class="btn-secundario" id="vt-excluir" style="color:var(--warn-text);">Excluir</button>` : ''}
+      <button class="btn-secundario" id="vt-fechar">Fechar</button>
+    </div>
+    <div class="recado oculto" id="vt-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#vt-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  if (registro) fundo.querySelector('#vt-excluir').onclick = async () => {
+    if (!confirm('Excluir esse registro de transição?')) return
+    await db.from('veiculo_transicao').delete().eq('id', registro.id)
+    fechar(); aoSalvar()
+  }
+
+  fundo.querySelector('#vt-salvar').onclick = async () => {
+    const el = fundo.querySelector('#vt-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const descricao = fundo.querySelector('#vt-descricao').value.trim()
+    if (!descricao) { aviso('Escreva a descrição do veículo.'); return }
+    const btn = fundo.querySelector('#vt-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const corpo = {
+      descricao, placa: fundo.querySelector('#vt-placa').value.trim() || null,
+      data_recebimento: fundo.querySelector('#vt-data').value, contraparte: fundo.querySelector('#vt-contraparte').value.trim() || null,
+      valor_referencia: fundo.querySelector('#vt-valor').value || null, status: fundo.querySelector('#vt-status').value,
+      observacoes: fundo.querySelector('#vt-obs').value.trim() || null
+    }
+    let error
+    if (registro) { ({ error } = await db.from('veiculo_transicao').update(corpo).eq('id', registro.id)) }
+    else { ({ error } = await db.from('veiculo_transicao').insert({ ...corpo, criado_por: PERFIL.pessoaId })) }
+    btn.disabled = false; btn.textContent = 'Salvar'
+    if (error) { aviso(error.message); return }
+    fechar(); aoSalvar()
   }
 }
 
@@ -17726,10 +17849,11 @@ function statusCor (valor, limiteBom, limiteRuim, invertido = false) {
 }
 
 function kpiCor (rotulo, valor, nota, cor) {
-  return `<div class="card kpi" style="border-left:4px solid var(--${cor === 'ok' ? 'good-text' : cor === 'critico' ? 'warn-text' : 'gold'});">
-    <div class="rotulo">${esc(rotulo)}</div>
-    <div class="valor" style="color:var(--${cor === 'ok' ? 'good-text' : cor === 'critico' ? 'warn-text' : 'gold'});">${valor}</div>
-    <div class="nota">${esc(nota)}</div>
+  const corVar = cor === 'ok' ? 'good-text' : cor === 'critico' ? 'critico-text' : 'gold'
+  return `<div class="bloco" style="border-left:4px solid var(--${corVar});">
+    <div class="rot">${esc(rotulo)}</div>
+    <div class="val" style="color:var(--${corVar});">${valor}</div>
+    ${nota ? `<div class="texto-dim2" style="font-size:11px;margin-top:3px;">${esc(nota)}</div>` : ''}
   </div>`
 }
 
@@ -18025,6 +18149,512 @@ async function dashDiretorFazenda (alvo) {
     </div>`
 }
 
+// ---------------------------------------------------------------
+// Página: DP e Segurança  (módulo 'dp')
+// Reaproveita a tabela `pessoa` que já existe pra funcionário (nada de
+// cadastro duplicado) — só soma os campos de DP (cpf, rg, admissão) e
+// três tabelas novas: documentos, exames e ocorrências, todas ligadas
+// em pessoa_id.
+// ---------------------------------------------------------------
+const ROTULO_STATUS_DP = { OK: 'ok', VENCIDO: 'vencido', PENDENTE: 'pendente', 'SEM VALIDADE': 'sem validade', 'VENCE EM BREVE': 'vence em breve' }
+function corStatusDp (status, validade) {
+  if (validade) {
+    const hoje = hojeISO()
+    if (validade < hoje) return 'badge-alerta'
+    if (validade <= new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10)) return 'chip'
+    return 'badge-bom'
+  }
+  if (status === 'VENCIDO') return 'badge-alerta'
+  if (status === 'OK') return 'badge-bom'
+  return 'chip'
+}
+
+async function paginaDpSeguranca () {
+  const editavel = podeEditar('dp')
+  if (!podeVer('dp')) { areaLivre().innerHTML =
+    `<div class="panel" style="padding:22px;"><p class="texto-dim">Você não tem acesso a DP e Segurança.</p></div>`; return }
+  $('#subtitulo-pagina').textContent = 'Funcionários, documentos, exames e ocorrências'
+  const area = areaLivre()
+  area.innerHTML = `
+    <div class="subabas">
+      <button data-sub="funcionarios" class="ativo">Funcionários</button>
+      <button data-sub="documentos">Documentos</button>
+      <button data-sub="exames">Exames</button>
+      <button data-sub="ocorrencias">Ocorrências</button>
+    </div>
+    <div id="sub-dp"></div>`
+  area.querySelectorAll('.subabas button').forEach(b => {
+    b.onclick = () => {
+      area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
+      abrirDp(b.dataset.sub, editavel)
+    }
+  })
+  abrirDp('funcionarios', editavel)
+}
+function abrirDp (sub, editavel) {
+  const alvo = $('#sub-dp')
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  if (sub === 'funcionarios') dpFuncionarios(alvo, editavel)
+  if (sub === 'documentos') dpDocumentos(alvo, editavel)
+  if (sub === 'exames') dpExames(alvo, editavel)
+  if (sub === 'ocorrencias') dpOcorrencias(alvo, editavel)
+}
+
+// ----- Funcionários -----
+async function dpFuncionarios (alvo, editavel) {
+  const [{ data: pessoas }, { data: comCpf }, { data: empresas }, { data: setores }] = await Promise.all([
+    db.from('pessoa').select('id,nome,cpf,rg,telefone,email,cargo,data_admissao,data_nascimento,status,foto_url,setor_id,empresa_id,setor:setor_id(nome),empresa:empresa_id(nome)').not('data_admissao', 'is', null).order('nome'),
+    // quem não tem data_admissao pode não ser "funcionário CLT" (ex: fornecedor cadastrado por engano) —
+    // mas se a pessoa tem cpf preenchido, também é considerado funcionário de DP
+    db.from('pessoa').select('id,nome,cpf,rg,telefone,email,cargo,data_admissao,data_nascimento,status,foto_url,setor_id,empresa_id,setor:setor_id(nome),empresa:empresa_id(nome)').is('data_admissao', null).not('cpf', 'is', null).order('nome'),
+    db.from('empresa').select('id,nome').eq('status', 'ATIVO').order('nome'),
+    db.from('setor').select('id,nome').order('nome')
+  ])
+  const lista = [...(pessoas || []), ...(comCpf || [])]
+  window.__DP_PESSOAS = lista
+  window.__DP_EMPRESAS = empresas || []
+  window.__DP_SETORES = setores || []
+
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <input id="dp-busca" placeholder="buscar por nome, CPF, cargo..." style="flex:1;min-width:220px;">
+      ${editavel ? `<button class="btn" id="dp-novo-func">+ Novo funcionário</button>` : ''}
+    </div>
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr><th></th><th>Nome</th><th>CPF</th><th>Cargo</th><th>Setor</th><th>Admissão</th><th>Status</th><th></th></tr></thead>
+      <tbody id="dp-func-corpo"></tbody></table>
+    </div></div>`
+
+  const render = filtro => {
+    const termo = filtro.trim().toLowerCase()
+    const filtrada = !termo ? lista : lista.filter(p => [p.nome, p.cpf, p.cargo].some(c => (c || '').toLowerCase().includes(termo)))
+    $('#dp-func-corpo').innerHTML = filtrada.map(p => `<tr>
+        <td>${p.foto_url ? `<img src="${esc(p.foto_url)}" style="width:34px;height:34px;border-radius:8px;object-fit:cover;">` : `<div style="width:34px;height:34px;border-radius:8px;background:var(--surface2);"></div>`}</td>
+        <td><b>${esc(p.nome)}</b></td><td class="texto-dim2">${esc(p.cpf ?? '—')}</td>
+        <td class="texto-dim">${esc(p.cargo ?? '—')}</td><td class="texto-dim2">${esc(p.setor?.nome ?? '—')}</td>
+        <td class="texto-dim2">${p.data_admissao ? fmtData(p.data_admissao) : '—'}</td>
+        <td>${p.status === 'ATIVO' ? '<span class="badge-bom">ativo</span>' : `<span class="chip">${esc(p.status ?? '—')}</span>`}</td>
+        <td><button class="btn-secundario mini" data-ver-pessoa="${p.id}">ver ficha</button></td>
+      </tr>`).join('') || `<tr><td colspan="8" class="vazio">Nenhum funcionário encontrado.</td></tr>`
+    $('#dp-func-corpo').querySelectorAll('[data-ver-pessoa]').forEach(b => {
+      b.onclick = () => dpFichaPessoa(lista.find(p => p.id === b.dataset.verPessoa), editavel)
+    })
+  }
+  render('')
+  $('#dp-busca').oninput = () => render($('#dp-busca').value)
+  if (editavel) $('#dp-novo-func').onclick = () => formDpFuncionario(null, () => dpFuncionarios(alvo, editavel))
+}
+
+function formDpFuncionario (pessoa, aoSalvar) {
+  const empresas = window.__DP_EMPRESAS || []
+  const setores = window.__DP_SETORES || []
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:760px;">
+    <h3>${pessoa ? 'Editar' : 'Novo'} funcionário</h3>
+    <div class="form-grade">
+      <div class="campo" style="grid-column:1/-1;"><label>Nome *</label><input id="fdp-nome" value="${esc(pessoa?.nome ?? '')}"></div>
+      <div class="campo"><label>CPF</label><input id="fdp-cpf" value="${esc(pessoa?.cpf ?? '')}"></div>
+      <div class="campo"><label>RG</label><input id="fdp-rg" value="${esc(pessoa?.rg ?? '')}"></div>
+      <div class="campo"><label>Data de nascimento</label><input type="date" id="fdp-nasc" value="${pessoa?.data_nascimento ?? ''}"></div>
+      <div class="campo"><label>Telefone</label><input id="fdp-tel" value="${esc(pessoa?.telefone ?? '')}"></div>
+      <div class="campo" style="grid-column:span 2;"><label>E-mail</label><input id="fdp-email" value="${esc(pessoa?.email ?? '')}"></div>
+      <div class="campo"><label>Cargo</label><input id="fdp-cargo" value="${esc(pessoa?.cargo ?? '')}"></div>
+      <div class="campo"><label>Setor</label><select id="fdp-setor"><option value="">—</option>
+        ${setores.map(s => `<option value="${s.id}" ${s.id === pessoa?.setor_id ? 'selected' : ''}>${esc(s.nome)}</option>`).join('')}</select></div>
+      <div class="campo"><label>Empresa</label><select id="fdp-empresa"><option value="">—</option>
+        ${empresas.map(e => `<option value="${e.id}" ${e.id === pessoa?.empresa_id ? 'selected' : ''}>${esc(e.nome)}</option>`).join('')}</select></div>
+      <div class="campo"><label>Data de admissão</label><input type="date" id="fdp-admissao" value="${pessoa?.data_admissao ?? ''}"></div>
+      <div class="campo"><label>Status</label><select id="fdp-status">
+        <option value="ATIVO" ${(!pessoa || pessoa.status === 'ATIVO') ? 'selected' : ''}>Ativo</option>
+        <option value="AFASTADO" ${pessoa?.status === 'AFASTADO' ? 'selected' : ''}>Afastado</option>
+        <option value="INATIVO" ${pessoa?.status === 'INATIVO' ? 'selected' : ''}>Inativo</option>
+      </select></div>
+    </div>
+    <div class="campo" style="margin-top:10px;"><label>Foto</label>
+      <div style="display:flex;gap:10px;align-items:center;">
+        ${pessoa?.foto_url ? `<img src="${esc(pessoa.foto_url)}" style="width:56px;height:56px;border-radius:10px;object-fit:cover;">` : ''}
+        <input type="file" id="fdp-foto" accept="image/*" style="flex:1;">
+      </div></div>
+    <div class="acoes" style="margin-top:14px;"><button class="btn" id="fdp-salvar">Salvar</button>
+      <button class="btn-secundario" id="fdp-fechar">Fechar</button></div>
+    <div class="recado oculto" id="fdp-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#fdp-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  fundo.querySelector('#fdp-salvar').onclick = async () => {
+    const el = fundo.querySelector('#fdp-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const nome = fundo.querySelector('#fdp-nome').value.trim()
+    if (!nome) { aviso('Escreva o nome.'); return }
+    const btn = fundo.querySelector('#fdp-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+
+    let fotoUrl = pessoa?.foto_url ?? null
+    const arquivoFoto = fundo.querySelector('#fdp-foto').files[0]
+    if (arquivoFoto) {
+      try {
+        const enviado = await enviarArquivo(arquivoFoto, 'dp-fotos')
+        const { data: signed } = await db.storage.from('documentos').createSignedUrl(enviado.caminho, 60 * 60 * 24 * 365 * 5)
+        fotoUrl = signed?.signedUrl || enviado.caminho
+      } catch (e) { aviso('Não deu pra enviar a foto: ' + e.message); btn.disabled = false; btn.textContent = 'Salvar'; return }
+    }
+
+    const corpo = {
+      nome, cpf: fundo.querySelector('#fdp-cpf').value.trim() || null, rg: fundo.querySelector('#fdp-rg').value.trim() || null,
+      data_nascimento: fundo.querySelector('#fdp-nasc').value || null, telefone: fundo.querySelector('#fdp-tel').value.trim() || null,
+      email: fundo.querySelector('#fdp-email').value.trim() || null, cargo: fundo.querySelector('#fdp-cargo').value.trim() || null,
+      setor_id: fundo.querySelector('#fdp-setor').value || null, empresa_id: fundo.querySelector('#fdp-empresa').value || null,
+      data_admissao: fundo.querySelector('#fdp-admissao').value || null, status: fundo.querySelector('#fdp-status').value,
+      foto_url: fotoUrl
+    }
+    let error
+    if (pessoa) { ({ error } = await db.from('pessoa').update(corpo).eq('id', pessoa.id)) }
+    else { ({ error } = await db.from('pessoa').insert(corpo)) }
+    btn.disabled = false; btn.textContent = 'Salvar'
+    if (error) { aviso(error.message); return }
+    fechar(); aoSalvar()
+  }
+}
+
+async function dpFichaPessoa (pessoa, editavel) {
+  const [{ data: docs }, { data: exames }, { data: ocorr }, { data: folhas }] = await Promise.all([
+    db.from('dp_documento').select('*').eq('pessoa_id', pessoa.id).order('criado_em', { ascending: false }),
+    db.from('dp_exame').select('*').eq('pessoa_id', pessoa.id).order('criado_em', { ascending: false }),
+    db.from('dp_ocorrencia').select('*').eq('pessoa_id', pessoa.id).order('data_ocorrencia', { ascending: false }),
+    db.from('dp_folha').select('*').eq('pessoa_id', pessoa.id).order('criado_em', { ascending: false })
+  ])
+  const valorLiquido = f => f.valor_liquido != null ? Number(f.valor_liquido)
+    : Number(f.salario_base || 0) + Number(f.horas_extras || 0) + Number(f.beneficios || 0) - Number(f.descontos || 0)
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:760px;">
+    <div class="cabeca-secao">
+      <h3>${esc(pessoa.nome)}</h3>
+      ${pessoa.foto_url ? `<img src="${esc(pessoa.foto_url)}" style="width:44px;height:44px;border-radius:10px;object-fit:cover;">` : ''}
+    </div>
+    <p class="texto-dim2" style="font-size:12.5px;margin:-6px 0 14px;">
+      CPF: ${esc(pessoa.cpf ?? '—')} · RG: ${esc(pessoa.rg ?? '—')} · Telefone: ${esc(pessoa.telefone ?? '—')} ·
+      Admissão: ${pessoa.data_admissao ? fmtData(pessoa.data_admissao) : '—'}</p>
+
+    <h4 style="font-family:var(--serif);font-size:14px;margin:14px 0 8px;">Documentos (${(docs || []).length})</h4>
+    <div class="tabela-scroll" style="max-height:180px;"><table><tbody>
+      ${(docs || []).map(d => `<tr><td>${esc(d.tipo_documento)}</td>
+        <td><span class="${corStatusDp(d.status, d.data_validade)}">${esc(ROTULO_STATUS_DP[d.status] ?? d.status ?? '—')}</span></td>
+        <td>${d.link_arquivo ? `<a href="${esc(d.link_arquivo)}" target="_blank">abrir</a>` : '—'}</td></tr>`).join('') || '<tr><td class="vazio">Nenhum documento.</td></tr>'}
+    </tbody></table></div>
+
+    <h4 style="font-family:var(--serif);font-size:14px;margin:14px 0 8px;">Exames (${(exames || []).length})</h4>
+    <div class="tabela-scroll" style="max-height:180px;"><table><tbody>
+      ${(exames || []).map(e => `<tr><td>${esc(e.tipo_exame)}</td>
+        <td class="texto-dim2">${e.data_validade ? fmtData(e.data_validade) : '—'}</td>
+        <td><span class="${corStatusDp(e.status, e.data_validade)}">${esc(ROTULO_STATUS_DP[e.status] ?? e.status ?? '—')}</span></td>
+        <td>${e.link_arquivo ? `<a href="${esc(e.link_arquivo)}" target="_blank">abrir</a>` : '—'}</td></tr>`).join('') || '<tr><td class="vazio">Nenhum exame.</td></tr>'}
+    </tbody></table></div>
+
+    <h4 style="font-family:var(--serif);font-size:14px;margin:14px 0 8px;">Folha (${(folhas || []).length})
+      ${editavel ? `<button class="btn-secundario mini" id="dpf-nova-folha" style="float:right;">+ lançar</button>` : ''}</h4>
+    <div class="tabela-scroll" style="max-height:180px;"><table><tbody>
+      ${(folhas || []).map(f => `<tr><td class="texto-dim2">${esc(f.competencia)}</td>
+        <td class="num">R$ ${fmtNum(valorLiquido(f))}</td>
+        <td><span class="${f.status === 'PAGO' ? 'badge-bom' : 'chip'}">${esc(f.status)}</span></td></tr>`).join('') || '<tr><td class="vazio">Nenhum lançamento de folha.</td></tr>'}
+    </tbody></table></div>
+
+    <h4 style="font-family:var(--serif);font-size:14px;margin:14px 0 8px;">Ocorrências (${(ocorr || []).length})</h4>
+    <div class="tabela-scroll" style="max-height:180px;"><table><tbody>
+      ${(ocorr || []).map(o => `<tr><td class="texto-dim2">${fmtData(o.data_ocorrencia)}</td><td>${esc(o.tipo)}</td>
+        <td><span class="${o.status === 'ENCERRADA' ? 'badge-bom' : 'badge-alerta'}">${esc(o.status)}</span></td></tr>`).join('') || '<tr><td class="vazio">Nenhuma ocorrência.</td></tr>'}
+    </tbody></table></div>
+
+    <div class="acoes" style="margin-top:16px;">
+      ${editavel ? `<button class="btn-secundario" id="dpf-editar">Editar cadastro</button>` : ''}
+      <button class="btn-secundario" id="dpf-pdf">Gerar PDF</button>
+      <button class="btn-secundario" id="dpf-fechar">Fechar</button>
+    </div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.querySelector('#dpf-fechar').onclick = () => fundo.remove()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+  fundo.querySelector('#dpf-pdf').onclick = () => dpGerarPdfFicha(pessoa, docs || [], exames || [], ocorr || [], folhas || [])
+  if (editavel) {
+    fundo.querySelector('#dpf-editar').onclick = () => { fundo.remove(); formDpFuncionario(pessoa, () => {}) }
+    fundo.querySelector('#dpf-nova-folha').onclick = () => formDpFolha(pessoa, null, () => { fundo.remove(); dpFichaPessoa(pessoa, editavel) })
+  }
+}
+
+// ----- Documentos -----
+async function dpDocumentos (alvo, editavel) {
+  const { data } = await db.from('dp_documento').select('*, pessoa:pessoa_id(nome)').order('data_validade', { ascending: true, nullsFirst: false })
+  const lista = data || []
+  const vencidos = lista.filter(d => d.data_validade && d.data_validade < hojeISO())
+
+  alvo.innerHTML = `
+    ${vencidos.length ? `<div class="aviso-bloqueio" style="margin-bottom:16px;">${vencidos.length} documento(s) vencido(s) — confira abaixo.</div>` : ''}
+    ${editavel ? `<div class="acoes" style="margin-bottom:16px;"><button class="btn" id="dpd-novo">+ Novo documento</button></div>` : ''}
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr><th>Funcionário</th><th>Tipo</th><th>Validade</th><th>Status</th><th></th></tr></thead><tbody>
+        ${lista.map(d => `<tr>
+          <td>${esc(d.pessoa?.nome ?? '—')}</td><td class="texto-dim">${esc(d.tipo_documento)}</td>
+          <td class="texto-dim2">${d.data_validade ? fmtData(d.data_validade) : '—'}</td>
+          <td><span class="${corStatusDp(d.status, d.data_validade)}">${esc(ROTULO_STATUS_DP[d.status] ?? d.status ?? '—')}</span></td>
+          <td>${d.link_arquivo ? `<a href="${esc(d.link_arquivo)}" target="_blank">abrir</a>` : '—'}</td>
+        </tr>`).join('') || `<tr><td colspan="5" class="vazio">Nenhum documento cadastrado.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+  if (editavel) $('#dpd-novo').onclick = () => formDpRegistro('documento', null, () => dpDocumentos(alvo, editavel))
+}
+
+// ----- Exames -----
+async function dpExames (alvo, editavel) {
+  const { data } = await db.from('dp_exame').select('*, pessoa:pessoa_id(nome)').order('data_validade', { ascending: true, nullsFirst: false })
+  const lista = data || []
+  const vencidos = lista.filter(e => e.data_validade && e.data_validade < hojeISO())
+
+  alvo.innerHTML = `
+    ${vencidos.length ? `<div class="aviso-bloqueio" style="margin-bottom:16px;">${vencidos.length} exame(s) vencido(s) — confira abaixo.</div>` : ''}
+    ${editavel ? `<div class="acoes" style="margin-bottom:16px;"><button class="btn" id="dpe-novo">+ Novo exame</button></div>` : ''}
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr><th>Funcionário</th><th>Tipo</th><th>Clínica</th><th>Validade</th><th>Status</th><th></th></tr></thead><tbody>
+        ${lista.map(e => `<tr>
+          <td>${esc(e.pessoa?.nome ?? '—')}</td><td class="texto-dim">${esc(e.tipo_exame)}</td>
+          <td class="texto-dim2">${esc(e.clinica ?? '—')}</td>
+          <td class="texto-dim2">${e.data_validade ? fmtData(e.data_validade) : '—'}</td>
+          <td><span class="${corStatusDp(e.status, e.data_validade)}">${esc(ROTULO_STATUS_DP[e.status] ?? e.status ?? '—')}</span></td>
+          <td>${e.link_arquivo ? `<a href="${esc(e.link_arquivo)}" target="_blank">abrir</a>` : '—'}</td>
+        </tr>`).join('') || `<tr><td colspan="6" class="vazio">Nenhum exame cadastrado.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+  if (editavel) $('#dpe-novo').onclick = () => formDpRegistro('exame', null, () => dpExames(alvo, editavel))
+}
+
+// ----- Ocorrências -----
+async function dpOcorrencias (alvo, editavel) {
+  const { data } = await db.from('dp_ocorrencia').select('*, pessoa:pessoa_id(nome)').order('data_ocorrencia', { ascending: false })
+  const lista = data || []
+  const corStatusOcorr = s => s === 'ENCERRADA' ? 'badge-bom' : s === 'EM_ANDAMENTO' ? 'chip' : 'badge-alerta'
+
+  alvo.innerHTML = `
+    ${editavel ? `<div class="acoes" style="margin-bottom:16px;"><button class="btn" id="dpo-novo">+ Registrar ocorrência</button></div>` : ''}
+    ${lista.map(o => `<div class="panel" style="padding:16px 18px;margin-bottom:12px;">
+      <div class="cabeca-secao">
+        <div><b>${esc(o.pessoa?.nome ?? 'sem pessoa vinculada')}</b> — <span class="chip">${esc(o.tipo)}</span></div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <span class="texto-dim2" style="font-size:12px;">${fmtData(o.data_ocorrencia)}</span>
+          <span class="${corStatusOcorr(o.status)}">${esc(o.status)}</span>
+        </div>
+      </div>
+      <p style="font-size:13px;white-space:pre-wrap;margin:10px 0;">${esc(o.descricao ?? '—')}</p>
+      ${o.acao_tomada ? `<p class="texto-dim2" style="font-size:12.5px;white-space:pre-wrap;"><b>Ação tomada:</b> ${esc(o.acao_tomada)}</p>` : ''}
+      ${editavel ? `<div class="acoes" style="margin-top:10px;"><button class="btn-secundario mini" data-editar-ocorr="${o.id}">editar</button></div>` : ''}
+    </div>`).join('') || `<p class="vazio">Nenhuma ocorrência registrada.</p>`}`
+
+  if (editavel) {
+    $('#dpo-novo').onclick = () => formDpOcorrencia(null, () => dpOcorrencias(alvo, editavel))
+    alvo.querySelectorAll('[data-editar-ocorr]').forEach(b => {
+      b.onclick = () => formDpOcorrencia(lista.find(o => o.id === b.dataset.editarOcorr), () => dpOcorrencias(alvo, editavel))
+    })
+  }
+}
+
+function formDpRegistro (tipo, registro, aoSalvar) {
+  const pessoas = window.__DP_PESSOAS || []
+  const tabela = tipo === 'documento' ? 'dp_documento' : 'dp_exame'
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>Novo ${tipo}</h3>
+    <div class="form-grade">
+      <div class="campo" style="grid-column:1/-1;"><label>Funcionário *</label>
+        <select id="dpr-pessoa"><option value="">selecione...</option>${pessoas.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')}</select></div>
+      <div class="campo"><label>Tipo ${tipo === 'documento' ? 'de documento' : 'de exame'} *</label><input id="dpr-tipo" placeholder="${tipo === 'documento' ? 'ex: Carteira de Trabalho' : 'ex: Periódico'}"></div>
+      ${tipo === 'exame' ? `<div class="campo"><label>Clínica</label><input id="dpr-clinica"></div>` : `<div class="campo"><label>Número</label><input id="dpr-numero"></div>`}
+      <div class="campo"><label>Validade</label><input type="date" id="dpr-validade"></div>
+      <div class="campo"><label>Status</label><select id="dpr-status">
+        <option value="OK">OK</option><option value="SEM VALIDADE">Sem validade</option>
+        <option value="PENDENTE">Pendente</option><option value="VENCIDO">Vencido</option>
+      </select></div>
+    </div>
+    <div class="campo" style="margin-top:10px;"><label>Link do arquivo</label><input id="dpr-link" placeholder="link do Drive, se tiver"></div>
+    <div class="campo" style="margin-top:10px;"><label>Observações</label><textarea id="dpr-obs" style="min-height:56px;"></textarea></div>
+    <div class="acoes" style="margin-top:14px;"><button class="btn" id="dpr-salvar">Salvar</button>
+      <button class="btn-secundario" id="dpr-fechar">Fechar</button></div>
+    <div class="recado oculto" id="dpr-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#dpr-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  fundo.querySelector('#dpr-salvar').onclick = async () => {
+    const el = fundo.querySelector('#dpr-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const pessoaId = fundo.querySelector('#dpr-pessoa').value
+    const tipoVal = fundo.querySelector('#dpr-tipo').value.trim()
+    if (!pessoaId) { aviso('Escolha o funcionário.'); return }
+    if (!tipoVal) { aviso('Informe o tipo.'); return }
+    const btn = fundo.querySelector('#dpr-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const corpo = tipo === 'documento'
+      ? { pessoa_id: pessoaId, tipo_documento: tipoVal, numero_documento: fundo.querySelector('#dpr-numero').value.trim() || null,
+          data_validade: fundo.querySelector('#dpr-validade').value || null, status: fundo.querySelector('#dpr-status').value,
+          link_arquivo: fundo.querySelector('#dpr-link').value.trim() || null, observacoes: fundo.querySelector('#dpr-obs').value.trim() || null }
+      : { pessoa_id: pessoaId, tipo_exame: tipoVal, clinica: fundo.querySelector('#dpr-clinica').value.trim() || null,
+          data_validade: fundo.querySelector('#dpr-validade').value || null, status: fundo.querySelector('#dpr-status').value,
+          link_arquivo: fundo.querySelector('#dpr-link').value.trim() || null, observacoes: fundo.querySelector('#dpr-obs').value.trim() || null }
+    const { error } = await db.from(tabela).insert(corpo)
+    btn.disabled = false; btn.textContent = 'Salvar'
+    if (error) { aviso(error.message); return }
+    fechar(); aoSalvar()
+  }
+}
+
+function formDpOcorrencia (registro, aoSalvar) {
+  const pessoas = window.__DP_PESSOAS || []
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>${registro ? 'Editar' : 'Registrar'} ocorrência</h3>
+    <div class="form-grade">
+      <div class="campo" style="grid-column:1/-1;"><label>Funcionário</label>
+        <select id="dpo-pessoa"><option value="">—</option>${pessoas.map(p => `<option value="${p.id}" ${p.id === registro?.pessoa_id ? 'selected' : ''}>${esc(p.nome)}</option>`).join('')}</select></div>
+      <div class="campo"><label>Data</label><input type="date" id="dpo-data" value="${registro?.data_ocorrencia ?? hojeISO()}"></div>
+      <div class="campo"><label>Tipo</label><select id="dpo-tipo">
+        ${['Acidente', 'Quase-acidente', 'Advertência', 'Elogio', 'Outro'].map(t => `<option value="${t}" ${t === registro?.tipo ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+      <div class="campo"><label>Status</label><select id="dpo-status">
+        <option value="ABERTA" ${(!registro || registro.status === 'ABERTA') ? 'selected' : ''}>Aberta</option>
+        <option value="EM_ANDAMENTO" ${registro?.status === 'EM_ANDAMENTO' ? 'selected' : ''}>Em andamento</option>
+        <option value="ENCERRADA" ${registro?.status === 'ENCERRADA' ? 'selected' : ''}>Encerrada</option>
+      </select></div>
+    </div>
+    <div class="campo" style="margin-top:10px;"><label>Descrição *</label><textarea id="dpo-desc" style="min-height:90px;">${esc(registro?.descricao ?? '')}</textarea></div>
+    <div class="campo" style="margin-top:10px;"><label>Ação tomada</label><textarea id="dpo-acao" style="min-height:70px;">${esc(registro?.acao_tomada ?? '')}</textarea></div>
+    <div class="acoes" style="margin-top:14px;"><button class="btn" id="dpo-salvar">Salvar</button>
+      <button class="btn-secundario" id="dpo-fechar">Fechar</button></div>
+    <div class="recado oculto" id="dpo-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#dpo-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  fundo.querySelector('#dpo-salvar').onclick = async () => {
+    const el = fundo.querySelector('#dpo-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const descricao = fundo.querySelector('#dpo-desc').value.trim()
+    if (!descricao) { aviso('Escreva a descrição.'); return }
+    const btn = fundo.querySelector('#dpo-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const corpo = {
+      pessoa_id: fundo.querySelector('#dpo-pessoa').value || null, data_ocorrencia: fundo.querySelector('#dpo-data').value,
+      tipo: fundo.querySelector('#dpo-tipo').value, status: fundo.querySelector('#dpo-status').value,
+      descricao, acao_tomada: fundo.querySelector('#dpo-acao').value.trim() || null
+    }
+    let error
+    if (registro) { ({ error } = await db.from('dp_ocorrencia').update(corpo).eq('id', registro.id)) }
+    else { ({ error } = await db.from('dp_ocorrencia').insert({ ...corpo, criado_por: PERFIL.pessoaId })) }
+    btn.disabled = false; btn.textContent = 'Salvar'
+    if (error) { aviso(error.message); return }
+    fechar(); aoSalvar()
+  }
+}
+
+// ----- Folha de pagamento (dentro da ficha da pessoa) -----
+function formDpFolha (pessoa, registro, aoSalvar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>Lançar folha — ${esc(pessoa.nome)}</h3>
+    <div class="form-grade">
+      <div class="campo"><label>Competência *</label><input id="dpfl-comp" placeholder="ex: 04/2026" value="${esc(registro?.competencia ?? '')}"></div>
+      <div class="campo"><label>Status</label><select id="dpfl-status">
+        <option value="LANCADO" ${(!registro || registro.status === 'LANCADO') ? 'selected' : ''}>Lançado</option>
+        <option value="PAGO" ${registro?.status === 'PAGO' ? 'selected' : ''}>Pago</option>
+        <option value="PENDENTE" ${registro?.status === 'PENDENTE' ? 'selected' : ''}>Pendente</option>
+      </select></div>
+      <div class="campo"><label>Salário base (R$)</label><input id="dpfl-sal" type="number" step="0.01" value="${registro?.salario_base ?? ''}"></div>
+      <div class="campo"><label>Horas extras (R$)</label><input id="dpfl-he" type="number" step="0.01" value="${registro?.horas_extras ?? ''}"></div>
+      <div class="campo"><label>Descontos (R$)</label><input id="dpfl-desc" type="number" step="0.01" value="${registro?.descontos ?? ''}"></div>
+      <div class="campo"><label>Benefícios (R$)</label><input id="dpfl-benef" type="number" step="0.01" value="${registro?.beneficios ?? ''}"></div>
+    </div>
+    <p class="texto-dim2" style="font-size:11.5px;margin-top:8px;">Valor líquido é calculado sozinho (salário + extras + benefícios − descontos) — só preenche na mão se quiser sobrescrever.</p>
+    <div class="campo"><label>Valor líquido (opcional, sobrescreve o cálculo)</label><input id="dpfl-liq" type="number" step="0.01" value="${registro?.valor_liquido ?? ''}"></div>
+    <div class="campo" style="margin-top:10px;"><label>Observações</label><textarea id="dpfl-obs" style="min-height:56px;">${esc(registro?.observacoes ?? '')}</textarea></div>
+    <div class="acoes" style="margin-top:14px;"><button class="btn" id="dpfl-salvar">Salvar</button>
+      <button class="btn-secundario" id="dpfl-fechar">Fechar</button></div>
+    <div class="recado oculto" id="dpfl-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#dpfl-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  fundo.querySelector('#dpfl-salvar').onclick = async () => {
+    const el = fundo.querySelector('#dpfl-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const comp = fundo.querySelector('#dpfl-comp').value.trim()
+    if (!comp) { aviso('Informe a competência (ex: 04/2026).'); return }
+    const btn = fundo.querySelector('#dpfl-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const corpo = {
+      pessoa_id: pessoa.id, competencia: comp, status: fundo.querySelector('#dpfl-status').value,
+      salario_base: fundo.querySelector('#dpfl-sal').value || 0, horas_extras: fundo.querySelector('#dpfl-he').value || 0,
+      descontos: fundo.querySelector('#dpfl-desc').value || 0, beneficios: fundo.querySelector('#dpfl-benef').value || 0,
+      valor_liquido: fundo.querySelector('#dpfl-liq').value || null, observacoes: fundo.querySelector('#dpfl-obs').value.trim() || null
+    }
+    let error
+    if (registro) { ({ error } = await db.from('dp_folha').update(corpo).eq('id', registro.id)) }
+    else { ({ error } = await db.from('dp_folha').insert({ ...corpo, criado_por: PERFIL.pessoaId })) }
+    btn.disabled = false; btn.textContent = 'Salvar'
+    if (error) { aviso(error.message); return }
+    fechar(); aoSalvar()
+  }
+}
+
+// ----- PDF completo da ficha (documentos + exames + folha + ocorrências) -----
+function dpGerarPdfFicha (pessoa, docs, exames, ocorr, folhas) {
+  const valorLiquido = f => f.valor_liquido != null ? Number(f.valor_liquido)
+    : Number(f.salario_base || 0) + Number(f.horas_extras || 0) + Number(f.beneficios || 0) - Number(f.descontos || 0)
+
+  const tabela = (titulo, linhas) => linhas ? `
+    <h3 style="margin-top:18px;">${titulo}</h3>${linhas}` : ''
+
+  const corpo = `
+    <div class="grade-doc" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;">
+      ${docLinha('Nome', pessoa.nome)}${docLinha('CPF', pessoa.cpf)}
+      ${docLinha('RG', pessoa.rg)}${docLinha('Telefone', pessoa.telefone)}
+      ${docLinha('E-mail', pessoa.email)}${docLinha('Cargo', pessoa.cargo)}
+      ${docLinha('Admissão', pessoa.data_admissao ? fmtData(pessoa.data_admissao) : '')}${docLinha('Status', pessoa.status)}
+    </div>
+    ${tabela('Documentos', `<table style="width:100%;border-collapse:collapse;"><thead><tr>
+        <th>Tipo</th><th>Validade</th><th>Status</th></tr></thead><tbody>
+        ${(docs || []).map(d => `<tr><td>${esc(d.tipo_documento)}</td><td>${d.data_validade ? fmtData(d.data_validade) : '—'}</td><td>${esc(ROTULO_STATUS_DP[d.status] ?? d.status ?? '—')}</td></tr>`).join('')
+        || '<tr><td colspan="3">Nenhum documento</td></tr>'}</tbody></table>`)}
+    ${tabela('Exames', `<table style="width:100%;border-collapse:collapse;"><thead><tr>
+        <th>Tipo</th><th>Validade</th><th>Status</th><th>Clínica</th></tr></thead><tbody>
+        ${(exames || []).map(e => `<tr><td>${esc(e.tipo_exame)}</td><td>${e.data_validade ? fmtData(e.data_validade) : '—'}</td><td>${esc(ROTULO_STATUS_DP[e.status] ?? e.status ?? '—')}</td><td>${esc(e.clinica ?? '—')}</td></tr>`).join('')
+        || '<tr><td colspan="4">Nenhum exame</td></tr>'}</tbody></table>`)}
+    ${tabela('Folha', `<table style="width:100%;border-collapse:collapse;"><thead><tr>
+        <th>Competência</th><th>Salário</th><th>Extras</th><th>Descontos</th><th>Benefícios</th><th>Líquido</th><th>Status</th></tr></thead><tbody>
+        ${(folhas || []).map(f => `<tr><td>${esc(f.competencia)}</td><td>R$ ${fmtNum(f.salario_base)}</td><td>R$ ${fmtNum(f.horas_extras)}</td>
+          <td>R$ ${fmtNum(f.descontos)}</td><td>R$ ${fmtNum(f.beneficios)}</td><td>R$ ${fmtNum(valorLiquido(f))}</td><td>${esc(f.status)}</td></tr>`).join('')
+        || '<tr><td colspan="7">Nenhum lançamento</td></tr>'}</tbody></table>`)}
+    ${tabela('Ocorrências', `<table style="width:100%;border-collapse:collapse;"><thead><tr>
+        <th>Data</th><th>Tipo</th><th>Descrição</th><th>Ação tomada</th><th>Status</th></tr></thead><tbody>
+        ${(ocorr || []).map(o => `<tr><td>${fmtData(o.data_ocorrencia)}</td><td>${esc(o.tipo)}</td><td>${esc(o.descricao ?? '—')}</td><td>${esc(o.acao_tomada ?? '—')}</td><td>${esc(o.status)}</td></tr>`).join('')
+        || '<tr><td colspan="5">Nenhuma ocorrência</td></tr>'}</tbody></table>`)}`
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = documentoPDF({
+    titulo: 'FICHA DE FUNCIONÁRIO', subtitulo: pessoa.nome, corpo,
+    acoes: `<button class="btn" id="dppdf-imprimir">Gerar PDF</button>
+      <button class="btn-secundario" id="dppdf-fechar">Fechar</button>`
+  })
+  document.body.appendChild(fundo)
+  fundo.querySelector('#dppdf-fechar').onclick = () => fundo.remove()
+  fundo.querySelector('#dppdf-imprimir').onclick = () => window.print()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+}
 
 // ---------------------------------------------------------------
 // Se já houver sessão salva, entra direto
