@@ -18264,6 +18264,74 @@ function mktImprimirPlanejamentoMes (doMes, relevantesDoMes, mes) {
 
 
 
+// ----- IA que melhora um trecho selecionado (Docs do Marketing) -----
+function abrirPopupIaMkt (areaTexto) {
+  const inicio = areaTexto.selectionStart, fim = areaTexto.selectionEnd
+  const trechoOriginal = areaTexto.value.slice(inicio, fim)
+  if (!trechoOriginal.trim()) return
+
+  const popup = document.createElement('div')
+  popup.className = 'modal-fundo'
+  popup.style.zIndex = 10000
+  popup.innerHTML = `<div class="modal" style="max-width:480px;">
+    <div class="cabeca-secao"><h3 style="font-size:15px;margin:0;">✨ IA</h3>
+      <button class="btn-secundario mini" id="ia-fechar">×</button></div>
+    <p class="texto-dim2" style="font-size:12px;background:var(--surface2);padding:8px 10px;border-radius:8px;max-height:80px;overflow:auto;">
+      "${esc(trechoOriginal.length > 200 ? trechoOriginal.slice(0, 200) + '…' : trechoOriginal)}"</p>
+    <div id="ia-corpo">
+      <div class="campo" style="margin-top:10px;">
+        <input id="ia-instrucao" placeholder="ex: deixa mais formal, resuma, corrija a gramática..." autofocus>
+      </div>
+      <div class="acoes" style="margin-top:10px;"><button class="btn" id="ia-pedir">Pedir à IA</button></div>
+      <div class="recado oculto" id="ia-recado"></div>
+    </div>
+  </div>`
+  document.body.appendChild(popup)
+  const fecharPopup = () => popup.remove()
+  popup.querySelector('#ia-fechar').onclick = fecharPopup
+  popup.onclick = e => { if (e.target === popup) fecharPopup() }
+
+  const pedir = async () => {
+    const instrucao = popup.querySelector('#ia-instrucao').value.trim()
+    const el = popup.querySelector('#ia-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    if (!instrucao) { aviso('Escreve o que você quer que a IA faça.'); return }
+    const btn = popup.querySelector('#ia-pedir'); btn.disabled = true; btn.textContent = 'Pensando...'
+    const { data, error } = await db.functions.invoke('marketing-melhorar-texto', { body: { texto: trechoOriginal, instrucao } })
+    btn.disabled = false; btn.textContent = 'Pedir à IA'
+    if (error || data?.erro) {
+      let msg = data?.erro || error?.message
+      if (error?.context?.json) { try { const c = await error.context.json(); msg = c?.erro || msg } catch {} }
+      aviso(msg + (data?.aviso ? '\n\n' + data.aviso : ''))
+      return
+    }
+    const textoNovo = data.texto
+    popup.querySelector('#ia-corpo').innerHTML = `
+      <p style="font-size:13.5px;white-space:pre-wrap;background:var(--hover-bg);padding:10px 12px;border-radius:8px;margin-top:10px;max-height:220px;overflow:auto;">${esc(textoNovo)}</p>
+      <div class="acoes" style="margin-top:10px;flex-wrap:wrap;">
+        <button class="btn" id="ia-substituir">Substituir seleção</button>
+        <button class="btn-secundario mini" id="ia-inserir">Inserir abaixo</button>
+        <button class="btn-secundario mini" id="ia-copiar">Copiar</button>
+        <button class="btn-secundario mini" id="ia-refazer">Pedir de novo</button>
+      </div>`
+    popup.querySelector('#ia-substituir').onclick = () => {
+      areaTexto.value = areaTexto.value.slice(0, inicio) + textoNovo + areaTexto.value.slice(fim)
+      fecharPopup()
+    }
+    popup.querySelector('#ia-inserir').onclick = () => {
+      areaTexto.value = areaTexto.value.slice(0, fim) + '\n' + textoNovo + areaTexto.value.slice(fim)
+      fecharPopup()
+    }
+    popup.querySelector('#ia-copiar').onclick = () => {
+      navigator.clipboard?.writeText(textoNovo)
+      popup.querySelector('#ia-copiar').textContent = 'Copiado!'
+    }
+    popup.querySelector('#ia-refazer').onclick = () => { fecharPopup(); abrirPopupIaMkt(areaTexto) }
+  }
+  popup.querySelector('#ia-pedir').onclick = pedir
+  popup.querySelector('#ia-instrucao').onkeydown = e => { if (e.key === 'Enter') pedir() }
+}
+
 function formMktDoc (registro, aoSalvar) {
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
@@ -18280,7 +18348,14 @@ function formMktDoc (registro, aoSalvar) {
       <div class="campo"><label>Dono</label><input id="mkd-dono" value="${esc(registro?.dono ?? '')}" placeholder="responsável por esse documento"></div>
     </div>
     <div class="campo" style="margin-top:10px;"><label>Texto</label>
-      <textarea id="mkd-conteudo" style="min-height:200px;">${esc(registro?.conteudo ?? '')}</textarea></div>
+      <div style="position:relative;">
+        <textarea id="mkd-conteudo" style="min-height:200px;">${esc(registro?.conteudo ?? '')}</textarea>
+        <button type="button" id="mkd-ia-botao" class="btn-gold-mini oculto"
+          style="position:absolute;bottom:10px;right:10px;padding:7px 13px;border:0;border-radius:20px;
+          background:var(--gold);color:#3a2e08;font-weight:700;font-size:12px;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.3);">
+          ✨ Melhorar com IA</button>
+      </div>
+      <p class="texto-dim2" style="font-size:11px;margin:4px 0 0;">Seleciona um trecho do texto acima pra ver a opção de melhorar com IA.</p></div>
     <div class="campo" style="margin-top:10px;"><label>Anexar arquivo (opcional)</label>
       <input type="file" id="mkd-arquivo">
       ${registro?.arquivo_url ? `<span class="texto-dim2" style="font-size:11.5px;">já tem: ${esc(registro.nome_arquivo || 'arquivo')} — escolher outro substitui</span>` : ''}</div>
@@ -18295,6 +18370,18 @@ function formMktDoc (registro, aoSalvar) {
   const fechar = () => fundo.remove()
   fundo.querySelector('#mkd-fechar').onclick = fechar
   fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  // ---- IA que melhora o trecho selecionado (tipo "Brain" do ClickUp) ----
+  const areaTexto = fundo.querySelector('#mkd-conteudo')
+  const botaoIA = fundo.querySelector('#mkd-ia-botao')
+  const atualizarBotaoIA = () => {
+    const temSelecao = areaTexto.selectionStart !== areaTexto.selectionEnd
+    botaoIA.classList.toggle('oculto', !temSelecao)
+  }
+  areaTexto.addEventListener('select', atualizarBotaoIA)
+  areaTexto.addEventListener('mouseup', atualizarBotaoIA)
+  areaTexto.addEventListener('keyup', atualizarBotaoIA)
+  botaoIA.onclick = () => abrirPopupIaMkt(areaTexto)
 
   if (registro) fundo.querySelector('#mkd-excluir-modal').onclick = async () => {
     if (!confirm('Excluir esse documento?')) return
