@@ -17599,14 +17599,15 @@ function abrirMarketing (sub, editavel) {
 // ----- Visão Geral -----
 async function mktVisaoGeral (alvo, editavel) {
   const hoje = new Date()
-  const [{ data: demandas }, { data: postits } ] = await Promise.all([
-    db.from('marketing_demanda').select('id,descricao,categoria,prazo,concluida').eq('concluida', false).order('prazo', { ascending: true, nullsFirst: false }),
+  const hojeStr = hoje.toISOString().slice(0, 10)
+  const [{ data: cards }, { data: postits }] = await Promise.all([
+    db.from('marketing_card').select('*').neq('coluna', 'CONCLUIDO').order('data_publicacao', { ascending: true, nullsFirst: false }),
     db.from('marketing_postit').select('id,texto,cor,criado_em').order('criado_em', { ascending: false })
   ])
 
-  const listaDemandas = demandas || []
-  const atrasadas = listaDemandas.filter(d => d.prazo && d.prazo < hoje.toISOString().slice(0, 10))
-  const hojeMesmo = listaDemandas.filter(d => d.prazo === hoje.toISOString().slice(0, 10))
+  const listaDemandas = cards || []
+  const atrasadas = listaDemandas.filter(d => d.data_publicacao && d.data_publicacao < hojeStr)
+  const hojeMesmo = listaDemandas.filter(d => d.data_publicacao === hojeStr)
 
   alvo.innerHTML = `
     <div class="resumo-topo" style="margin-bottom:16px;">
@@ -17616,40 +17617,28 @@ async function mktVisaoGeral (alvo, editavel) {
       <div class="bloco"><div class="rot">Post-its</div><div class="val">${(postits || []).length}</div></div>
     </div>
 
-    <div class="duas-colunas" style="margin-bottom:16px;align-items:start;">
-      <div class="panel" style="padding:18px;" id="mk-bloco-agenda"></div>
-
-      <div class="panel" style="padding:16px 18px;">
-        <div class="cabeca-secao">
-          <h3 style="font-family:var(--serif);font-size:15px;">Demandas</h3>
-          ${editavel ? `<button class="btn-secundario mini" id="mk-nova-demanda">+ nova</button>` : ''}
-        </div>
-        <div id="mk-lista-demandas">
-          ${listaDemandas.map(d => `<div class="linha-demanda">
-            <label><input type="checkbox" data-concluir-demanda="${d.id}" ${editavel ? '' : 'disabled'}>
-              <span class="tag-aging ${COR_CATEGORIA_DEMANDA[d.categoria]}" style="margin-right:6px;">${d.categoria}</span>
-              ${esc(d.descricao)}</label>
-            ${d.prazo ? `<span class="texto-dim2" style="font-size:11px;">${fmtData(d.prazo)}</span>` : ''}
-          </div>`).join('') || '<p class="texto-dim2" style="font-size:12.5px;">nenhuma demanda em aberto.</p>'}
-        </div>
-      </div>
-    </div>
-
-    <div class="cabeca-secao" style="margin-top:4px;">
-      <h3 style="font-family:var(--serif);font-size:15px;">Pendências (metas do dia · urgência · prioridade)</h3>
+    <div class="cabeca-secao">
+      <h3 style="font-family:var(--serif);font-size:15px;">Demandas <span class="texto-dim2" style="font-size:11px;font-weight:400;">— o mesmo do Quadro e do Calendário</span></h3>
+      ${editavel ? `<button class="btn-secundario mini" id="mk-nova-demanda">+ nova</button>` : ''}
     </div>
     <div class="panel" style="padding:0;margin-bottom:16px;"><div class="tabela-scroll">
-      <table><thead><tr><th>Meta do dia</th><th>Urgência</th><th>Prioridade</th></tr></thead><tbody>
+      <table><thead><tr><th>Demanda</th><th>Prazo</th><th>Status</th><th>Urgência</th></tr></thead><tbody>
         ${listaDemandas.map(d => {
-          const dias = d.prazo ? Math.round((new Date(d.prazo) - hoje) / 86400000) : null
+          const dias = d.data_publicacao ? Math.round((new Date(d.data_publicacao) - hoje) / 86400000) : null
           const urgencia = dias === null ? '<span class="texto-dim2">sem prazo</span>'
             : dias < 0 ? `<span class="tag-aging critico">venceu há ${-dias}d</span>`
             : dias === 0 ? `<span class="tag-aging critico">hoje</span>`
             : dias <= 3 ? `<span class="tag-aging alerta">em ${dias}d</span>`
             : `<span class="tag-aging ok">em ${dias}d</span>`
-          return `<tr><td>${esc(d.descricao)}</td><td>${urgencia}</td>
-            <td><span class="tag-aging ${COR_CATEGORIA_DEMANDA[d.categoria]}">${ROTULO_CATEGORIA_DEMANDA[d.categoria]}</span></td></tr>`
-        }).join('') || `<tr><td colspan="3" class="vazio">Nada pendente.</td></tr>`}
+          return `<tr>
+            <td><label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+              <input type="checkbox" data-concluir-demanda="${d.id}" ${editavel ? '' : 'disabled'}>
+              ${esc(d.titulo)}</label></td>
+            <td class="texto-dim2">${d.data_publicacao ? fmtData(d.data_publicacao) : '—'}</td>
+            <td><span class="chip">${COLUNAS_QUADRO_MKT.find(x => x[0] === d.coluna)?.[1] ?? d.coluna}</span></td>
+            <td>${urgencia}</td>
+          </tr>`
+        }).join('') || `<tr><td colspan="4" class="vazio">Nenhuma demanda em aberto.</td></tr>`}
       </tbody></table>
     </div></div>
 
@@ -17664,16 +17653,14 @@ async function mktVisaoGeral (alvo, editavel) {
       </div>`).join('') || '<p class="texto-dim2" style="font-size:12.5px;">nenhum post-it colado.</p>'}
     </div>`
 
-  await montarAgendaEmbutida($('#mk-bloco-agenda'), () => mktVisaoGeral(alvo, editavel))
-
   alvo.querySelectorAll('[data-concluir-demanda]').forEach(cb => {
     cb.onchange = async () => {
-      await db.from('marketing_demanda').update({ concluida: true, concluida_em: new Date().toISOString() }).eq('id', cb.dataset.concluirDemanda)
+      await db.from('marketing_card').update({ coluna: 'CONCLUIDO', atualizado_em: new Date().toISOString() }).eq('id', cb.dataset.concluirDemanda)
       mktVisaoGeral(alvo, editavel)
     }
   })
   if (!editavel) return
-  $('#mk-nova-demanda').onclick = () => formDemandaMkt(alvo, editavel)
+  $('#mk-nova-demanda').onclick = () => formMktCard(null, () => mktVisaoGeral(alvo, editavel))
   $('#mk-novo-postit').onclick = async () => {
     const texto = prompt('Texto do post-it:'); if (!texto) return
     const cores = ['#fef08a', '#bbf7d0', '#bfdbfe', '#fecaca', '#e9d5ff']
@@ -17683,34 +17670,6 @@ async function mktVisaoGeral (alvo, editavel) {
   alvo.querySelectorAll('[data-del-postit]').forEach(b => {
     b.onclick = async () => { await db.from('marketing_postit').delete().eq('id', b.dataset.delPostit); mktVisaoGeral(alvo, editavel) }
   })
-}
-
-function formDemandaMkt (alvoPai, editavel) {
-  const fundo = document.createElement('div')
-  fundo.className = 'modal-fundo'
-  fundo.innerHTML = `<div class="modal">
-    <h3>Nova demanda</h3>
-    <div class="campo"><label>Descrição *</label><input id="dm-desc"></div>
-    <div class="form-grade" style="margin-top:10px;">
-      <div class="campo"><label>Categoria</label><select id="dm-cat">
-        ${Object.entries(ROTULO_CATEGORIA_DEMANDA).map(([k, v]) => `<option value="${k}" ${k === 'C' ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
-      <div class="campo"><label>Prazo</label><input id="dm-prazo" type="date"></div>
-    </div>
-    <div class="acoes"><button class="btn" id="dm-salvar">Adicionar</button><button class="btn-secundario" id="dm-cancelar">Cancelar</button></div>
-  </div>`
-  document.body.appendChild(fundo)
-  const fechar = () => fundo.remove()
-  fundo.querySelector('#dm-cancelar').onclick = fechar
-  fundo.onclick = e => { if (e.target === fundo) fechar() }
-  fundo.querySelector('#dm-salvar').onclick = async () => {
-    const desc = fundo.querySelector('#dm-desc').value.trim()
-    if (!desc) return
-    await db.from('marketing_demanda').insert({
-      descricao: desc, categoria: fundo.querySelector('#dm-cat').value,
-      prazo: fundo.querySelector('#dm-prazo').value || null, criado_por: PERFIL.pessoaId
-    })
-    fechar(); mktVisaoGeral(alvoPai, editavel)
-  }
 }
 
 // ----- Redes Sociais (metas mensais editáveis) -----
@@ -18026,7 +17985,7 @@ function formMktCard (registro, aoSalvar) {
       <div class="campo"><label>Responsável</label><input id="mkq-resp" value="${esc(registro?.responsavel ?? '')}"></div>
       <div class="campo"><label>Coluna</label><select id="mkq-coluna">
         ${COLUNAS_QUADRO_MKT.map(([c, r]) => `<option value="${c}" ${c === (registro?.coluna ?? 'A_FAZER') ? 'selected' : ''}>${r}</option>`).join('')}</select></div>
-      <div class="campo"><label>Data de publicação</label><input type="date" id="mkq-data" value="${registro?.data_publicacao ?? ''}"></div>
+      <div class="campo"><label>Prazo/Data de publicação *</label><input type="date" id="mkq-data" value="${registro?.data_publicacao ?? hojeISO()}"></div>
       <div class="campo"><label>Verba (R$, se for pago)</label><input type="number" step="0.01" id="mkq-verba" value="${registro?.verba ?? ''}"></div>
     </div>
     <div class="campo" style="margin-top:10px;"><label>Etiquetas extras</label>
@@ -18058,6 +18017,7 @@ function formMktCard (registro, aoSalvar) {
     const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
     const titulo = fundo.querySelector('#mkq-titulo').value.trim()
     if (!titulo) { aviso('Escreva o título.'); return }
+    if (!fundo.querySelector('#mkq-data').value) { aviso('Toda demanda precisa de um prazo.'); return }
     const btn = fundo.querySelector('#mkq-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
     const tipo = fundo.querySelector('#mkq-tipo').value
     const tags = [...fundo.querySelectorAll('[data-tag-extra]:checked')].map(c => c.value)
