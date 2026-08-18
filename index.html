@@ -6768,7 +6768,7 @@ async function crmFunilIndividual (alvo, editavel, gerencia) {
   const lista = data || []
   CRM_CACHE.leads = lista
 
-  const podeNovo = editavel && gerencia // criar lead do zero é ação de quem gerencia; vendedor só trabalha o que chega
+  const podeNovo = editavel // criar lead do zero — liberado pra qualquer vendedor com acesso de edição, não só gestão
   alvo.innerHTML =
     (podeNovo ? `<div class="acoes" style="margin:0 0 16px;"><button class="btn" id="crm-novo">Novo lead</button></div>` : '') +
     (!gerencia && !lista.length ? `<p class="vazio">Nenhum lead atribuído a você ainda. Assim que a gerência mandar um cliente pra você, ele aparece aqui.</p>` : '') +
@@ -6893,7 +6893,7 @@ function renderCrmProgresso (alvo, editavel, gerencia) {
       <div class="campo" style="flex:1;min-width:180px;"><label>Buscar cliente</label>
         <input id="cl-busca" placeholder="nome, cidade, telefone..."></div>
       <button class="btn" id="cl-buscar">Buscar</button>
-      ${editavel && gerencia ? `<button class="btn-secundario" id="cl-novo">Novo lead</button>` : ''}
+      ${editavel ? `<button class="btn-secundario" id="cl-novo">Novo lead</button>` : ''}
     </div>
     <div id="cl-conteudo"></div>`
 
@@ -6948,7 +6948,7 @@ function renderCrmProgresso (alvo, editavel, gerencia) {
   $('#cl-buscar').onclick = buscar
   $('#cl-etapa').onchange = buscar
   $('#cl-busca').oninput = aplicarBusca
-  if (editavel && gerencia) $('#cl-novo').onclick = () => formLead(null, editavel, gerencia, buscar)
+  if (editavel) $('#cl-novo').onclick = () => formLead(null, editavel, gerencia, buscar)
   buscar()
 }
 
@@ -7379,7 +7379,7 @@ function formLead (l, editavel, gerencia, aoFechar) {
         <input id="ld-nome" value="${esc(l?.nome ?? '')}" ${editavel ? '' : 'disabled'}></div>
       <div class="campo"><label>Vendedor</label>
         <select id="ld-vendedor" ${podeReatribuir ? '' : 'disabled'}><option value="">—</option>
-          ${CRM_CACHE.vendedores.map(p => `<option value="${p.id}" ${p.id === l?.vendedor_id ? 'selected' : ''}>${esc(p.nome)}</option>`).join('')}</select></div>
+          ${CRM_CACHE.vendedores.map(p => `<option value="${p.id}" ${p.id === (l?.vendedor_id ?? (!podeReatribuir ? PERFIL.pessoaId : null)) ? 'selected' : ''}>${esc(p.nome)}</option>`).join('')}</select></div>
       <div class="campo"><label>Origem</label>
         <input id="ld-origem" placeholder="indicação, site, feira..." value="${esc(l?.origem ?? '')}" ${editavel ? '' : 'disabled'}></div>
       <div class="campo"><label>Etapa</label>
