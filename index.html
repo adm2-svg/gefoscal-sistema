@@ -13845,11 +13845,16 @@ async function detalheOS (os, editavel, aoFechar) {
       </div>
 
       ${editavel ? `<div class="form-grade" style="margin-top:10px;">
-        <div class="campo"><label>Material / peça</label><input id="do-mat-desc" placeholder="Ex: filtro de óleo"></div>
+        <div class="campo"><label>Material / peça</label>
+          <input id="do-mat-desc" list="do-mat-lista" placeholder="Ex: filtro de óleo — começa a digitar pra ver sugestões">
+          <datalist id="do-mat-lista"></datalist></div>
         <div class="campo"><label>Quantidade</label><input id="do-mat-qtd" inputmode="decimal" placeholder="Ex: 1"></div>
         <div class="campo"><label>Unidade</label><input id="do-mat-un" placeholder="un, L, kg..."></div>
         <div class="campo"><label>Retirado por</label><input id="do-mat-quem" placeholder="opcional" value="${esc(PERFIL.nome)}"></div>
       </div>
+      <label style="display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:400;margin-top:8px;">
+        <input type="checkbox" id="do-mat-salvar-catalogo" checked>
+        Se for um material novo, guardar na lista de sugestões pra próxima vez</label>
       <div class="acoes">
         <button class="btn-secundario" id="do-mat-add">Lançar material (já usado)</button>
         <button class="btn-secundario" id="do-mat-pedir">Pedir peça pro Compras</button>
@@ -13871,6 +13876,19 @@ async function detalheOS (os, editavel, aoFechar) {
   if (!editavel) return
 
   ligarBlocoAdministrativo('do', fundo)
+
+  // sugestões do campo "Material/Peça" — junta o catálogo de manutenção
+  // (histórico do que já foi usado) com o que já existe cadastrado no
+  // Estoque, sem duplicar entre os dois
+  ;(async () => {
+    const [{ data: catalogo }, { data: produtosEstoque }] = await Promise.all([
+      db.from('manutencao_material_catalogo').select('nome').order('nome'),
+      db.from('produto').select('nome').order('nome')
+    ])
+    const nomes = new Set([...(catalogo || []).map(m => m.nome), ...(produtosEstoque || []).map(p => p.nome)])
+    fundo.querySelector('#do-mat-lista').innerHTML = [...nomes].sort((a, b) => a.localeCompare(b))
+      .map(n => `<option value="${esc(n)}"></option>`).join('')
+  })()
 
   const aviso = t => {
     const el = fundo.querySelector('#do-recado'); el.textContent = t; el.classList.remove('oculto')
@@ -13925,6 +13943,11 @@ async function detalheOS (os, editavel, aoFechar) {
       retirado_por_nome: fundo.querySelector('#do-mat-quem').value.trim() || null
     })
     if (error) { aviso(error.message); return }
+    if (fundo.querySelector('#do-mat-salvar-catalogo').checked) {
+      await db.from('manutencao_material_catalogo').insert({
+        nome: descricao, unidade_padrao: fundo.querySelector('#do-mat-un').value.trim() || null
+      }).select().maybeSingle() // ignora erro de duplicado (unique constraint) de propósito
+    }
     fechar(); detalheOS(os, editavel, aoFechar)
   }
 
