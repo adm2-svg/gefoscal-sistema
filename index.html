@@ -321,6 +321,9 @@ tbody tr:hover { background: var(--hover-bg); }
 .crm-card .linhas .alerta-txt.atencao { color:var(--warn-text); font-weight:600; }
 .crm-card .linhas .alerta-txt.atrasado { color:var(--critico-text); font-weight:600; }
 .crm-card select.crm-card-etapa { width:100%; margin-top:9px; font-size:11px; padding:5px 6px; border-radius:8px; }
+.crm-card .crm-etapa-toggle { font-size:10.5px; color:var(--dim2); margin-top:9px; cursor:pointer;
+                               text-decoration:underline dotted; display:inline-block; }
+.crm-card .crm-etapa-toggle:hover { color:var(--rust); }
 .crm-card .rodape { margin-top:9px; padding-top:8px; border-top:1px solid var(--line); display:flex;
                      justify-content:space-between; align-items:center; gap:8px; }
 .crm-card .rodape .data { font-size:10.5px; color:var(--dim2); }
@@ -7407,11 +7410,13 @@ function formLead (l, editavel, gerencia, aoFechar) {
         <div class="campo"><label>Título / observação</label><input id="ag-titulo" placeholder="ex: ligar, levar proposta..."></div>
         <button class="btn-secundario mini" id="ag-adicionar" type="button" style="height:38px;">Adicionar</button>
       </div>` : ''}` : ''}
-    ${l ? `<div class="cabeca-secao" style="margin-top:16px;margin-bottom:4px;">
+    ${l ? `<div id="ld-proposta-wrap" style="${l.etapa === 'PROPOSTA' ? '' : 'display:none;'}">
+      <div class="cabeca-secao" style="margin-top:16px;margin-bottom:4px;">
         <h3 style="font-family:var(--serif);font-size:14px;">Proposta</h3></div>
       <p class="texto-dim2" style="font-size:11.5px;margin:-2px 0 8px;">
         Monta a proposta comercial (preço, condições, validade) e gera o PDF pronto pra mandar pro cliente.</p>
-      <div id="ld-proposta-area"><p class="texto-dim2" style="font-size:12px;">carregando proposta...</p></div>` : ''}
+      <div id="ld-proposta-area"><p class="texto-dim2" style="font-size:12px;">carregando proposta...</p></div>
+    </div>` : ''}
     ${l?.cliente_id ? `<p class="texto-dim2" style="font-size:12px;margin-top:8px;">Já convertido em cliente: <b>${esc(l.cliente?.nome_fantasia || l.cliente?.razao_social || '—')}</b></p>
       ${editavel ? `<div class="acoes" style="margin-top:8px;"><button class="btn-secundario" id="ld-emitir-pedido" type="button">Emitir pedido</button></div>` : ''}`
       : (editavel && l ? `<div class="acoes" style="margin-top:10px;"><button class="btn-secundario" id="ld-converter" type="button">Converter em cliente</button></div>` : '')}
@@ -7428,7 +7433,22 @@ function formLead (l, editavel, gerencia, aoFechar) {
   fundo.onclick = e => { if (e.target === fundo) fechar() }
 
   if (l) carregarAgendaLead(fundo, l, editavel)
-  if (l) carregarPropostaLead(fundo, l, editavel)
+  let propostaCarregada = l && l.etapa === 'PROPOSTA'
+  if (propostaCarregada) carregarPropostaLead(fundo, l, editavel)
+
+  // mostra/esconde a seção de Proposta na hora, conforme a etapa escolhida
+  // no seletor — não precisa salvar nem reabrir o card pra ela aparecer
+  if (l) {
+    const selEtapa = fundo.querySelector('#ld-etapa')
+    const wrapProposta = fundo.querySelector('#ld-proposta-wrap')
+    if (selEtapa && wrapProposta) {
+      selEtapa.addEventListener('change', () => {
+        const mostrar = selEtapa.value === 'PROPOSTA'
+        wrapProposta.style.display = mostrar ? '' : 'none'
+        if (mostrar && !propostaCarregada) { propostaCarregada = true; carregarPropostaLead(fundo, l, editavel) }
+      })
+    }
+  }
 
   const aviso = (t, ok = false) => {
     const el = fundo.querySelector('#ld-recado'); el.textContent = t; el.classList.remove('oculto')
@@ -7600,7 +7620,8 @@ function renderFunilGestao (alvo, lista, editavel, aoMudar, gerencia = true) {
         ${alertaTxt ? `<div class="alerta-txt ${alerta}"><span class="ic">⏱</span>${esc(alertaTxt)}</div>` : ''}
         ${l.cliente_id ? `<div><span class="ic">✔</span>Convertido em cliente</div>` : ''}
       </div>
-      ${editavel ? `<select class="crm-card-etapa" data-mudar-etapa="${l.id}" onclick="event.stopPropagation()">
+      ${editavel ? `<div class="crm-etapa-toggle" data-toggle-etapa="${l.id}" onclick="event.stopPropagation()">🔀 mudar etapa</div>
+      <select class="crm-card-etapa oculto" data-mudar-etapa="${l.id}" onclick="event.stopPropagation()">
         ${ETAPAS_LEAD.map(e => `<option value="${e}" ${e === l.etapa ? 'selected' : ''}>${ROTULO_ETAPA_LEAD[e]}</option>`).join('')}
       </select>` : ''}
       <div class="rodape">
@@ -7640,7 +7661,15 @@ function renderFunilGestao (alvo, lista, editavel, aoMudar, gerencia = true) {
 
   if (!editavel) return
 
-  // seletor de etapa dentro do card — alternativa ao arrastar
+  // seletor de etapa dentro do card — fica escondido até clicar em
+  // "mudar etapa", pra não poluir o card com um select sempre visível
+  alvo.querySelectorAll('[data-toggle-etapa]').forEach(link => {
+    link.onclick = () => {
+      link.classList.add('oculto')
+      const sel = alvo.querySelector(`[data-mudar-etapa="${link.dataset.toggleEtapa}"]`)
+      if (sel) { sel.classList.remove('oculto'); sel.focus() }
+    }
+  })
   alvo.querySelectorAll('[data-mudar-etapa]').forEach(sel => {
     sel.onchange = () => {
       const lead = lista.find(l => l.id === sel.dataset.mudarEtapa)
