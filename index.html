@@ -6681,7 +6681,7 @@ async function paginaCrm () {
   CRM_CACHE.vendedores = CRM_CACHE.pessoas.filter(p => p.eh_vendedor)
   if (!CRM_CACHE.vendedores.length) CRM_CACHE.vendedores = CRM_CACHE.pessoas
 
-  const abas = [['painel', 'Painel'], ['funil', 'Funil'], ['progresso', 'Progresso']]
+  const abas = [['painel', 'Painel'], ['funil', 'Funil'], ['progresso', 'Progresso'], ['calendario', 'Calendário']]
   if (gerencia) abas.push(['gestao', 'Gestão'])
 
   const inicial = CRM_SUBABA_INICIAL && abas.some(a => a[0] === CRM_SUBABA_INICIAL) ? CRM_SUBABA_INICIAL : abas[0][0]
@@ -6709,6 +6709,7 @@ function abrirCrm (sub, editavel, gerencia) {
   if (sub === 'painel') crmPainelIndividual(alvo, editavel, gerencia)
   if (sub === 'funil') crmFunilIndividual(alvo, editavel, gerencia)
   if (sub === 'progresso') crmProgressoIndividual(alvo, editavel, gerencia)
+  if (sub === 'calendario') crmCalendario(alvo, editavel, gerencia)
   if (sub === 'atribuir') crmAtribuir(alvo)
   if (sub === 'gestao') crmGestaoTab(alvo, editavel)
 }
@@ -6781,6 +6782,201 @@ async function crmFunilIndividual (alvo, editavel, gerencia) {
 // ----- Progresso (individual) — tabela/busca -----
 async function crmProgressoIndividual (alvo, editavel, gerencia) {
   renderCrmProgresso(alvo, editavel, gerencia)
+}
+
+// ----- Calendário (individual) — mesmo padrão de calendário do
+// Marketing (ano → meses → grade do mês), só que aqui puxa as datas
+// de lead_compromisso. É sempre pessoal (os MEUS compromissos), mesmo
+// pra quem gerencia — cada um cuida da própria agenda aqui. -----
+const CRM_CAL_MESES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
+let CRM_CAL_ANO = new Date().getFullYear()
+let CRM_CAL_MES_ABERTO = new Date().getMonth()
+let CRM_CAL_ITENS = []
+let CRM_CAL_LEADS = []
+
+async function crmCalendario (alvo, editavel, gerencia) {
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  const [{ data: itens, error }, { data: leads }] = await Promise.all([
+    PERFIL.pessoaId
+      ? db.from('lead_compromisso').select('id,data_hora,titulo,observacao,concluido,lead_id,lead:lead_id!inner(nome,vendedor_id)')
+          .eq('lead.vendedor_id', PERFIL.pessoaId).order('data_hora')
+      : { data: [] },
+    filtrarPorDono(db.from('lead').select('id,nome'), gerencia).order('nome')
+  ])
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  CRM_CAL_ITENS = itens || []
+  CRM_CAL_LEADS = leads || []
+  renderCrmCalendario(alvo, editavel, gerencia)
+}
+
+function renderCrmCalendario (alvo, editavel, gerencia) {
+  const itensDoAno = CRM_CAL_ITENS.filter(c => c.data_hora?.slice(0, 4) === String(CRM_CAL_ANO))
+  const porMes = Array.from({ length: 12 }, (_, i) => itensDoAno.filter(c => Number(c.data_hora.slice(5, 7)) === i + 1))
+
+  alvo.innerHTML = `
+    <div class="cabeca-secao" style="margin-bottom:14px;">
+      <div>
+        <h3 style="font-family:var(--serif);font-size:20px;margin:0;">Calendário</h3>
+        <p class="texto-dim2" style="font-size:12.5px;margin:2px 0 0;">Seus compromissos do funil — clica num mês pra abrir, e no dia pra ver ou agendar algo.</p>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <button class="btn-secundario mini" id="crc-ano-anterior">← ${CRM_CAL_ANO - 1}</button>
+        <span style="font-family:var(--serif);font-size:16px;">${CRM_CAL_ANO}</span>
+        <button class="btn-secundario mini" id="crc-ano-seguinte">${CRM_CAL_ANO + 1} →</button>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px;margin-bottom:18px;">
+      ${CRM_CAL_MESES.map((nome, i) => {
+        const qtd = porMes[i].length
+        return `<button class="crc-mes" data-mes="${i}" style="padding:10px 6px;text-align:center;cursor:pointer;
+          background:var(--panel);border:1px solid ${qtd ? 'var(--rust)' : 'var(--line)'};border-radius:10px;color:var(--txt);">
+          <div style="font-size:12px;font-weight:600;">${nome.slice(0, 3)}</div>
+          ${qtd ? `<div style="width:6px;height:6px;border-radius:50%;background:var(--rust);margin:5px auto 0;"></div>` : ''}
+        </button>`
+      }).join('')}
+    </div>
+    <div id="crc-detalhe"></div>`
+
+  $('#crc-ano-anterior').onclick = () => { CRM_CAL_ANO--; renderCrmCalendario(alvo, editavel, gerencia) }
+  $('#crc-ano-seguinte').onclick = () => { CRM_CAL_ANO++; renderCrmCalendario(alvo, editavel, gerencia) }
+  alvo.querySelectorAll('[data-mes]').forEach(el => {
+    el.onclick = () => { CRM_CAL_MES_ABERTO = Number(el.dataset.mes); renderCrmMesCompleto(alvo, editavel, gerencia) }
+  })
+
+  if (CRM_CAL_MES_ABERTO !== null) renderCrmMesCompleto(alvo, editavel, gerencia)
+}
+
+function renderCrmMesCompleto (alvo, editavel, gerencia) {
+  const mes = CRM_CAL_MES_ABERTO
+  const primeiroDiaSemana = new Date(CRM_CAL_ANO, mes, 1).getDay()
+  const diasNoMes = new Date(CRM_CAL_ANO, mes + 1, 0).getDate()
+  const hojeStr = hojeISO()
+
+  const doMes = CRM_CAL_ITENS.filter(c => c.data_hora?.slice(0, 4) === String(CRM_CAL_ANO) && Number(c.data_hora.slice(5, 7)) === mes + 1)
+  const porDia = dia => doMes.filter(c => Number(c.data_hora.slice(8, 10)) === dia)
+
+  const celulas = []
+  for (let i = 0; i < primeiroDiaSemana; i++) celulas.push('<div></div>')
+  for (let dia = 1; dia <= diasNoMes; dia++) {
+    const dataStr = `${CRM_CAL_ANO}-${String(mes + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`
+    const itensDia = porDia(dia)
+    const temAtrasado = itensDia.some(it => !it.concluido && new Date(it.data_hora).getTime() < Date.now())
+    celulas.push(`<button class="crc-dia" data-dia="${dia}" style="aspect-ratio:1;padding:4px;text-align:left;cursor:pointer;
+      background:${dataStr === hojeStr ? 'var(--hover-bg)' : 'var(--panel)'};border:1px solid ${temAtrasado ? 'var(--critico-text)' : itensDia.length ? 'var(--rust)' : 'var(--line)'};border-radius:8px;color:var(--txt);
+      display:flex;flex-direction:column;gap:2px;overflow:hidden;">
+      <span style="font-size:11px;font-weight:${dataStr === hojeStr ? '700' : '400'};color:${dataStr === hojeStr ? 'var(--rust)' : 'var(--dim)'};">${dia}</span>
+      ${itensDia.slice(0, 2).map(it => `<span style="font-size:8.5px;background:var(--surface2);border-radius:4px;padding:1px 3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;${it.concluido ? 'text-decoration:line-through;opacity:.6;' : ''}">${esc(it.lead?.nome ?? '')}${it.titulo ? ' · ' + esc(it.titulo) : ''}</span>`).join('')}
+      ${itensDia.length > 2 ? `<span style="font-size:8.5px;color:var(--dim2);">+${itensDia.length - 2}</span>` : ''}
+    </button>`)
+  }
+
+  $('#crc-detalhe').innerHTML = `
+    <div class="panel" style="padding:18px;">
+      <div class="cabeca-secao">
+        <h3 style="font-family:var(--serif);font-size:18px;margin:0;">${CRM_CAL_MESES[mes]} de ${CRM_CAL_ANO}</h3>
+        <div style="display:flex;gap:8px;">
+          <button class="btn-secundario mini" id="crc-pdf-mes">🖨️ Gerar PDF</button>
+          <button class="btn-secundario mini" id="crc-fechar-mes">fechar</button>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:5px;margin:14px 0 6px;">
+        ${['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map(d => `<div class="texto-dim2" style="text-align:center;font-size:10.5px;">${d}</div>`).join('')}
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:5px;">${celulas.join('')}</div>
+    </div>`
+
+  $('#crc-fechar-mes').onclick = () => { CRM_CAL_MES_ABERTO = null; renderCrmCalendario(alvo, editavel, gerencia) }
+  $('#crc-pdf-mes').onclick = () => abrirPdfCalendarioMes(mes, doMes)
+  $('#crc-detalhe').querySelectorAll('[data-dia]').forEach(el => {
+    el.onclick = () => abrirCrmDia(Number(el.dataset.dia), mes, alvo, editavel, gerencia)
+  })
+}
+
+// ----- PDF do mês do calendário individual -----
+function abrirPdfCalendarioMes (mes, itensDoMes) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  const ordenados = [...itensDoMes].sort((a, b) => new Date(a.data_hora) - new Date(b.data_hora))
+  const linhas = ordenados.map(it => `<tr>
+    <td>${esc(fmtQuando(it.data_hora) ?? '')}</td>
+    <td>${esc(it.lead?.nome ?? '—')}</td>
+    <td>${esc(it.titulo ?? '—')}</td>
+    <td>${it.concluido ? 'Concluído' : 'Pendente'}</td>
+  </tr>`).join('')
+
+  fundo.innerHTML = documentoPDF({
+    titulo: `Agenda — ${CRM_CAL_MESES[mes]} de ${CRM_CAL_ANO}`,
+    subtitulo: PERFIL.nome || '',
+    corpo: `<table><thead><tr><th>Data/hora</th><th>Cliente</th><th>Título</th><th>Status</th></tr></thead>
+      <tbody>${linhas || '<tr><td colspan="4" class="vazio">Nenhum compromisso nesse mês.</td></tr>'}</tbody></table>`,
+    acoes: `<button class="btn" id="cpm-imprimir">Baixar / imprimir PDF</button>
+            <button class="btn-secundario" id="cpm-fechar">Fechar</button>`
+  })
+  document.body.appendChild(fundo)
+  fundo.querySelector('#cpm-fechar').onclick = () => fundo.remove()
+  fundo.querySelector('#cpm-imprimir').onclick = () => window.print()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+}
+
+// ----- ao clicar num dia: mostra o que já tem e deixa agendar algo novo -----
+function abrirCrmDia (dia, mes, alvo, editavel, gerencia) {
+  const dataStr = `${CRM_CAL_ANO}-${String(mes + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`
+  const itensDia = CRM_CAL_ITENS.filter(c => c.data_hora?.slice(0, 10) === dataStr)
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>${dia} de ${CRM_CAL_MESES[mes]}</h3>
+    <div id="crc-itens-dia">
+      ${itensDia.map(it => `<div class="passo" data-abrir-lead="${it.lead_id}" style="cursor:pointer;${it.concluido ? 'opacity:.55;' : ''}">
+        <span style="flex:1;${it.concluido ? 'text-decoration:line-through;' : ''}"><b>${esc(it.lead?.nome ?? '—')}</b>
+          ${it.titulo ? `<span class="texto-dim2" style="font-size:11px;"> — ${esc(it.titulo)}</span>` : ''}</span>
+        ${!it.concluido && new Date(it.data_hora).getTime() < Date.now() ? '<span class="badge-estourado" style="font-size:10px;">atrasado</span>' : ''}
+      </div>`).join('') || '<p class="vazio">Nada agendado nesse dia.</p>'}
+    </div>
+    ${editavel ? `
+      <div class="cabeca-secao" style="margin-top:16px;"><h4 style="font-size:13px;margin:0;">Agendar algo nesse dia</h4></div>
+      <div class="form-grade">
+        <div class="campo" style="grid-column:span 2;"><label>Cliente / lead *</label>
+          <select id="crc-novo-lead"><option value="">selecione...</option>
+            ${CRM_CAL_LEADS.map(l => `<option value="${l.id}">${esc(l.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Hora</label><input id="crc-novo-hora" type="time" value="09:00"></div>
+        <div class="campo" style="grid-column:span 2;"><label>Título / observação</label><input id="crc-novo-titulo" placeholder="ex: ligar, levar proposta..."></div>
+      </div>
+      <div class="acoes" style="margin-top:12px;"><button class="btn" id="crc-agendar">Agendar</button>
+        <button class="btn-secundario" id="crc-dia-fechar">Fechar</button></div>
+      <div class="recado oculto" id="crc-dia-recado"></div>
+    ` : `<div class="acoes" style="margin-top:16px;"><button class="btn-secundario" id="crc-dia-fechar">Fechar</button></div>`}
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#crc-dia-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  fundo.querySelectorAll('[data-abrir-lead]').forEach(el => {
+    el.onclick = async () => {
+      const { data } = await db.from('lead').select(selLead).eq('id', el.dataset.abrirLead).single()
+      if (data) { fechar(); formLead(data, editavel, gerencia, () => crmCalendario(alvo, editavel, gerencia)) }
+    }
+  })
+
+  if (!editavel) return
+  fundo.querySelector('#crc-agendar').onclick = async () => {
+    const el = fundo.querySelector('#crc-dia-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const leadId = fundo.querySelector('#crc-novo-lead').value
+    if (!leadId) { aviso('Escolha o cliente/lead.'); return }
+    const hora = fundo.querySelector('#crc-novo-hora').value || '09:00'
+    const btn = fundo.querySelector('#crc-agendar'); btn.disabled = true; btn.textContent = 'Agendando...'
+    const { error } = await db.from('lead_compromisso').insert({
+      lead_id: leadId, data_hora: new Date(`${dataStr}T${hora}:00`).toISOString(),
+      titulo: fundo.querySelector('#crc-novo-titulo').value.trim() || null, criado_por: PERFIL.pessoaId
+    })
+    btn.disabled = false; btn.textContent = 'Agendar'
+    if (error) { aviso(error.message); return }
+    fechar()
+    crmCalendario(alvo, editavel, gerencia)
+  }
 }
 
 // ----- Card "Minha agenda" no topo do Painel -----
@@ -7413,8 +7609,14 @@ function formLead (l, editavel, gerencia, aoFechar) {
         Monta a proposta comercial (preço, condições, validade) e gera o PDF pronto pra mandar pro cliente.</p>
       <div id="ld-proposta-area"><p class="texto-dim2" style="font-size:12px;">carregando proposta...</p></div>
     </div>` : ''}
-    ${l?.cliente_id ? `<p class="texto-dim2" style="font-size:12px;margin-top:8px;">Já convertido em cliente: <b>${esc(l.cliente?.nome_fantasia || l.cliente?.razao_social || '—')}</b></p>
-      ${editavel ? `<div class="acoes" style="margin-top:8px;"><button class="btn-secundario" id="ld-emitir-pedido" type="button">Emitir pedido</button></div>` : ''}`
+    ${l ? `<div id="ld-pedido-wrap" style="${l.etapa === 'GANHO' ? '' : 'display:none;'}">
+      <div class="cabeca-secao" style="margin-top:16px;margin-bottom:4px;">
+        <h3 style="font-family:var(--serif);font-size:14px;">Pedido</h3></div>
+      <p class="texto-dim2" style="font-size:11.5px;margin:-2px 0 8px;">
+        Cliente ganho — emite o pedido de venda na mesma tela do Crédito e Cobrança, já atrelado a esse cliente.</p>
+      ${editavel ? `<button type="button" class="btn" id="ld-fazer-pedido">Fazer pedido</button>` : ''}
+    </div>` : ''}
+    ${l?.cliente_id ? `<p class="texto-dim2" style="font-size:12px;margin-top:8px;">Já convertido em cliente: <b>${esc(l.cliente?.nome_fantasia || l.cliente?.razao_social || '—')}</b></p>`
       : (editavel && l ? `<div class="acoes" style="margin-top:10px;"><button class="btn-secundario" id="ld-converter" type="button">Converter em cliente</button></div>` : '')}
     <div class="acoes" style="margin-top:14px;">
       ${editavel ? `<button class="btn" id="ld-salvar">Salvar</button>` : ''}
@@ -7432,18 +7634,40 @@ function formLead (l, editavel, gerencia, aoFechar) {
   let propostaCarregada = l && l.etapa === 'PROPOSTA'
   if (propostaCarregada) carregarPropostaLead(fundo, l, editavel)
 
-  // mostra/esconde a seção de Proposta na hora, conforme a etapa escolhida
-  // no seletor — não precisa salvar nem reabrir o card pra ela aparecer
+  // mostra/esconde as seções de Proposta e Pedido na hora, conforme a
+  // etapa escolhida no seletor — não precisa salvar nem reabrir o card
   if (l) {
     const selEtapa = fundo.querySelector('#ld-etapa')
     const wrapProposta = fundo.querySelector('#ld-proposta-wrap')
-    if (selEtapa && wrapProposta) {
+    const wrapPedido = fundo.querySelector('#ld-pedido-wrap')
+    if (selEtapa) {
       selEtapa.addEventListener('change', () => {
-        const mostrar = selEtapa.value === 'PROPOSTA'
-        wrapProposta.style.display = mostrar ? '' : 'none'
-        if (mostrar && !propostaCarregada) { propostaCarregada = true; carregarPropostaLead(fundo, l, editavel) }
+        if (wrapProposta) {
+          const mostrarProposta = selEtapa.value === 'PROPOSTA'
+          wrapProposta.style.display = mostrarProposta ? '' : 'none'
+          if (mostrarProposta && !propostaCarregada) { propostaCarregada = true; carregarPropostaLead(fundo, l, editavel) }
+        }
+        if (wrapPedido) wrapPedido.style.display = selEtapa.value === 'GANHO' ? '' : 'none'
       })
     }
+  }
+
+  const btnPedido = fundo.querySelector('#ld-fazer-pedido')
+  if (btnPedido) btnPedido.onclick = async () => {
+    btnPedido.disabled = true; btnPedido.textContent = 'Preparando...'
+    let clienteId = l.cliente_id
+    if (!clienteId) {
+      const { data: cliente, error: e1 } = await db.from('cliente').insert({
+        razao_social: l.nome, telefone: l.telefone, email: l.email,
+        municipio: l.municipio, uf: l.uf, vendedor_id: l.vendedor_id
+      }).select('id').single()
+      if (e1) { btnPedido.disabled = false; btnPedido.textContent = 'Fazer pedido'; alert('Não consegui converter em cliente: ' + e1.message); return }
+      clienteId = cliente.id
+      await db.from('lead').update({ cliente_id: clienteId }).eq('id', l.id)
+      l.cliente_id = clienteId
+    }
+    btnPedido.disabled = false; btnPedido.textContent = 'Fazer pedido'
+    formPedidoVenda(null, { clienteId, vendedorId: l.vendedor_id })
   }
 
   const aviso = (t, ok = false) => {
@@ -7522,56 +7746,6 @@ function formLead (l, editavel, gerencia, aoFechar) {
       if (error) { aviso(error.message); return }
       fechar(); aoFechar()
     }
-  }
-
-  if (editavel && l?.cliente_id) {
-    const btnEmitir = fundo.querySelector('#ld-emitir-pedido')
-    if (btnEmitir) btnEmitir.onclick = () => formEmitirPedidoCrm(l)
-  }
-}
-
-// ----- Emitir pedido direto do CRM (mesmo formulário/tabela "Novo
-// pedido" de Crédito e Cobrança — só que aqui o cliente já vem
-// travado, porque já sabemos qual lead/cliente é) -----
-function formEmitirPedidoCrm (l) {
-  const nomeCli = l.cliente?.nome_fantasia || l.cliente?.razao_social || l.nome
-  const fundo = document.createElement('div')
-  fundo.className = 'modal-fundo'
-  fundo.innerHTML = `<div class="modal">
-    <h3>Emitir pedido — ${esc(nomeCli)}</h3>
-    <div class="form-grade">
-      <div class="campo"><label>Vencimento</label><input id="ep-venc" type="date"></div>
-      <div class="campo"><label>Toneladas *</label><input id="ep-ton" type="number" step="0.01"></div>
-      <div class="campo"><label>R$/t *</label><input id="ep-preco" type="number" step="0.01"></div>
-    </div>
-    <div class="campo" style="margin-top:10px;"><label>Observação</label><input id="ep-obs" placeholder="opcional"></div>
-    <div class="acoes" style="margin-top:14px;"><button class="btn" id="ep-salvar">Emitir pedido</button>
-      <button class="btn-secundario" id="ep-cancelar">Cancelar</button></div>
-    <div class="recado oculto" id="ep-recado"></div>
-    <p class="texto-dim2" style="font-size:11.5px;margin-top:8px;">O número do pedido é gerado automaticamente. O valor é calculado por toneladas × R$/t. Depois de emitido, o pedido aparece normalmente em Crédito e Cobrança.</p>
-  </div>`
-  document.body.appendChild(fundo)
-  const fechar = () => fundo.remove()
-  fundo.querySelector('#ep-cancelar').onclick = fechar
-  fundo.onclick = e => { if (e.target === fundo) fechar() }
-
-  fundo.querySelector('#ep-salvar').onclick = async () => {
-    const ton = Number(fundo.querySelector('#ep-ton').value)
-    const preco = Number(fundo.querySelector('#ep-preco').value)
-    const el = fundo.querySelector('#ep-recado')
-    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
-    if (!ton || !preco) { aviso('Preencha toneladas e R$/t.'); return }
-    const { data: novoPedido, error } = await db.from('pedido').insert({
-      cliente_id: l.cliente_id,
-      quantidade_t: ton, preco_unitario: preco, valor_total: ton * preco,
-      vencimento: fundo.querySelector('#ep-venc').value || null,
-      observacao_cobranca: fundo.querySelector('#ep-obs').value.trim() || null,
-      data_pedido: new Date().toISOString().slice(0, 10)
-    }).select('numero').single()
-    if (error) { aviso(error.message); return }
-    el.textContent = `Pedido ${novoPedido?.numero ?? ''} emitido com sucesso.`; el.classList.remove('oculto')
-    el.style.borderColor = 'var(--good-text)'; el.style.color = 'var(--good-text)'
-    setTimeout(fechar, 1400)
   }
 }
 
@@ -7675,6 +7849,161 @@ function renderFunilGestao (alvo, lista, editavel, aoMudar, gerencia = true) {
   })
 }
 
+// ----- Busca/filtro no funil da equipe (Gestão) — filtra os .crm-card
+// já renderizados, sem precisar ir de novo no banco. -----
+function ligarBuscaFunilGestao () {
+  const input = $('#cg-busca-funil')
+  if (!input) return
+  const normaliza = s => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  input.oninput = () => {
+    const termo = normaliza(input.value.trim())
+    document.querySelectorAll('#cg-funil .crm-card').forEach(card => {
+      const texto = normaliza(card.innerText)
+      card.style.display = !termo || texto.includes(termo) ? '' : 'none'
+    })
+  }
+}
+
+// ----- Atividade da equipe — cruza o sinal do funil (verde/amarelo/
+// vermelho) com quantos compromissos cada vendedor tem marcados e
+// quantos já estão atrasados. -----
+async function carregarAtividadeEquipe (atribuidos) {
+  const alvo = $('#cg-atividade')
+  if (!alvo) return
+
+  const { data: compromissos, error } = await db.from('lead_compromisso')
+    .select('id,data_hora,concluido,lead:lead_id(vendedor_id,vendedor:vendedor_id(nome))')
+  if (error) { alvo.innerHTML = `<p class="vazio" style="padding:16px;">${esc(error.message)}</p>`; return }
+
+  const porVendedor = {}
+  const garantir = nome => (porVendedor[nome] = porVendedor[nome] || { verde: 0, amarelo: 0, vermelho: 0, compPendentes: 0, compAtrasados: 0 })
+
+  atribuidos.forEach(l => {
+    const nome = l.vendedor?.nome ?? '—'
+    const g = garantir(nome)
+    const alerta = nivelAlertaLead(l)
+    if (alerta === 'ok') g.verde++
+    else if (alerta === 'atencao') g.amarelo++
+    else if (alerta === 'atrasado') g.vermelho++
+  })
+
+  ;(compromissos || []).forEach(c => {
+    const nome = c.lead?.vendedor?.nome
+    if (!nome) return
+    const g = garantir(nome)
+    if (!c.concluido) {
+      g.compPendentes++
+      if (new Date(c.data_hora).getTime() < Date.now()) g.compAtrasados++
+    }
+  })
+
+  const linhas = Object.entries(porVendedor).sort((a, b) => b[1].vermelho - a[1].vermelho)
+
+  alvo.innerHTML = `<div class="tabela-scroll" style="max-height:none;">
+    <table><thead><tr>
+      <th>Vendedor</th><th class="num">🟢 Em dia</th><th class="num">🟡 +7 dias</th><th class="num">🔴 +15 dias</th>
+      <th class="num">Compromissos pendentes</th><th class="num">Compromissos atrasados</th>
+    </tr></thead><tbody>
+      ${linhas.map(([nome, v]) => `<tr>
+        <td>${esc(nome)}</td>
+        <td class="num">${v.verde}</td>
+        <td class="num">${v.amarelo || '—'}</td>
+        <td class="num">${v.vermelho ? `<span class="badge-estourado">${v.vermelho}</span>` : '—'}</td>
+        <td class="num">${v.compPendentes || '—'}</td>
+        <td class="num">${v.compAtrasados ? `<span class="badge-estourado">${v.compAtrasados}</span>` : '—'}</td>
+      </tr>`).join('') || `<tr><td colspan="6" class="vazio">Sem dados ainda.</td></tr>`}
+    </tbody></table>
+  </div>`
+}
+
+// ----- Calendário da equipe (dentro de Gestão) — mesmo padrão do
+// calendário individual, só que junta os compromissos de todo mundo e
+// mostra de quem é cada um. Só consulta (não agenda por aqui). -----
+let CRM_CAL_EQ_ANO = new Date().getFullYear()
+let CRM_CAL_EQ_MES = new Date().getMonth()
+let CRM_CAL_EQ_ITENS = []
+
+async function crmCalendarioEquipe (alvo) {
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  const { data, error } = await db.from('lead_compromisso')
+    .select('id,data_hora,titulo,concluido,lead_id,lead:lead_id(nome,vendedor:vendedor_id(nome))')
+    .order('data_hora')
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  CRM_CAL_EQ_ITENS = data || []
+  renderCrmCalendarioEquipe(alvo)
+}
+
+function renderCrmCalendarioEquipe (alvo) {
+  const itensDoAno = CRM_CAL_EQ_ITENS.filter(c => c.data_hora?.slice(0, 4) === String(CRM_CAL_EQ_ANO))
+  const porMes = Array.from({ length: 12 }, (_, i) => itensDoAno.filter(c => Number(c.data_hora.slice(5, 7)) === i + 1))
+
+  alvo.innerHTML = `
+    <div class="cabeca-secao" style="margin-bottom:14px;">
+      <p class="texto-dim2" style="font-size:12px;margin:0;">Compromissos de toda a equipe. Clica num mês pra abrir.</p>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <button class="btn-secundario mini" id="cge-ano-anterior">← ${CRM_CAL_EQ_ANO - 1}</button>
+        <span style="font-family:var(--serif);font-size:15px;">${CRM_CAL_EQ_ANO}</span>
+        <button class="btn-secundario mini" id="cge-ano-seguinte">${CRM_CAL_EQ_ANO + 1} →</button>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(78px,1fr));gap:6px;margin-bottom:16px;">
+      ${CRM_CAL_MESES.map((nome, i) => {
+        const qtd = porMes[i].length
+        return `<button class="cge-mes" data-mes="${i}" style="padding:8px 4px;text-align:center;cursor:pointer;
+          background:var(--panel);border:1px solid ${qtd ? 'var(--rust)' : 'var(--line)'};border-radius:9px;color:var(--txt);">
+          <div style="font-size:11px;font-weight:600;">${nome.slice(0, 3)}</div>
+          ${qtd ? `<div style="font-size:9px;color:var(--rust);margin-top:2px;">${qtd}</div>` : ''}
+        </button>`
+      }).join('')}
+    </div>
+    <div id="cge-detalhe"></div>`
+
+  $('#cge-ano-anterior').onclick = () => { CRM_CAL_EQ_ANO--; renderCrmCalendarioEquipe(alvo) }
+  $('#cge-ano-seguinte').onclick = () => { CRM_CAL_EQ_ANO++; renderCrmCalendarioEquipe(alvo) }
+  alvo.querySelectorAll('[data-mes]').forEach(el => {
+    el.onclick = () => { CRM_CAL_EQ_MES = Number(el.dataset.mes); renderCrmMesEquipe(alvo) }
+  })
+  if (CRM_CAL_EQ_MES !== null) renderCrmMesEquipe(alvo)
+}
+
+function renderCrmMesEquipe (alvo) {
+  const mes = CRM_CAL_EQ_MES
+  const primeiroDiaSemana = new Date(CRM_CAL_EQ_ANO, mes, 1).getDay()
+  const diasNoMes = new Date(CRM_CAL_EQ_ANO, mes + 1, 0).getDate()
+  const hojeStr = hojeISO()
+
+  const doMes = CRM_CAL_EQ_ITENS.filter(c => c.data_hora?.slice(0, 4) === String(CRM_CAL_EQ_ANO) && Number(c.data_hora.slice(5, 7)) === mes + 1)
+  const porDia = dia => doMes.filter(c => Number(c.data_hora.slice(8, 10)) === dia)
+
+  const celulas = []
+  for (let i = 0; i < primeiroDiaSemana; i++) celulas.push('<div></div>')
+  for (let dia = 1; dia <= diasNoMes; dia++) {
+    const dataStr = `${CRM_CAL_EQ_ANO}-${String(mes + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`
+    const itensDia = porDia(dia)
+    const temAtrasado = itensDia.some(it => !it.concluido && new Date(it.data_hora).getTime() < Date.now())
+    celulas.push(`<div style="aspect-ratio:1;padding:4px;text-align:left;
+      background:${dataStr === hojeStr ? 'var(--hover-bg)' : 'var(--panel)'};border:1px solid ${temAtrasado ? 'var(--critico-text)' : itensDia.length ? 'var(--rust)' : 'var(--line)'};border-radius:8px;color:var(--txt);
+      display:flex;flex-direction:column;gap:2px;overflow:hidden;">
+      <span style="font-size:10.5px;font-weight:${dataStr === hojeStr ? '700' : '400'};color:${dataStr === hojeStr ? 'var(--rust)' : 'var(--dim)'};">${dia}</span>
+      ${itensDia.slice(0, 2).map(it => `<span style="font-size:8px;background:var(--surface2);border-radius:4px;padding:1px 3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;${it.concluido ? 'text-decoration:line-through;opacity:.6;' : ''}">${esc(it.lead?.vendedor?.nome ?? '—')}: ${esc(it.lead?.nome ?? '')}</span>`).join('')}
+      ${itensDia.length > 2 ? `<span style="font-size:8px;color:var(--dim2);">+${itensDia.length - 2}</span>` : ''}
+    </div>`)
+  }
+
+  $('#cge-detalhe').innerHTML = `
+    <div class="panel" style="padding:16px;">
+      <div class="cabeca-secao">
+        <h3 style="font-family:var(--serif);font-size:16px;margin:0;">${CRM_CAL_MESES[mes]} de ${CRM_CAL_EQ_ANO}</h3>
+        <button class="btn-secundario mini" id="cge-fechar-mes">fechar</button>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin:12px 0 5px;">
+        ${['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map(d => `<div class="texto-dim2" style="text-align:center;font-size:10px;">${d}</div>`).join('')}
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;">${celulas.join('')}</div>
+    </div>`
+  $('#cge-fechar-mes').onclick = () => { CRM_CAL_EQ_MES = null; renderCrmCalendarioEquipe(alvo) }
+}
+
 async function crmGestaoTab (alvo, editavel) {
   const { data, error } = await db.from('lead').select(selLead)
     .eq('arquivado', false).order('atualizado_em', { ascending: false }).limit(1500)
@@ -7737,6 +8066,9 @@ async function crmGestaoTab (alvo, editavel) {
     </div>
     <p class="texto-dim2" style="font-size:11.5px;margin:-4px 0 12px;">
       Arraste o card pra outra coluna, ou clique nele pra abrir e trocar a etapa lá dentro.</p>
+    <div class="campo" style="max-width:420px;margin-bottom:12px;">
+      <input id="cg-busca-funil" placeholder="🔍 pesquisar por cliente, vendedor, local...">
+    </div>
     <div id="cg-funil"></div>
 
     <div style="display:grid;grid-template-columns:1.3fr 1fr;gap:16px;margin-top:20px;" class="grade-painel-comb">
@@ -7767,6 +8099,19 @@ async function crmGestaoTab (alvo, editavel) {
       </div>
     </div>
 
+    <div class="cabeca-secao" style="margin-top:20px;">
+      <h3 style="font-family:var(--serif);font-size:16px;">Atividade da equipe — funil e agenda</h3>
+    </div>
+    <p class="texto-dim2" style="font-size:11.5px;margin:-4px 0 12px;">
+      Cruza o sinal do funil (🟢 em dia, 🟡 +7 dias parado, 🔴 +15 dias parado) com os compromissos marcados na agenda de cada um.</p>
+    <div id="cg-atividade" class="panel" style="padding:0;"><p class="texto-dim2" style="padding:16px;">carregando...</p></div>
+
+    <div class="cabeca-secao" style="margin-top:20px;">
+      <h3 style="font-family:var(--serif);font-size:16px;">Agenda da equipe</h3>
+      <button class="btn-secundario mini" id="cg-toggle-agenda">Ver calendário de todos</button>
+    </div>
+    <div id="cg-agenda-painel" class="oculto" style="margin-top:10px;"></div>
+
     ${PERFIL.pessoaId ? `<div class="cabeca-secao" style="margin-top:20px;">
       <h3 style="font-family:var(--serif);font-size:16px;">Sua carteira</h3></div>
     <div class="panel" style="padding:0;"><div class="tabela-scroll">
@@ -7792,6 +8137,8 @@ async function crmGestaoTab (alvo, editavel) {
     <div id="cg-banco-painel" class="oculto" style="margin-top:10px;"></div>`
 
   renderFunilGestao($('#cg-funil'), lista, editavel, () => crmGestaoTab(alvo, editavel))
+  ligarBuscaFunilGestao()
+  carregarAtividadeEquipe(atribuidos)
 
   const painelHistorico = $('#cg-historico-painel')
   $('#cg-toggle-historico').onclick = () => {
@@ -7799,6 +8146,14 @@ async function crmGestaoTab (alvo, editavel) {
       painelHistorico.classList.remove('oculto')
       crmHistoricoEquipe(painelHistorico)
     } else painelHistorico.classList.add('oculto')
+  }
+
+  const painelAgenda = $('#cg-agenda-painel')
+  $('#cg-toggle-agenda').onclick = () => {
+    if (painelAgenda.classList.contains('oculto')) {
+      painelAgenda.classList.remove('oculto')
+      crmCalendarioEquipe(painelAgenda)
+    } else painelAgenda.classList.add('oculto')
   }
 
   const painelBanco = $('#cg-banco-painel')
@@ -8542,7 +8897,7 @@ async function cobPedidos (alvo, editavel) {
   $('#pv-novo').onclick = () => formPedidoVenda(null)
 }
 
-async function formPedidoVenda (p) {
+async function formPedidoVenda (p, preset = null) {
   const [{ data: clientes }, { data: produtos }, { data: vendedores }] = await Promise.all([
     db.from('cliente').select('id,razao_social,cnpj_cpf,conferir_dados').eq('status','ATIVO').order('razao_social'),
     db.from('produto').select('id,nome').order('nome'),
@@ -8567,12 +8922,12 @@ async function formPedidoVenda (p) {
       <h3>${p ? 'Editar pedido ' + esc(p.numero) : 'Novo pedido de venda'}</h3>
       <div class="form-grade">
         <div class="campo" style="grid-column:1/-1;"><label>Cliente *</label>
-          <select id="pv-cliente">${opc(clientes || [], p?.cliente_id, 'razao_social')}</select>
+          <select id="pv-cliente">${opc(clientes || [], p?.cliente_id ?? preset?.clienteId, 'razao_social')}</select>
           <span class="texto-dim2" id="pv-aviso-cli" style="font-size:11px;"></span></div>
         <div class="campo"><label>Produto</label>
-          <select id="pv-produto">${opc(produtos || [], p?.produto_id, 'nome')}</select></div>
+          <select id="pv-produto">${opc(produtos || [], p?.produto_id ?? preset?.produtoId, 'nome')}</select></div>
         <div class="campo"><label>Vendedor</label>
-          <select id="pv-vendedor">${opc(vendedores || [], p?.vendedor_id, 'nome')}</select></div>
+          <select id="pv-vendedor">${opc(vendedores || [], p?.vendedor_id ?? preset?.vendedorId, 'nome')}</select></div>
         <div class="campo"><label>Quantidade *</label>
           <input id="pv-qtd" inputmode="decimal" value="${p?.quantidade_t ?? ''}"></div>
         <div class="campo"><label>Unidade</label>
