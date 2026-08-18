@@ -6586,7 +6586,7 @@ async function paginaCrm () {
   CRM_CACHE.vendedores = CRM_CACHE.pessoas.filter(p => p.eh_vendedor)
   if (!CRM_CACHE.vendedores.length) CRM_CACHE.vendedores = CRM_CACHE.pessoas
 
-  const abas = [['painel', 'Painel']]
+  const abas = [['painel', 'Painel'], ['funil', 'Funil'], ['progresso', 'Progresso']]
   if (gerencia) abas.push(['gestao', 'Gestão'])
 
   const inicial = CRM_SUBABA_INICIAL && abas.some(a => a[0] === CRM_SUBABA_INICIAL) ? CRM_SUBABA_INICIAL : abas[0][0]
@@ -6611,7 +6611,9 @@ function abrirCrm (sub, editavel, gerencia) {
   const alvo = $('#sub-crm')
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
   $('#kpis').innerHTML = ''
-  if (sub === 'painel') crmPainelProgresso(alvo, editavel, gerencia)
+  if (sub === 'painel') crmPainelIndividual(alvo, editavel, gerencia)
+  if (sub === 'funil') crmFunilIndividual(alvo, editavel, gerencia)
+  if (sub === 'progresso') crmProgressoIndividual(alvo, editavel, gerencia)
   if (sub === 'atribuir') crmAtribuir(alvo)
   if (sub === 'gestao') crmGestaoTab(alvo, editavel)
 }
@@ -6632,13 +6634,11 @@ function filtrarPorDono (q, gerencia) {
   return q.eq('vendedor_id', PERFIL.pessoaId)
 }
 
-// ----- Painel + Funil (KPIs, gráficos e kanban numa página só) -----
-// Antes eram três abas separadas (Painel só com números, Funil só com o
-// kanban, Progresso só com a tabela). Agora: Painel = números + agenda
-// pessoal + tabela de progresso, tudo individual (o que é seu). O kanban
-// visual (arrastar card entre etapas) e o histórico da equipe inteira
-// ficam só dentro de Gestão — só quem gerencia enxerga todo mundo.
-async function crmPainelProgresso (alvo, editavel, gerencia) {
+// ----- Painel (individual) — números + agenda pessoal -----
+// 4 abas de novo, como era antes: Painel, Funil e Progresso são sempre
+// individuais (o que é seu). Gestão (só pra quem tem esse nível) é quem
+// vê a equipe toda, incluindo o funil e o histórico de todo mundo.
+async function crmPainelIndividual (alvo, editavel, gerencia) {
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
   const [painelRes, agendaRes] = await Promise.all([
@@ -6660,15 +6660,32 @@ async function crmPainelProgresso (alvo, editavel, gerencia) {
   renderMinhaAgenda(alvo, agendaRes.data || [], editavel, gerencia)
   renderPainelResumo(alvo, listaPainel, gerencia)
   await crmCardNovoPedido(alvo, gerencia)
+}
 
-  const tituloProgresso = document.createElement('div')
-  tituloProgresso.className = 'painel-funil-secao-titulo'
-  tituloProgresso.innerHTML = `<span>Meus leads</span>`
-  alvo.appendChild(tituloProgresso)
+// ----- Funil (individual) — kanban só dos MEUS leads, com drag-and-drop
+// e seletor de etapa dentro do card (mesmo motor usado em Gestão, só que
+// aqui a lista já vem filtrada pra "só o meu"). -----
+async function crmFunilIndividual (alvo, editavel, gerencia) {
+  const { data, error } = await filtrarPorDono(db.from('lead').select(selLead), gerencia)
+    .order('atualizado_em', { ascending: false }).limit(500)
+  if (faltaMigracao(error) || error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
 
-  const areaProgresso = document.createElement('div')
-  alvo.appendChild(areaProgresso)
-  renderCrmProgresso(areaProgresso, editavel, gerencia)
+  const lista = data || []
+  CRM_CACHE.leads = lista
+
+  const podeNovo = editavel && gerencia // criar lead do zero é ação de quem gerencia; vendedor só trabalha o que chega
+  alvo.innerHTML =
+    (podeNovo ? `<div class="acoes" style="margin:0 0 16px;"><button class="btn" id="crm-novo">Novo lead</button></div>` : '') +
+    (!gerencia && !lista.length ? `<p class="vazio">Nenhum lead atribuído a você ainda. Assim que a gerência mandar um cliente pra você, ele aparece aqui.</p>` : '') +
+    `<div id="crm-funil-individual"></div>`
+
+  renderFunilGestao($('#crm-funil-individual'), lista, editavel, () => crmFunilIndividual(alvo, editavel, gerencia), gerencia)
+  if (podeNovo) $('#crm-novo').onclick = () => formLead(null, editavel, gerencia, () => crmFunilIndividual(alvo, editavel, gerencia))
+}
+
+// ----- Progresso (individual) — tabela/busca -----
+async function crmProgressoIndividual (alvo, editavel, gerencia) {
+  renderCrmProgresso(alvo, editavel, gerencia)
 }
 
 // ----- Card "Minha agenda" no topo do Painel -----
@@ -7339,7 +7356,7 @@ async function atualizarEtapaLead (lead, novaEtapa, aoTerminar) {
   aoTerminar()
 }
 
-function renderFunilGestao (alvo, lista, editavel, aoMudar) {
+function renderFunilGestao (alvo, lista, editavel, aoMudar, gerencia = true) {
   let arrastando = null // id do lead sendo arrastado
 
   const cartao = l => {
@@ -7370,7 +7387,7 @@ function renderFunilGestao (alvo, lista, editavel, aoMudar) {
 
   // clique no card (fora do seletor) abre o lead completo
   alvo.querySelectorAll('[data-lead]').forEach(el => {
-    el.onclick = () => formLead(lista.find(l => l.id === el.dataset.lead), editavel, true, aoMudar)
+    el.onclick = () => formLead(lista.find(l => l.id === el.dataset.lead), editavel, gerencia, aoMudar)
   })
 
   if (!editavel) return
