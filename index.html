@@ -18186,24 +18186,16 @@ function abrirMarketing (sub, editavel) {
 }
 
 // ----- Visão Geral -----
-// "Minha agenda" e "Demandas" eram dois sistemas separados (tarefa
-// pessoal vs. marketing_demanda da equipe) que nunca se falavam —
-// criar algo num não refletia no outro. Agora é uma coisa só: tudo
-// que entra aqui é uma marketing_demanda, com prazo opcional (o que
-// não tem prazo aparece em "Sem data" em vez de sumir) e agrupado
-// por urgência, do jeito que a agenda já mostrava.
 async function mktVisaoGeral (alvo, editavel) {
   const hoje = new Date()
-  const hojeISO = hoje.toISOString().slice(0, 10)
-  const [{ data: demandas }, { data: postits }] = await Promise.all([
-    db.from('marketing_demanda').select('id,descricao,categoria,prazo,concluida,concluida_em').eq('concluida', false)
-      .order('prazo', { ascending: true, nullsFirst: false }),
+  const [{ data: demandas }, { data: postits } ] = await Promise.all([
+    db.from('marketing_demanda').select('id,descricao,categoria,prazo,concluida').eq('concluida', false).order('prazo', { ascending: true, nullsFirst: false }),
     db.from('marketing_postit').select('id,texto,cor,criado_em').order('criado_em', { ascending: false })
   ])
 
   const listaDemandas = demandas || []
-  const atrasadas = listaDemandas.filter(d => d.prazo && d.prazo < hojeISO)
-  const hojeMesmo = listaDemandas.filter(d => d.prazo === hojeISO)
+  const atrasadas = listaDemandas.filter(d => d.prazo && d.prazo < hoje.toISOString().slice(0, 10))
+  const hojeMesmo = listaDemandas.filter(d => d.prazo === hoje.toISOString().slice(0, 10))
 
   alvo.innerHTML = `
     <div class="resumo-topo" style="margin-bottom:16px;">
@@ -18213,21 +18205,42 @@ async function mktVisaoGeral (alvo, editavel) {
       <div class="bloco"><div class="rot">Post-its</div><div class="val">${(postits || []).length}</div></div>
     </div>
 
-    <div class="panel" style="padding:18px;margin-bottom:16px;">
-      <div class="cabeca-secao">
-        <h3 style="font-family:var(--serif);font-size:17px;">Demandas &amp; agenda</h3>
-        <a href="#" id="mk-ir-calendario" class="texto-dim2" style="font-size:12px;">ver no calendário →</a>
+    <div class="duas-colunas" style="margin-bottom:16px;align-items:start;">
+      <div class="panel" style="padding:18px;" id="mk-bloco-agenda"></div>
+
+      <div class="panel" style="padding:16px 18px;">
+        <div class="cabeca-secao">
+          <h3 style="font-family:var(--serif);font-size:15px;">Demandas</h3>
+          ${editavel ? `<button class="btn-secundario mini" id="mk-nova-demanda">+ nova</button>` : ''}
+        </div>
+        <div id="mk-lista-demandas">
+          ${listaDemandas.map(d => `<div class="linha-demanda">
+            <label><input type="checkbox" data-concluir-demanda="${d.id}" ${editavel ? '' : 'disabled'}>
+              <span class="tag-aging ${COR_CATEGORIA_DEMANDA[d.categoria]}" style="margin-right:6px;">${d.categoria}</span>
+              ${esc(d.descricao)}</label>
+            ${d.prazo ? `<span class="texto-dim2" style="font-size:11px;">${fmtData(d.prazo)}</span>` : ''}
+          </div>`).join('') || '<p class="texto-dim2" style="font-size:12.5px;">nenhuma demanda em aberto.</p>'}
+        </div>
       </div>
-      ${editavel ? `<div class="linha-add">
-        <input id="mk-desc-rapida" placeholder="O que precisa ser feito?">
-        <select id="mk-cat-rapida" style="flex:none;width:130px;">
-          ${Object.entries(ROTULO_CATEGORIA_DEMANDA).map(([k, v]) => `<option value="${k}" ${k === 'C' ? 'selected' : ''}>${k} · ${v.split('· ')[1]}</option>`).join('')}
-        </select>
-        <input type="date" id="mk-prazo-rapido" style="flex:none;width:145px;">
-        <button class="btn mini" id="mk-add-rapido">Adicionar</button>
-      </div>` : ''}
-      <div id="mk-lista-demandas" style="margin-top:6px;"></div>
     </div>
+
+    <div class="cabeca-secao" style="margin-top:4px;">
+      <h3 style="font-family:var(--serif);font-size:15px;">Pendências (metas do dia · urgência · prioridade)</h3>
+    </div>
+    <div class="panel" style="padding:0;margin-bottom:16px;"><div class="tabela-scroll">
+      <table><thead><tr><th>Meta do dia</th><th>Urgência</th><th>Prioridade</th></tr></thead><tbody>
+        ${listaDemandas.map(d => {
+          const dias = d.prazo ? Math.round((new Date(d.prazo) - hoje) / 86400000) : null
+          const urgencia = dias === null ? '<span class="texto-dim2">sem prazo</span>'
+            : dias < 0 ? `<span class="tag-aging critico">venceu há ${-dias}d</span>`
+            : dias === 0 ? `<span class="tag-aging critico">hoje</span>`
+            : dias <= 3 ? `<span class="tag-aging alerta">em ${dias}d</span>`
+            : `<span class="tag-aging ok">em ${dias}d</span>`
+          return `<tr><td>${esc(d.descricao)}</td><td>${urgencia}</td>
+            <td><span class="tag-aging ${COR_CATEGORIA_DEMANDA[d.categoria]}">${ROTULO_CATEGORIA_DEMANDA[d.categoria]}</span></td></tr>`
+        }).join('') || `<tr><td colspan="3" class="vazio">Nada pendente.</td></tr>`}
+      </tbody></table>
+    </div></div>
 
     <div class="cabeca-secao">
       <h3 style="font-family:var(--serif);font-size:15px;">Post-its</h3>
@@ -18240,32 +18253,7 @@ async function mktVisaoGeral (alvo, editavel) {
       </div>`).join('') || '<p class="texto-dim2" style="font-size:12.5px;">nenhum post-it colado.</p>'}
     </div>`
 
-  const daqui7dias = new Date(Date.now() + 7 * 864e5).toISOString().slice(0, 10)
-  const grupos = [
-    ['Atrasadas', listaDemandas.filter(d => d.prazo && d.prazo < hojeISO)],
-    ['Hoje', listaDemandas.filter(d => d.prazo === hojeISO)],
-    ['Próximos 7 dias', listaDemandas.filter(d => d.prazo && d.prazo > hojeISO && d.prazo <= daqui7dias)],
-    ['Mais adiante', listaDemandas.filter(d => d.prazo && d.prazo > daqui7dias)],
-    ['Sem data', listaDemandas.filter(d => !d.prazo)]
-  ].filter(([, itens]) => itens.length)
-
-  const linhaDemanda = d => `<div class="linha-demanda" data-abrir-demanda="${d.id}" style="cursor:pointer;">
-    <label onclick="event.stopPropagation()"><input type="checkbox" data-concluir-demanda="${d.id}" ${editavel ? '' : 'disabled'}>
-      <span class="tag-aging ${COR_CATEGORIA_DEMANDA[d.categoria]}" style="margin-right:6px;">${d.categoria}</span>
-      ${esc(d.descricao)}</label>
-    ${d.prazo ? `<span class="texto-dim2" style="font-size:11px;">${fmtData(d.prazo)}</span>` : '<span class="texto-dim2" style="font-size:11px;">sem data</span>'}
-  </div>`
-
-  $('#mk-lista-demandas').innerHTML = grupos.length ? grupos.map(([titulo, itens]) => `
-    <div style="margin-top:10px;">
-      <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;margin:8px 0 4px;">${titulo}</div>
-      ${itens.map(linhaDemanda).join('')}
-    </div>`).join('') : '<p class="texto-dim2" style="font-size:12.5px;padding:10px 0;">Nada pendente. Escreva acima o que precisa ser feito.</p>'
-
-  $('#mk-ir-calendario').onclick = e => {
-    e.preventDefault()
-    $('.subabas [data-sub="calendario"]')?.click()
-  }
+  await montarAgendaEmbutida($('#mk-bloco-agenda'), () => mktVisaoGeral(alvo, editavel))
 
   alvo.querySelectorAll('[data-concluir-demanda]').forEach(cb => {
     cb.onchange = async () => {
@@ -18273,23 +18261,8 @@ async function mktVisaoGeral (alvo, editavel) {
       mktVisaoGeral(alvo, editavel)
     }
   })
-  if (editavel) {
-    alvo.querySelectorAll('[data-abrir-demanda]').forEach(el => {
-      el.onclick = () => formDemandaMkt(editavel, listaDemandas.find(d => d.id === el.dataset.abrirDemanda), null, () => mktVisaoGeral(alvo, editavel))
-    })
-    $('#mk-add-rapido').onclick = async () => {
-      const desc = $('#mk-desc-rapida').value.trim()
-      if (!desc) return
-      await db.from('marketing_demanda').insert({
-        descricao: desc, categoria: $('#mk-cat-rapida').value,
-        prazo: $('#mk-prazo-rapido').value || null, criado_por: PERFIL.pessoaId
-      })
-      mktVisaoGeral(alvo, editavel)
-    }
-    $('#mk-desc-rapida').onkeydown = e => { if (e.key === 'Enter') $('#mk-add-rapido').click() }
-  }
-
   if (!editavel) return
+  $('#mk-nova-demanda').onclick = () => formDemandaMkt(alvo, editavel)
   $('#mk-novo-postit').onclick = async () => {
     const texto = prompt('Texto do post-it:'); if (!texto) return
     const cores = ['#fef08a', '#bbf7d0', '#bfdbfe', '#fecaca', '#e9d5ff']
@@ -18301,25 +18274,18 @@ async function mktVisaoGeral (alvo, editavel) {
   })
 }
 
-// aceita edição (passe a demanda) e um prazo padrão (ex.: clicando
-// num dia do calendário) — aoFechar é chamado depois de salvar/excluir,
-// pra quem abriu (Painel ou Calendário) recarregar o que for seu
-function formDemandaMkt (editavel, demanda, prazoPadrao, aoFechar) {
+function formDemandaMkt (alvoPai, editavel) {
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
   fundo.innerHTML = `<div class="modal">
-    <h3>${demanda ? 'Editar demanda' : 'Nova demanda'}</h3>
-    <div class="campo"><label>Descrição *</label><input id="dm-desc" value="${esc(demanda?.descricao ?? '')}"></div>
+    <h3>Nova demanda</h3>
+    <div class="campo"><label>Descrição *</label><input id="dm-desc"></div>
     <div class="form-grade" style="margin-top:10px;">
       <div class="campo"><label>Categoria</label><select id="dm-cat">
-        ${Object.entries(ROTULO_CATEGORIA_DEMANDA).map(([k, v]) => `<option value="${k}" ${k === (demanda?.categoria ?? 'C') ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
-      <div class="campo"><label>Prazo</label><input id="dm-prazo" type="date" value="${demanda?.prazo ?? prazoPadrao ?? ''}"></div>
+        ${Object.entries(ROTULO_CATEGORIA_DEMANDA).map(([k, v]) => `<option value="${k}" ${k === 'C' ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+      <div class="campo"><label>Prazo</label><input id="dm-prazo" type="date"></div>
     </div>
-    <div class="acoes" style="margin-top:14px;">
-      <button class="btn" id="dm-salvar">${demanda ? 'Salvar' : 'Adicionar'}</button>
-      <button class="btn-secundario" id="dm-cancelar">Cancelar</button>
-      ${demanda ? `<button class="btn-secundario" id="dm-excluir" style="margin-left:auto;">Excluir</button>` : ''}
-    </div>
+    <div class="acoes"><button class="btn" id="dm-salvar">Adicionar</button><button class="btn-secundario" id="dm-cancelar">Cancelar</button></div>
   </div>`
   document.body.appendChild(fundo)
   const fechar = () => fundo.remove()
@@ -18328,15 +18294,48 @@ function formDemandaMkt (editavel, demanda, prazoPadrao, aoFechar) {
   fundo.querySelector('#dm-salvar').onclick = async () => {
     const desc = fundo.querySelector('#dm-desc').value.trim()
     if (!desc) return
-    const corpo = {
+    await db.from('marketing_demanda').insert({
       descricao: desc, categoria: fundo.querySelector('#dm-cat').value,
-      prazo: fundo.querySelector('#dm-prazo').value || null
-    }
+      prazo: fundo.querySelector('#dm-prazo').value || null, criado_por: PERFIL.pessoaId
+    })
+    fechar(); mktVisaoGeral(alvoPai, editavel)
+  }
+}
+
+
+// versão da demanda usada só pelo Calendário — cria com data pré-preenchida
+// ou edita/exclui uma existente. Não mexe em formDemandaMkt (do Painel),
+// que continua exatamente como estava.
+function formDemandaCal (demanda, prazoPadrao, aoFechar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>${demanda ? 'Editar demanda' : 'Nova demanda'}</h3>
+    <div class="campo"><label>Descrição *</label><input id="dc-desc" value="${esc(demanda?.descricao ?? '')}"></div>
+    <div class="form-grade" style="margin-top:10px;">
+      <div class="campo"><label>Categoria</label><select id="dc-cat">
+        ${Object.entries(ROTULO_CATEGORIA_DEMANDA).map(([k, v]) => `<option value="${k}" ${k === (demanda?.categoria ?? 'C') ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+      <div class="campo"><label>Prazo</label><input id="dc-prazo" type="date" value="${demanda?.prazo ?? prazoPadrao ?? ''}"></div>
+    </div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="dc-salvar">${demanda ? 'Salvar' : 'Adicionar'}</button>
+      <button class="btn-secundario" id="dc-cancelar">Cancelar</button>
+      ${demanda ? `<button class="btn-secundario" id="dc-excluir" style="margin-left:auto;">Excluir</button>` : ''}
+    </div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#dc-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  fundo.querySelector('#dc-salvar').onclick = async () => {
+    const desc = fundo.querySelector('#dc-desc').value.trim()
+    if (!desc) return
+    const corpo = { descricao: desc, categoria: fundo.querySelector('#dc-cat').value, prazo: fundo.querySelector('#dc-prazo').value || null }
     if (demanda) await db.from('marketing_demanda').update(corpo).eq('id', demanda.id)
     else await db.from('marketing_demanda').insert({ ...corpo, criado_por: PERFIL.pessoaId })
     fechar(); aoFechar()
   }
-  if (demanda) fundo.querySelector('#dm-excluir').onclick = async () => {
+  if (demanda) fundo.querySelector('#dc-excluir').onclick = async () => {
     if (!confirm('Excluir essa demanda?')) return
     await db.from('marketing_demanda').delete().eq('id', demanda.id)
     fechar(); aoFechar()
@@ -18428,7 +18427,7 @@ function renderMktCalendario (alvo, editavel, demandas, posts) {
   alvo.querySelectorAll('[data-abrir-demanda-cal]').forEach(el => {
     el.onclick = e => {
       e.stopPropagation()
-      formDemandaMkt(editavel, demandas.find(d => d.id === el.dataset.abrirDemandaCal), null, () => mktCalendario(alvo, editavel))
+      formDemandaCal(demandas.find(d => d.id === el.dataset.abrirDemandaCal), null, () => mktCalendario(alvo, editavel))
     }
   })
   alvo.querySelectorAll('[data-abrir-post-cal]').forEach(el => {
@@ -18464,7 +18463,7 @@ function formDiaCalendarioMkt (dataISO, itens, editavel, aoFechar) {
   fundo.querySelector('#dc-fechar').onclick = () => { fechar(); aoFechar() }
   fundo.onclick = e => { if (e.target === fundo) { fechar(); aoFechar() } }
   if (editavel) {
-    fundo.querySelector('#dc-nova-demanda').onclick = () => { fechar(); formDemandaMkt(editavel, null, dataISO, aoFechar) }
+    fundo.querySelector('#dc-nova-demanda').onclick = () => { fechar(); formDemandaCal(null, dataISO, aoFechar) }
     fundo.querySelector('#dc-novo-post').onclick = () => { fechar(); formPostAgendaMkt(null, dataISO, editavel, aoFechar) }
   }
 }
