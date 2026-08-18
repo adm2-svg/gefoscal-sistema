@@ -209,10 +209,23 @@ tbody tr:hover { background: var(--hover-bg); }
 .postit .fechar { position:absolute; top:4px; right:6px; background:none; border:none; cursor:pointer;
                    font-size:14px; color:#241f17; opacity:.5; }
 .postit .fechar:hover { opacity:1; }
-.grade-meses-mkt { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:12px; }
-.cartao-mes-mkt { border:1px solid var(--line); border-radius:8px; padding:10px; background:var(--panel); }
-.cartao-mes-mkt h4 { font-family:var(--serif); font-size:13px; margin:0 0 8px; }
-.cartao-mes-mkt table { width:100%; font-size:11px; }
+/* ---- Marketing: metas mensais por rede (cards do ano) ---- */
+.grade-meses-mkt { display:grid; grid-template-columns:repeat(auto-fill,minmax(270px,1fr)); gap:14px; }
+.cartao-mes-mkt { border:1px solid var(--line); border-top:3px solid var(--card-accent, var(--rust));
+                   border-radius:9px; padding:14px 16px; background:var(--panel);
+                   transition:border-color .15s ease; }
+.cartao-mes-mkt:hover { border-color:var(--line2); border-top-color:var(--card-accent, var(--rust)); }
+.cartao-mes-mkt h4 { font-family:var(--serif); font-size:15px; margin:0 0 10px; color:var(--txt); }
+.linha-metrica-mkt { padding:9px 0; border-top:1px solid var(--line); }
+.linha-metrica-mkt:first-of-type { border-top:none; padding-top:0; }
+.rotulo-metrica-mkt { font-size:11.5px; color:var(--dim); line-height:1.35; margin-bottom:6px; }
+.campos-metrica-mkt { display:flex; gap:8px; }
+.campos-metrica-mkt > label { flex:1; min-width:0; }
+.campos-metrica-mkt > label span { display:block; font-size:9px; text-transform:uppercase; letter-spacing:.06em;
+                                    color:var(--dim2); margin-bottom:3px; }
+.campos-metrica-mkt input { width:100%; box-sizing:border-box; font-size:12.5px; padding:5px 7px;
+                             text-align:right; font-variant-numeric:tabular-nums; }
+.campos-metrica-mkt .so-leitura { font-size:12.5px; text-align:right; color:var(--dim); padding:5px 2px; }
 .grade-cronograma-mkt { display:grid; grid-template-columns:repeat(5,1fr); gap:10px; }
 @media (max-width:900px) { .grade-cronograma-mkt { grid-template-columns:1fr 1fr; } }
 .coluna-cronograma-mkt { border:1px solid var(--line); border-radius:8px; padding:10px; background:var(--panel); }
@@ -18582,20 +18595,24 @@ async function mktRedesSociais (alvo, editavel) {
 
   $('#mk-grade-metas').innerHTML = `
     ${editavel ? `<div class="acoes" style="margin-bottom:12px;"><button class="btn-secundario mini" id="mk-add-metrica">+ métrica</button></div>` : ''}
-    <div class="grade-meses-mkt">
+    <div class="grade-meses-mkt" style="--card-accent:${CORES_REDE_MARKETING[MKT_REDE_ATUAL]};">
       ${MESES_MKT.map((nome, i) => { const mes = i + 1
         return `<div class="cartao-mes-mkt">
           <h4>${nome}</h4>
-          <table><thead><tr><th>Métrica</th><th class="num">Meta</th><th class="num">Realizado</th></tr></thead><tbody>
-            ${metricasExistentes.map(met => {
-              const r = valorDe(mes, met)
-              return `<tr>
-                <td class="texto-dim2" style="font-size:11.5px;">${esc(met)}</td>
-                <td class="num">${editavel ? `<input type="number" step="0.01" data-mes="${mes}" data-metrica="${esc(met)}" data-campo="meta" value="${r?.meta ?? ''}" style="width:72px;text-align:right;">` : (r?.meta ?? '—')}</td>
-                <td class="num">${editavel ? `<input type="number" step="0.01" data-mes="${mes}" data-metrica="${esc(met)}" data-campo="realizado" value="${r?.realizado ?? ''}" style="width:72px;text-align:right;">` : (r?.realizado ?? '—')}</td>
-              </tr>`
-            }).join('')}
-          </tbody></table>
+          ${metricasExistentes.map(met => {
+            const r = valorDe(mes, met)
+            return `<div class="linha-metrica-mkt">
+              <div class="rotulo-metrica-mkt">${esc(met)}</div>
+              <div class="campos-metrica-mkt">
+                <label><span>Meta</span>${editavel
+                  ? `<input type="number" step="0.01" data-mes="${mes}" data-metrica="${esc(met)}" data-campo="meta" value="${r?.meta ?? ''}">`
+                  : `<div class="so-leitura">${r?.meta ?? '—'}</div>`}</label>
+                <label><span>Realizado</span>${editavel
+                  ? `<input type="number" step="0.01" data-mes="${mes}" data-metrica="${esc(met)}" data-campo="realizado" value="${r?.realizado ?? ''}">`
+                  : `<div class="so-leitura">${r?.realizado ?? '—'}</div>`}</label>
+              </div>
+            </div>`
+          }).join('')}
         </div>`
       }).join('')}
     </div>`
