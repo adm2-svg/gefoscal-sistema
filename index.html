@@ -174,6 +174,14 @@ tbody tr:hover { background: var(--hover-bg); }
                text-align:center; font-size:11px; color:#5b6b60; }
 .assinaturas .risco { border-top:1px solid #98a89e; margin:24px 8px 5px; }
 .assinaturas b { color:#1b1b1b; }
+.doc .doc-rodape { background:var(--verde); color:#fff; padding:14px 22px; font-size:11px;
+                    display:flex; justify-content:space-between; align-items:center; gap:14px;
+                    border-top:4px solid var(--ouro); }
+.doc .doc-rodape b { font-weight:700; }
+.doc .prop-opcao { border:1.5px solid var(--verde); border-radius:8px; padding:12px 14px; margin-top:10px; }
+.doc .prop-opcao h4 { margin:0 0 8px; color:var(--verde); font-size:13.5px; }
+.doc .prop-opcao div { font-size:13px; padding:2px 0; }
+.doc .prop-validade { margin-top:12px; font-size:12.5px; color:#8a5a12; font-weight:600; }
 
 /* ---- Financeiro e Projetos ---- */
 .orc-grade { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px; margin-top:10px; }
@@ -489,6 +497,7 @@ tr.detalhe .conteudo { padding:16px 18px; }
   .doc-topo img { height:30px; }
   .bloco > h4, .doc .valor-caixa.destaque, .doc table th {
     -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .doc-rodape { -webkit-print-color-adjust:exact; print-color-adjust:exact; padding:10px 14px; }
 
   /* tudo mais compacto para caber em uma folha */
   .doc-corpo { padding:9px; gap:7px; }
@@ -758,6 +767,47 @@ const docAssinaturas = nomes => `
       <div><div class="risco"></div>${esc(papel)}<br>
         <b>${esc(nome ?? '')}</b></div>`).join('')}
   </div>`
+
+// ----- Proposta comercial (CRM) — mesmo molde .doc dos outros PDFs, com
+// um rodapé verde/dourado a mais, no estilo dos PDFs de proposta que já
+// circulam por e-mail com o pessoal comercial. -----
+function abrirPdfProposta (prop, lead) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  const opcoesHtml = (prop.opcoes || []).map((op, i) => `
+    <div class="prop-opcao">
+      <h4>${esc(op.titulo || `Opção ${i + 1}`)}</h4>
+      ${(op.linhas || []).filter(ln => ln.rotulo || ln.valor).map(ln =>
+        `<div><span class="rot">${esc(ln.rotulo)}:</span> <b>${esc(ln.valor)}</b></div>`).join('')}
+    </div>`).join('')
+
+  fundo.innerHTML = documentoPDF({
+    titulo: prop.titulo || 'Proposta comercial',
+    subtitulo: lead?.nome || '',
+    corpo: `
+      ${prop.texto_intro ? `<p style="font-size:13.5px;line-height:1.65;white-space:pre-wrap;margin:0;">${esc(prop.texto_intro)}</p>` : ''}
+      ${opcoesHtml}
+      ${prop.validade ? `<p class="prop-validade">Oferta válida somente até ${fmtData(prop.validade)}</p>` : ''}
+      ${prop.pergunta_fechamento ? `<p style="font-size:13.5px;margin-top:12px;">${esc(prop.pergunta_fechamento)}</p>` : ''}`,
+    acoes: `<button class="btn" id="pp-imprimir">Baixar / imprimir PDF</button>
+            <button class="btn-secundario" id="pp-fechar">Fechar</button>`
+  })
+
+  // acrescenta o rodapé verde/dourado dentro do .doc (documentoPDF não
+  // tem essa peça porque os outros documentos do sistema não usam)
+  const doc = fundo.querySelector('.doc')
+  if (doc) doc.insertAdjacentHTML('beforeend', `
+    <div class="doc-rodape">
+      <span>📞 <b>(62) 99232-8743</b></span>
+      <span>R. Pernambuco, 55, Sala 16 - Centro, Luís Eduardo Magalhães - BA - CEP: 47.850-045</span>
+      <span>🌐 www.gefoscal.com.br</span>
+    </div>`)
+
+  document.body.appendChild(fundo)
+  fundo.querySelector('#pp-fechar').onclick = () => fundo.remove()
+  fundo.querySelector('#pp-imprimir').onclick = () => window.print()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+}
 
 const db = createClient(SUPABASE_URL, SUPABASE_KEY)
 const $ = s => document.querySelector(s)
@@ -7144,6 +7194,125 @@ async function carregarAgendaLead (fundo, l, editavel) {
   }
 }
 
+// ----- Proposta dentro do card do lead -----
+async function carregarPropostaLead (fundo, l, editavel) {
+  const alvo = fundo.querySelector('#ld-proposta-area')
+  const { data, error } = await db.from('lead_proposta').select('*').eq('lead_id', l.id)
+    .order('criado_em', { ascending: false }).limit(1)
+  if (error) { alvo.innerHTML = `<p class="vazio" style="font-size:12px;">${esc(error.message)}</p>`; return }
+
+  const existente = (data || [])[0] || null
+  const estado = existente ? {
+    id: existente.id,
+    titulo: existente.titulo || '',
+    texto_intro: existente.texto_intro || '',
+    opcoes: Array.isArray(existente.opcoes) && existente.opcoes.length ? existente.opcoes : [{ titulo: 'Opção 1', linhas: [{ rotulo: '', valor: '' }] }],
+    validade: existente.validade || '',
+    pergunta_fechamento: existente.pergunta_fechamento || ''
+  } : {
+    id: null,
+    titulo: 'Definição Gefoscal - Lote',
+    texto_intro: 'Como conversamos, alinhei as condições comerciais pra essa negociação. Segue a proposta estruturada:',
+    opcoes: [{
+      titulo: 'Opção 1',
+      linhas: [
+        { rotulo: 'Volume', valor: '' }, { rotulo: 'Valor unitário', valor: '' },
+        { rotulo: 'Vencimento', valor: '' }, { rotulo: 'Total', valor: '' }
+      ]
+    }],
+    validade: '',
+    pergunta_fechamento: 'Podemos seguir com o pedido para garantir essa condição?'
+  }
+
+  const desenharOpcoes = () => {
+    const alvoOp = alvo.querySelector('#pp-opcoes')
+    alvoOp.innerHTML = estado.opcoes.map((op, i) => `
+      <div style="margin-top:8px;border:1px solid var(--line);border-radius:8px;padding:10px;">
+        <div style="display:flex;gap:8px;align-items:center;">
+          ${editavel
+            ? `<input data-op-titulo="${i}" value="${esc(op.titulo)}" style="flex:1;font-weight:600;">
+               <button type="button" class="btn-secundario mini" data-remover-opcao="${i}">Remover opção</button>`
+            : `<b>${esc(op.titulo)}</b>`}
+        </div>
+        <div style="margin-top:8px;display:grid;gap:6px;">
+          ${op.linhas.map((ln, j) => `<div style="display:flex;gap:6px;">
+            ${editavel
+              ? `<input data-linha-rot="${i}:${j}" placeholder="rótulo (ex: Volume)" value="${esc(ln.rotulo)}" style="flex:1;">
+                 <input data-linha-val="${i}:${j}" placeholder="valor (ex: 3.000 ton)" value="${esc(ln.valor)}" style="flex:1.4;">
+                 <button type="button" class="btn-secundario mini" data-remover-linha="${i}:${j}">✕</button>`
+              : `<span class="texto-dim2" style="font-size:12px;">${esc(ln.rotulo)}: <b>${esc(ln.valor)}</b></span>`}
+          </div>`).join('')}
+        </div>
+        ${editavel ? `<button type="button" class="btn-secundario mini" data-add-linha="${i}" style="margin-top:6px;">+ Linha</button>` : ''}
+      </div>`).join('')
+
+    if (!editavel) return
+    alvoOp.querySelectorAll('[data-op-titulo]').forEach(inp => { inp.oninput = () => { estado.opcoes[inp.dataset.opTitulo].titulo = inp.value } })
+    alvoOp.querySelectorAll('[data-linha-rot]').forEach(inp => {
+      inp.oninput = () => { const [i, j] = inp.dataset.linhaRot.split(':').map(Number); estado.opcoes[i].linhas[j].rotulo = inp.value }
+    })
+    alvoOp.querySelectorAll('[data-linha-val]').forEach(inp => {
+      inp.oninput = () => { const [i, j] = inp.dataset.linhaVal.split(':').map(Number); estado.opcoes[i].linhas[j].valor = inp.value }
+    })
+    alvoOp.querySelectorAll('[data-add-linha]').forEach(btn => {
+      btn.onclick = () => { estado.opcoes[Number(btn.dataset.addLinha)].linhas.push({ rotulo: '', valor: '' }); desenharOpcoes() }
+    })
+    alvoOp.querySelectorAll('[data-remover-linha]').forEach(btn => {
+      btn.onclick = () => { const [i, j] = btn.dataset.removerLinha.split(':').map(Number); estado.opcoes[i].linhas.splice(j, 1); desenharOpcoes() }
+    })
+    alvoOp.querySelectorAll('[data-remover-opcao]').forEach(btn => {
+      btn.onclick = () => { estado.opcoes.splice(Number(btn.dataset.removerOpcao), 1); desenharOpcoes() }
+    })
+  }
+
+  alvo.innerHTML = `
+    ${editavel ? `<div class="campo"><label>Título</label><input id="pp-titulo" value="${esc(estado.titulo)}"></div>
+    <div class="campo" style="margin-top:8px;"><label>Texto de abertura</label>
+      <textarea id="pp-intro" style="min-height:60px;">${esc(estado.texto_intro)}</textarea></div>` : ''}
+    <div id="pp-opcoes"></div>
+    ${editavel ? `<button type="button" class="btn-secundario mini" id="pp-add-opcao" style="margin-top:8px;">+ Adicionar opção</button>` : ''}
+    ${editavel ? `<div class="form-grade" style="grid-template-columns:1fr 2fr;margin-top:10px;">
+      <div class="campo"><label>Válida até</label><input id="pp-validade" type="date" value="${esc(estado.validade)}"></div>
+      <div class="campo"><label>Pergunta de fechamento</label><input id="pp-fechamento" value="${esc(estado.pergunta_fechamento)}"></div>
+    </div>` : ''}
+    <div class="acoes" style="margin-top:10px;">
+      ${editavel ? `<button type="button" class="btn-secundario mini" id="pp-salvar">Salvar proposta</button>` : ''}
+      <button type="button" class="btn mini" id="pp-gerar-pdf">Gerar PDF</button>
+    </div>`
+
+  desenharOpcoes()
+
+  if (editavel) {
+    alvo.querySelector('#pp-titulo').oninput = e => { estado.titulo = e.target.value }
+    alvo.querySelector('#pp-intro').oninput = e => { estado.texto_intro = e.target.value }
+    alvo.querySelector('#pp-validade').oninput = e => { estado.validade = e.target.value }
+    alvo.querySelector('#pp-fechamento').oninput = e => { estado.pergunta_fechamento = e.target.value }
+    alvo.querySelector('#pp-add-opcao').onclick = () => {
+      estado.opcoes.push({ titulo: `Opção ${estado.opcoes.length + 1}`, linhas: [{ rotulo: '', valor: '' }] })
+      desenharOpcoes()
+    }
+    alvo.querySelector('#pp-salvar').onclick = async () => {
+      const btn = alvo.querySelector('#pp-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+      const corpo = {
+        lead_id: l.id, titulo: estado.titulo || null, texto_intro: estado.texto_intro || null,
+        opcoes: estado.opcoes, validade: estado.validade || null,
+        pergunta_fechamento: estado.pergunta_fechamento || null,
+        criado_por: PERFIL.pessoaId, atualizado_em: new Date().toISOString()
+      }
+      let error
+      if (estado.id) {
+        ({ error } = await db.from('lead_proposta').update(corpo).eq('id', estado.id))
+      } else {
+        const { data: novo, error: e2 } = await db.from('lead_proposta').insert(corpo).select('id').single()
+        error = e2; if (novo) estado.id = novo.id
+      }
+      btn.disabled = false; btn.textContent = 'Salvar proposta'
+      if (error) { alert('Não consegui salvar a proposta: ' + error.message); return }
+    }
+  }
+  alvo.querySelector('#pp-gerar-pdf').onclick = () => abrirPdfProposta(estado, l)
+}
+
 function formLead (l, editavel, gerencia, aoFechar) {
   const podeReatribuir = editavel && gerencia // trocar o vendedor é ação de quem gerencia
   const podeExcluir = editavel && gerencia && l
@@ -7188,6 +7357,11 @@ function formLead (l, editavel, gerencia, aoFechar) {
         <div class="campo"><label>Título / observação</label><input id="ag-titulo" placeholder="ex: ligar, levar proposta..."></div>
         <button class="btn-secundario mini" id="ag-adicionar" type="button" style="height:38px;">Adicionar</button>
       </div>` : ''}` : ''}
+    ${l ? `<div class="cabeca-secao" style="margin-top:16px;margin-bottom:4px;">
+        <h3 style="font-family:var(--serif);font-size:14px;">Proposta</h3></div>
+      <p class="texto-dim2" style="font-size:11.5px;margin:-2px 0 8px;">
+        Monta a proposta comercial (preço, condições, validade) e gera o PDF pronto pra mandar pro cliente.</p>
+      <div id="ld-proposta-area"><p class="texto-dim2" style="font-size:12px;">carregando proposta...</p></div>` : ''}
     ${l?.cliente_id ? `<p class="texto-dim2" style="font-size:12px;margin-top:8px;">Já convertido em cliente: <b>${esc(l.cliente?.nome_fantasia || l.cliente?.razao_social || '—')}</b></p>
       ${editavel ? `<div class="acoes" style="margin-top:8px;"><button class="btn-secundario" id="ld-emitir-pedido" type="button">Emitir pedido</button></div>` : ''}`
       : (editavel && l ? `<div class="acoes" style="margin-top:10px;"><button class="btn-secundario" id="ld-converter" type="button">Converter em cliente</button></div>` : '')}
@@ -7204,6 +7378,7 @@ function formLead (l, editavel, gerencia, aoFechar) {
   fundo.onclick = e => { if (e.target === fundo) fechar() }
 
   if (l) carregarAgendaLead(fundo, l, editavel)
+  if (l) carregarPropostaLead(fundo, l, editavel)
 
   const aviso = (t, ok = false) => {
     const el = fundo.querySelector('#ld-recado'); el.textContent = t; el.classList.remove('oculto')
