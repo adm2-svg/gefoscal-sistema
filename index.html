@@ -339,6 +339,62 @@ tbody tr:hover { background: var(--hover-bg); }
                           background:rgba(var(--rust-rgb),.13); color:var(--rust); cursor:pointer;
                           transition:background .15s ease; min-height:30px; }
 .crm-card .btn-agendar:hover { background:rgba(var(--rust-rgb),.22); }
+
+/* ---- CRM Técnico — reaproveita quase tudo que já existe (.cabeca-secao,
+   .passo, .form-grade, .chip-filtro, .modal); só o kanban de ciclo e o
+   farol de atraso precisam de classe própria. ---- */
+.tec-farol { display:inline-block; width:9px; height:9px; border-radius:50%; flex:none; }
+.tec-farol.verde { background:var(--good-text); }
+.tec-farol.amarelo { background:var(--warn-text); }
+.tec-farol.vermelho { background:var(--critico-text); }
+.tec-kanban { display:grid; grid-template-columns:repeat(6,minmax(210px,1fr)); gap:12px; overflow-x:auto;
+              padding-bottom:8px; align-items:start; -webkit-overflow-scrolling:touch; }
+.tec-col { background:var(--surface2); border:1px solid var(--line); border-radius:14px; min-width:200px; }
+.tec-col.sobre { border-color:var(--rust); }
+.tec-col-head { padding:10px 12px; font-weight:700; font-size:12px; text-transform:uppercase; letter-spacing:.04em;
+                color:var(--dim); display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--line); }
+.tec-col-head .contagem { background:var(--panel); border-radius:999px; padding:2px 8px; font-size:11px; color:var(--dim); }
+.tec-col-corpo { padding:9px; display:flex; flex-direction:column; gap:8px; min-height:56px; }
+.tec-col-pe { padding:8px 12px; border-top:1px solid var(--line); font-size:10.5px; color:var(--dim2); display:flex; justify-content:space-between; }
+.tec-card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:10px 11px;
+            cursor:grab; box-shadow:0 3px 10px rgba(0,0,0,.06); transition:transform .12s ease, border-color .15s ease; }
+.tec-card:hover { transform:translateY(-1px); border-color:var(--line2); }
+.tec-card.arrastando { opacity:.4; }
+.tec-card h4 { font-family:var(--serif); font-size:13.5px; margin:0 0 4px; }
+.tec-card .m1 { font-size:11px; color:var(--dim); }
+.tec-card .m2 { font-size:10.5px; color:var(--dim2); margin-top:2px; }
+.tec-card .badges { display:flex; gap:4px; flex-wrap:wrap; margin-top:7px; }
+.tec-dl { display:grid; grid-template-columns:150px 1fr; gap:5px 12px; font-size:12.5px; margin-top:4px; }
+.tec-dl dt { color:var(--dim2); font-size:10.5px; text-transform:uppercase; letter-spacing:.05em; padding-top:2px; }
+.tec-dl dd { margin:0; color:var(--txt); }
+.tec-matriz { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:12px; }
+.tec-quad { border:1px solid var(--line); border-radius:10px; padding:12px; background:var(--surface2); }
+.tec-quad .qn { font-family:var(--serif); font-size:24px; font-weight:700; }
+.tec-quad .qt { font-size:12px; font-weight:700; margin-top:3px; }
+.tec-quad .qa { font-size:11px; color:var(--dim2); line-height:1.5; margin-top:5px; }
+.tec-quad.bomAlta { border-color:var(--good-text); }
+.tec-quad.bomBaixa { border-color:var(--info-text,var(--rust)); }
+.tec-quad.ruimAlta { border-color:var(--critico-text); }
+.tec-quad.ruimBaixa { border-color:var(--warn-text); }
+.tec-cal-sem { display:grid; grid-template-columns:repeat(7,1fr); gap:5px; margin:12px 0 5px; }
+.tec-cal-sem div { font-size:10px; color:var(--dim2); text-transform:uppercase; text-align:center; }
+.tec-cal { display:grid; grid-template-columns:repeat(7,1fr); gap:5px; }
+.tec-dia { background:var(--panel); border:1px solid var(--line); border-radius:8px; min-height:78px;
+           padding:5px; cursor:pointer; display:flex; flex-direction:column; gap:3px; overflow:hidden; }
+.tec-dia:hover { border-color:var(--line2); }
+.tec-dia.fora { opacity:.35; }
+.tec-dia.hoje { border-color:var(--rust); }
+.tec-dia .num { font-size:10.5px; color:var(--dim2); font-weight:700; }
+.tec-dia.hoje .num { color:var(--rust); }
+.tec-pub { font-size:9.5px; padding:2px 5px; border-radius:6px; background:var(--surface2); color:var(--txt);
+           overflow:hidden; text-overflow:ellipsis; white-space:nowrap; border-left:2px solid var(--dim2); }
+.tec-pub.feito { opacity:.5; text-decoration:line-through; }
+.tec-pub.atrasado { border-left-color:var(--critico-text); background:rgba(var(--critico-rgb),.12); }
+@media (max-width:640px) {
+  .tec-kanban { grid-template-columns:repeat(6,82vw); }
+  .tec-matriz { grid-template-columns:1fr; }
+  .tec-dl { grid-template-columns:1fr; gap:1px 0; }
+}
 @media (max-width:640px) {
   .crm-col { min-width:78vw; }
   .crm-kpis { grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; }
@@ -1221,6 +1277,7 @@ const PAGINAS = {
   cobranca:    { nome: 'Crédito e Cobrança', render: paginaCobranca },
   marketing:   { nome: 'Marketing', render: paginaMarketing },
   crm:         { nome: 'CRM Comercial', render: paginaCrm },
+  crm_tecnico: { nome: 'CRM Técnico', render: paginaCrmTecnico },
   financeiro:  { nome: 'Financeiro', render: paginaFinanceiro },
   projetos:    { nome: 'Projetos', render: paginaProjetos, sempre: true },
   ferramentas: { nome: 'Ferramentas', render: paginaFerramentas },
@@ -1254,6 +1311,7 @@ const ICONES_MODULO = {
   compras: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="20" r="1.4"/><circle cx="18" cy="20" r="1.4"/><path d="M2 2h3l2.6 13a2 2 0 0 0 2 1.6h9a2 2 0 0 0 2-1.8L22 7H6"/></svg>',
   cobranca: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="13" rx="2"/><path d="M2 10h20"/><circle cx="17" cy="14.5" r="1.2" fill="currentColor" stroke="none"/></svg>',
   crm: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+  crm_tecnico: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l1.5 4.5L18 8l-4.5 1.5L12 14l-1.5-4.5L6 8l4.5-1.5z"/><path d="M5 15l.8 2.2L8 18l-2.2.8L5 21l-.8-2.2L2 18l2.2-.8z"/><path d="M19 14l.6 1.7 1.7.6-1.7.6-.6 1.7-.6-1.7-1.7-.6 1.7-.6z"/></svg>',
   financeiro: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V10M11 21V6M17 21v-8"/></svg>',
   projetos: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M15 3v12"/></svg>',
   ferramentas: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.9-3.9a5 5 0 0 1-6.6 6.6L4.3 22.7a2 2 0 0 1-2.8-2.8L12.2 9.2a5 5 0 0 1 6.6-6.6z"/></svg>',
@@ -1275,7 +1333,7 @@ const ICONES_MODULO = {
 // grupo vazio simplesmente some da tela). Item que não estiver
 // mapeado aqui cai automaticamente em "Outros", pra nunca sumir.
 const GRUPOS_MENU = [
-  ['Comercial', ['crm', 'cadastro', 'expedicao', 'cobranca', 'marketing']],
+  ['Comercial', ['crm', 'crm_tecnico', 'cadastro', 'expedicao', 'cobranca', 'marketing']],
   ['Operações', ['estoque', 'combustivel', 'manutencao', 'frota', 'laboratorio']],
   ['Gestão', ['financeiro', 'desempenho', 'dp', 'onfly', 'juridico', 'ferramentas', 'banco', 'gestao_ti', 'dashboard_diretor']],
   ['Administração', ['ti']]
@@ -8397,6 +8455,1192 @@ async function crmCompartilharBanco (alvo) {
   }
   $('#cb-vendedor-banco').onchange = e => desenharChecklist(e.target.value)
   desenharChecklist('')
+}
+
+// ===================================================================
+// CRM TÉCNICO — acompanhamento agronômico de campo. Fica abaixo do CRM
+// Comercial no menu. Base compartilhada por todo o setor Técnico (sem
+// recorte por pessoa) — quem tem acesso ao módulo vê e edita tudo,
+// igual o protótipo original pedia. Ciclo do cliente na safra:
+// Entregue → Aplicado → Acompanhamento → Resultado → Demanda
+// qualificada → Passado ao comercial (handoff pro CRM Comercial).
+// ===================================================================
+
+const TEC_FASES = [
+  { id: 'entregue', nome: 'Entregue', cor: '', cad: 'aplicado', sig: 'Produto faturado e entregue', sai: 'Aplicação registrada em talhão' },
+  { id: 'aplicado', nome: 'Aplicado', cor: 'blue', cad: 'aplicado', sig: 'Aplicação registrada com dose e data', sai: 'Primeira visita de acompanhamento feita' },
+  { id: 'acompanhamento', nome: 'Em acompanhamento', cor: 'blue', cad: 'acompanhamento', sig: 'Visitas em curso na lavoura', sai: 'Colheita realizada' },
+  { id: 'resultado', nome: 'Resultado apurado', cor: 'gold', cad: 'resultado', sig: 'Produtividade lançada, com ou sem testemunha', sai: 'Resultado analisado e decisão tomada' },
+  { id: 'demanda', nome: 'Demanda qualificada', cor: 'teal', cad: 'resultado', sig: 'Dossiê montado, pronto para o comercial', sai: 'Enviado ao time de fechamento' },
+  { id: 'comercial', nome: 'Passado ao comercial', cor: 'teal', cad: null, sig: 'Handoff feito, aguardando retorno', sai: 'Retorno registrado' }
+]
+const TEC_CADENCIA = { aplicado: 21, acompanhamento: 30, resultado: 45 }
+const TEC_NIVEIS = [{ id: 'ouro', nome: 'Ouro' }, { id: 'prata', nome: 'Prata' }, { id: 'bronze', nome: 'Bronze' }]
+const TEC_SINAIS = [
+  { id: 'prioridade', nome: 'Prioridade' }, { id: 'aguardando', nome: 'Aguardando cliente' }, { id: 'risco', nome: 'Risco de perda' }
+]
+const TEC_TIPOS_DEM = [
+  { id: 'recompra', nome: 'Recompra', ajuda: 'mesmo cliente, mesma área' },
+  { id: 'expansao', nome: 'Expansão', ajuda: 'mesmo cliente, área nova ou cultura nova' },
+  { id: 'indicacao', nome: 'Indicação', ajuda: 'terceiro indicado — vira lead novo no CRM Comercial' }
+]
+const TEC_STATUS_DEM = [
+  { id: 'rascunho', nome: 'Rascunho' }, { id: 'enviada', nome: 'Enviada ao comercial' },
+  { id: 'negociacao', nome: 'Em negociação' }, { id: 'convertida', nome: 'Convertida' }, { id: 'naoconvertida', nome: 'Não convertida' }
+]
+const TEC_TIPOS_OCO = ['Entrega', 'Produto', 'Dúvida técnica', 'Atendimento']
+const TEC_STATUS_OCO = [{ id: 'aberta', nome: 'Aberta' }, { id: 'analise', nome: 'Em análise' }, { id: 'resolvida', nome: 'Resolvida' }]
+const TEC_GRUPOS_DOC = ['Casos de resultado', 'Fichas técnicas', 'Protocolos de acompanhamento']
+const TEC_PARAMS_SOLO = [
+  { k: 'argila', r: 'Argila', u: '%' }, { k: 'ph', r: 'pH', u: '' }, { k: 'p', r: 'P', u: '' }, { k: 's', r: 'S', u: '' },
+  { k: 'k', r: 'K', u: '' }, { k: 'ca', r: 'Ca', u: '' }, { k: 'mg', r: 'Mg', u: '' }, { k: 'mo', r: 'M.O.', u: '%' },
+  { k: 'v', r: 'V', u: '%' }, { k: 'ctc', r: 'CTC', u: '' }
+]
+
+let TEC = { clientes: [], contatos: [], talhoes: [], analises: [], aplicacoes: [], visitas: [], resultados: [], ocorrencias: [], demandas: [], docs: [], anexos: [] }
+let TEC_VISTA = 'painel'
+let TEC_SUBACOMP = 'ciclo'
+let TEC_CAL_REF = new Date()
+let TEC_CMP = {}
+const TF = {
+  rota: '', nivel: '', farol: '', municipio: '', fase: '', busca: '',
+  demStatus: '', demTipo: '', ocoStatus: 'abertas'
+}
+
+const tecNum = v => { const n = parseFloat(String(v ?? '').replace(',', '.')); return isNaN(n) ? 0 : n }
+const tecNHa = v => tecNum(v).toLocaleString('pt-BR', { maximumFractionDigits: 0 })
+const tecNT = v => tecNum(v).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })
+const tecNP = v => (v > 0 ? '+' : '') + tecNum(v).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + '%'
+const tecOu = v => (v == null || v === '') ? '—' : esc(v)
+const tecVal = id => { const e = document.getElementById(id); return e ? e.value.trim() : '' }
+const tecChk = id => { const e = document.getElementById(id); return e ? e.checked : false }
+const tecCli = id => TEC.clientes.find(c => c.id === id)
+const tecTalhao = id => TEC.talhoes.find(t => t.id === id)
+const tecTalhoesDe = id => TEC.talhoes.filter(t => t.cliente_id === id)
+const tecContatosDe = id => TEC.contatos.filter(c => c.cliente_id === id)
+const tecAplicDe = id => TEC.aplicacoes.filter(a => a.cliente_id === id)
+const tecVisitasDe = id => TEC.visitas.filter(v => v.cliente_id === id).sort((a, b) => (b.data || '').localeCompare(a.data || ''))
+const tecOcoDe = id => TEC.ocorrencias.filter(o => o.cliente_id === id)
+const tecDemDe = id => TEC.demandas.filter(d => d.cliente_id === id)
+const tecAnalisesDe = tid => TEC.analises.filter(a => a.talhao_id === tid).sort((a, b) => (b.data || '').localeCompare(a.data || ''))
+const tecAnexosDe = (alvo, alvoId) => TEC.anexos.filter(a => a.alvo === alvo && a.alvo_id === alvoId)
+function tecResultadosDe(id) { const ids = tecAplicDe(id).map(a => a.id); return TEC.resultados.filter(r => ids.includes(r.aplicacao_id)) }
+function tecGanho(r) {
+  const t = tecNum(r.produtividade_testemunha), o = tecNum(r.produtividade_obtida)
+  if (!t || !o) return null
+  return (o - t) / t * 100
+}
+function tecCadenciaDe(fase) { const f = TEC_FASES.find(x => x.id === fase); return (f && f.cad) ? TEC_CADENCIA[f.cad] : null }
+function tecFarol(c) {
+  const cad = tecCadenciaDe(c.fase)
+  if (cad == null) return { cor: 'verde', atraso: 0 }
+  if (!c.ultima_visita) return { cor: 'vermelho', atraso: null }
+  const d = diasDesde(c.ultima_visita), atraso = d - cad
+  if (atraso <= 0) return { cor: 'verde', atraso: 0 }
+  if (atraso <= cad * 0.5) return { cor: 'amarelo', atraso }
+  return { cor: 'vermelho', atraso }
+}
+function tecOrdemAtraso(c) { const f = tecFarol(c); return f.atraso == null ? 100000 : f.atraso }
+function tecAreaAplicadaHa(id) {
+  const vistos = {}
+  tecAplicDe(id).forEach(a => { const t = tecTalhao(a.talhao_id); if (t) vistos[t.id] = tecNum(t.area_ha) })
+  return Object.values(vistos).reduce((a, b) => a + b, 0)
+}
+function tecVolumeAplicadoT(id) { return tecAplicDe(id).reduce((s, a) => s + tecNum(a.volume_t), 0) }
+function tecTemOcoAberta(id) { return tecOcoDe(id).some(o => o.status !== 'resolvida') }
+function tecSinaisDe(c) {
+  const s = (c.sinais || []).slice()
+  if (tecTemOcoAberta(c.id) && !s.includes('risco_oco')) return ['ocorrencia', ...s]
+  return s
+}
+function tecOrdemStatusDem(id) { return TEC_STATUS_DEM.findIndex(s => s.id === id) }
+function tecDemandasEnviadas() { return TEC.demandas.filter(d => tecOrdemStatusDem(d.status) >= 1) }
+function tecDemandaGeradaT() { return tecDemandasEnviadas().reduce((s, d) => s + tecNum(d.volume_estimado_t), 0) }
+function tecDiasAberta(o) { return diasDesde(o.abertura) }
+function tecEstourouSLA(o) { return o.status !== 'resolvida' && tecDiasAberta(o) >= 15 }
+function tecIntegravel(c) { return !!(c && String(c.cpf_cnpj || '').trim()) }
+function tecSafraAtual() {
+  const d = new Date(), a = d.getFullYear()
+  return (d.getMonth() + 1) >= 5 ? a + '/' + String((a + 1) % 100).padStart(2, '0') : (a - 1) + '/' + String(a % 100).padStart(2, '0')
+}
+function tecClassificar() {
+  const r = { bomAlta: [], bomBaixa: [], ruimAlta: [], ruimBaixa: [], semTestemunha: [] }
+  TEC.clientes.forEach(c => {
+    const res = tecResultadosDe(c.id).filter(x => tecNum(x.produtividade_obtida) > 0)
+    if (!res.length) return
+    const comT = res.map(tecGanho).filter(g => g != null)
+    if (!comT.length) { r.semTestemunha.push(c); return }
+    const bom = Math.max.apply(null, comT) > 0
+    const base = tecAreaAplicadaHa(c.id), pot = tecNum(c.potencial_expansao_ha)
+    const alta = base > 0 ? pot >= base * 0.5 : pot > 0
+    r[(bom ? 'bom' : 'ruim') + (alta ? 'Alta' : 'Baixa')].push(c)
+  })
+  return r
+}
+async function tecGerarCodigo(pre) {
+  const d = new Date(), p = n => String(n).padStart(2, '0')
+  const data = String(d.getFullYear()).slice(2) + p(d.getMonth() + 1) + p(d.getDate())
+  const tabela = pre === 'CLI' ? 'tecnico_cliente' : (pre === 'DEM' ? 'tecnico_demanda' : 'tecnico_ocorrencia')
+  const { count } = await db.from(tabela).select('id', { count: 'exact', head: true }).like('codigo', pre + '-' + data + '-%')
+  return pre + '-' + data + '-' + String((count || 0) + 1).padStart(4, '0')
+}
+
+// ----- Página / navegação -----
+async function paginaCrmTecnico () {
+  if (!podeVer('crm_tecnico')) { areaLivre().innerHTML =
+    `<div class="panel" style="padding:22px;"><p class="texto-dim">Você não tem acesso ao CRM Técnico.</p></div>`; return }
+  $('#subtitulo-pagina').textContent = 'Acompanhamento agronômico de campo — ciclo do cliente na safra'
+  const area = areaLivre()
+  area.innerHTML = `<p class="texto-dim2">carregando...</p>`
+
+  const [{ data: clientes }, { data: contatos }, { data: talhoes }, { data: analises }, { data: aplicacoes },
+    { data: visitas }, { data: resultados }, { data: ocorrencias }, { data: demandas }, { data: docs }, { data: anexos }] = await Promise.all([
+    db.from('tecnico_cliente').select('*').order('nome'),
+    db.from('tecnico_contato').select('*'),
+    db.from('tecnico_talhao').select('*'),
+    db.from('tecnico_analise_solo').select('*'),
+    db.from('tecnico_aplicacao').select('*'),
+    db.from('tecnico_visita').select('*'),
+    db.from('tecnico_resultado').select('*'),
+    db.from('tecnico_ocorrencia').select('*'),
+    db.from('tecnico_demanda').select('*'),
+    db.from('tecnico_doc').select('*'),
+    db.from('tecnico_anexo').select('*')
+  ])
+  TEC = {
+    clientes: clientes || [], contatos: contatos || [], talhoes: talhoes || [], analises: analises || [],
+    aplicacoes: aplicacoes || [], visitas: visitas || [], resultados: resultados || [], ocorrencias: ocorrencias || [],
+    demandas: demandas || [], docs: docs || [], anexos: anexos || []
+  }
+
+  const abas = [['painel', 'Painel'], ['clientes', 'Clientes'], ['acompanhamento', 'Acompanhamento'], ['agenda', 'Agenda']]
+  area.innerHTML = `
+    <div class="subabas">
+      ${abas.map(a => `<button data-sub="${a[0]}" class="${a[0] === TEC_VISTA ? 'ativo' : ''}">${a[1]}</button>`).join('')}
+    </div>
+    <div id="sub-tec"></div>`
+  area.querySelectorAll('.subabas button').forEach(b => {
+    b.onclick = () => {
+      area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
+      TEC_VISTA = b.dataset.sub
+      tecAbrirSub()
+    }
+  })
+  tecAbrirSub()
+}
+function tecAbrirSub () {
+  const alvo = $('#sub-tec')
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  if (TEC_VISTA === 'painel') tecRenderPainel(alvo)
+  if (TEC_VISTA === 'clientes') tecRenderClientes(alvo)
+  if (TEC_VISTA === 'acompanhamento') tecRenderAcompanhamento(alvo)
+  if (TEC_VISTA === 'agenda') tecRenderAgenda(alvo)
+}
+
+// ----- Painel -----
+function tecRenderPainel (alvo) {
+  const emAcomp = TEC.clientes.filter(c => c.fase === 'acompanhamento').length
+  const haSafra = TEC.clientes.reduce((s, c) => s + tecAreaAplicadaHa(c.id), 0)
+  const gerada = tecDemandaGeradaT()
+
+  const venc = TEC.clientes.filter(c => tecFarol(c).cor !== 'verde' && tecCadenciaDe(c.fase) != null)
+    .sort((a, b) => tecOrdemAtraso(b) - tecOrdemAtraso(a))
+  const abertas = TEC.ocorrencias.filter(o => o.status !== 'resolvida').sort((a, b) => (tecDiasAberta(b) || 0) - (tecDiasAberta(a) || 0))
+  const m = tecClassificar()
+  const quadros = [
+    { k: 'bomAlta', t: 'Resultado bom · expansão alta', a: 'Prioridade de demanda — vira caso e vai para o comercial primeiro.' },
+    { k: 'bomBaixa', t: 'Resultado bom · expansão baixa', a: 'Fonte de indicação — peça a referência do vizinho.' },
+    { k: 'ruimAlta', t: 'Resultado ruim · expansão alta', a: 'Resgate técnico urgente antes de passar demanda.' },
+    { k: 'ruimBaixa', t: 'Resultado ruim · expansão baixa', a: 'Investigar causa antes de qualquer coisa.' }
+  ]
+  const env = tecDemandasEnviadas(), conv = TEC.demandas.filter(d => d.status === 'convertida'), nao = TEC.demandas.filter(d => d.status === 'naoconvertida')
+  const aprov = env.length ? Math.round(conv.length / env.length * 100) : null
+
+  alvo.innerHTML = `
+    <div class="kpis">
+      ${kpi('Clientes em acompanhamento', emAcomp)}
+      ${kpi('Hectares aplicados na safra', haSafra ? tecNHa(haSafra) : '—')}
+      ${kpi('Demanda qualificada gerada', gerada ? tecNT(gerada) + ' t' : '—')}
+      ${kpi('Aproveitamento do handoff', aprov == null ? '—' : aprov + '%', env.length + ' enviada(s)')}
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;" class="grade-painel-comb">
+      <div class="panel" style="padding:18px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 4px;">Acompanhamento vencido</h3>
+        <p class="texto-dim2" style="margin:0 0 10px;">Cliente que comprou e não recebe visita é risco de perda.</p>
+        <div id="tec-vencidos"></div>
+      </div>
+      <div class="panel" style="padding:18px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 4px;">Ocorrências abertas</h3>
+        <p class="texto-dim2" style="margin:0 0 10px;">Enquanto aberta, a demanda daquele cliente fica travada.</p>
+        <div id="tec-ocoabertas"></div>
+      </div>
+    </div>
+    <div class="panel" style="padding:18px;margin-top:16px;">
+      <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 4px;">Resultado × Potencial de expansão</h3>
+      <p class="texto-dim2" style="margin:0;">Só entra na matriz quem tem resultado apurado contra testemunha.</p>
+      <div class="tec-matriz">
+        ${quadros.map(q => `<div class="tec-quad ${q.k}">
+          <div class="qn">${m[q.k].length}</div><div class="qt">${q.t}</div><div class="qa">${q.a}</div>
+          ${m[q.k].length ? `<div class="qa" style="margin-top:6px;">${m[q.k].map(c => `<span style="cursor:pointer;text-decoration:underline;" data-abrir-cli="${c.id}">${esc(c.nome)}</span>`).join(' · ')}</div>` : ''}
+        </div>`).join('')}
+      </div>
+      <p class="texto-dim2" style="margin-top:10px;">${m.semTestemunha.length ? m.semTestemunha.length + ' cliente(s) com resultado lançado sem testemunha ficam fora da matriz.' : 'Todo resultado apurado tem testemunha.'}</p>
+    </div>
+    <div class="panel" style="padding:18px;margin-top:16px;">
+      <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Retorno do comercial</h3>
+      <table><tr><th>Enviadas</th><th>Convertidas</th><th>Não convertidas</th><th>Aproveitamento</th></tr>
+        <tr><td><b>${env.length}</b> · ${tecNT(tecDemandaGeradaT())} t</td>
+          <td><b>${conv.length}</b> · ${tecNT(conv.reduce((s, d) => s + tecNum(d.volume_estimado_t), 0))} t</td>
+          <td><b>${nao.length}</b></td>
+          <td>${aprov == null ? '—' : `<span class="${aprov >= 50 ? 'badge-bom' : 'badge-alerta'}">${aprov}%</span>`}</td></tr>
+      </table>
+    </div>`
+
+  $('#tec-vencidos').innerHTML = venc.length ? venc.slice(0, 10).map(c => {
+    const f = tecFarol(c)
+    return `<div class="passo" data-abrir-cli="${c.id}" style="cursor:pointer;">
+      <span class="quando"><span class="tec-farol ${f.cor}"></span></span>
+      <span style="flex:1;"><b>${esc(c.nome)}</b> <span class="texto-dim2">· ${esc(c.rota || '—')}</span></span>
+      <span class="texto-dim2" style="font-size:11px;">${f.atraso == null ? 'sem visita' : f.atraso + 'd atraso'}</span></div>`
+  }).join('') : '<p class="vazio">Ninguém fora da cadência.</p>'
+
+  $('#tec-ocoabertas').innerHTML = abertas.length ? abertas.map(o => {
+    const c = tecCli(o.cliente_id)
+    return `<div class="passo" data-abrir-oco="${o.id}" style="cursor:pointer;">
+      <span class="quando"><span class="${tecEstourouSLA(o) ? 'badge-alerta' : 'badge-atencao'}" style="font-size:10px;">${esc(o.tipo)}</span></span>
+      <span style="flex:1;">${c ? esc(c.nome) : '—'} <span class="texto-dim2">· ${esc(o.descricao || '')}</span></span>
+      <span class="texto-dim2" style="font-size:11px;">${tecDiasAberta(o)}d</span></div>`
+  }).join('') : '<p class="vazio">Nenhuma ocorrência em aberto.</p>'
+
+  alvo.querySelectorAll('[data-abrir-cli]').forEach(el => { el.onclick = () => tecAbrirFicha(el.dataset.abrirCli) })
+  alvo.querySelectorAll('[data-abrir-oco]').forEach(el => { el.onclick = () => tecFormOcorrencia(TEC.ocorrencias.find(o => o.id === el.dataset.abrirOco)) })
+}
+
+// ----- Clientes (lista + ficha) -----
+function tecRenderClientes (alvo) {
+  const municipios = Array.from(new Set(TEC.clientes.map(c => c.municipio).filter(Boolean))).sort()
+  alvo.innerHTML = `
+    <div class="filtros">
+      <div><label>Rota</label><input id="tf-rota" placeholder="qualquer rota" value="${esc(TF.rota)}"></div>
+      <div><label>Nível</label><select id="tf-nivel"><option value="">Todos</option>${TEC_NIVEIS.map(n => `<option value="${n.id}" ${TF.nivel === n.id ? 'selected' : ''}>${n.nome}</option>`).join('')}</select></div>
+      <div><label>Farol</label><select id="tf-farol"><option value="">Todos</option><option value="verde" ${TF.farol === 'verde' ? 'selected' : ''}>Em dia</option><option value="amarelo" ${TF.farol === 'amarelo' ? 'selected' : ''}>Atrasando</option><option value="vermelho" ${TF.farol === 'vermelho' ? 'selected' : ''}>Vencido</option></select></div>
+      <div><label>Município</label><select id="tf-municipio"><option value="">Todos</option>${municipios.map(m => `<option ${TF.municipio === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select></div>
+      <div><label>Fase</label><select id="tf-fase"><option value="">Todas</option>${TEC_FASES.map(f => `<option value="${f.id}" ${TF.fase === f.id ? 'selected' : ''}>${f.nome}</option>`).join('')}</select></div>
+      <div style="flex:1;min-width:180px;"><label>Buscar</label><input id="tf-busca" placeholder="nome, código, decisor..." value="${esc(TF.busca)}"></div>
+      <button class="btn" id="tf-novo">+ Novo cliente</button>
+    </div>
+    <div class="panel" style="padding:0;"><div id="tec-lista-clientes" class="tabela-scroll"></div></div>`
+
+  ;['rota', 'municipio', 'fase', 'nivel', 'farol'].forEach(k => {
+    const el = $('#tf-' + k); if (el) el.onchange = () => { TF[k] = el.value; tecDesenharListaClientes() }
+  })
+  $('#tf-rota').oninput = () => { TF.rota = $('#tf-rota').value; tecDesenharListaClientes() }
+  $('#tf-busca').oninput = () => { TF.busca = $('#tf-busca').value; tecDesenharListaClientes() }
+  $('#tf-novo').onclick = () => tecFormCliente(null)
+  tecDesenharListaClientes()
+}
+function tecClientesFiltrados () {
+  const b = (TF.busca || '').toLowerCase().trim()
+  return TEC.clientes.filter(c => {
+    if (TF.rota && !(c.rota || '').toLowerCase().includes(TF.rota.toLowerCase())) return false
+    if (TF.nivel && c.nivel !== TF.nivel) return false
+    if (TF.farol && tecFarol(c).cor !== TF.farol) return false
+    if (TF.municipio && c.municipio !== TF.municipio) return false
+    if (TF.fase && c.fase !== TF.fase) return false
+    if (b && !([c.nome, c.codigo, c.municipio, c.decisor, c.razao_social].join(' ').toLowerCase().includes(b))) return false
+    return true
+  }).sort((a, b2) => tecOrdemAtraso(b2) - tecOrdemAtraso(a))
+}
+function tecDesenharListaClientes () {
+  const lista = tecClientesFiltrados()
+  $('#tec-lista-clientes').innerHTML = `<table><thead><tr>
+      <th></th><th>Cliente</th><th>Fase</th><th>Local</th><th class="num">Área aplicada</th><th>Última visita</th>
+    </tr></thead><tbody>
+      ${lista.map(c => {
+        const f = tecFarol(c), ha = tecAreaAplicadaHa(c.id)
+        return `<tr style="cursor:pointer;" data-abrir="${c.id}">
+          <td><span class="tec-farol ${f.cor}"></span></td>
+          <td><b>${esc(c.nome)}</b> <span class="texto-dim2">· ${esc(c.codigo || '')}</span>${tecTemOcoAberta(c.id) ? ' <span class="badge-alerta">ocorrência</span>' : ''}</td>
+          <td><span class="chip">${TEC_FASES.find(x => x.id === c.fase)?.nome || c.fase}</span></td>
+          <td class="texto-dim2">${esc([c.municipio, c.rota].filter(Boolean).join(' · ') || '—')}</td>
+          <td class="num">${ha ? tecNHa(ha) + ' ha' : '—'}</td>
+          <td class="texto-dim2">${c.ultima_visita ? fmtData(c.ultima_visita) : 'sem visita'}</td>
+        </tr>`
+      }).join('') || `<tr><td colspan="6" class="vazio">Nenhum cliente com esses filtros.</td></tr>`}
+    </tbody></table>`
+  $('#tec-lista-clientes').querySelectorAll('[data-abrir]').forEach(el => { el.onclick = () => tecAbrirFicha(el.dataset.abrir) })
+}
+
+async function tecAbrirFicha (id) {
+  const c = tecCli(id); if (!c) return
+  const f = tecFarol(c), ha = tecAreaAplicadaHa(id), vol = tecVolumeAplicadoT(id)
+  const ts = tecTalhoesDe(id), aps = tecAplicDe(id), vis = tecVisitasDe(id), res = tecResultadosDe(id)
+  const ocs = tecOcoDe(id), dms = tecDemDe(id), cts = tecContatosDe(id)
+  const casos = TEC.docs.filter(d => d.cliente_id === id), gerais = TEC.docs.filter(d => !d.cliente_id)
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:900px;">
+    <div style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;">
+      <h3 style="flex:1;min-width:200px;">${esc(c.nome)}</h3>
+      <span class="chip">${TEC_FASES.find(x => x.id === c.fase)?.nome}</span>
+      ${(c.sinais || []).map(s => `<span class="badge-atencao">${TEC_SINAIS.find(x => x.id === s)?.nome || s}</span>`).join('')}
+      ${tecTemOcoAberta(id) ? '<span class="badge-alerta">Ocorrência aberta</span>' : ''}
+    </div>
+    <div class="texto-dim2" style="margin:2px 0 12px;">${esc(c.codigo || '')} · ${esc(c.municipio || '—')} · rota ${esc(c.rota || '—')} · ${esc(c.segmento || '—')}${c.area_total_ha ? ' · ' + tecNHa(c.area_total_ha) + ' ha' : ''}</div>
+    ${!tecIntegravel(c) ? '<div class="aviso-bloqueio">Sem CPF/CNPJ — sem ele esta conta não entra no dossiê de demanda pro CRM Comercial.</div>' : ''}
+    <div class="acoes" style="margin:10px 0;">
+      <button class="btn" id="tec-nova-visita">Registrar visita</button>
+      <button class="btn-secundario" id="tec-nova-aplic">Registrar aplicação</button>
+      <button class="btn-secundario" id="tec-novo-res">Lançar resultado</button>
+      <button class="btn-secundario" id="tec-nova-oco">Abrir ocorrência</button>
+      <button class="btn-secundario" id="tec-nova-dem">Qualificar demanda</button>
+      <button class="btn-secundario" id="tec-editar-cli">Editar cliente</button>
+      <button class="btn-secundario" id="tec-novo-contato">+ Contato</button>
+    </div>
+
+    <div class="secao"><div class="cabeca-secao"><h3 style="font-size:14px;">1 · Identificação</h3></div>
+      <dl class="tec-dl">
+        <dt>Razão social</dt><dd>${tecOu(c.razao_social)}</dd>
+        <dt>CPF / CNPJ</dt><dd>${tecIntegravel(c) ? esc(c.cpf_cnpj) : '<span class="badge-alerta">ausente</span>'}</dd>
+        <dt>Decisor</dt><dd>${tecOu(c.decisor)}</dd>
+        <dt>Área total</dt><dd>${c.area_total_ha ? tecNHa(c.area_total_ha) + ' ha' : '—'}</dd>
+        <dt>Potencial expansão</dt><dd>${c.potencial_expansao_ha ? tecNHa(c.potencial_expansao_ha) + ' ha' : '—'}</dd>
+        <dt>Última visita</dt><dd>${c.ultima_visita ? fmtData(c.ultima_visita) : '—'} · cadência ${f.atraso == null ? '' : ''} <span class="tec-farol ${f.cor}"></span></dd>
+      </dl>
+      ${cts.length ? `<table style="margin-top:10px;"><tr><th>Contato</th><th>Papel</th><th>Telefone</th><th>Horário</th></tr>
+        ${cts.map(x => `<tr><td><b>${esc(x.nome)}</b></td><td>${tecOu(x.papel)}</td><td>${tecOu(x.telefone)}</td><td>${tecOu(x.melhor_horario)}</td></tr>`).join('')}</table>`
+        : '<p class="texto-dim2" style="margin-top:8px;">Nenhum contato cadastrado.</p>'}
+    </div>
+
+    <div class="secao"><div class="cabeca-secao"><h3 style="font-size:14px;">2 · Talhões e solo</h3><button class="btn-secundario mini" id="tec-novo-talhao">+ talhão</button></div>
+      <div id="tec-lista-talhoes"></div>
+    </div>
+
+    <div class="secao"><div class="cabeca-secao"><h3 style="font-size:14px;">3 · Aplicações</h3></div>
+      ${aps.length ? `<table><tr><th>Talhão</th><th>Safra</th><th>Produtos</th><th>Dose</th><th>Volume</th><th>Data</th><th>Testemunha</th></tr>
+        ${aps.map(a => { const t = tecTalhao(a.talhao_id); return `<tr><td><b>${t ? esc(t.nome) : '—'}</b></td><td>${tecOu(a.safra)}</td>
+          <td>${esc((a.produtos || []).join(' + '))}</td><td>${a.dose_t_ha ? tecNT(a.dose_t_ha) + ' t/ha' : '—'}</td>
+          <td>${a.volume_t ? tecNT(a.volume_t) + ' t' : '—'}</td><td>${fmtData(a.data_aplicacao)}</td>
+          <td>${a.tem_testemunha ? '<span class="badge-bom">sim</span>' : '<span class="chip">não</span>'}</td></tr>` }).join('')}
+      </table><p class="texto-dim2" style="margin-top:8px;"><b>${tecNHa(ha)} ha</b> e <b>${tecNT(vol)} t</b> na safra ${esc(tecSafraAtual())}.</p>`
+        : '<p class="vazio">Nenhuma aplicação registrada.</p>'}
+    </div>
+
+    <div class="secao"><div class="cabeca-secao"><h3 style="font-size:14px;">4 · Acompanhamento</h3></div>
+      ${vis.length ? vis.map(v => `<div class="passo">
+        <span class="quando">${fmtData(v.data)}</span>
+        <span style="flex:1;"><b>${tecOu(v.estagio_cultura)}</b>${v.dae ? ' · DAE ' + v.dae : ''} ${v.realizada ? '' : '<span class="badge-atencao">programada</span>'}
+          ${v.observacao ? '<br>' + esc(v.observacao) : ''}
+          ${v.dor_identificada ? '<br><b>Dor:</b> ' + esc(v.dor_identificada) : ''}
+          ${v.proximo_passo ? '<br><b>Próximo passo:</b> ' + esc(v.proximo_passo) + (v.data_proximo_passo ? ' até ' + fmtData(v.data_proximo_passo) : '') : ''}</span>
+      </div>`).join('') : '<p class="vazio">Nenhuma visita registrada.</p>'}
+    </div>
+
+    <div class="secao"><div class="cabeca-secao"><h3 style="font-size:14px;">5 · Resultados</h3></div>
+      ${res.length ? `<table><tr><th>Talhão</th><th>Obtida</th><th>Testemunha</th><th>Ganho</th><th>Colheita</th><th></th></tr>
+        ${res.map(r => { const a = TEC.aplicacoes.find(x => x.id === r.aplicacao_id); const t = a ? tecTalhao(a.talhao_id) : null; const g = tecGanho(r)
+          return `<tr><td><b>${t ? esc(t.nome) : '—'}</b></td><td>${tecOu(r.produtividade_obtida)} ${esc(r.unidade || '')}</td>
+          <td>${r.produtividade_testemunha ? esc(r.produtividade_testemunha) + ' ' + esc(r.unidade || '') : '<span class="chip">sem testemunha</span>'}</td>
+          <td>${g == null ? '—' : `<span class="${g > 0 ? 'badge-bom' : 'badge-alerta'}">${tecNP(g)}</span>`}</td>
+          <td>${fmtData(r.data_colheita)}</td><td><button class="btn-secundario mini" data-virar-caso="${r.id}">virar caso</button></td></tr>` }).join('')}
+      </table>` : '<p class="vazio">Nenhum resultado lançado.</p>'}
+    </div>
+
+    <div class="secao"><div class="cabeca-secao"><h3 style="font-size:14px;">6 · Ocorrências</h3></div>
+      ${ocs.length ? ocs.map(o => `<div class="passo" data-abrir-oco2="${o.id}" style="cursor:pointer;">
+        <span class="${TEC_STATUS_OCO.find(s => s.id === o.status)?.id === 'resolvida' ? 'badge-bom' : 'badge-alerta'}" style="flex:none;">${TEC_STATUS_OCO.find(s => s.id === o.status)?.nome}</span>
+        <span style="flex:1;">${esc(o.tipo)} · ${esc(o.descricao || '')}</span>
+        <span class="texto-dim2">${o.status === 'resolvida' ? 'fechada' : tecDiasAberta(o) + 'd'}</span></div>`).join('') : '<p class="vazio">Nenhuma ocorrência.</p>'}
+    </div>
+
+    <div class="secao"><div class="cabeca-secao"><h3 style="font-size:14px;">7 · Demandas</h3></div>
+      ${dms.length ? dms.map(d => `<div class="passo" data-abrir-dem="${d.id}" style="cursor:pointer;">
+        <span class="chip" style="flex:none;">${TEC_STATUS_DEM.find(s => s.id === d.status)?.nome}</span>
+        <span style="flex:1;">${TEC_TIPOS_DEM.find(t => t.id === d.tipo)?.nome} · ${d.volume_estimado_t ? tecNT(d.volume_estimado_t) + ' t' : '— t'}</span>
+        <span class="texto-dim2">${tecOu(d.janela_estimada)}</span></div>`).join('') : '<p class="vazio">Nenhuma demanda gerada ainda.</p>'}
+    </div>
+
+    <div class="secao"><div class="cabeca-secao"><h3 style="font-size:14px;">8 · Biblioteca</h3><button class="btn-secundario mini" id="tec-novo-doc">+ documento</button></div>
+      <p class="texto-dim2" style="margin:0 0 4px;"><b>Casos desta conta</b></p>
+      ${casos.length ? casos.map(d => `<div class="passo" data-abrir-doc="${d.id}" style="cursor:pointer;"><span class="chip">${esc(d.grupo)}</span><span style="flex:1;">${esc(d.titulo)}</span></div>`).join('') : '<p class="vazio">Nenhum caso ainda.</p>'}
+      <p class="texto-dim2" style="margin:12px 0 4px;"><b>Material técnico da equipe</b></p>
+      ${gerais.length ? gerais.map(d => `<div class="passo" data-abrir-doc="${d.id}" style="cursor:pointer;"><span class="chip">${esc(d.grupo)}</span><span style="flex:1;">${esc(d.titulo)}</span></div>`).join('') : '<p class="vazio">Nenhum material geral.</p>'}
+    </div>
+
+    <div class="acoes"><button class="btn-secundario" id="tec-excluir-cli">excluir cliente</button>
+      <button class="btn" id="tec-fechar-ficha" style="margin-left:auto;">fechar</button></div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+  $('#tec-fechar-ficha').onclick = () => fundo.remove()
+
+  const talhoesArea = fundo.querySelector('#tec-lista-talhoes')
+  talhoesArea.innerHTML = ts.length ? ts.map(t => {
+    const an = tecAnalisesDe(t.id), ult = an[0]
+    return `<div class="passo" style="align-items:flex-start;">
+      <span style="flex:1;"><b>${esc(t.nome)}</b> · ${t.area_ha ? tecNHa(t.area_ha) + ' ha' : '—'} · ${tecOu(t.cultura)}<br>
+        <span class="texto-dim2">${ult ? TEC_PARAMS_SOLO.map(pp => pp.r + ' ' + (ult[pp.k] ?? '—')).join(' · ') + ' · ' + fmtData(ult.data) : 'sem análise cadastrada'}</span></span>
+      <button class="btn-secundario mini" data-analises="${t.id}">análises (${an.length})</button>
+    </div>`
+  }).join('') : '<p class="vazio">Nenhum talhão cadastrado.</p>'
+  talhoesArea.querySelectorAll('[data-analises]').forEach(el => { el.onclick = () => tecAnalisesDoTalhao(el.dataset.analises, id) })
+
+  fundo.querySelector('#tec-nova-visita').onclick = () => { fundo.remove(); tecFormVisita(id) }
+  fundo.querySelector('#tec-nova-aplic').onclick = () => { fundo.remove(); tecFormAplicacao(id) }
+  fundo.querySelector('#tec-novo-res').onclick = () => { fundo.remove(); tecFormResultado(id) }
+  fundo.querySelector('#tec-nova-oco').onclick = () => { fundo.remove(); tecFormOcorrencia(null, id) }
+  fundo.querySelector('#tec-nova-dem').onclick = () => { fundo.remove(); tecFormDemanda(null, id) }
+  fundo.querySelector('#tec-editar-cli').onclick = () => { fundo.remove(); tecFormCliente(c) }
+  fundo.querySelector('#tec-novo-contato').onclick = () => { fundo.remove(); tecFormContato(id) }
+  fundo.querySelector('#tec-novo-talhao').onclick = () => { fundo.remove(); tecFormTalhao(null, id) }
+  fundo.querySelector('#tec-novo-doc').onclick = () => { fundo.remove(); tecFormDoc(null, id) }
+  fundo.querySelector('#tec-excluir-cli').onclick = () => tecExcluirCliente(id, fundo)
+  fundo.querySelectorAll('[data-virar-caso]').forEach(el => { el.onclick = () => tecVirarCaso(el.dataset.virarCaso, fundo, id) })
+  fundo.querySelectorAll('[data-abrir-oco2]').forEach(el => { el.onclick = () => { fundo.remove(); tecFormOcorrencia(TEC.ocorrencias.find(o => o.id === el.dataset.abrirOco2)) } })
+  fundo.querySelectorAll('[data-abrir-dem]').forEach(el => { el.onclick = () => { fundo.remove(); tecFormDemanda(TEC.demandas.find(d => d.id === el.dataset.abrirDem)) } })
+  fundo.querySelectorAll('[data-abrir-doc]').forEach(el => { el.onclick = () => { fundo.remove(); tecFormDoc(TEC.docs.find(d => d.id === el.dataset.abrirDoc), id) } })
+}
+
+// ----- Formulário: Cliente -----
+function tecFormCliente (c) {
+  const e = c || {}
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>${c ? 'Editar cliente' : 'Novo cliente'}</h3>
+    <div class="texto-dim2" style="margin:-8px 0 12px;">CPF/CNPJ é a chave que integra com o CRM Comercial.</div>
+    <div class="campo"><label>Nome da fazenda/grupo</label><input id="tc-nome" value="${esc(e.nome || '')}"></div>
+    <div class="form-grade">
+      <div class="campo"><label>Razão social</label><input id="tc-razao" value="${esc(e.razao_social || '')}"></div>
+      <div class="campo"><label>CPF / CNPJ</label><input id="tc-doc" value="${esc(e.cpf_cnpj || '')}"></div>
+      <div class="campo"><label>Município</label><input id="tc-mun" value="${esc(e.municipio || '')}"></div>
+      <div class="campo"><label>Rota</label><input id="tc-rota" value="${esc(e.rota || '')}"></div>
+      <div class="campo"><label>Segmento</label><input id="tc-seg" value="${esc(e.segmento || '')}"></div>
+      <div class="campo"><label>Fase</label><select id="tc-fase">${TEC_FASES.map(f => `<option value="${f.id}" ${e.fase === f.id ? 'selected' : ''}>${f.nome}</option>`).join('')}</select></div>
+      <div class="campo"><label>Nível</label><select id="tc-nivel">${TEC_NIVEIS.map(n => `<option value="${n.id}" ${(e.nivel || 'prata') === n.id ? 'selected' : ''}>${n.nome}</option>`).join('')}</select></div>
+      <div class="campo"><label>Decisor</label><input id="tc-dec" value="${esc(e.decisor || '')}"></div>
+      <div class="campo"><label>Área total (ha)</label><input id="tc-area" value="${e.area_total_ha ?? ''}" inputmode="decimal"></div>
+      <div class="campo"><label>Potencial de expansão (ha)</label><input id="tc-pot" value="${e.potencial_expansao_ha ?? ''}" inputmode="decimal"></div>
+    </div>
+    <div class="campo"><label>Sinais</label>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:4px;">
+        ${TEC_SINAIS.map(s => `<label style="display:flex;gap:5px;align-items:center;font-size:12.5px;"><input type="checkbox" id="tc-s-${s.id}" ${(e.sinais || []).includes(s.id) ? 'checked' : ''}>${s.nome}</label>`).join('')}
+      </div></div>
+    <div class="acoes"><button class="btn" id="tc-salvar">salvar</button><button class="btn-secundario" id="tc-cancelar">cancelar</button></div>
+    <div class="recado oculto" id="tc-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#tc-cancelar').onclick = fechar
+  fundo.onclick = ev => { if (ev.target === fundo) fechar() }
+  fundo.querySelector('#tc-salvar').onclick = async () => {
+    const nome = tecVal('tc-nome')
+    if (!nome) { const el = fundo.querySelector('#tc-recado'); el.textContent = 'Escreva o nome da fazenda.'; el.classList.remove('oculto'); return }
+    const corpo = {
+      nome, razao_social: tecVal('tc-razao') || null, cpf_cnpj: tecVal('tc-doc') || null,
+      municipio: tecVal('tc-mun') || null, rota: tecVal('tc-rota') || null, segmento: tecVal('tc-seg') || null,
+      fase: tecVal('tc-fase'), nivel: tecVal('tc-nivel'), decisor: tecVal('tc-dec') || null,
+      area_total_ha: tecVal('tc-area') || null, potencial_expansao_ha: tecVal('tc-pot') || null,
+      sinais: TEC_SINAIS.filter(s => tecChk('tc-s-' + s.id)).map(s => s.id),
+      atualizado_por: PERFIL.pessoaId, atualizado_em: new Date().toISOString()
+    }
+    let novoId = c?.id
+    if (c) { await db.from('tecnico_cliente').update(corpo).eq('id', c.id) }
+    else {
+      corpo.codigo = await tecGerarCodigo('CLI')
+      corpo.criado_por = PERFIL.pessoaId
+      const { data, error } = await db.from('tecnico_cliente').insert(corpo).select('id').single()
+      if (error) { alert(error.message); return }
+      novoId = data.id
+    }
+    fechar(); await tecRecarregar(); tecToast(c ? 'Cliente atualizado' : 'Cliente cadastrado')
+    if (!c) tecAbrirFicha(novoId)
+  }
+}
+function tecToast (msg) { alert(msg) }
+async function tecRecarregar () {
+  const [{ data: clientes }, { data: contatos }, { data: talhoes }, { data: analises }, { data: aplicacoes },
+    { data: visitas }, { data: resultados }, { data: ocorrencias }, { data: demandas }, { data: docs }, { data: anexos }] = await Promise.all([
+    db.from('tecnico_cliente').select('*').order('nome'), db.from('tecnico_contato').select('*'),
+    db.from('tecnico_talhao').select('*'), db.from('tecnico_analise_solo').select('*'),
+    db.from('tecnico_aplicacao').select('*'), db.from('tecnico_visita').select('*'),
+    db.from('tecnico_resultado').select('*'), db.from('tecnico_ocorrencia').select('*'),
+    db.from('tecnico_demanda').select('*'), db.from('tecnico_doc').select('*'), db.from('tecnico_anexo').select('*')
+  ])
+  TEC = { clientes: clientes || [], contatos: contatos || [], talhoes: talhoes || [], analises: analises || [],
+    aplicacoes: aplicacoes || [], visitas: visitas || [], resultados: resultados || [], ocorrencias: ocorrencias || [],
+    demandas: demandas || [], docs: docs || [], anexos: anexos || [] }
+  if ($('#sub-tec')) tecAbrirSub()
+}
+function tecExcluirCliente (id, fundo) {
+  if (!confirm('Excluir este cliente e todos os talhões, aplicações, visitas, resultados, ocorrências e demandas ligados a ele?')) return
+  ;(async () => {
+    await db.from('tecnico_cliente').delete().eq('id', id)
+    fundo.remove(); await tecRecarregar(); tecToast('Cliente excluído')
+  })()
+}
+
+// ----- Formulário: Contato -----
+function tecFormContato (cid) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>Novo contato</h3>
+    <div class="form-grade">
+      <div class="campo"><label>Nome</label><input id="tk-nome"></div>
+      <div class="campo"><label>Papel</label><input id="tk-papel" placeholder="Decisor, Agrônomo..."></div>
+      <div class="campo"><label>Telefone</label><input id="tk-tel"></div>
+      <div class="campo"><label>WhatsApp</label><input id="tk-wa" placeholder="63999998888"></div>
+      <div class="campo"><label>Melhor horário</label><input id="tk-hora"></div>
+    </div>
+    <div class="acoes"><button class="btn" id="tk-salvar">salvar</button><button class="btn-secundario" id="tk-cancelar">cancelar</button></div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.querySelector('#tk-cancelar').onclick = () => { fundo.remove(); tecAbrirFicha(cid) }
+  fundo.onclick = ev => { if (ev.target === fundo) { fundo.remove(); tecAbrirFicha(cid) } }
+  fundo.querySelector('#tk-salvar').onclick = async () => {
+    if (!tecVal('tk-nome')) { alert('Escreva o nome do contato'); return }
+    await db.from('tecnico_contato').insert({ cliente_id: cid, nome: tecVal('tk-nome'), papel: tecVal('tk-papel') || null,
+      telefone: tecVal('tk-tel') || null, whatsapp: tecVal('tk-wa') || null, melhor_horario: tecVal('tk-hora') || null })
+    fundo.remove(); await tecRecarregar(); tecAbrirFicha(cid)
+  }
+}
+
+// ----- Formulário: Talhão -----
+function tecFormTalhao (t, cid) {
+  const e = t || {}
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>${t ? 'Editar talhão' : 'Novo talhão'}</h3>
+    <div class="form-grade">
+      <div class="campo"><label>Nome</label><input id="tt-nome" value="${esc(e.nome || '')}" placeholder="ex: T-01"></div>
+      <div class="campo"><label>Área (ha)</label><input id="tt-area" value="${e.area_ha ?? ''}" inputmode="decimal"></div>
+      <div class="campo"><label>Cultura</label><input id="tt-cult" value="${esc(e.cultura || '')}"></div>
+      <div class="campo"><label>Produtividade média</label><input id="tt-prod" value="${esc(e.produtividade_media || '')}" placeholder="ex: 62 sc/ha"></div>
+    </div>
+    <div class="acoes">${t ? `<button class="btn-secundario" id="tt-excluir">excluir</button>` : ''}
+      <button class="btn" id="tt-salvar" style="margin-left:auto;">salvar</button><button class="btn-secundario" id="tt-cancelar">cancelar</button></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const voltar = () => { fundo.remove(); tecAbrirFicha(cid) }
+  fundo.querySelector('#tt-cancelar').onclick = voltar
+  fundo.onclick = ev => { if (ev.target === fundo) voltar() }
+  if (t) fundo.querySelector('#tt-excluir').onclick = async () => {
+    if (!confirm('Excluir este talhão e as análises ligadas a ele?')) return
+    await db.from('tecnico_talhao').delete().eq('id', t.id)
+    await tecRecarregar(); voltar()
+  }
+  fundo.querySelector('#tt-salvar').onclick = async () => {
+    if (!tecVal('tt-nome')) { alert('Dê um nome ao talhão'); return }
+    const corpo = { nome: tecVal('tt-nome'), area_ha: tecVal('tt-area') || null, cultura: tecVal('tt-cult') || null, produtividade_media: tecVal('tt-prod') || null }
+    if (t) await db.from('tecnico_talhao').update(corpo).eq('id', t.id)
+    else await db.from('tecnico_talhao').insert({ ...corpo, cliente_id: cid })
+    await tecRecarregar(); voltar()
+  }
+}
+
+// ----- Análises de solo do talhão -----
+function tecAnalisesDoTalhao (tid, cid) {
+  const t = tecTalhao(tid); if (!t) return
+  const an = tecAnalisesDe(tid)
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:760px;">
+    <h3>${esc(t.nome)} · análises de solo</h3>
+    <div class="texto-dim2" style="margin:-8px 0 12px;">${an.length} análise(s) no histórico.</div>
+    <div class="acoes"><button class="btn" id="ta-nova">+ Nova análise</button><button class="btn-secundario" id="ta-voltar">voltar à ficha</button></div>
+    <div id="ta-lista" style="margin-top:14px;"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const voltar = () => { fundo.remove(); tecAbrirFicha(cid) }
+  fundo.querySelector('#ta-voltar').onclick = voltar
+  fundo.onclick = ev => { if (ev.target === fundo) voltar() }
+  fundo.querySelector('#ta-nova').onclick = () => { fundo.remove(); tecFormAnalise(null, tid, cid) }
+  fundo.querySelector('#ta-lista').innerHTML = an.length ? an.map(x => `
+    <div class="secao"><div class="cabeca-secao"><h3 style="font-size:13px;">${fmtData(x.data)}${x.rotulo ? ' · ' + esc(x.rotulo) : ''}</h3>
+      <button class="btn-secundario mini" data-editar-an="${x.id}">editar</button></div>
+      <div class="texto-dim2">${TEC_PARAMS_SOLO.map(pp => pp.r + ' ' + (x[pp.k] ?? '—') + (pp.u || '')).join(' · ')}</div>
+      ${x.laboratorio ? `<div class="texto-dim2">Laboratório: <b>${esc(x.laboratorio)}</b>${x.protocolo ? ' · laudo ' + esc(x.protocolo) : ''}</div>` : ''}
+      ${x.observacao ? `<div class="texto-dim2">${esc(x.observacao)}</div>` : ''}
+    </div>`).join('') : '<p class="vazio">Nenhuma análise cadastrada.</p>'
+  fundo.querySelectorAll('[data-editar-an]').forEach(el => { el.onclick = () => { fundo.remove(); tecFormAnalise(TEC.analises.find(a => a.id === el.dataset.editarAn), tid, cid) } })
+}
+function tecFormAnalise (a, tid, cid) {
+  const e = a || {}
+  const campo = k => { const pp = TEC_PARAMS_SOLO.find(x => x.k === k); return `<div class="campo"><label>${pp.r}${pp.u ? ' (' + pp.u + ')' : ''}</label><input id="an-${k}" value="${e[k] ?? ''}" inputmode="decimal"></div>` }
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>${a ? 'Editar análise' : 'Nova análise de solo'}</h3>
+    <div class="form-grade">
+      <div class="campo"><label>Data da coleta</label><input type="date" id="an-data" value="${e.data || hojeISO()}"></div>
+      <div class="campo"><label>Rótulo</label><input id="an-rot" value="${esc(e.rotulo || '')}" placeholder="ex: antes da aplicação"></div>
+      <div class="campo"><label>Laboratório</label><input id="an-lab" value="${esc(e.laboratorio || '')}"></div>
+      <div class="campo"><label>Nº do laudo</label><input id="an-prot" value="${esc(e.protocolo || '')}"></div>
+      ${TEC_PARAMS_SOLO.map(pp => campo(pp.k)).join('')}
+    </div>
+    <div class="campo"><label>Observação</label><textarea id="an-obs">${esc(e.observacao || '')}</textarea></div>
+    <div class="acoes"><button class="btn" id="an-salvar">salvar</button><button class="btn-secundario" id="an-cancelar">cancelar</button></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const voltar = () => { fundo.remove(); tecAnalisesDoTalhao(tid, cid) }
+  fundo.querySelector('#an-cancelar').onclick = voltar
+  fundo.onclick = ev => { if (ev.target === fundo) voltar() }
+  fundo.querySelector('#an-salvar').onclick = async () => {
+    const corpo = { data: tecVal('an-data') || hojeISO(), rotulo: tecVal('an-rot') || null, laboratorio: tecVal('an-lab') || null, protocolo: tecVal('an-prot') || null, observacao: tecVal('an-obs') || null }
+    TEC_PARAMS_SOLO.forEach(pp => { corpo[pp.k] = tecVal('an-' + pp.k) || null })
+    if (a) await db.from('tecnico_analise_solo').update(corpo).eq('id', a.id)
+    else await db.from('tecnico_analise_solo').insert({ ...corpo, talhao_id: tid })
+    await tecRecarregar(); voltar()
+  }
+}
+
+// ----- Formulário: Aplicação -----
+function tecFormAplicacao (cid) {
+  const ts = tecTalhoesDe(cid)
+  if (!ts.length) { alert('Cadastre um talhão antes de registrar a aplicação'); return }
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>Registrar aplicação</h3>
+    <div class="form-grade">
+      <div class="campo"><label>Talhão</label><select id="ap-talhao">${ts.map(t => `<option value="${t.id}">${esc(t.nome)} · ${tecNHa(t.area_ha)} ha</option>`).join('')}</select></div>
+      <div class="campo"><label>Safra</label><input id="ap-safra" value="${esc(tecSafraAtual())}"></div>
+      <div class="campo"><label>Cultura</label><input id="ap-cult"></div>
+      <div class="campo"><label>Data da aplicação</label><input type="date" id="ap-data" value="${hojeISO()}"></div>
+      <div class="campo"><label>Produtos (separados por vírgula)</label><input id="ap-prod" placeholder="Gefoscal, KCl, Boro"></div>
+      <div class="campo"><label>Dose (t/ha)</label><input id="ap-dose" inputmode="decimal" oninput="tecCalcVolume()"></div>
+      <div class="campo"><label>Volume (t)</label><input id="ap-vol" inputmode="decimal"></div>
+      <div class="campo"><label>Modo de aplicação</label><input id="ap-modo" placeholder="ex: a lanço em pré-plantio"></div>
+    </div>
+    <div class="campo"><label>Testemunha</label>
+      <div style="display:flex;gap:14px;margin-top:4px;">
+        <label><input type="radio" name="ap-test" value="1">Tem testemunha</label>
+        <label><input type="radio" name="ap-test" value="0" checked>Sem testemunha</label>
+      </div></div>
+    <div class="campo"><label>Como foi montada a testemunha</label><input id="ap-descT"></div>
+    <div class="acoes"><button class="btn" id="ap-salvar">salvar</button><button class="btn-secundario" id="ap-cancelar">cancelar</button></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const voltar = () => { fundo.remove(); tecAbrirFicha(cid) }
+  fundo.querySelector('#ap-cancelar').onclick = voltar
+  fundo.onclick = ev => { if (ev.target === fundo) voltar() }
+  window.tecCalcVolume = () => {
+    const t = tecTalhao(tecVal('ap-talhao')), dose = tecNum(tecVal('ap-dose'))
+    if (t && dose) $('#ap-vol').value = (tecNum(t.area_ha) * dose).toFixed(1)
+  }
+  fundo.querySelector('#ap-salvar').onclick = async () => {
+    const produtos = tecVal('ap-prod').split(',').map(x => x.trim()).filter(Boolean)
+    if (!produtos.length) { alert('Informe pelo menos um produto'); return }
+    const test = document.querySelector('input[name=ap-test]:checked')
+    const { data: nova, error } = await db.from('tecnico_aplicacao').insert({
+      cliente_id: cid, talhao_id: tecVal('ap-talhao'), safra: tecVal('ap-safra') || null, cultura: tecVal('ap-cult') || null,
+      produtos, dose_t_ha: tecVal('ap-dose') || null, volume_t: tecVal('ap-vol') || null,
+      data_aplicacao: tecVal('ap-data') || null, modo_aplicacao: tecVal('ap-modo') || null,
+      tem_testemunha: test && test.value === '1', descricao_testemunha: tecVal('ap-descT') || null
+    }).select('id').single()
+    if (error) { alert(error.message); return }
+    const c = tecCli(cid)
+    if (c && c.fase === 'entregue') await db.from('tecnico_cliente').update({ fase: 'aplicado' }).eq('id', cid)
+    await tecRecarregar(); voltar()
+  }
+}
+
+// ----- Formulário: Visita -----
+function tecFormVisita (cid, dataSugerida) {
+  const aps = tecAplicDe(cid)
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>Registrar visita</h3>
+    <div class="form-grade">
+      <div class="campo"><label>Data</label><input type="date" id="v-data" value="${dataSugerida || hojeISO()}"></div>
+      <div class="campo"><label>Responsável</label><input id="v-resp" value="${esc(PERFIL.nome || '')}"></div>
+      <div class="campo"><label>Estágio da cultura</label><input id="v-est" placeholder="ex: V6, R3"></div>
+      <div class="campo"><label>DAE</label><input id="v-dae" inputmode="numeric"></div>
+      <div class="campo"><label>Avaliação geral</label><select id="v-aval"><option>Boa</option><option>Regular</option><option>Ruim</option></select></div>
+      <div class="campo"><label>Situação</label><select id="v-feita"><option value="1">Já realizada</option><option value="0">Só programada</option></select></div>
+    </div>
+    <div class="campo"><label>Observação</label><textarea id="v-obs"></textarea></div>
+    <div class="campo"><label>Dor identificada</label><input id="v-dor" placeholder="o que o produtor quer resolver"></div>
+    <div class="form-grade">
+      <div class="campo"><label>Próximo passo</label><input id="v-prox"></div>
+      <div class="campo"><label>Até quando</label><input type="date" id="v-proxd"></div>
+    </div>
+    <div class="acoes"><button class="btn" id="v-salvar">salvar</button><button class="btn-secundario" id="v-cancelar">cancelar</button></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const voltar = () => { fundo.remove(); tecAbrirFicha(cid) }
+  fundo.querySelector('#v-cancelar').onclick = voltar
+  fundo.onclick = ev => { if (ev.target === fundo) voltar() }
+  fundo.querySelector('#v-salvar').onclick = async () => {
+    const realizada = tecVal('v-feita') === '1'
+    const dataV = tecVal('v-data')
+    await db.from('tecnico_visita').insert({
+      cliente_id: cid, aplicacao_id: aps[0]?.id || null, data: dataV, responsavel: tecVal('v-resp') || null,
+      estagio_cultura: tecVal('v-est') || null, dae: tecVal('v-dae') || null, observacao: tecVal('v-obs') || null,
+      avaliacao: tecVal('v-aval'), dor_identificada: tecVal('v-dor') || null, proximo_passo: tecVal('v-prox') || null,
+      data_proximo_passo: tecVal('v-proxd') || null, realizada
+    })
+    if (realizada) {
+      const c = tecCli(cid)
+      const upd = { ultima_visita: (!c.ultima_visita || dataV > c.ultima_visita) ? dataV : c.ultima_visita }
+      if (c.fase === 'aplicado') upd.fase = 'acompanhamento'
+      await db.from('tecnico_cliente').update(upd).eq('id', cid)
+    }
+    await tecRecarregar(); voltar()
+  }
+}
+
+// ----- Formulário: Resultado -----
+function tecFormResultado (cid) {
+  const aps = tecAplicDe(cid)
+  if (!aps.length) { alert('Registre a aplicação antes de lançar resultado'); return }
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>Lançar resultado</h3>
+    <div class="campo"><label>Aplicação</label><select id="r-aplic">${aps.map(a => { const t = tecTalhao(a.talhao_id); return `<option value="${a.id}">${t ? esc(t.nome) : '?'} · ${esc(a.cultura || '')} · ${esc(a.safra || '')}</option>` }).join('')}</select></div>
+    <div class="form-grade">
+      <div class="campo"><label>Produtividade obtida</label><input id="r-obt" inputmode="decimal"></div>
+      <div class="campo"><label>Produtividade testemunha</label><input id="r-test" inputmode="decimal" placeholder="deixe vazio se não houver"></div>
+      <div class="campo"><label>Unidade</label><input id="r-uni" value="sc/ha"></div>
+      <div class="campo"><label>Data da colheita</label><input type="date" id="r-data" value="${hojeISO()}"></div>
+    </div>
+    <div class="campo"><label>Validado por</label><input id="r-val" value="${esc(PERFIL.nome || '')}"></div>
+    <div class="campo"><label>Observação</label><textarea id="r-obs"></textarea></div>
+    <div class="acoes"><button class="btn" id="r-salvar">salvar</button><button class="btn-secundario" id="r-cancelar">cancelar</button></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const voltar = () => { fundo.remove(); tecAbrirFicha(cid) }
+  fundo.querySelector('#r-cancelar').onclick = voltar
+  fundo.onclick = ev => { if (ev.target === fundo) voltar() }
+  fundo.querySelector('#r-salvar').onclick = async () => {
+    if (!tecNum(tecVal('r-obt'))) { alert('Lance a produtividade obtida'); return }
+    await db.from('tecnico_resultado').insert({
+      aplicacao_id: tecVal('r-aplic'), produtividade_obtida: tecVal('r-obt') || null, produtividade_testemunha: tecVal('r-test') || null,
+      unidade: tecVal('r-uni') || 'sc/ha', data_colheita: tecVal('r-data') || null, validado_por: tecVal('r-val') || null, observacao: tecVal('r-obs') || null
+    })
+    const c = tecCli(cid)
+    if (c && ['entregue', 'aplicado', 'acompanhamento'].includes(c.fase)) await db.from('tecnico_cliente').update({ fase: 'resultado' }).eq('id', cid)
+    await tecRecarregar(); voltar()
+  }
+}
+function tecVirarCaso (rid, fundoAntigo, cid) {
+  ;(async () => {
+    const r = TEC.resultados.find(x => x.id === rid); if (!r) return
+    const a = TEC.aplicacoes.find(x => x.id === r.aplicacao_id)
+    const c = a ? tecCli(a.cliente_id) : null
+    const t = a ? tecTalhao(a.talhao_id) : null
+    const g = tecGanho(r)
+    const conteudo = `Cliente: ${c ? c.nome + ' — ' + (c.municipio || '') : '—'}\n` +
+      `Talhão: ${t ? t.nome + ' — ' + tecNHa(t.area_ha) + ' ha' : '—'}\n` +
+      `Cultura/safra: ${a ? (a.cultura || '') + ' · ' + (a.safra || '') : '—'}\n` +
+      `Produtos: ${a ? (a.produtos || []).join(' + ') : '—'}\n\n` +
+      `Produtividade obtida: ${r.produtividade_obtida} ${r.unidade || ''}\n` +
+      `Testemunha: ${r.produtividade_testemunha ? r.produtividade_testemunha + ' ' + (r.unidade || '') : 'não houve'}\n` +
+      `Ganho apurado: ${g == null ? 'não calculável sem testemunha' : tecNP(g)}\n\n` +
+      `Observação: ${r.observacao || '—'}`
+    await db.from('tecnico_doc').insert({ cliente_id: c ? c.id : null, grupo: 'Casos de resultado',
+      titulo: 'Caso — ' + (c ? c.nome : 'cliente') + ' · ' + (a ? a.cultura : ''), dono: PERFIL.nome || '', conteudo })
+    if (fundoAntigo) fundoAntigo.remove()
+    await tecRecarregar()
+    if (c) tecAbrirFicha(c.id)
+    tecToast('Caso criado na Biblioteca')
+  })()
+}
+
+// ----- Formulário: Ocorrência -----
+function tecFormOcorrencia (o, cidSugerido) {
+  const e = o || {}
+  const cid = e.cliente_id || cidSugerido
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>${o ? 'Ocorrência ' + esc(o.codigo || '') : 'Abrir ocorrência'}</h3>
+    ${o && tecEstourouSLA(o) ? '<span class="badge-alerta">SLA estourado (15 dias)</span>' : ''}
+    <div class="form-grade" style="margin-top:10px;">
+      <div class="campo"><label>Cliente</label><select id="o-cli" ${o ? 'disabled' : ''}>${TEC.clientes.map(x => `<option value="${x.id}" ${x.id === cid ? 'selected' : ''}>${esc(x.nome)}</option>`).join('')}</select></div>
+      <div class="campo"><label>Tipo</label><select id="o-tipo">${TEC_TIPOS_OCO.map(t => `<option ${e.tipo === t ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+      <div class="campo"><label>Data de abertura</label><input type="date" id="o-ab" value="${e.abertura || hojeISO()}"></div>
+      <div class="campo"><label>Responsável</label><input id="o-resp" value="${esc(e.responsavel || PERFIL.nome || '')}"></div>
+    </div>
+    <div class="campo"><label>Descrição</label><textarea id="o-desc">${esc(e.descricao || '')}</textarea></div>
+    <div class="campo"><label>Tratativas (uma por linha)</label><textarea id="o-trat">${esc((e.tratativas || []).join('\n'))}</textarea></div>
+    <div class="form-grade">
+      <div class="campo"><label>Status</label><select id="o-st">${TEC_STATUS_OCO.map(s => `<option value="${s.id}" ${(e.status || 'aberta') === s.id ? 'selected' : ''}>${s.nome}</option>`).join('')}</select></div>
+      <div class="campo"><label>Data de resolução</label><input type="date" id="o-dr" value="${e.data_resolucao || ''}"></div>
+    </div>
+    <div class="campo"><label>Resolução</label><textarea id="o-res">${esc(e.resolucao || '')}</textarea></div>
+    <div class="acoes">${o ? `<button class="btn-secundario" id="o-excluir">excluir</button>` : ''}
+      <button class="btn" id="o-salvar" style="margin-left:auto;">salvar</button><button class="btn-secundario" id="o-cancelar">cancelar</button></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const voltar = () => { fundo.remove(); if (cid) tecAbrirFicha(cid); else tecAbrirSub() }
+  fundo.querySelector('#o-cancelar').onclick = voltar
+  fundo.onclick = ev => { if (ev.target === fundo) voltar() }
+  if (o) fundo.querySelector('#o-excluir').onclick = async () => {
+    if (!confirm('Excluir esta ocorrência?')) return
+    await db.from('tecnico_ocorrencia').delete().eq('id', o.id)
+    await tecRecarregar(); voltar()
+  }
+  fundo.querySelector('#o-salvar').onclick = async () => {
+    const st = tecVal('o-st')
+    const corpo = {
+      cliente_id: tecVal('o-cli'), tipo: tecVal('o-tipo'), abertura: tecVal('o-ab') || hojeISO(),
+      descricao: tecVal('o-desc') || null, responsavel: tecVal('o-resp') || null,
+      tratativas: tecVal('o-trat') ? tecVal('o-trat').split('\n').map(x => x.trim()).filter(Boolean) : [],
+      status: st, resolucao: tecVal('o-res') || null, data_resolucao: st === 'resolvida' ? (tecVal('o-dr') || hojeISO()) : null
+    }
+    if (o) await db.from('tecnico_ocorrencia').update(corpo).eq('id', o.id)
+    else { corpo.codigo = await tecGerarCodigo('OCO'); await db.from('tecnico_ocorrencia').insert(corpo) }
+    await tecRecarregar(); voltar()
+    tecToast(st === 'resolvida' ? 'Ocorrência resolvida — demanda liberada' : 'Ocorrência salva')
+  }
+}
+
+// ----- Formulário: Demanda -----
+function tecFormDemanda (d, cidSugerido) {
+  const e = d || {}
+  const cid = e.cliente_id || cidSugerido || (TEC.clientes[0] && TEC.clientes[0].id)
+  if (!cid) { alert('Cadastre um cliente antes'); return }
+  const c = tecCli(cid)
+  const res = c ? tecResultadosDe(c.id) : []
+  const ts = c ? tecTalhoesDe(c.id) : []
+  const travaOco = c && tecTemOcoAberta(c.id)
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:760px;">
+    <h3>${d ? 'Dossiê ' + esc(d.codigo || '') : 'Nova demanda'}</h3>
+    <div class="texto-dim2" style="margin:-8px 0 12px;">Isto não é pedido — é o dossiê pro time de fechamento executar.</div>
+    ${travaOco ? '<div class="aviso-bloqueio">Cliente com ocorrência aberta — resolva antes de enviar ao comercial.</div>' : ''}
+    <div class="form-grade">
+      <div class="campo"><label>Cliente</label><select id="d-cli">${TEC.clientes.map(x => `<option value="${x.id}" ${x.id === cid ? 'selected' : ''}>${esc(x.nome)}</option>`).join('')}</select></div>
+      <div class="campo"><label>Tipo</label><select id="d-tipo" onchange="document.getElementById('d-bloco-ind').style.display=this.value==='indicacao'?'grid':'none'">${TEC_TIPOS_DEM.map(t => `<option value="${t.id}" ${e.tipo === t.id ? 'selected' : ''}>${t.nome} — ${t.ajuda}</option>`).join('')}</select></div>
+    </div>
+    <div class="form-grade" id="d-bloco-ind" style="display:${e.tipo === 'indicacao' ? 'grid' : 'none'};">
+      <div class="campo"><label>Nome do indicado</label><input id="d-i-nome" value="${esc(e.indicado_nome || '')}"></div>
+      <div class="campo"><label>Telefone</label><input id="d-i-tel" value="${esc(e.indicado_telefone || '')}"></div>
+      <div class="campo"><label>Município</label><input id="d-i-mun" value="${esc(e.indicado_municipio || '')}"></div>
+    </div>
+    <div class="form-grade">
+      <div class="campo"><label>Volume estimado (t)</label><input id="d-vol" value="${e.volume_estimado_t ?? ''}" inputmode="decimal"></div>
+      <div class="campo"><label>Janela estimada</label><input id="d-jan" value="${esc(e.janela_estimada || '')}" placeholder="ex: junho/2027"></div>
+      <div class="campo"><label>Cultura alvo</label><input id="d-cult" value="${esc(e.cultura_alvo || '')}"></div>
+      <div class="campo"><label>Talhão alvo</label><select id="d-talhao"><option value="">—</option>${ts.map(t => `<option ${e.talhao_alvo === t.nome ? 'selected' : ''}>${esc(t.nome)}</option>`).join('')}</select></div>
+    </div>
+    <div class="campo"><label>Argumento técnico</label><textarea id="d-arg">${esc(e.argumento_tecnico || '')}</textarea></div>
+    <div class="campo"><label>Resultado que comprova</label><select id="d-res"><option value="">— nenhum</option>${res.map(r => `<option value="${r.id}" ${e.resultado_id === r.id ? 'selected' : ''}>${r.produtividade_obtida} ${r.unidade || ''}</option>`).join('')}</select></div>
+    <div class="form-grade">
+      <div class="campo"><label>Decisor</label><input id="d-dec" value="${esc(e.decisor || (c ? c.decisor : '') || '')}"></div>
+      <div class="campo"><label>Concorrente</label><input id="d-conc" value="${esc(e.concorrente || '')}"></div>
+    </div>
+    <div class="campo"><label>Objeção esperada</label><input id="d-obj" value="${esc(e.objecao_esperada || '')}"></div>
+    <div class="form-grade">
+      <div class="campo"><label>Status</label><select id="d-st">${TEC_STATUS_DEM.map(s => `<option value="${s.id}" ${(e.status || 'rascunho') === s.id ? 'selected' : ''}>${s.nome}</option>`).join('')}</select></div>
+      <div class="campo"><label>Responsável comercial</label><input id="d-resp" value="${esc(e.responsavel_comercial || '')}"></div>
+      <div class="campo"><label>Retorno recebido</label><input id="d-ret" value="${esc(e.retorno || '')}"></div>
+      <div class="campo"><label>Motivo não conversão</label><input id="d-mot" value="${esc(e.motivo_nao_conversao || '')}"></div>
+    </div>
+    <div class="acoes">${d ? `<button class="btn-secundario" id="d-excluir">excluir</button>` : ''}
+      <button class="btn" id="d-salvar" style="margin-left:auto;">salvar</button><button class="btn-secundario" id="d-cancelar">cancelar</button></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const voltar = () => { fundo.remove(); if (cidSugerido) tecAbrirFicha(cidSugerido); else tecAbrirSub() }
+  fundo.querySelector('#d-cancelar').onclick = voltar
+  fundo.onclick = ev => { if (ev.target === fundo) voltar() }
+  if (d) fundo.querySelector('#d-excluir').onclick = async () => {
+    if (!confirm('Excluir esta demanda?')) return
+    await db.from('tecnico_demanda').delete().eq('id', d.id)
+    await tecRecarregar(); voltar()
+  }
+  fundo.querySelector('#d-salvar').onclick = async () => {
+    const tipo = tecVal('d-tipo')
+    if (tipo === 'indicacao' && !tecVal('d-i-nome')) { alert('Escreva o nome de quem foi indicado'); return }
+    const status = tecVal('d-st')
+    const corpo = {
+      cliente_id: tecVal('d-cli'), tipo,
+      indicado_nome: tipo === 'indicacao' ? tecVal('d-i-nome') : null,
+      indicado_telefone: tipo === 'indicacao' ? tecVal('d-i-tel') : null,
+      indicado_municipio: tipo === 'indicacao' ? tecVal('d-i-mun') : null,
+      volume_estimado_t: tecVal('d-vol') || null, janela_estimada: tecVal('d-jan') || null,
+      cultura_alvo: tecVal('d-cult') || null, talhao_alvo: tecVal('d-talhao') || null,
+      argumento_tecnico: tecVal('d-arg') || null, resultado_id: tecVal('d-res') || null,
+      decisor: tecVal('d-dec') || null, objecao_esperada: tecVal('d-obj') || null, concorrente: tecVal('d-conc') || null,
+      status, responsavel_comercial: tecVal('d-resp') || null, retorno: tecVal('d-ret') || null, motivo_nao_conversao: tecVal('d-mot') || null
+    }
+    if (d) await db.from('tecnico_demanda').update(corpo).eq('id', d.id)
+    else {
+      corpo.codigo = await tecGerarCodigo('DEM')
+      if (tecOrdemStatusDem(status) >= 1) corpo.data_envio = hojeISO()
+      await db.from('tecnico_demanda').insert(corpo)
+    }
+    await tecRecarregar(); voltar()
+    tecToast(d ? 'Dossiê atualizado' : 'Demanda criada')
+  }
+}
+
+// ----- Formulário: Documento da Biblioteca -----
+function tecFormDoc (doc, cid) {
+  const e = doc || { grupo: 'Protocolos de acompanhamento', titulo: 'Novo documento', dono: PERFIL.nome || '', conteudo: '' }
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:760px;">
+    <h3>Biblioteca</h3>
+    <div class="campo"><label>Título</label><input id="b-tit" value="${esc(e.titulo || '')}"></div>
+    <div class="form-grade">
+      <div class="campo"><label>Grupo</label><select id="b-grupo">${TEC_GRUPOS_DOC.map(g => `<option ${e.grupo === g ? 'selected' : ''}>${esc(g)}</option>`).join('')}</select></div>
+      <div class="campo"><label>Dono</label><input id="b-dono" value="${esc(e.dono || '')}"></div>
+    </div>
+    <div class="campo"><label>Vínculo</label><select id="b-cli"><option value="">Material geral da equipe</option>${TEC.clientes.map(x => `<option value="${x.id}" ${e.cliente_id === x.id ? 'selected' : ''}>${esc(x.nome)}</option>`).join('')}</select></div>
+    <div class="campo"><label>Conteúdo</label><textarea id="b-cont" style="min-height:260px;">${esc(e.conteudo || '')}</textarea></div>
+    <div class="acoes">${doc ? `<button class="btn-secundario" id="b-excluir">excluir</button>` : ''}
+      <button class="btn" id="b-salvar" style="margin-left:auto;">salvar</button><button class="btn-secundario" id="b-cancelar">cancelar</button></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const voltar = () => { fundo.remove(); if (cid) tecAbrirFicha(cid); else tecAbrirSub() }
+  fundo.querySelector('#b-cancelar').onclick = voltar
+  fundo.onclick = ev => { if (ev.target === fundo) voltar() }
+  if (doc) fundo.querySelector('#b-excluir').onclick = async () => {
+    if (!confirm('Excluir "' + doc.titulo + '"?')) return
+    await db.from('tecnico_doc').delete().eq('id', doc.id)
+    await tecRecarregar(); voltar()
+  }
+  fundo.querySelector('#b-salvar').onclick = async () => {
+    const corpo = { titulo: tecVal('b-tit') || 'Sem título', grupo: tecVal('b-grupo'), dono: tecVal('b-dono') || null, cliente_id: tecVal('b-cli') || null, conteudo: tecVal('b-cont'), atualizado_em: new Date().toISOString() }
+    if (doc) await db.from('tecnico_doc').update(corpo).eq('id', doc.id)
+    else await db.from('tecnico_doc').insert(corpo)
+    await tecRecarregar(); voltar()
+    tecToast('Documento salvo')
+  }
+}
+
+// ----- Acompanhamento: Ciclo (kanban) / Demandas / Ocorrências -----
+function tecRenderAcompanhamento (alvo) {
+  const nOco = TEC.ocorrencias.filter(o => o.status !== 'resolvida').length
+  const nDem = TEC.demandas.filter(d => tecOrdemStatusDem(d.status) < 3).length
+  const subs = [['ciclo', 'Ciclo na safra', TEC.clientes.length], ['demandas', 'Demandas', nDem], ['ocorrencias', 'Ocorrências', nOco]]
+  alvo.innerHTML = `
+    <div class="filtros">${subs.map(s => `<button class="chip-filtro ${TEC_SUBACOMP === s[0] ? 'ativo' : ''}" data-subacomp="${s[0]}">${s[1]} (${s[2]})</button>`).join('')}</div>
+    <div id="tec-subacomp"></div>`
+  alvo.querySelectorAll('[data-subacomp]').forEach(b => { b.onclick = () => { TEC_SUBACOMP = b.dataset.subacomp; tecRenderAcompanhamento(alvo) } })
+  const area = $('#tec-subacomp')
+  if (TEC_SUBACOMP === 'ciclo') tecRenderCiclo(area)
+  if (TEC_SUBACOMP === 'demandas') tecRenderDemandas(area)
+  if (TEC_SUBACOMP === 'ocorrencias') tecRenderOcorrencias(area)
+}
+
+function tecRenderCiclo (area) {
+  area.innerHTML = `<p class="texto-dim2" style="margin:10px 0;">O ciclo do cliente na safra — não é funil de venda, arraste conforme o campo andar.</p>
+    <div class="tec-kanban" id="tec-kanban"></div>`
+  const kb = $('#tec-kanban')
+  kb.innerHTML = TEC_FASES.map(f => {
+    const naFase = TEC.clientes.filter(c => c.fase === f.id)
+    const ha = naFase.reduce((s, c) => s + tecAreaAplicadaHa(c.id), 0)
+    return `<div class="tec-col" data-fase="${f.id}" title="${esc(f.sig)}">
+      <div class="tec-col-head"><span>${f.nome}</span><span class="contagem">${naFase.length}</span></div>
+      <div class="tec-col-corpo">${naFase.map(tecCartaoCliente).join('') || '<p class="vazio" style="padding:8px 0;font-size:12px;">vazio</p>'}</div>
+      <div class="tec-col-pe"><span>${tecNHa(ha)} ha</span></div>
+    </div>`
+  }).join('')
+  kb.querySelectorAll('[data-abrir-cli]').forEach(el => { el.onclick = () => tecAbrirFicha(el.dataset.abrirCli) })
+  tecLigarArrasto(kb)
+}
+function tecCartaoCliente (c) {
+  const f = tecFarol(c), ha = tecAreaAplicadaHa(c.id)
+  return `<div class="tec-card" draggable="true" data-id="${c.id}" data-abrir-cli="${c.id}">
+    <h4>${esc(c.nome)}</h4>
+    <div class="m1">${esc(c.municipio || '—')} · ${esc(c.rota || '—')}</div>
+    <div class="m2">${ha ? tecNHa(ha) + ' ha aplicados' : 'sem aplicação'} · ${c.ultima_visita ? 'visita ' + fmtData(c.ultima_visita) : 'sem visita'}</div>
+    <div class="badges"><span class="tec-farol ${f.cor}"></span>${f.cor !== 'verde' ? `<span class="badge-${f.cor === 'vermelho' ? 'alerta' : 'atencao'}">${f.atraso == null ? 'sem visita' : f.atraso + 'd atraso'}</span>` : ''}</div>
+  </div>`
+}
+function tecPodeMover (c, destino) {
+  if (destino === 'aplicado' && !tecAplicDe(c.id).length) return 'Registre a aplicação antes de mover para Aplicado.'
+  if (destino === 'resultado' && !tecResultadosDe(c.id).some(r => tecNum(r.produtividade_obtida) > 0)) return 'Lance a produtividade antes de mover para Resultado apurado.'
+  if (destino === 'demanda') {
+    if (tecTemOcoAberta(c.id)) return 'Ocorrência aberta neste cliente — resolva antes de qualificar demanda.'
+    const ok = tecDemDe(c.id).some(d => tecNum(d.volume_estimado_t) > 0 && d.janela_estimada && d.argumento_tecnico)
+    if (!ok) return 'O dossiê precisa de volume, janela e argumento técnico antes de qualificar.'
+  }
+  return null
+}
+function tecLigarArrasto (kb) {
+  let arrastando = null
+  kb.querySelectorAll('.tec-card').forEach(el => {
+    el.ondragstart = e => { arrastando = el.dataset.id; e.dataTransfer.effectAllowed = 'move'; el.classList.add('arrastando') }
+    el.ondragend = () => el.classList.remove('arrastando')
+  })
+  kb.querySelectorAll('.tec-col').forEach(col => {
+    col.ondragover = e => { e.preventDefault(); col.classList.add('sobre') }
+    col.ondragleave = () => col.classList.remove('sobre')
+    col.ondrop = async e => {
+      e.preventDefault(); col.classList.remove('sobre')
+      const c = tecCli(arrastando), destino = col.dataset.fase
+      if (!c || c.fase === destino) return
+      const bloqueio = tecPodeMover(c, destino)
+      if (bloqueio) { alert(bloqueio); return }
+      await db.from('tecnico_cliente').update({ fase: destino, atualizado_por: PERFIL.pessoaId }).eq('id', c.id)
+      await tecRecarregar()
+    }
+  })
+}
+
+function tecRenderDemandas (area) {
+  area.innerHTML = `
+    <div class="filtros">
+      <div><label>Status</label><select id="tf-demstatus"><option value="">Todos</option>${TEC_STATUS_DEM.map(s => `<option value="${s.id}" ${TF.demStatus === s.id ? 'selected' : ''}>${s.nome}</option>`).join('')}</select></div>
+      <div><label>Tipo</label><select id="tf-demtipo"><option value="">Todos</option>${TEC_TIPOS_DEM.map(t => `<option value="${t.id}" ${TF.demTipo === t.id ? 'selected' : ''}>${t.nome}</option>`).join('')}</select></div>
+      <button class="btn-secundario" id="tec-exportar-csv">Exportar CSV pro CRM Comercial</button>
+      <button class="btn" id="tec-nova-demanda">+ Nova demanda</button>
+    </div>
+    <div class="panel" style="padding:0;"><div id="tec-lista-demandas" class="tabela-scroll"></div></div>`
+  $('#tf-demstatus').onchange = () => { TF.demStatus = $('#tf-demstatus').value; tecDesenharDemandas() }
+  $('#tf-demtipo').onchange = () => { TF.demTipo = $('#tf-demtipo').value; tecDesenharDemandas() }
+  $('#tec-nova-demanda').onclick = () => tecFormDemanda(null)
+  $('#tec-exportar-csv').onclick = tecExportarDemandasCSV
+  tecDesenharDemandas()
+}
+function tecDesenharDemandas () {
+  const lista = TEC.demandas.filter(d => (!TF.demStatus || d.status === TF.demStatus) && (!TF.demTipo || d.tipo === TF.demTipo))
+    .sort((a, b) => tecOrdemStatusDem(a.status) - tecOrdemStatusDem(b.status) || (b.criado_em || '').localeCompare(a.criado_em || ''))
+  $('#tec-lista-demandas').innerHTML = `<table><thead><tr><th>Status</th><th>Tipo</th><th>Cliente / indicado</th><th>Volume</th><th>Janela</th></tr></thead><tbody>
+    ${lista.map(d => {
+      const c = tecCli(d.cliente_id)
+      const alvo = d.tipo === 'indicacao' ? (d.indicado_nome || 'indicado sem nome') : (c ? c.nome : 'cliente removido')
+      return `<tr style="cursor:pointer;" data-abrir="${d.id}">
+        <td><span class="chip">${TEC_STATUS_DEM.find(s => s.id === d.status)?.nome}</span></td>
+        <td>${TEC_TIPOS_DEM.find(t => t.id === d.tipo)?.nome}</td>
+        <td><b>${esc(alvo)}</b> ${d.tipo !== 'indicacao' && !tecIntegravel(c) ? '<span class="badge-alerta">sem CPF/CNPJ</span>' : ''}</td>
+        <td class="num">${d.volume_estimado_t ? tecNT(d.volume_estimado_t) + ' t' : '—'}</td>
+        <td class="texto-dim2">${tecOu(d.janela_estimada)}</td></tr>`
+    }).join('') || `<tr><td colspan="5" class="vazio">Nenhuma demanda com esses filtros.</td></tr>`}
+  </tbody></table>`
+  $('#tec-lista-demandas').querySelectorAll('[data-abrir]').forEach(el => { el.onclick = () => tecFormDemanda(TEC.demandas.find(d => d.id === el.dataset.abrir)) })
+}
+function tecExportarDemandasCSV () {
+  if (!TEC.demandas.length) { alert('Nenhuma demanda para exportar'); return }
+  const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"'
+  const linhas = ['cpfCnpj;cliente;municipio;rota;tipo;volumeEstimadoT;janela;culturaAlvo;argumento;decisor;objecao;dataEnvio;status']
+  TEC.demandas.forEach(d => {
+    const c = tecCli(d.cliente_id)
+    linhas.push([
+      d.tipo === 'indicacao' ? '' : (tecIntegravel(c) ? c.cpf_cnpj : 'NAO_INTEGRAVEL'),
+      d.tipo === 'indicacao' ? (d.indicado_nome || '') : (c ? c.nome : ''),
+      d.tipo === 'indicacao' ? (d.indicado_municipio || '') : (c ? c.municipio : ''),
+      c ? c.rota : '', TEC_TIPOS_DEM.find(t => t.id === d.tipo)?.nome || d.tipo,
+      d.volume_estimado_t || '', d.janela_estimada || '', d.cultura_alvo || '', d.argumento_tecnico || '',
+      d.decisor || '', d.objecao_esperada || '', d.data_envio || '', TEC_STATUS_DEM.find(s => s.id === d.status)?.nome || d.status
+    ].map(q).join(';'))
+  })
+  const blob = new Blob(['\ufeff' + linhas.join('\n')], { type: 'text/csv;charset=utf-8' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob); a.download = 'crm-tecnico-demandas-' + hojeISO() + '.csv'
+  a.click(); URL.revokeObjectURL(a.href)
+}
+
+function tecRenderOcorrencias (area) {
+  area.innerHTML = `
+    <div class="filtros">
+      <div><label>Status</label><select id="tf-ocostatus">
+        <option value="abertas" ${TF.ocoStatus === 'abertas' ? 'selected' : ''}>Em aberto</option>
+        <option value="" ${TF.ocoStatus === '' ? 'selected' : ''}>Todas</option>
+        ${TEC_STATUS_OCO.map(s => `<option value="${s.id}" ${TF.ocoStatus === s.id ? 'selected' : ''}>${s.nome}</option>`).join('')}
+      </select></div>
+      <button class="btn" id="tec-nova-oco2">+ Abrir ocorrência</button>
+    </div>
+    <div class="panel" style="padding:0;"><div id="tec-lista-oco" class="tabela-scroll"></div></div>`
+  $('#tf-ocostatus').onchange = () => { TF.ocoStatus = $('#tf-ocostatus').value; tecDesenharOcorrencias() }
+  $('#tec-nova-oco2').onclick = () => tecFormOcorrencia(null)
+  tecDesenharOcorrencias()
+}
+function tecDesenharOcorrencias () {
+  const lista = TEC.ocorrencias.filter(o => TF.ocoStatus === '' ? true : TF.ocoStatus === 'abertas' ? o.status !== 'resolvida' : o.status === TF.ocoStatus)
+    .sort((a, b) => (tecDiasAberta(b) || 0) - (tecDiasAberta(a) || 0))
+  $('#tec-lista-oco').innerHTML = `<table><thead><tr><th>Status</th><th>Tipo</th><th>Cliente</th><th>Dias</th></tr></thead><tbody>
+    ${lista.map(o => { const c = tecCli(o.cliente_id)
+      return `<tr style="cursor:pointer;" data-abrir="${o.id}">
+        <td><span class="${o.status === 'resolvida' ? 'badge-bom' : 'badge-alerta'}">${TEC_STATUS_OCO.find(s => s.id === o.status)?.nome}</span></td>
+        <td>${esc(o.tipo)}</td><td><b>${c ? esc(c.nome) : 'removido'}</b> <span class="texto-dim2">${esc(o.descricao || '')}</span></td>
+        <td class="texto-dim2">${o.status === 'resolvida' ? 'fechada ' + fmtData(o.data_resolucao) : tecDiasAberta(o) + 'd' + (tecEstourouSLA(o) ? ' · SLA estourado' : '')}</td></tr>` }).join('') ||
+      `<tr><td colspan="4" class="vazio">Nada aqui.</td></tr>`}
+  </tbody></table>`
+  $('#tec-lista-oco').querySelectorAll('[data-abrir]').forEach(el => { el.onclick = () => tecFormOcorrencia(TEC.ocorrencias.find(o => o.id === el.dataset.abrir)) })
+}
+
+// ----- Agenda -----
+const TEC_MESES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
+function tecRenderAgenda (alvo) {
+  alvo.innerHTML = `
+    <div class="cabeca-secao">
+      <h3 style="font-family:var(--serif);font-size:16px;" id="tec-cal-mes"></h3>
+      <div class="acoes" style="margin:0;">
+        <button class="btn-secundario mini" id="tec-mes-ant">‹ Anterior</button>
+        <button class="btn-secundario mini" id="tec-mes-hoje">Hoje</button>
+        <button class="btn-secundario mini" id="tec-mes-prox">Próximo ›</button>
+      </div>
+    </div>
+    <div class="tec-cal-sem"><div>Dom</div><div>Seg</div><div>Ter</div><div>Qua</div><div>Qui</div><div>Sex</div><div>Sáb</div></div>
+    <div class="tec-cal" id="tec-cal"></div>
+    <div class="panel" style="padding:18px;margin-top:20px;">
+      <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 4px;">Roteiro da semana — quem tá mais atrasado</h3>
+      <div id="tec-roteiro"></div>
+    </div>`
+  $('#tec-mes-ant').onclick = () => { TEC_CAL_REF.setMonth(TEC_CAL_REF.getMonth() - 1); tecRenderAgenda(alvo) }
+  $('#tec-mes-prox').onclick = () => { TEC_CAL_REF.setMonth(TEC_CAL_REF.getMonth() + 1); tecRenderAgenda(alvo) }
+  $('#tec-mes-hoje').onclick = () => { TEC_CAL_REF = new Date(); tecRenderAgenda(alvo) }
+  tecDesenharCalendario()
+  tecDesenharRoteiro()
+}
+function tecDesenharCalendario () {
+  const ano = TEC_CAL_REF.getFullYear(), mes = TEC_CAL_REF.getMonth()
+  $('#tec-cal-mes').textContent = TEC_MESES[mes] + ' ' + ano
+  const primeiro = new Date(ano, mes, 1)
+  const inicio = new Date(primeiro); inicio.setDate(inicio.getDate() - primeiro.getDay())
+  const hoje = hojeISO()
+  let html = ''
+  for (let i = 0; i < 42; i++) {
+    const d = new Date(inicio); d.setDate(inicio.getDate() + i)
+    const iso = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0')
+    const fora = d.getMonth() !== mes
+    const doDia = TEC.visitas.filter(v => v.data === iso)
+    html += `<div class="tec-dia ${fora ? 'fora' : ''} ${iso === hoje ? 'hoje' : ''}" data-dia="${iso}">
+      <span class="num">${d.getDate()}</span>
+      ${doDia.map(v => { const c = tecCli(v.cliente_id); const atras = !v.realizada && v.data < hoje
+        return `<span class="tec-pub ${v.realizada ? 'feito' : ''} ${atras ? 'atrasado' : ''}" data-abrir-cli-cal="${v.cliente_id}" title="${esc(c ? c.nome : '')}">${esc(c ? c.nome : 'visita')}</span>` }).join('')}
+    </div>`
+  }
+  $('#tec-cal').innerHTML = html
+  $('#tec-cal').querySelectorAll('[data-dia]').forEach(el => { el.onclick = () => tecNovaVisitaDoDia(el.dataset.dia) })
+  $('#tec-cal').querySelectorAll('[data-abrir-cli-cal]').forEach(el => { el.onclick = ev => { ev.stopPropagation(); tecAbrirFicha(el.dataset.abrirCliCal) } })
+}
+function tecNovaVisitaDoDia (iso) {
+  if (!TEC.clientes.length) { alert('Cadastre um cliente antes'); return }
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>Nova visita em ${fmtData(iso)}</h3>
+    <div class="campo"><label>Cliente</label><select id="g-cli">${TEC.clientes.slice().sort((a, b) => a.nome.localeCompare(b.nome)).map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('')}</select></div>
+    <div class="acoes"><button class="btn" id="g-continuar">continuar</button><button class="btn-secundario" id="g-cancelar">cancelar</button></div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.querySelector('#g-cancelar').onclick = () => fundo.remove()
+  fundo.onclick = ev => { if (ev.target === fundo) fundo.remove() }
+  fundo.querySelector('#g-continuar').onclick = () => { const cid = tecVal('g-cli'); fundo.remove(); tecFormVisita(cid, iso) }
+}
+function tecDesenharRoteiro () {
+  const pendentes = TEC.clientes.filter(c => tecCadenciaDe(c.fase) != null && tecFarol(c).cor !== 'verde')
+    .sort((a, b) => tecOrdemAtraso(b) - tecOrdemAtraso(a))
+  $('#tec-roteiro').innerHTML = pendentes.length ? pendentes.slice(0, 20).map(c => {
+    const f = tecFarol(c)
+    return `<div class="passo" data-abrir-cli3="${c.id}" style="cursor:pointer;">
+      <span class="quando"><span class="tec-farol ${f.cor}"></span></span>
+      <span style="flex:1;"><b>${esc(c.nome)}</b> <span class="texto-dim2">· ${esc(c.municipio || '—')} · ${tecNHa(tecAreaAplicadaHa(c.id))} ha</span></span>
+      <span class="texto-dim2">${f.atraso == null ? 'sem visita' : f.atraso + 'd'}</span></div>`
+  }).join('') : '<p class="vazio">Nenhuma visita em atraso.</p>'
+  $('#tec-roteiro').querySelectorAll('[data-abrir-cli3]').forEach(el => { el.onclick = () => tecAbrirFicha(el.dataset.abrirCli3) })
 }
 
 // Histórico individual (leads arquivados só do próprio vendedor) foi
