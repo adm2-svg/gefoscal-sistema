@@ -262,11 +262,17 @@ tbody tr:hover { background: var(--hover-bg); }
 .coluna-kanban h4 { font-family:var(--serif); font-size:14px; margin:2px 4px 10px; display:flex; justify-content:space-between; }
 .coluna-kanban .grupo-resp { font-size:10.5px; text-transform:uppercase; letter-spacing:.4px;
                               color:var(--dim2); margin:10px 4px 4px; }
-.card-tarefa { background:var(--card); border:1px solid var(--line); border-radius:6px;
+.card-tarefa { position:relative; background:var(--card); border:1px solid var(--line); border-radius:6px;
                padding:9px 10px; margin-bottom:7px; font-size:13px; cursor:pointer; }
 .card-tarefa:hover { border-color:var(--line2); }
 .card-tarefa .proj { font-size:11px; color:var(--dim2); margin-top:3px; }
 .card-tarefa .rodape-t { display:flex; justify-content:space-between; align-items:center; margin-top:6px; }
+.card-tarefa .alerta-dot { position:absolute; top:10px; right:10px; width:8px; height:8px; border-radius:50%; }
+.card-tarefa .alerta-dot.ok { background:var(--good-text); box-shadow:0 0 0 3px rgba(var(--good-rgb),.18); }
+.card-tarefa .alerta-dot.atencao { background:var(--warn-text); box-shadow:0 0 0 3px rgba(var(--warn-rgb),.18); }
+.card-tarefa .alerta-dot.atrasado { background:var(--critico-text); box-shadow:0 0 0 3px rgba(var(--critico-rgb),.18); }
+.painel-funil-kpis { margin-bottom:18px; }
+.painel-funil-secao-titulo { font-family:var(--serif); font-size:15px; margin:22px 0 12px; display:flex; align-items:center; justify-content:space-between; gap:10px; }
 .prio { font-size:9.5px; padding:2px 8px; border-radius:20px; text-transform:uppercase; letter-spacing:.3px; }
 .prio.ALTA  { border:1px solid var(--warn-text); color:var(--warn-text); background:rgba(var(--warn-rgb),.13); }
 .prio.MEDIA { border:1px solid var(--line2); color:var(--dim); background:var(--surface2); }
@@ -6580,7 +6586,7 @@ async function paginaCrm () {
   CRM_CACHE.vendedores = CRM_CACHE.pessoas.filter(p => p.eh_vendedor)
   if (!CRM_CACHE.vendedores.length) CRM_CACHE.vendedores = CRM_CACHE.pessoas
 
-  const abas = [['painel', 'Painel'], ['funil', 'Funil'], ['progresso', 'Progresso'], ['historico', 'Histórico']]
+  const abas = [['painel', 'Painel'], ['progresso', 'Progresso'], ['historico', 'Histórico']]
   if (gerencia) abas.push(['gestao', 'Gestão'])
 
   const inicial = CRM_SUBABA_INICIAL && abas.some(a => a[0] === CRM_SUBABA_INICIAL) ? CRM_SUBABA_INICIAL : abas[0][0]
@@ -6605,8 +6611,7 @@ function abrirCrm (sub, editavel, gerencia) {
   const alvo = $('#sub-crm')
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
   $('#kpis').innerHTML = ''
-  if (sub === 'painel') crmPainel(alvo, gerencia)
-  if (sub === 'funil') crmFunil(alvo, editavel, gerencia)
+  if (sub === 'painel') crmPainelFunil(alvo, editavel, gerencia)
   if (sub === 'atribuir') crmAtribuir(alvo)
   if (sub === 'progresso') crmLeads(alvo, editavel, gerencia)
   if (sub === 'historico') crmHistorico(alvo, editavel, gerencia)
@@ -6629,25 +6634,114 @@ function filtrarPorDono (q, gerencia) {
   return q.eq('vendedor_id', PERFIL.pessoaId)
 }
 
-// ----- Funil (kanban por etapa) -----
-async function crmFunil (alvo, editavel, gerencia) {
-  const { data, error } = await filtrarPorDono(db.from('lead').select(selLead), gerencia)
-    .order('atualizado_em', { ascending: false }).limit(500)
-  if (faltaMigracao(error) || error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-  CRM_CACHE.leads = data || []
-  renderFunil(alvo, editavel, gerencia)
+// ----- Painel + Funil (KPIs, gráficos e kanban numa página só) -----
+// Antes eram duas abas separadas (Painel só com números, Funil só com o
+// kanban). Fundidas aqui: primeiro a realidade do vendedor em números
+// (o que ele tem, como está indo, onde precisa melhorar), depois o
+// kanban logo abaixo pra ele já trabalhar sem trocar de aba.
+async function crmPainelFunil (alvo, editavel, gerencia) {
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+
+  const [painelRes, funilRes] = await Promise.all([
+    filtrarPorDono(db.from('lead').select(`
+      id, etapa, origem, valor_estimado, vendedor_id, criado_em, atualizado_em, vendedor:vendedor_id ( nome )
+    `), gerencia).order('criado_em', { ascending: false }).limit(1000),
+    filtrarPorDono(db.from('lead').select(selLead), gerencia).order('atualizado_em', { ascending: false }).limit(500)
+  ])
+
+  if (faltaMigracao(painelRes.error) || painelRes.error) { alvo.innerHTML = `<p class="vazio">${esc(painelRes.error.message)}</p>`; return }
+  if (faltaMigracao(funilRes.error) || funilRes.error) { alvo.innerHTML = `<p class="vazio">${esc(funilRes.error.message)}</p>`; return }
+
+  const listaPainel = painelRes.data || []
+  CRM_CACHE.leads = funilRes.data || []
+
+  alvo.innerHTML = ''
+  renderPainelResumo(alvo, listaPainel, gerencia)
+  await crmCardNovoPedido(alvo, gerencia)
+
+  const tituloFunil = document.createElement('div')
+  tituloFunil.className = 'painel-funil-secao-titulo'
+  tituloFunil.innerHTML = `<span>Funil de vendas</span>`
+  alvo.appendChild(tituloFunil)
+
+  const areaFunil = document.createElement('div')
+  alvo.appendChild(areaFunil)
+  renderFunil(areaFunil, editavel, gerencia)
+}
+
+// KPIs + gráficos — mesma lógica que já existia em crmPainel, isolada
+// pra poder desenhar acima do kanban na mesma aba.
+function renderPainelResumo (alvo, lista, gerencia) {
+  const emAberto = lista.filter(l => ETAPAS_LEAD_ABERTAS.includes(l.etapa))
+  const ganhos = lista.filter(l => l.etapa === 'GANHO')
+  const perdidos = lista.filter(l => l.etapa === 'PERDIDO')
+  const fechados = ganhos.length + perdidos.length
+  const taxaConversao = fechados ? Math.round((ganhos.length / fechados) * 100) : null
+  const valorPipeline = emAberto.reduce((s, l) => s + Number(l.valor_estimado || 0), 0)
+  const parados = emAberto.filter(l => (diasDesde(l.atualizado_em) ?? 0) > 7).length
+
+  const porOrigem = {}
+  lista.forEach(l => { const o = l.origem || 'não informado'; porOrigem[o] = (porOrigem[o] || 0) + 1 })
+  const barrasOrigem = Object.entries(porOrigem).sort((a, b) => b[1] - a[1]).map(([rotulo, valor]) => ({ rotulo, valor }))
+
+  const donutEtapa = ETAPAS_LEAD.map(e => ({ rotulo: ROTULO_ETAPA_LEAD[e], valor: lista.filter(l => l.etapa === e).length }))
+
+  let blocoVendedor = ''
+  if (gerencia) {
+    const porVendedor = {}
+    emAberto.forEach(l => { const n = l.vendedor?.nome ?? 'sem vendedor'; porVendedor[n] = (porVendedor[n] || 0) + 1 })
+    const barrasVendedor = Object.entries(porVendedor).sort((a, b) => b[1] - a[1]).map(([rotulo, valor]) => ({ rotulo, valor }))
+    blocoVendedor = `<div class="panel" style="padding:18px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Leads em aberto por vendedor</h3>
+        ${barrasHorizontais(barrasVendedor, { unidade: '', casas: 0 })}
+      </div>`
+  }
+
+  const painel = document.createElement('div')
+  painel.className = 'painel-funil-kpis'
+  painel.innerHTML = `
+    <div class="resumo-topo">
+      ${[['Leads em aberto', emAberto.length, ''], ['Valor em funil', 'R$ ' + fmtNum(valorPipeline), ''],
+         ['Taxa de conversão', taxaConversao != null ? taxaConversao + '%' : '—', ''],
+         ['Parados há +7 dias', parados, parados ? 'alerta' : (emAberto.length ? 'bom' : '')]]
+        .map(([rot, val, cl]) => `<div class="bloco ${cl}"><div class="rot">${rot}</div><div class="val">${val}</div></div>`).join('')}
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;" class="grade-painel-comb">
+      ${blocoVendedor}
+      <div class="panel" style="padding:18px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Por etapa (histórico)</h3>
+        ${svgDonut(donutEtapa)}
+      </div>
+    </div>
+    <div class="panel" style="padding:18px;margin-top:16px;">
+      <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Leads por origem</h3>
+      ${barrasHorizontais(barrasOrigem, { unidade: '', casas: 0 })}
+    </div>`
+  alvo.appendChild(painel)
+}
+
+// dias parado -> nível de alerta visual do card (verde/amarelo/vermelho)
+function nivelAlertaLead (l) {
+  if (['GANHO', 'PERDIDO'].includes(l.etapa)) return null
+  const parado = diasDesde(l.atualizado_em)
+  if (parado == null) return 'ok'
+  if (parado > 15) return 'atrasado'
+  if (parado > 7) return 'atencao'
+  return 'ok'
 }
 
 function renderFunil (alvo, editavel, gerencia) {
   const lista = CRM_CACHE.leads
   const cartao = l => {
     const parado = diasDesde(l.atualizado_em)
+    const alerta = nivelAlertaLead(l)
     return `<div class="card-tarefa" data-lead="${l.id}">
+      ${alerta ? `<span class="alerta-dot ${alerta}" title="${alerta === 'atrasado' ? 'Parado há mais de 15 dias' : alerta === 'atencao' ? 'Parado há mais de 7 dias' : 'Dentro do prazo'}"></span>` : ''}
       <div>${esc(l.nome)}</div>
       ${l.municipio || l.uf ? `<div class="proj">${esc([l.municipio, l.uf].filter(Boolean).join(' / '))}</div>` : ''}
       <div class="rodape-t">
         <span class="texto-dim2" style="font-size:11px;">${gerencia ? esc(l.vendedor?.nome ?? 'sem vendedor') : (l.valor_estimado ? 'R$ ' + fmtNum(l.valor_estimado) : '')}</span>
-        <span class="texto-dim2" style="font-size:11px;${parado != null && parado > 7 && !['GANHO', 'PERDIDO'].includes(l.etapa) ? 'color:var(--warn-text);font-weight:600;' : ''}">
+        <span class="texto-dim2" style="font-size:11px;${alerta === 'atencao' ? 'color:var(--warn-text);font-weight:600;' : alerta === 'atrasado' ? 'color:var(--critico-text);font-weight:600;' : ''}">
           ${gerencia && l.valor_estimado ? 'R$ ' + fmtNum(l.valor_estimado) : (parado != null ? `${parado}d parado` : '')}</span>
       </div></div>`
   }
@@ -6663,9 +6757,9 @@ function renderFunil (alvo, editavel, gerencia) {
     </div>`
 
   alvo.querySelectorAll('[data-lead]').forEach(el => {
-    el.onclick = () => formLead(lista.find(l => l.id === el.dataset.lead), editavel, gerencia, () => abrirCrm('funil', editavel, gerencia))
+    el.onclick = () => formLead(lista.find(l => l.id === el.dataset.lead), editavel, gerencia, () => abrirCrm('painel', editavel, gerencia))
   })
-  if (podeNovo) $('#crm-novo').onclick = () => formLead(null, editavel, gerencia, () => abrirCrm('funil', editavel, gerencia))
+  if (podeNovo) $('#crm-novo').onclick = () => formLead(null, editavel, gerencia, () => abrirCrm('painel', editavel, gerencia))
 }
 
 // ----- Progresso (lista/busca, com filtro por cliente) -----
@@ -6748,60 +6842,6 @@ async function crmLeads (alvo, editavel, gerencia) {
   $('#cl-busca').oninput = aplicarBusca
   if (editavel && gerencia) $('#cl-novo').onclick = () => formLead(null, editavel, gerencia, buscar)
   buscar()
-}
-
-// ----- Painel (KPIs e distribuição) -----
-async function crmPainel (alvo, gerencia) {
-  const { data, error } = await filtrarPorDono(db.from('lead').select(`
-    id, etapa, origem, valor_estimado, vendedor_id, criado_em, atualizado_em, vendedor:vendedor_id ( nome )
-  `), gerencia).order('criado_em', { ascending: false }).limit(1000)
-  if (faltaMigracao(error)) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-  const lista = data || []
-
-  const emAberto = lista.filter(l => ETAPAS_LEAD_ABERTAS.includes(l.etapa))
-  const ganhos = lista.filter(l => l.etapa === 'GANHO')
-  const perdidos = lista.filter(l => l.etapa === 'PERDIDO')
-  const fechados = ganhos.length + perdidos.length
-  const taxaConversao = fechados ? Math.round((ganhos.length / fechados) * 100) : null
-  const valorPipeline = emAberto.reduce((s, l) => s + Number(l.valor_estimado || 0), 0)
-  const parados = emAberto.filter(l => (diasDesde(l.atualizado_em) ?? 0) > 7).length
-
-  const porOrigem = {}
-  lista.forEach(l => { const o = l.origem || 'não informado'; porOrigem[o] = (porOrigem[o] || 0) + 1 })
-  const barrasOrigem = Object.entries(porOrigem).sort((a, b) => b[1] - a[1]).map(([rotulo, valor]) => ({ rotulo, valor }))
-
-  const donutEtapa = ETAPAS_LEAD.map(e => ({ rotulo: ROTULO_ETAPA_LEAD[e], valor: lista.filter(l => l.etapa === e).length }))
-
-  let blocoVendedor = ''
-  if (gerencia) {
-    const porVendedor = {}
-    emAberto.forEach(l => { const n = l.vendedor?.nome ?? 'sem vendedor'; porVendedor[n] = (porVendedor[n] || 0) + 1 })
-    const barrasVendedor = Object.entries(porVendedor).sort((a, b) => b[1] - a[1]).map(([rotulo, valor]) => ({ rotulo, valor }))
-    blocoVendedor = `<div class="panel" style="padding:18px;">
-        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Leads em aberto por vendedor</h3>
-        ${barrasHorizontais(barrasVendedor, { unidade: '', casas: 0 })}
-      </div>`
-  }
-
-  alvo.innerHTML = `
-    <div class="resumo-topo" style="margin-bottom:16px;">
-      ${[['Leads em aberto', emAberto.length, ''], ['Valor em funil', 'R$ ' + fmtNum(valorPipeline), ''],
-         ['Taxa de conversão', taxaConversao != null ? taxaConversao + '%' : '—', ''], ['Parados há +7 dias', parados, parados ? 'alerta' : '']]
-        .map(([rot, val, cl]) => `<div class="bloco ${cl}"><div class="rot">${rot}</div><div class="val">${val}</div></div>`).join('')}
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;" class="grade-painel-comb">
-      ${blocoVendedor}
-      <div class="panel" style="padding:18px;">
-        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Por etapa (histórico)</h3>
-        ${svgDonut(donutEtapa)}
-      </div>
-    </div>
-    <div class="panel" style="padding:18px;margin-top:16px;">
-      <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Leads por origem</h3>
-      ${barrasHorizontais(barrasOrigem, { unidade: '', casas: 0 })}
-    </div>`
-
-  await crmCardNovoPedido(alvo, gerencia)
 }
 
 // ----- Card "Novo pedido" no Painel do CRM -----
@@ -7106,6 +7146,18 @@ function formLead (l, editavel, gerencia, aoFechar) {
   if (editavel) fundo.querySelector('#ld-salvar').onclick = async () => {
     const nome = fundo.querySelector('#ld-nome').value.trim()
     if (!nome) { aviso('Escreva o nome do lead.'); return }
+
+    // só checa duplicidade em lead NOVO (nunca salvo ainda) — editar um
+    // lead que já existe não precisa, porque o próprio já é o "dono"
+    if (!l) {
+      const telefone = fundo.querySelector('#ld-telefone').value.trim()
+      const { data: dup } = await db.rpc('verificar_lead_duplicado', { p_nome: nome, p_telefone: telefone || null })
+      const achado = Array.isArray(dup) ? dup[0] : dup
+      if (achado?.existe) {
+        if (!confirm(`Já existe um cliente em atendimento com esse nome/telefone pelo setor ${achado.setor || 'comercial'}.\n\nQuer continuar mesmo assim?`)) return
+      }
+    }
+
     const novaEtapa = fundo.querySelector('#ld-etapa').value
     const corpo = {
       nome,
