@@ -18085,14 +18085,18 @@ let MKT_CAL_ANO = new Date().getFullYear()
 let MKT_CAL_MES_ABERTO = null
 
 async function mktCalendario (alvo, editavel) {
-  const { data } = await db.from('marketing_card').select('*').not('data_publicacao', 'is', null).order('data_publicacao')
+  const [{ data }, { data: datasRelevantes }] = await Promise.all([
+    db.from('marketing_card').select('*').not('data_publicacao', 'is', null).order('data_publicacao'),
+    db.from('marketing_data_relevante').select('*').order('mes').order('dia')
+  ])
   const itens = data || []
-  renderMktCalendario(alvo, itens, editavel)
+  renderMktCalendario(alvo, itens, datasRelevantes || [], editavel)
 }
 
-function renderMktCalendario (alvo, itens, editavel) {
+function renderMktCalendario (alvo, itens, datasRelevantes, editavel) {
   const itensDoAno = itens.filter(c => c.data_publicacao?.slice(0, 4) === String(MKT_CAL_ANO))
   const porMes = Array.from({ length: 12 }, (_, i) => itensDoAno.filter(c => Number(c.data_publicacao.slice(5, 7)) === i + 1))
+  const relevantesPorMes = Array.from({ length: 12 }, (_, i) => datasRelevantes.filter(d => d.mes === i + 1))
 
   alvo.innerHTML = `
     <div class="cabeca-secao" style="margin-bottom:16px;">
@@ -18109,31 +18113,36 @@ function renderMktCalendario (alvo, itens, editavel) {
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:20px;">
       ${NOMES_MES_MKT.map((nome, i) => {
         const qtd = porMes[i].length
+        const qtdRelevantes = relevantesPorMes[i].length
         const orgCount = porMes[i].filter(c => c.tipo === 'ORGANICO').length
         const pagoCount = porMes[i].filter(c => c.tipo === 'PAGO').length
+        const temAlgo = qtd || qtdRelevantes
         return `<div class="panel mes-cal-mkt" data-mes="${i}" style="padding:16px;cursor:pointer;text-align:center;
-          border-color:${qtd ? 'var(--rust)' : 'var(--line)'};">
+          border-color:${temAlgo ? 'var(--rust)' : 'var(--line)'};">
           <div style="font-family:var(--serif);font-size:16px;">${nome}</div>
-          <div style="font-size:26px;font-family:var(--serif);margin-top:6px;color:${qtd ? 'var(--txt)' : 'var(--dim2)'};">${qtd}</div>
-          <div class="texto-dim2" style="font-size:10.5px;margin-top:2px;">${qtd ? `${orgCount} orgânico · ${pagoCount} pago` : 'sem planejamento'}</div>
+          <div style="font-size:26px;font-family:var(--serif);margin-top:6px;color:${temAlgo ? 'var(--txt)' : 'var(--dim2)'};">${qtd}</div>
+          <div class="texto-dim2" style="font-size:10.5px;margin-top:2px;">
+            ${qtd ? `${orgCount} orgânico · ${pagoCount} pago` : 'sem planejamento'}
+            ${qtdRelevantes ? `<br>📅 ${qtdRelevantes} data${qtdRelevantes > 1 ? 's' : ''} relevante${qtdRelevantes > 1 ? 's' : ''}` : ''}</div>
         </div>`
       }).join('')}
     </div>
     <div id="mkc-detalhe"></div>`
 
-  $('#mkc-ano-anterior').onclick = () => { MKT_CAL_ANO--; MKT_CAL_MES_ABERTO = null; renderMktCalendario(alvo, itens, editavel) }
-  $('#mkc-ano-seguinte').onclick = () => { MKT_CAL_ANO++; MKT_CAL_MES_ABERTO = null; renderMktCalendario(alvo, itens, editavel) }
+  $('#mkc-ano-anterior').onclick = () => { MKT_CAL_ANO--; MKT_CAL_MES_ABERTO = null; renderMktCalendario(alvo, itens, datasRelevantes, editavel) }
+  $('#mkc-ano-seguinte').onclick = () => { MKT_CAL_ANO++; MKT_CAL_MES_ABERTO = null; renderMktCalendario(alvo, itens, datasRelevantes, editavel) }
   alvo.querySelectorAll('[data-mes]').forEach(el => {
-    el.onclick = () => { MKT_CAL_MES_ABERTO = Number(el.dataset.mes); renderMktDetalheMes(alvo, itens, editavel) }
+    el.onclick = () => { MKT_CAL_MES_ABERTO = Number(el.dataset.mes); renderMktDetalheMes(alvo, itens, datasRelevantes, editavel) }
   })
 
-  if (MKT_CAL_MES_ABERTO !== null) renderMktDetalheMes(alvo, itens, editavel)
+  if (MKT_CAL_MES_ABERTO !== null) renderMktDetalheMes(alvo, itens, datasRelevantes, editavel)
 }
 
-function renderMktDetalheMes (alvo, itens, editavel) {
+function renderMktDetalheMes (alvo, itens, datasRelevantes, editavel) {
   const mes = MKT_CAL_MES_ABERTO
   const doMes = itens.filter(c => c.data_publicacao?.slice(0, 4) === String(MKT_CAL_ANO) && Number(c.data_publicacao.slice(5, 7)) === mes + 1)
     .sort((a, b) => a.data_publicacao.localeCompare(b.data_publicacao))
+  const relevantesDoMes = datasRelevantes.filter(d => d.mes === mes + 1).sort((a, b) => a.dia - b.dia)
 
   const linhas = doMes.map(c => `<div class="passo">
       <span class="quando">${c.data_publicacao.slice(8, 10)}/${String(mes + 1).padStart(2, '0')}</span>
@@ -18145,6 +18154,14 @@ function renderMktDetalheMes (alvo, itens, editavel) {
       <span class="${c.tipo === 'PAGO' ? 'badge-bom' : 'chip'}" style="margin-left:6px;">${c.tipo === 'PAGO' ? 'pago' : 'orgânico'}</span>
     </div>`).join('')
 
+  const linhasRelevantes = relevantesDoMes.map(d => `<div class="passo">
+      <span class="quando">${String(d.dia).padStart(2, '0')}/${String(mes + 1).padStart(2, '0')}</span>
+      <span style="flex:1;">
+        <b>📅 ${esc(d.titulo)}</b>
+        ${d.orientacao ? `<div class="texto-dim2" style="font-size:11.5px;margin-top:2px;">${esc(d.orientacao)}</div>` : ''}
+      </span>
+    </div>`).join('')
+
   $('#mkc-detalhe').innerHTML = `
     <div class="panel" style="padding:20px;">
       <div class="cabeca-secao">
@@ -18154,16 +18171,26 @@ function renderMktDetalheMes (alvo, itens, editavel) {
           <button class="btn-secundario mini" id="mkc-fechar-mes">fechar</button>
         </div>
       </div>
-      <p class="texto-dim2" style="font-size:12px;margin:2px 0 14px;">${doMes.length} planejamento(s) nesse mês.</p>
-      ${linhas || '<p class="vazio">Nada planejado pra esse mês ainda — adiciona pelo Quadro.</p>'}
+      <p class="texto-dim2" style="font-size:12px;margin:2px 0 14px;">${doMes.length} planejamento(s) do Quadro · ${relevantesDoMes.length} data(s) relevante(s) do mês.</p>
+      ${relevantesDoMes.length ? `<div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;margin:14px 0 6px;">Datas relevantes do mês</div>${linhasRelevantes}` : ''}
+      ${doMes.length ? `<div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;margin:14px 0 6px;">Planejamento (Quadro)</div>${linhas}` : ''}
+      ${!doMes.length && !relevantesDoMes.length ? '<p class="vazio">Nada pra esse mês ainda — adiciona pelo Quadro.</p>' : ''}
     </div>`
 
-  $('#mkc-fechar-mes').onclick = () => { MKT_CAL_MES_ABERTO = null; renderMktCalendario(alvo, itens, editavel) }
-  $('#mkc-imprimir').onclick = () => mktImprimirPlanejamentoMes(doMes, mes)
+  $('#mkc-fechar-mes').onclick = () => { MKT_CAL_MES_ABERTO = null; renderMktCalendario(alvo, itens, datasRelevantes, editavel) }
+  $('#mkc-imprimir').onclick = () => mktImprimirPlanejamentoMes(doMes, relevantesDoMes, mes)
 }
 
-function mktImprimirPlanejamentoMes (doMes, mes) {
-  const corpo = doMes.length ? `<table style="width:100%;border-collapse:collapse;">
+function mktImprimirPlanejamentoMes (doMes, relevantesDoMes, mes) {
+  const tabelaRelevantes = relevantesDoMes.length ? `<h3>Datas relevantes do mês</h3>
+    <table style="width:100%;border-collapse:collapse;margin-bottom:16px;">
+      <thead><tr><th>Data</th><th>Data comemorativa</th><th>Orientação de conteúdo</th></tr></thead>
+      <tbody>${relevantesDoMes.map(d => `<tr>
+        <td>${String(d.dia).padStart(2, '0')}/${String(mes + 1).padStart(2, '0')}</td>
+        <td>${esc(d.titulo)}</td><td>${esc(d.orientacao ?? '—')}</td>
+      </tr>`).join('')}</tbody></table>` : ''
+
+  const tabelaQuadro = doMes.length ? `<h3>Planejamento (Quadro)</h3><table style="width:100%;border-collapse:collapse;">
       <thead><tr><th>Data</th><th>Título</th><th>Canal</th><th>Responsável</th><th>Tipo</th><th>Status</th></tr></thead>
       <tbody>
         ${doMes.map(c => `<tr>
@@ -18172,7 +18199,9 @@ function mktImprimirPlanejamentoMes (doMes, mes) {
           <td>${c.tipo === 'PAGO' ? 'Pago' : 'Orgânico'}</td>
           <td>${COLUNAS_QUADRO_MKT.find(x => x[0] === c.coluna)?.[1] ?? c.coluna}</td>
         </tr>`).join('')}
-      </tbody></table>` : '<p>Nenhum planejamento nesse mês.</p>'
+      </tbody></table>` : ''
+
+  const corpo = (tabelaRelevantes + tabelaQuadro) || '<p>Nada cadastrado nesse mês.</p>'
 
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
