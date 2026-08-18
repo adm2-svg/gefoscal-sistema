@@ -315,6 +315,8 @@ tbody tr:hover { background: var(--hover-bg); }
 .tag-aging { font-size:11px; padding:2px 8px; border-radius:20px; white-space:nowrap; }
 .chip-filtro { border:1px solid var(--line2); background:var(--surface2); color:var(--dim); border-radius:20px;
   padding:8px 16px; font-size:12.5px; font-weight:600; cursor:pointer; }
+.mes-cal-mkt { transition:.15s ease; }
+.mes-cal-mkt:hover { transform:translateY(-2px); box-shadow:0 8px 20px rgba(0,0,0,.25); border-color:var(--rust) !important; }
 .chip-filtro.ativo { background:var(--rust); border-color:var(--rust); color:#fff; }
 
 /* ---- Dashboard Diretor ---- */
@@ -17569,7 +17571,7 @@ async function paginaMarketing () {
   const editavel = podeEditar('marketing')
   $('#subtitulo-pagina').textContent = 'Redes sociais, conteúdo e mercado'
   const area = areaLivre()
-  const abas = [['visao', 'Painel'], ['quadro', 'Quadro'], ['redes', 'Redes Sociais'], ['mercado', 'Mercado'], ['docs', 'Docs'], ['aniversariantes', 'Aniversariantes']]
+  const abas = [['visao', 'Painel'], ['quadro', 'Quadro'], ['calendario', 'Calendário'], ['redes', 'Redes Sociais'], ['mercado', 'Mercado'], ['docs', 'Docs'], ['aniversariantes', 'Aniversariantes']]
   area.innerHTML = `
     <div class="subabas">${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}</div>
     <div id="sub-marketing"></div>`
@@ -17590,6 +17592,7 @@ function abrirMarketing (sub, editavel) {
   if (sub === 'mercado') mktMercado(alvo)
   if (sub === 'docs') mktDocs(alvo, editavel)
   if (sub === 'quadro') mktQuadro(alvo, editavel)
+  if (sub === 'calendario') mktCalendario(alvo, editavel)
   if (sub === 'aniversariantes') mktAniversariantes(alvo, editavel)
 }
 
@@ -18074,6 +18077,114 @@ function formMktCard (registro, aoSalvar) {
     if (error) { aviso(error.message); return }
     fechar(); aoSalvar()
   }
+}
+
+// ----- Calendário (planejamento mensal, puxado do Quadro) -----
+const NOMES_MES_MKT = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
+let MKT_CAL_ANO = new Date().getFullYear()
+let MKT_CAL_MES_ABERTO = null
+
+async function mktCalendario (alvo, editavel) {
+  const { data } = await db.from('marketing_card').select('*').not('data_publicacao', 'is', null).order('data_publicacao')
+  const itens = data || []
+  renderMktCalendario(alvo, itens, editavel)
+}
+
+function renderMktCalendario (alvo, itens, editavel) {
+  const itensDoAno = itens.filter(c => c.data_publicacao?.slice(0, 4) === String(MKT_CAL_ANO))
+  const porMes = Array.from({ length: 12 }, (_, i) => itensDoAno.filter(c => Number(c.data_publicacao.slice(5, 7)) === i + 1))
+
+  alvo.innerHTML = `
+    <div class="cabeca-secao" style="margin-bottom:16px;">
+      <div>
+        <h3 style="font-family:var(--serif);font-size:20px;margin:0;">Calendário</h3>
+        <p class="texto-dim2" style="font-size:12.5px;margin:2px 0 0;">Clica num mês pra ver o planejamento completo e imprimir.</p>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <button class="btn-secundario mini" id="mkc-ano-anterior">← ${MKT_CAL_ANO - 1}</button>
+        <span style="font-family:var(--serif);font-size:17px;">${MKT_CAL_ANO}</span>
+        <button class="btn-secundario mini" id="mkc-ano-seguinte">${MKT_CAL_ANO + 1} →</button>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:20px;">
+      ${NOMES_MES_MKT.map((nome, i) => {
+        const qtd = porMes[i].length
+        const orgCount = porMes[i].filter(c => c.tipo === 'ORGANICO').length
+        const pagoCount = porMes[i].filter(c => c.tipo === 'PAGO').length
+        return `<div class="panel mes-cal-mkt" data-mes="${i}" style="padding:16px;cursor:pointer;text-align:center;
+          border-color:${qtd ? 'var(--rust)' : 'var(--line)'};">
+          <div style="font-family:var(--serif);font-size:16px;">${nome}</div>
+          <div style="font-size:26px;font-family:var(--serif);margin-top:6px;color:${qtd ? 'var(--txt)' : 'var(--dim2)'};">${qtd}</div>
+          <div class="texto-dim2" style="font-size:10.5px;margin-top:2px;">${qtd ? `${orgCount} orgânico · ${pagoCount} pago` : 'sem planejamento'}</div>
+        </div>`
+      }).join('')}
+    </div>
+    <div id="mkc-detalhe"></div>`
+
+  $('#mkc-ano-anterior').onclick = () => { MKT_CAL_ANO--; MKT_CAL_MES_ABERTO = null; renderMktCalendario(alvo, itens, editavel) }
+  $('#mkc-ano-seguinte').onclick = () => { MKT_CAL_ANO++; MKT_CAL_MES_ABERTO = null; renderMktCalendario(alvo, itens, editavel) }
+  alvo.querySelectorAll('[data-mes]').forEach(el => {
+    el.onclick = () => { MKT_CAL_MES_ABERTO = Number(el.dataset.mes); renderMktDetalheMes(alvo, itens, editavel) }
+  })
+
+  if (MKT_CAL_MES_ABERTO !== null) renderMktDetalheMes(alvo, itens, editavel)
+}
+
+function renderMktDetalheMes (alvo, itens, editavel) {
+  const mes = MKT_CAL_MES_ABERTO
+  const doMes = itens.filter(c => c.data_publicacao?.slice(0, 4) === String(MKT_CAL_ANO) && Number(c.data_publicacao.slice(5, 7)) === mes + 1)
+    .sort((a, b) => a.data_publicacao.localeCompare(b.data_publicacao))
+
+  const linhas = doMes.map(c => `<div class="passo">
+      <span class="quando">${c.data_publicacao.slice(8, 10)}/${String(mes + 1).padStart(2, '0')}</span>
+      <span style="flex:1;">
+        <b>${esc(c.titulo)}</b>
+        <span class="texto-dim2" style="font-size:11.5px;"> — ${esc(c.canal ?? 'sem canal')}${c.responsavel ? ' · ' + esc(c.responsavel) : ''}</span>
+      </span>
+      <span class="chip">${COLUNAS_QUADRO_MKT.find(x => x[0] === c.coluna)?.[1] ?? c.coluna}</span>
+      <span class="${c.tipo === 'PAGO' ? 'badge-bom' : 'chip'}" style="margin-left:6px;">${c.tipo === 'PAGO' ? 'pago' : 'orgânico'}</span>
+    </div>`).join('')
+
+  $('#mkc-detalhe').innerHTML = `
+    <div class="panel" style="padding:20px;">
+      <div class="cabeca-secao">
+        <h3 style="font-family:var(--serif);font-size:18px;margin:0;">${NOMES_MES_MKT[mes]} de ${MKT_CAL_ANO}</h3>
+        <div style="display:flex;gap:8px;">
+          <button class="btn-secundario mini" id="mkc-imprimir">🖨️ Imprimir planejamento</button>
+          <button class="btn-secundario mini" id="mkc-fechar-mes">fechar</button>
+        </div>
+      </div>
+      <p class="texto-dim2" style="font-size:12px;margin:2px 0 14px;">${doMes.length} planejamento(s) nesse mês.</p>
+      ${linhas || '<p class="vazio">Nada planejado pra esse mês ainda — adiciona pelo Quadro.</p>'}
+    </div>`
+
+  $('#mkc-fechar-mes').onclick = () => { MKT_CAL_MES_ABERTO = null; renderMktCalendario(alvo, itens, editavel) }
+  $('#mkc-imprimir').onclick = () => mktImprimirPlanejamentoMes(doMes, mes)
+}
+
+function mktImprimirPlanejamentoMes (doMes, mes) {
+  const corpo = doMes.length ? `<table style="width:100%;border-collapse:collapse;">
+      <thead><tr><th>Data</th><th>Título</th><th>Canal</th><th>Responsável</th><th>Tipo</th><th>Status</th></tr></thead>
+      <tbody>
+        ${doMes.map(c => `<tr>
+          <td>${c.data_publicacao.slice(8, 10)}/${String(mes + 1).padStart(2, '0')}</td>
+          <td>${esc(c.titulo)}</td><td>${esc(c.canal ?? '—')}</td><td>${esc(c.responsavel ?? '—')}</td>
+          <td>${c.tipo === 'PAGO' ? 'Pago' : 'Orgânico'}</td>
+          <td>${COLUNAS_QUADRO_MKT.find(x => x[0] === c.coluna)?.[1] ?? c.coluna}</td>
+        </tr>`).join('')}
+      </tbody></table>` : '<p>Nenhum planejamento nesse mês.</p>'
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = documentoPDF({
+    titulo: 'PLANEJAMENTO DE MARKETING', subtitulo: `${NOMES_MES_MKT[mes]} de ${MKT_CAL_ANO}`, corpo,
+    acoes: `<button class="btn" id="mkc-pdf-gerar">Gerar PDF</button>
+      <button class="btn-secundario" id="mkc-pdf-fechar">Fechar</button>`
+  })
+  document.body.appendChild(fundo)
+  fundo.querySelector('#mkc-pdf-fechar').onclick = () => fundo.remove()
+  fundo.querySelector('#mkc-pdf-gerar').onclick = () => window.print()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
 }
 
 
