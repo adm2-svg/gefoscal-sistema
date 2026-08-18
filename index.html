@@ -855,7 +855,7 @@ const PAPEIS_TOTAIS = ['ADMIN', 'DIRETORIA']   // enxergam tudo, por tem_modulo(
 
 let PERFIL = {
   userId: '', email: '', nome: '',
-  pessoaId: null, setorId: null,
+  pessoaId: null, setorId: null, funcaoCrm: null,
   papeis: [], modulos: [], permissoes: [], setoresGeridos: [], souGestorComercial: false
 }
 
@@ -869,7 +869,7 @@ async function abrirApp () {
     db.from('usuario_papel').select('papel').eq('user_id', user.id),
     db.from('modulo').select('id,chave,nome,ordem').order('ordem'),
     db.from('usuario_perfil')
-      .select('pessoa_id,setor_id,ativo,pessoa:pessoa_id(nome,setor_id)')
+      .select('pessoa_id,setor_id,ativo,pessoa:pessoa_id(nome,setor_id,funcao_crm)')
       .eq('user_id', user.id).maybeSingle()
   ])
 
@@ -881,6 +881,9 @@ async function abrirApp () {
   // pra não sumir solicitação/painel de ninguém por um campo esquecido
   PERFIL.setorId = perfil?.setor_id ?? perfil?.pessoa?.setor_id ?? null
   PERFIL.nome = perfil?.pessoa?.nome || user.email
+  // face do CRM que essa pessoa opera (Atendentes Virtuais / Originação /
+  // Consultor) — null pra quem não tem papel comercial nenhum
+  PERFIL.funcaoCrm = perfil?.pessoa?.funcao_crm ?? null
 
   if (PERFIL.papeis.length === 0 || perfil?.ativo === false) {
     $('#erro-login').textContent =
@@ -6547,6 +6550,59 @@ function corEtapaLead (e) {
 // outra pessoa (o vendedor de fato) só vê o que é dela
 const souGerenciaCrm = () => ehTotal() || PERFIL.souGestorComercial
 
+// =================================================================
+// As Faces do CRM — Atendentes Virtuais / Originação / Consultor
+// Ficam sobre `crm_negociacao` (+ crm_nota, crm_compromisso), uma
+// estrutura mais completa que já existia no banco mas nunca tinha
+// tela. O mesmo registro de negociação passa pelas três faces sem
+// duplicar dado: a etapa é que decide quem trabalha ele agora.
+// =================================================================
+const ETAPAS_CRM = ['LEAD', 'PROSPECCAO', 'QUALIFICACAO', 'PROPOSTA', 'NEGOCIACAO',
+  'PEDIDO_GERADO', 'ANALISE_CREDITO', 'FECHAMENTO', 'ENTREGA', 'ATIVACAO_PROGRAMADA',
+  'RECOMPRA', 'EM_RISCO', 'PERDIDO']
+const ROTULO_ETAPA_CRM = {
+  LEAD: 'Lead', PROSPECCAO: 'Prospecção', QUALIFICACAO: 'Qualificação', PROPOSTA: 'Proposta',
+  NEGOCIACAO: 'Negociação', PEDIDO_GERADO: 'Pedido gerado', ANALISE_CREDITO: 'Análise de crédito',
+  FECHAMENTO: 'Fechamento', ENTREGA: 'Entrega', ATIVACAO_PROGRAMADA: 'Ativação programada',
+  RECOMPRA: 'Recompra', EM_RISCO: 'Em risco', PERDIDO: 'Perdido'
+}
+// etapa → face que enxerga/trabalha o registro
+const ETAPAS_FACE_IA = ['LEAD', 'PROSPECCAO']
+const ETAPAS_FACE_ORIGINACAO = ['QUALIFICACAO']
+const ETAPAS_FACE_CONSULTOR = ['PROPOSTA', 'NEGOCIACAO', 'PEDIDO_GERADO', 'ANALISE_CREDITO',
+  'FECHAMENTO', 'ENTREGA', 'ATIVACAO_PROGRAMADA', 'RECOMPRA', 'EM_RISCO']
+const TIPOS_FUNIL_CRM = { AQUISICAO: 'Aquisição (cliente novo)', CARTEIRA: 'Carteira (recompra)' }
+
+const souAssistenteTecnico = () => PERFIL.funcaoCrm === 'ASSISTENTE_TECNICO'
+const souSDR = () => PERFIL.funcaoCrm === 'SDR'
+const souConsultorCrm = () => PERFIL.funcaoCrm === 'CONSULTOR'
+
+// comissão do Consultor: 0,8% a 1,8% sobre o valor, por faixa — mesma
+// régua que você descreveu; ajusta os cortes aqui se a política mudar
+function comissaoConsultor (valor) {
+  valor = Number(valor || 0)
+  let pct = 0.008
+  if (valor >= 500000) pct = 0.018
+  else if (valor >= 250000) pct = 0.013
+  else if (valor >= 100000) pct = 0.010
+  return { pct, valor: valor * pct }
+}
+
+function diasDesde2 (dataIso) {
+  if (!dataIso) return null
+  return Math.floor((Date.now() - new Date(dataIso).getTime()) / 864e5)
+}
+
+let CRM_FACE_CACHE = { negociacoes: [], sdrs: [], consultores: [] }
+
+const selNegociacao = `
+  id, cliente_id, tipo_funil, etapa, status, originador_id, consultor_id, produto_id,
+  quantidade_esperada, valor_esperado, pedido_id, origem, safra, canal_contato, resumo_ia,
+  criterio_qualificacao, nome_contato, telefone_contato, email_contato, uf, municipio,
+  data_prevista_recompra, motivo_perda, criado_por, criado_em, atualizado_por, atualizado_em,
+  cliente:cliente_id ( razao_social, nome_fantasia, telefone, email ),
+  originador:originador_id ( nome ), consultor:consultor_id ( nome )`
+
 function diasDesde (dataIso) {
   if (!dataIso) return null
   return Math.floor((Date.now() - new Date(dataIso).getTime()) / 864e5)
@@ -6568,7 +6624,7 @@ async function paginaCrm () {
   area.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
   const [{ data: pessoas }] = await Promise.all([
-    db.from('pessoa').select('id,nome,eh_vendedor').eq('status', 'ATIVO').order('nome')
+    db.from('pessoa').select('id,nome,eh_vendedor,funcao_crm').eq('status', 'ATIVO').order('nome')
   ])
   CRM_CACHE.pessoas = pessoas || []
   // vendedor = quem tem "eh_vendedor" marcado (inclui vendedor de cargo E
@@ -6576,11 +6632,24 @@ async function paginaCrm () {
   // se ninguém tiver ainda marcado, cai pra lista geral (sistema em configuração)
   CRM_CACHE.vendedores = CRM_CACHE.pessoas.filter(p => p.eh_vendedor)
   if (!CRM_CACHE.vendedores.length) CRM_CACHE.vendedores = CRM_CACHE.pessoas
+  CRM_FACE_CACHE.sdrs = CRM_CACHE.pessoas.filter(p => p.funcao_crm === 'SDR')
+  CRM_FACE_CACHE.consultores = CRM_CACHE.pessoas.filter(p => p.funcao_crm === 'CONSULTOR')
 
-  const abas = [['painel', 'Painel'], ['funil', 'Funil'], ['progresso', 'Progresso'], ['historico', 'Histórico']]
+  // As 3 faces: cada pessoa só vê a sua (mais a de quem gerencia, que
+  // enxerga as três); as abas antigas (Funil/Progresso/Atribuir) ficam
+  // como estão, ainda rodando sobre a tabela `lead`.
+  const abas = [['painel', 'Painel']]
+  if (gerencia || souAssistenteTecnico()) abas.push(['ia', 'Atendentes Virtuais'])
+  if (gerencia || souSDR()) abas.push(['originacao', 'Originação'])
+  if (gerencia || souConsultorCrm()) abas.push(['consultor', 'Consultor'])
+  abas.push(['funil', 'Funil (antigo)'], ['progresso', 'Progresso'], ['historico', 'Histórico'])
   if (gerencia) abas.push(['gestao', 'Gestão'])
 
-  const inicial = CRM_SUBABA_INICIAL && abas.some(a => a[0] === CRM_SUBABA_INICIAL) ? CRM_SUBABA_INICIAL : abas[0][0]
+  // pessoa com face definida abre direto na dela; quem gerencia ou não
+  // tem face nenhuma cai no Painel
+  const faceDaPessoa = souAssistenteTecnico() ? 'ia' : souSDR() ? 'originacao' : souConsultorCrm() ? 'consultor' : null
+  const inicial = CRM_SUBABA_INICIAL && abas.some(a => a[0] === CRM_SUBABA_INICIAL) ? CRM_SUBABA_INICIAL
+    : (!gerencia && faceDaPessoa) ? faceDaPessoa : abas[0][0]
   CRM_SUBABA_INICIAL = null
 
   area.innerHTML = `
@@ -6603,6 +6672,9 @@ function abrirCrm (sub, editavel, gerencia) {
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
   $('#kpis').innerHTML = ''
   if (sub === 'painel') crmPainel(alvo, gerencia)
+  if (sub === 'ia') crmFaceIA(alvo, gerencia)
+  if (sub === 'originacao') crmFaceOriginacao(alvo, gerencia)
+  if (sub === 'consultor') crmFaceConsultor(alvo, gerencia)
   if (sub === 'funil') crmFunil(alvo, editavel, gerencia)
   if (sub === 'atribuir') crmAtribuir(alvo)
   if (sub === 'progresso') crmLeads(alvo, editavel, gerencia)
@@ -6889,6 +6961,525 @@ async function crmCardNovoPedido (alvo, gerencia) {
     bloco.querySelector('#npc-ton').value = ''; bloco.querySelector('#npc-preco').value = ''
     bloco.querySelector('#npc-obs').value = ''
   }
+}
+
+
+// =================================================================
+// Face 1 — Atendentes Virtuais (IA)
+// Fila de leads capturados pela IA (WhatsApp, chatbot) — etapa LEAD
+// ou PROSPECCAO. Quem opera essa fila (ASSISTENTE_TECNICO) decide
+// quando qualificar e faz o handoff pra Originação (SDR) ou, na
+// Fase 2 (autonomia plena), direto pro Consultor.
+// =================================================================
+async function crmFaceIA (alvo, gerencia) {
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  const { data, error } = await db.from('crm_negociacao').select(selNegociacao)
+    .in('etapa', ETAPAS_FACE_IA).order('criado_em', { ascending: false }).limit(300)
+  if (faltaMigracao(error) || error) { alvo.innerHTML = `<p class="vazio">${esc(error?.message ?? '')}</p>`; return }
+  CRM_FACE_CACHE.negociacoes = data || []
+  renderFaceIA(alvo, gerencia)
+}
+
+function renderFaceIA (alvo, gerencia) {
+  const lista = CRM_FACE_CACHE.negociacoes
+  const novos = lista.filter(n => n.etapa === 'LEAD')
+  const emConversa = lista.filter(n => n.etapa === 'PROSPECCAO')
+
+  $('#kpis').innerHTML = kpi('Novos', novos.length) + kpi('Em conversa', emConversa.length) +
+    kpi('Total na fila', lista.length)
+
+  const cartao = n => `<div class="card-tarefa" data-neg="${n.id}">
+      <div><b>${esc(n.cliente?.nome_fantasia || n.cliente?.razao_social || n.nome_contato || 'sem nome')}</b></div>
+      <div class="proj">${esc([n.canal_contato, [n.municipio, n.uf].filter(Boolean).join('/')].filter(Boolean).join(' · ') || '—')}</div>
+      <div class="rodape-t">
+        <span class="texto-dim2" style="font-size:11px;">${esc(n.telefone_contato || n.cliente?.telefone || '—')}</span>
+        <span class="texto-dim2" style="font-size:11px;">${diasDesde2(n.criado_em) === 0 ? 'hoje' : `há ${diasDesde2(n.criado_em)}d`}</span>
+      </div></div>`
+
+  alvo.innerHTML = `
+    <div class="acoes" style="margin:0 0 16px;"><button class="btn" id="ia-novo">Novo lead (manual)</button></div>
+    ${!lista.length ? `<p class="vazio">Nenhum lead na fila da IA no momento.</p>` : `
+    <div class="kanban" style="grid-template-columns:repeat(2,1fr);">
+      <div class="coluna-kanban"><h4>Novo <span class="texto-dim2">${novos.length}</span></h4>
+        ${novos.map(cartao).join('') || '<p class="vazio" style="padding:10px;">vazio</p>'}</div>
+      <div class="coluna-kanban"><h4>Em conversa <span class="texto-dim2">${emConversa.length}</span></h4>
+        ${emConversa.map(cartao).join('') || '<p class="vazio" style="padding:10px;">vazio</p>'}</div>
+    </div>`}`
+
+  alvo.querySelectorAll('[data-neg]').forEach(el => {
+    el.onclick = () => formNegociacaoIA(CRM_FACE_CACHE.negociacoes.find(n => n.id === el.dataset.neg), () => crmFaceIA(alvo, gerencia))
+  })
+  $('#ia-novo').onclick = () => formNegociacaoIA(null, () => crmFaceIA(alvo, gerencia))
+}
+
+function formNegociacaoIA (n, aoFechar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <div class="cabeca-secao">
+      <h3>${n ? esc(n.nome_contato || n.cliente?.razao_social || 'Lead') : 'Novo lead'}</h3>
+      ${n ? `<span class="texto-dim">${ROTULO_ETAPA_CRM[n.etapa]}</span>` : ''}
+    </div>
+    <div class="form-grade">
+      <div class="campo"><label>Nome / contato *</label><input id="ia-nome" value="${esc(n?.nome_contato ?? '')}"></div>
+      <div class="campo"><label>Canal</label>
+        <select id="ia-canal">${['whatsapp', 'site', 'telefone', 'indicação', 'feira', 'outro']
+          .map(c => `<option value="${c}" ${c === n?.canal_contato ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
+      <div class="campo"><label>Telefone</label><input id="ia-telefone" value="${esc(n?.telefone_contato ?? '')}"></div>
+      <div class="campo"><label>E-mail</label><input id="ia-email" value="${esc(n?.email_contato ?? '')}"></div>
+      <div class="campo"><label>Município</label><input id="ia-municipio" value="${esc(n?.municipio ?? '')}"></div>
+      <div class="campo"><label>UF</label><input id="ia-uf" maxlength="2" style="text-transform:uppercase;" value="${esc(n?.uf ?? '')}"></div>
+      <div class="campo"><label>Valor estimado (R$)</label><input id="ia-valor" type="number" step="0.01" value="${n?.valor_esperado ?? ''}"></div>
+      <div class="campo"><label>Safra</label><input id="ia-safra" value="${esc(n?.safra ?? '')}"></div>
+    </div>
+    <div class="campo" style="margin-top:10px;"><label>Resumo da conversa (IA)</label>
+      <textarea id="ia-resumo" style="min-height:70px;" placeholder="transcript ou resumo gerado pela IA">${esc(n?.resumo_ia ?? '')}</textarea></div>
+    <div class="campo" style="margin-top:10px;"><label>Critério de qualificação</label>
+      <input id="ia-criterio" placeholder="ex.: 300ha, intenção de compra pra próxima safra" value="${esc(n?.criterio_qualificacao ?? '')}"></div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="ia-salvar">Salvar</button>
+      ${n ? `<button class="btn-secundario" id="ia-descartar">Descartar</button>` : ''}
+      <button class="btn-secundario" id="ia-fechar">Fechar</button>
+    </div>
+    ${n ? `<div class="linha-divisoria" style="margin:16px 0;"></div>
+    <h4 style="font-family:var(--serif);font-size:14px;margin:0 0 10px;">Enviar pra próxima face</h4>
+    <div class="form-grade">
+      <div class="campo"><label>Enviar pra Originação (SDR)</label>
+        <select id="ia-sdr"><option value="">selecione o SDR...</option>
+          ${CRM_FACE_CACHE.sdrs.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')}</select></div>
+      <div class="campo"><label>ou direto pro Consultor (Fase 2)</label>
+        <select id="ia-consultor-direto"><option value="">selecione o Consultor...</option>
+          ${CRM_FACE_CACHE.consultores.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')}</select></div>
+    </div>
+    <div class="acoes" style="margin-top:10px;"><button class="btn" id="ia-qualificar">Qualificar e enviar</button></div>` : ''}
+    <div class="recado oculto" id="ia-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#ia-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  const aviso = (t, ok = false) => {
+    const el = fundo.querySelector('#ia-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = ok ? 'var(--good-text)' : 'var(--warn-text)'
+    el.style.color = ok ? 'var(--good-text)' : 'var(--warn-text)'
+  }
+
+  const corpoBase = () => ({
+    nome_contato: fundo.querySelector('#ia-nome').value.trim(),
+    canal_contato: fundo.querySelector('#ia-canal').value || null,
+    telefone_contato: fundo.querySelector('#ia-telefone').value.trim() || null,
+    email_contato: fundo.querySelector('#ia-email').value.trim() || null,
+    municipio: fundo.querySelector('#ia-municipio').value.trim() || null,
+    uf: fundo.querySelector('#ia-uf').value.trim().toUpperCase() || null,
+    valor_esperado: fundo.querySelector('#ia-valor').value || null,
+    safra: fundo.querySelector('#ia-safra').value.trim() || null,
+    resumo_ia: fundo.querySelector('#ia-resumo').value.trim() || null,
+    criterio_qualificacao: fundo.querySelector('#ia-criterio').value.trim() || null,
+    atualizado_em: new Date().toISOString(), atualizado_por: PERFIL.pessoaId
+  })
+
+  fundo.querySelector('#ia-salvar').onclick = async () => {
+    const corpo = corpoBase()
+    if (!corpo.nome_contato) { aviso('Escreva o nome do contato.'); return }
+    let error
+    if (n) {
+      ;({ error } = await db.from('crm_negociacao').update(corpo).eq('id', n.id))
+    } else {
+      corpo.etapa = 'LEAD'; corpo.tipo_funil = 'AQUISICAO'; corpo.criado_por = PERFIL.pessoaId
+      ;({ error } = await db.from('crm_negociacao').insert(corpo))
+    }
+    if (error) { aviso(error.message); return }
+    fechar(); aoFechar()
+  }
+
+  if (n) {
+    fundo.querySelector('#ia-descartar').onclick = async () => {
+      if (!confirm('Marcar esse lead como perdido/descartado?')) return
+      const { error } = await db.from('crm_negociacao')
+        .update({ etapa: 'PERDIDO', status: 'PERDIDA', motivo_perda: 'Descartado na triagem da IA', atualizado_em: new Date().toISOString() })
+        .eq('id', n.id)
+      if (error) { aviso(error.message); return }
+      fechar(); aoFechar()
+    }
+
+    fundo.querySelector('#ia-qualificar').onclick = async () => {
+      const sdrId = fundo.querySelector('#ia-sdr').value
+      const consultorId = fundo.querySelector('#ia-consultor-direto').value
+      if (!sdrId && !consultorId) { aviso('Escolha um SDR ou um Consultor pra enviar.'); return }
+      const corpo = corpoBase()
+      if (!corpo.nome_contato) { aviso('Escreva o nome do contato antes de enviar.'); return }
+      if (sdrId) { corpo.originador_id = sdrId; corpo.etapa = 'QUALIFICACAO' }
+      else { corpo.consultor_id = consultorId; corpo.etapa = 'PROPOSTA' }
+      const { error } = await db.from('crm_negociacao').update(corpo).eq('id', n.id)
+      if (error) { aviso(error.message); return }
+      aviso(`Enviado pra ${sdrId ? 'Originação' : 'o Consultor'}.`, true)
+      setTimeout(() => { fechar(); aoFechar() }, 1200)
+    }
+  }
+}
+
+// =================================================================
+// Face 2 — Originação (SDR)
+// Carteira do SDR: negociações na etapa QUALIFICACAO com
+// originador_id = ele mesmo (quem gerencia vê de todos). Registra
+// ligações e, quando pronto, agenda a visita — o que já dispara o
+// handoff pro Consultor.
+// =================================================================
+async function crmFaceOriginacao (alvo, gerencia) {
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  let q = db.from('crm_negociacao').select(selNegociacao).eq('etapa', 'QUALIFICACAO')
+  if (!gerencia) q = q.eq('originador_id', PERFIL.pessoaId)
+  const { data, error } = await q.order('atualizado_em', { ascending: false }).limit(300)
+  if (faltaMigracao(error) || error) { alvo.innerHTML = `<p class="vazio">${esc(error?.message ?? '')}</p>`; return }
+  CRM_FACE_CACHE.negociacoes = data || []
+
+  // última ligação de cada negociação, pra mostrar a "próxima ação"
+  const ids = CRM_FACE_CACHE.negociacoes.map(n => n.id)
+  let ligacoes = []
+  if (ids.length) {
+    const { data: comp } = await db.from('crm_compromisso').select('negociacao_id,resultado,proxima_acao_em,data_hora')
+      .eq('tipo', 'LIGACAO').in('negociacao_id', ids).order('data_hora', { ascending: false })
+    ligacoes = comp || []
+  }
+  const ultimaLigacao = {}
+  ligacoes.forEach(c => { if (!ultimaLigacao[c.negociacao_id]) ultimaLigacao[c.negociacao_id] = c })
+
+  renderFaceOriginacao(alvo, gerencia, ultimaLigacao)
+}
+
+function renderFaceOriginacao (alvo, gerencia, ultimaLigacao) {
+  const lista = CRM_FACE_CACHE.negociacoes
+  const hoje = new Date().toISOString().slice(0, 10)
+  const atrasadas = lista.filter(n => {
+    const p = ultimaLigacao[n.id]?.proxima_acao_em
+    return p && p.slice(0, 10) <= hoje
+  })
+
+  $('#kpis').innerHTML = kpi('Na carteira', lista.length) + kpi('Ligações pendentes hoje', atrasadas.length) +
+    kpi('Já ligaram pelo menos 1x', Object.keys(ultimaLigacao).length)
+
+  const cartao = n => {
+    const lig = ultimaLigacao[n.id]
+    const nomeExib = n.cliente?.nome_fantasia || n.cliente?.razao_social || n.nome_contato || 'sem nome'
+    return `<div class="card-tarefa" data-neg="${n.id}">
+      <div><b>${esc(nomeExib)}</b></div>
+      <div class="proj">${esc([n.municipio, n.uf].filter(Boolean).join('/') || n.origem || '—')}</div>
+      <div class="rodape-t">
+        <span class="texto-dim2" style="font-size:11px;">${esc(lig?.resultado ?? 'sem ligação ainda')}</span>
+        ${lig?.proxima_acao_em ? `<span class="texto-dim2" style="font-size:11px;${lig.proxima_acao_em.slice(0, 10) <= hoje ? 'color:var(--warn-text);font-weight:600;' : ''}">próx: ${esc(fmtQuando(lig.proxima_acao_em))}</span>` : ''}
+        ${gerencia ? `<span class="texto-dim2" style="font-size:11px;">${esc(n.originador?.nome ?? '—')}</span>` : ''}
+      </div></div>`
+  }
+
+  alvo.innerHTML = !lista.length ? `<p class="vazio">Nenhum lead qualificado na sua carteira ainda.</p>` : `
+    <div class="kanban" style="grid-template-columns:1fr;max-width:640px;">
+      <div class="coluna-kanban">${lista.map(cartao).join('')}</div>
+    </div>`
+
+  alvo.querySelectorAll('[data-neg]').forEach(el => {
+    el.onclick = () => formNegociacaoOriginacao(CRM_FACE_CACHE.negociacoes.find(n => n.id === el.dataset.neg),
+      gerencia, () => crmFaceOriginacao(alvo, gerencia))
+  })
+}
+
+function formNegociacaoOriginacao (n, gerencia, aoFechar) {
+  const nomeExib = n.cliente?.nome_fantasia || n.cliente?.razao_social || n.nome_contato || 'sem nome'
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <div class="cabeca-secao"><h3>${esc(nomeExib)}</h3><span class="texto-dim">Originação</span></div>
+    <p class="texto-dim2" style="font-size:12px;margin:-6px 0 12px;">
+      ${esc([n.telefone_contato || n.cliente?.telefone, n.municipio, n.uf].filter(Boolean).join(' · ') || '—')}
+      ${n.resumo_ia ? ` — resumo da IA: ${esc(n.resumo_ia)}` : ''}</p>
+
+    <div class="form-grade">
+      <div class="campo"><label>Valor estimado (R$)</label><input id="or-valor" type="number" step="0.01" value="${n.valor_esperado ?? ''}"></div>
+      <div class="campo"><label>Safra</label><input id="or-safra" value="${esc(n.safra ?? '')}"></div>
+    </div>
+
+    <div class="linha-divisoria" style="margin:14px 0;"></div>
+    <h4 style="font-family:var(--serif);font-size:14px;margin:0 0 8px;">Registrar ligação</h4>
+    <div class="form-grade">
+      <div class="campo"><label>Resultado</label>
+        <select id="or-resultado">${['Não atendeu', 'Recusou', 'Agendou retorno', 'Qualificou'].map(r => `<option>${r}</option>`).join('')}</select></div>
+      <div class="campo"><label>Próxima ação</label><input id="or-proxima" type="date"></div>
+    </div>
+    <div class="acoes" style="margin-top:8px;"><button class="btn-secundario" id="or-registrar-ligacao">Registrar</button></div>
+    <div id="or-lista-ligacoes" style="margin-top:10px;"><p class="texto-dim2">carregando ligações...</p></div>
+
+    <div class="linha-divisoria" style="margin:16px 0;"></div>
+    <h4 style="font-family:var(--serif);font-size:14px;margin:0 0 8px;">Agendar visita e enviar pro Consultor</h4>
+    <div class="form-grade">
+      <div class="campo"><label>Consultor *</label>
+        <select id="or-consultor"><option value="">selecione...</option>
+          ${CRM_FACE_CACHE.consultores.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')}</select></div>
+      <div class="campo"><label>Data/hora da visita *</label><input id="or-visita-quando" type="datetime-local"></div>
+    </div>
+    <div class="campo" style="margin-top:8px;"><label>Observações pro Consultor</label>
+      <textarea id="or-visita-obs" style="min-height:60px;"></textarea></div>
+    <div class="acoes" style="margin-top:10px;"><button class="btn" id="or-agendar">Agendar e enviar</button></div>
+
+    <div class="acoes" style="margin-top:16px;">
+      <button class="btn" id="or-salvar">Salvar</button>
+      <button class="btn-secundario" id="or-fechar">Fechar</button>
+    </div>
+    <div class="recado oculto" id="or-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#or-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  const aviso = (t, ok = false) => {
+    const el = fundo.querySelector('#or-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = ok ? 'var(--good-text)' : 'var(--warn-text)'
+    el.style.color = ok ? 'var(--good-text)' : 'var(--warn-text)'
+  }
+
+  const carregarLigacoes = async () => {
+    const { data } = await db.from('crm_compromisso').select('id,resultado,proxima_acao_em,data_hora,criado_em')
+      .eq('negociacao_id', n.id).eq('tipo', 'LIGACAO').order('criado_em', { ascending: false })
+    const el = fundo.querySelector('#or-lista-ligacoes')
+    el.innerHTML = !data?.length ? `<p class="texto-dim2" style="font-size:12px;">Nenhuma ligação registrada ainda.</p>` :
+      data.map(c => `<div class="texto-dim2" style="font-size:12px;padding:4px 0;border-top:1px solid var(--line);">
+        ${esc(fmtQuando(c.criado_em))} — <b>${esc(c.resultado ?? '—')}</b>${c.proxima_acao_em ? ` · próxima ação: ${esc(fmtQuando(c.proxima_acao_em))}` : ''}</div>`).join('')
+  }
+  carregarLigacoes()
+
+  fundo.querySelector('#or-registrar-ligacao').onclick = async () => {
+    const { error } = await db.from('crm_compromisso').insert({
+      negociacao_id: n.id, tipo: 'LIGACAO', titulo: 'Ligação — ' + nomeExib,
+      resultado: fundo.querySelector('#or-resultado').value,
+      proxima_acao_em: fundo.querySelector('#or-proxima').value || null,
+      data_hora: new Date().toISOString(), criado_por: PERFIL.pessoaId
+    })
+    if (error) { aviso(error.message); return }
+    fundo.querySelector('#or-proxima').value = ''
+    carregarLigacoes()
+    aviso('Ligação registrada.', true)
+  }
+
+  fundo.querySelector('#or-salvar').onclick = async () => {
+    const { error } = await db.from('crm_negociacao').update({
+      valor_esperado: fundo.querySelector('#or-valor').value || null,
+      safra: fundo.querySelector('#or-safra').value.trim() || null,
+      atualizado_em: new Date().toISOString(), atualizado_por: PERFIL.pessoaId
+    }).eq('id', n.id)
+    if (error) { aviso(error.message); return }
+    fechar(); aoFechar()
+  }
+
+  fundo.querySelector('#or-agendar').onclick = async () => {
+    const consultorId = fundo.querySelector('#or-consultor').value
+    const quando = fundo.querySelector('#or-visita-quando').value
+    if (!consultorId || !quando) { aviso('Escolha o Consultor e a data/hora da visita.'); return }
+    const { error: e1 } = await db.from('crm_compromisso').insert({
+      negociacao_id: n.id, tipo: 'VISITA', titulo: 'Visita — ' + nomeExib,
+      data_hora: new Date(quando).toISOString(),
+      resultado: fundo.querySelector('#or-visita-obs').value.trim() || null,
+      criado_por: PERFIL.pessoaId
+    })
+    if (e1) { aviso(e1.message); return }
+    const { error: e2 } = await db.from('crm_negociacao').update({
+      consultor_id: consultorId, etapa: 'PROPOSTA', atualizado_em: new Date().toISOString(), atualizado_por: PERFIL.pessoaId
+    }).eq('id', n.id)
+    if (e2) { aviso(e2.message); return }
+    aviso('Visita agendada e enviado pro Consultor.', true)
+    setTimeout(() => { fechar(); aoFechar() }, 1200)
+  }
+}
+
+// =================================================================
+// Face 3 — Consultor de Negócios (closer)
+// Funil de fechamento: negociações da etapa PROPOSTA em diante, com
+// consultor_id = ele mesmo (quem gerencia vê de todos). Ficha
+// completa com notas, agenda e comissão calculada automaticamente.
+// =================================================================
+async function crmFaceConsultor (alvo, gerencia) {
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  let q = db.from('crm_negociacao').select(selNegociacao).in('etapa', ETAPAS_FACE_CONSULTOR).eq('status', 'ATIVA')
+  if (!gerencia) q = q.eq('consultor_id', PERFIL.pessoaId)
+  const { data, error } = await q.order('atualizado_em', { ascending: false }).limit(300)
+  if (faltaMigracao(error) || error) { alvo.innerHTML = `<p class="vazio">${esc(error?.message ?? '')}</p>`; return }
+  CRM_FACE_CACHE.negociacoes = data || []
+  renderFaceConsultor(alvo, gerencia)
+}
+
+const COLUNAS_CONSULTOR = ['PROPOSTA', 'NEGOCIACAO', 'PEDIDO_GERADO', 'ANALISE_CREDITO', 'FECHAMENTO']
+
+function renderFaceConsultor (alvo, gerencia) {
+  const lista = CRM_FACE_CACHE.negociacoes
+  const valorFunil = lista.reduce((s, n) => s + Number(n.valor_esperado || 0), 0)
+  const comissaoTotal = lista.reduce((s, n) => s + comissaoConsultor(n.valor_esperado).valor, 0)
+
+  $('#kpis').innerHTML = kpi('Em fechamento', lista.length) + kpi('Valor em funil', 'R$ ' + fmtNum(valorFunil)) +
+    kpi('Comissão projetada', 'R$ ' + fmtNum(comissaoTotal))
+
+  const cartao = n => {
+    const nomeExib = n.cliente?.nome_fantasia || n.cliente?.razao_social || n.nome_contato || 'sem nome'
+    return `<div class="card-tarefa" data-neg="${n.id}">
+      <div><b>${esc(nomeExib)}</b></div>
+      <div class="proj">${esc([n.municipio, n.uf].filter(Boolean).join('/') || '—')}</div>
+      <div class="rodape-t">
+        <span class="texto-dim2" style="font-size:11px;">${gerencia ? esc(n.consultor?.nome ?? '—') : (n.valor_esperado ? 'R$ ' + fmtNum(n.valor_esperado) : '')}</span>
+        <span class="texto-dim2" style="font-size:11px;">${gerencia && n.valor_esperado ? 'R$ ' + fmtNum(n.valor_esperado) : ''}</span>
+      </div></div>`
+  }
+
+  alvo.innerHTML = !lista.length ? `<p class="vazio">Nenhuma negociação em fechamento com você ainda.</p>` : `
+    <div class="kanban" style="grid-template-columns:repeat(${COLUNAS_CONSULTOR.length},1fr);overflow-x:auto;">
+      ${COLUNAS_CONSULTOR.map(et => `<div class="coluna-kanban" style="min-width:170px;"><h4>${ROTULO_ETAPA_CRM[et]}
+        <span class="texto-dim2">${lista.filter(n => n.etapa === et).length}</span></h4>
+        ${lista.filter(n => n.etapa === et).map(cartao).join('') || '<p class="vazio" style="padding:10px;">vazio</p>'}</div>`).join('')}
+    </div>`
+
+  alvo.querySelectorAll('[data-neg]').forEach(el => {
+    el.onclick = () => formNegociacaoConsultor(CRM_FACE_CACHE.negociacoes.find(n => n.id === el.dataset.neg),
+      gerencia, () => crmFaceConsultor(alvo, gerencia))
+  })
+}
+
+function formNegociacaoConsultor (n, gerencia, aoFechar) {
+  const nomeExib = n.cliente?.nome_fantasia || n.cliente?.razao_social || n.nome_contato || 'sem nome'
+  const com = comissaoConsultor(n.valor_esperado)
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:640px;">
+    <div class="cabeca-secao"><h3>${esc(nomeExib)}</h3><span class="texto-dim">${ROTULO_ETAPA_CRM[n.etapa]}</span></div>
+    <p class="texto-dim2" style="font-size:12px;margin:-6px 0 12px;">
+      ${esc([n.telefone_contato || n.cliente?.telefone, n.email_contato || n.cliente?.email, [n.municipio, n.uf].filter(Boolean).join('/')].filter(Boolean).join(' · ') || '—')}
+      ${n.resumo_ia ? `<br>Resumo da IA: ${esc(n.resumo_ia)}` : ''}</p>
+
+    <div class="form-grade">
+      <div class="campo"><label>Etapa</label>
+        <select id="co-etapa">${ETAPAS_FACE_CONSULTOR.concat(['ENTREGA', 'ATIVACAO_PROGRAMADA', 'RECOMPRA', 'EM_RISCO']).map(e =>
+          `<option value="${e}" ${e === n.etapa ? 'selected' : ''}>${ROTULO_ETAPA_CRM[e]}</option>`).join('')}</select></div>
+      <div class="campo"><label>Valor esperado (R$)</label><input id="co-valor" type="number" step="0.01" value="${n.valor_esperado ?? ''}"></div>
+      <div class="campo"><label>Safra</label><input id="co-safra" value="${esc(n.safra ?? '')}"></div>
+    </div>
+    <p class="texto-dim2" style="font-size:11.5px;margin:4px 0 0;">Comissão projetada nessa faixa: <b>${(com.pct * 100).toFixed(1)}%</b> = <b>R$ ${fmtNum(com.valor)}</b> (sobre o valor efetivamente recebido, na liquidação)</p>
+
+    <div class="linha-divisoria" style="margin:14px 0;"></div>
+    <h4 style="font-family:var(--serif);font-size:14px;margin:0 0 8px;">Notas</h4>
+    <div id="co-notas"><p class="texto-dim2">carregando...</p></div>
+    <div class="campo" style="margin-top:8px;"><textarea id="co-nova-nota" style="min-height:50px;" placeholder="nova nota..."></textarea></div>
+    <div class="acoes" style="margin-top:6px;"><button class="btn-secundario" id="co-add-nota">Adicionar nota</button></div>
+
+    <div class="linha-divisoria" style="margin:16px 0;"></div>
+    <h4 style="font-family:var(--serif);font-size:14px;margin:0 0 8px;">Compromissos</h4>
+    <div id="co-compromissos"><p class="texto-dim2">carregando...</p></div>
+
+    <div class="linha-divisoria" style="margin:16px 0;"></div>
+    <div class="campo" id="co-campo-motivo" style="display:${n.etapa === 'PERDIDO' ? '' : 'none'};">
+      <label>Motivo da perda</label><input id="co-motivo" value="${esc(n.motivo_perda ?? '')}"></div>
+
+    <div class="acoes" style="margin-top:6px;flex-wrap:wrap;">
+      <button class="btn" id="co-salvar">Salvar</button>
+      <button class="btn-secundario" id="co-ganho">Marcar como ganho</button>
+      <button class="btn-secundario" id="co-perdido">Marcar como perdido</button>
+      ${!n.cliente_id ? `<button class="btn-secundario" id="co-converter">Converter em cliente</button>` : `<button class="btn-secundario" id="co-emitir">Emitir pedido</button>`}
+      <button class="btn-secundario" id="co-fechar">Fechar</button>
+    </div>
+    <div class="recado oculto" id="co-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#co-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  const aviso = (t, ok = false) => {
+    const el = fundo.querySelector('#co-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = ok ? 'var(--good-text)' : 'var(--warn-text)'
+    el.style.color = ok ? 'var(--good-text)' : 'var(--warn-text)'
+  }
+
+  const carregarNotas = async () => {
+    const { data } = await db.from('crm_nota').select('id,texto,tipo,criado_em,autor:autor_id(nome)')
+      .eq('negociacao_id', n.id).order('criado_em', { ascending: false })
+    fundo.querySelector('#co-notas').innerHTML = !data?.length ? `<p class="texto-dim2" style="font-size:12px;">Nenhuma nota ainda.</p>` :
+      data.map(nt => `<div style="font-size:12px;padding:6px 0;border-top:1px solid var(--line);">
+        <span class="texto-dim2">${esc(fmtQuando(nt.criado_em))} · ${esc(nt.autor?.nome ?? (nt.tipo === 'IA' ? 'IA' : '—'))}</span>
+        <div>${esc(nt.texto)}</div></div>`).join('')
+  }
+  carregarNotas()
+
+  const carregarCompromissos = async () => {
+    const { data } = await db.from('crm_compromisso').select('id,titulo,tipo,data_hora,resultado,concluido')
+      .eq('negociacao_id', n.id).order('data_hora', { ascending: false })
+    fundo.querySelector('#co-compromissos').innerHTML = !data?.length ? `<p class="texto-dim2" style="font-size:12px;">Nenhum compromisso ainda.</p>` :
+      data.map(c => `<div style="font-size:12px;padding:6px 0;border-top:1px solid var(--line);">
+        <b>${esc(c.tipo === 'VISITA' ? 'Visita' : 'Ligação')}</b> — ${esc(fmtQuando(c.data_hora) ?? '—')}${c.resultado ? ` · ${esc(c.resultado)}` : ''}
+        ${c.concluido ? ' <span class="badge-bom">concluído</span>' : ''}</div>`).join('')
+  }
+  carregarCompromissos()
+
+  fundo.querySelector('#co-etapa').onchange = e => {
+    fundo.querySelector('#co-campo-motivo').style.display = e.target.value === 'PERDIDO' ? '' : 'none'
+  }
+
+  fundo.querySelector('#co-add-nota').onclick = async () => {
+    const texto = fundo.querySelector('#co-nova-nota').value.trim()
+    if (!texto) return
+    const { error } = await db.from('crm_nota').insert({ negociacao_id: n.id, texto, tipo: 'HUMANO', autor_id: PERFIL.pessoaId })
+    if (error) { aviso(error.message); return }
+    fundo.querySelector('#co-nova-nota').value = ''
+    carregarNotas()
+  }
+
+  const salvarBase = async (extra = {}) => {
+    const etapa = fundo.querySelector('#co-etapa').value
+    const corpo = {
+      etapa,
+      valor_esperado: fundo.querySelector('#co-valor').value || null,
+      safra: fundo.querySelector('#co-safra').value.trim() || null,
+      atualizado_em: new Date().toISOString(), atualizado_por: PERFIL.pessoaId,
+      ...extra
+    }
+    if (etapa === 'PERDIDO' && !corpo.status) {
+      corpo.status = 'PERDIDA'
+      corpo.motivo_perda = fundo.querySelector('#co-motivo').value.trim() || 'não informado'
+    }
+    return db.from('crm_negociacao').update(corpo).eq('id', n.id)
+  }
+
+  fundo.querySelector('#co-salvar').onclick = async () => {
+    const { error } = await salvarBase()
+    if (error) { aviso(error.message); return }
+    fechar(); aoFechar()
+  }
+
+  fundo.querySelector('#co-ganho').onclick = async () => {
+    if (!confirm('Marcar essa negociação como ganha?')) return
+    const { error } = await salvarBase({ etapa: 'ENTREGA', status: 'GANHA' })
+    if (error) { aviso(error.message); return }
+    aviso('Marcado como ganho.', true)
+    setTimeout(() => { fechar(); aoFechar() }, 1000)
+  }
+
+  fundo.querySelector('#co-perdido').onclick = async () => {
+    const motivo = fundo.querySelector('#co-motivo').value.trim()
+    if (!motivo) { fundo.querySelector('#co-campo-motivo').style.display = ''; aviso('Escreva o motivo da perda.'); return }
+    const { error } = await db.from('crm_negociacao').update({
+      etapa: 'PERDIDO', status: 'PERDIDA', motivo_perda: motivo, atualizado_em: new Date().toISOString(), atualizado_por: PERFIL.pessoaId
+    }).eq('id', n.id)
+    if (error) { aviso(error.message); return }
+    fechar(); aoFechar()
+  }
+
+  const btnConverter = fundo.querySelector('#co-converter')
+  if (btnConverter) btnConverter.onclick = async () => {
+    if (!confirm(`Criar um cliente a partir de "${nomeExib}"?`)) return
+    const { data: cliente, error: e1 } = await db.from('cliente').insert({
+      razao_social: n.nome_contato || nomeExib, telefone: n.telefone_contato, email: n.email_contato,
+      municipio: n.municipio, uf: n.uf, vendedor_id: n.consultor_id
+    }).select('id').single()
+    if (e1) { aviso(e1.message); return }
+    const { error: e2 } = await db.from('crm_negociacao').update({ cliente_id: cliente.id }).eq('id', n.id)
+    if (e2) { aviso(e2.message); return }
+    aviso('Cliente criado e vinculado.', true)
+    setTimeout(() => { fechar(); aoFechar() }, 1200)
+  }
+
+  const btnEmitir = fundo.querySelector('#co-emitir')
+  if (btnEmitir) btnEmitir.onclick = () => formEmitirPedidoCrm(n)
 }
 
 // ----- Atribuir (só gerência): importa planilha e distribui pro vendedor -----
