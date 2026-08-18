@@ -18083,87 +18083,89 @@ function formMktCard (registro, aoSalvar) {
 const NOMES_MES_MKT = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
 let MKT_CAL_ANO = new Date().getFullYear()
 let MKT_CAL_MES_ABERTO = null
+let MKT_CAL_ITENS = []
+let MKT_CAL_RELEVANTES = []
 
 async function mktCalendario (alvo, editavel) {
   const [{ data }, { data: datasRelevantes }] = await Promise.all([
     db.from('marketing_card').select('*').not('data_publicacao', 'is', null).order('data_publicacao'),
     db.from('marketing_data_relevante').select('*').order('mes').order('dia')
   ])
-  const itens = data || []
-  renderMktCalendario(alvo, itens, datasRelevantes || [], editavel)
+  MKT_CAL_ITENS = data || []
+  MKT_CAL_RELEVANTES = datasRelevantes || []
+  renderMktCalendario(alvo, editavel)
 }
 
-function renderMktCalendario (alvo, itens, datasRelevantes, editavel) {
-  const itensDoAno = itens.filter(c => c.data_publicacao?.slice(0, 4) === String(MKT_CAL_ANO))
+function renderMktCalendario (alvo, editavel) {
+  const itensDoAno = MKT_CAL_ITENS.filter(c => c.data_publicacao?.slice(0, 4) === String(MKT_CAL_ANO))
   const porMes = Array.from({ length: 12 }, (_, i) => itensDoAno.filter(c => Number(c.data_publicacao.slice(5, 7)) === i + 1))
-  const relevantesPorMes = Array.from({ length: 12 }, (_, i) => datasRelevantes.filter(d => d.mes === i + 1))
+  const relevantesPorMes = Array.from({ length: 12 }, (_, i) => MKT_CAL_RELEVANTES.filter(d => d.mes === i + 1))
 
   alvo.innerHTML = `
-    <div class="cabeca-secao" style="margin-bottom:16px;">
+    <div class="cabeca-secao" style="margin-bottom:14px;">
       <div>
         <h3 style="font-family:var(--serif);font-size:20px;margin:0;">Calendário</h3>
-        <p class="texto-dim2" style="font-size:12.5px;margin:2px 0 0;">Clica num mês pra ver o planejamento completo e imprimir.</p>
+        <p class="texto-dim2" style="font-size:12.5px;margin:2px 0 0;">Clica num mês pra abrir o calendário completo — e no dia pra agendar algo.</p>
       </div>
       <div style="display:flex;align-items:center;gap:10px;">
         <button class="btn-secundario mini" id="mkc-ano-anterior">← ${MKT_CAL_ANO - 1}</button>
-        <span style="font-family:var(--serif);font-size:17px;">${MKT_CAL_ANO}</span>
+        <span style="font-family:var(--serif);font-size:16px;">${MKT_CAL_ANO}</span>
         <button class="btn-secundario mini" id="mkc-ano-seguinte">${MKT_CAL_ANO + 1} →</button>
       </div>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:20px;">
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px;margin-bottom:18px;">
       ${NOMES_MES_MKT.map((nome, i) => {
-        const qtd = porMes[i].length
-        const qtdRelevantes = relevantesPorMes[i].length
-        const orgCount = porMes[i].filter(c => c.tipo === 'ORGANICO').length
-        const pagoCount = porMes[i].filter(c => c.tipo === 'PAGO').length
-        const temAlgo = qtd || qtdRelevantes
-        return `<div class="panel mes-cal-mkt" data-mes="${i}" style="padding:16px;cursor:pointer;text-align:center;
-          border-color:${temAlgo ? 'var(--rust)' : 'var(--line)'};">
-          <div style="font-family:var(--serif);font-size:16px;">${nome}</div>
-          <div style="font-size:26px;font-family:var(--serif);margin-top:6px;color:${temAlgo ? 'var(--txt)' : 'var(--dim2)'};">${qtd}</div>
-          <div class="texto-dim2" style="font-size:10.5px;margin-top:2px;">
-            ${qtd ? `${orgCount} orgânico · ${pagoCount} pago` : 'sem planejamento'}
-            ${qtdRelevantes ? `<br>📅 ${qtdRelevantes} data${qtdRelevantes > 1 ? 's' : ''} relevante${qtdRelevantes > 1 ? 's' : ''}` : ''}</div>
-        </div>`
+        const qtd = porMes[i].length + relevantesPorMes[i].length
+        return `<button class="mes-cal-mkt" data-mes="${i}" style="padding:10px 6px;text-align:center;cursor:pointer;
+          background:var(--panel);border:1px solid ${qtd ? 'var(--rust)' : 'var(--line)'};border-radius:10px;color:var(--txt);">
+          <div style="font-size:12px;font-weight:600;">${nome.slice(0, 3)}</div>
+          ${qtd ? `<div style="width:6px;height:6px;border-radius:50%;background:var(--rust);margin:5px auto 0;"></div>` : ''}
+        </button>`
       }).join('')}
     </div>
     <div id="mkc-detalhe"></div>`
 
-  $('#mkc-ano-anterior').onclick = () => { MKT_CAL_ANO--; MKT_CAL_MES_ABERTO = null; renderMktCalendario(alvo, itens, datasRelevantes, editavel) }
-  $('#mkc-ano-seguinte').onclick = () => { MKT_CAL_ANO++; MKT_CAL_MES_ABERTO = null; renderMktCalendario(alvo, itens, datasRelevantes, editavel) }
+  $('#mkc-ano-anterior').onclick = () => { MKT_CAL_ANO--; renderMktCalendario(alvo, editavel) }
+  $('#mkc-ano-seguinte').onclick = () => { MKT_CAL_ANO++; renderMktCalendario(alvo, editavel) }
   alvo.querySelectorAll('[data-mes]').forEach(el => {
-    el.onclick = () => { MKT_CAL_MES_ABERTO = Number(el.dataset.mes); renderMktDetalheMes(alvo, itens, datasRelevantes, editavel) }
+    el.onclick = () => { MKT_CAL_MES_ABERTO = Number(el.dataset.mes); renderMesCompletoMkt(alvo, editavel) }
   })
 
-  if (MKT_CAL_MES_ABERTO !== null) renderMktDetalheMes(alvo, itens, datasRelevantes, editavel)
+  if (MKT_CAL_MES_ABERTO !== null) renderMesCompletoMkt(alvo, editavel)
 }
 
-function renderMktDetalheMes (alvo, itens, datasRelevantes, editavel) {
+// ----- grade do mês completo, tipo calendário de parede -----
+function renderMesCompletoMkt (alvo, editavel) {
   const mes = MKT_CAL_MES_ABERTO
-  const doMes = itens.filter(c => c.data_publicacao?.slice(0, 4) === String(MKT_CAL_ANO) && Number(c.data_publicacao.slice(5, 7)) === mes + 1)
-    .sort((a, b) => a.data_publicacao.localeCompare(b.data_publicacao))
-  const relevantesDoMes = datasRelevantes.filter(d => d.mes === mes + 1).sort((a, b) => a.dia - b.dia)
+  const primeiroDiaSemana = new Date(MKT_CAL_ANO, mes, 1).getDay() // 0=domingo
+  const diasNoMes = new Date(MKT_CAL_ANO, mes + 1, 0).getDate()
+  const hojeStr = hojeISO()
 
-  const linhas = doMes.map(c => `<div class="passo">
-      <span class="quando">${c.data_publicacao.slice(8, 10)}/${String(mes + 1).padStart(2, '0')}</span>
-      <span style="flex:1;">
-        <b>${esc(c.titulo)}</b>
-        <span class="texto-dim2" style="font-size:11.5px;"> — ${esc(c.canal ?? 'sem canal')}${c.responsavel ? ' · ' + esc(c.responsavel) : ''}</span>
-      </span>
-      <span class="chip">${COLUNAS_QUADRO_MKT.find(x => x[0] === c.coluna)?.[1] ?? c.coluna}</span>
-      <span class="${c.tipo === 'PAGO' ? 'badge-bom' : 'chip'}" style="margin-left:6px;">${c.tipo === 'PAGO' ? 'pago' : 'orgânico'}</span>
-    </div>`).join('')
+  const doMes = MKT_CAL_ITENS.filter(c => c.data_publicacao?.slice(0, 4) === String(MKT_CAL_ANO) && Number(c.data_publicacao.slice(5, 7)) === mes + 1)
+  const relevantesDoMes = MKT_CAL_RELEVANTES.filter(d => d.mes === mes + 1)
+  const porDia = dia => ({
+    itens: doMes.filter(c => Number(c.data_publicacao.slice(8, 10)) === dia),
+    relevantes: relevantesDoMes.filter(d => d.dia === dia)
+  })
 
-  const linhasRelevantes = relevantesDoMes.map(d => `<div class="passo">
-      <span class="quando">${String(d.dia).padStart(2, '0')}/${String(mes + 1).padStart(2, '0')}</span>
-      <span style="flex:1;">
-        <b>📅 ${esc(d.titulo)}</b>
-        ${d.orientacao ? `<div class="texto-dim2" style="font-size:11.5px;margin-top:2px;">${esc(d.orientacao)}</div>` : ''}
-      </span>
-    </div>`).join('')
+  const celulas = []
+  for (let i = 0; i < primeiroDiaSemana; i++) celulas.push('<div></div>')
+  for (let dia = 1; dia <= diasNoMes; dia++) {
+    const dataStr = `${MKT_CAL_ANO}-${String(mes + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`
+    const { itens: itensDia, relevantes: relevantesDia } = porDia(dia)
+    const temAlgo = itensDia.length || relevantesDia.length
+    celulas.push(`<button class="dia-cal-mkt" data-dia="${dia}" style="aspect-ratio:1;padding:4px;text-align:left;cursor:pointer;
+      background:${dataStr === hojeStr ? 'var(--hover-bg)' : 'var(--panel)'};border:1px solid ${temAlgo ? 'var(--rust)' : 'var(--line)'};border-radius:8px;color:var(--txt);
+      display:flex;flex-direction:column;gap:2px;overflow:hidden;">
+      <span style="font-size:11px;font-weight:${dataStr === hojeStr ? '700' : '400'};color:${dataStr === hojeStr ? 'var(--rust)' : 'var(--dim)'};">${dia}</span>
+      ${relevantesDia.length ? `<span style="font-size:9px;">📅</span>` : ''}
+      ${itensDia.slice(0, 2).map(it => `<span style="font-size:8.5px;background:var(--surface2);border-radius:4px;padding:1px 3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(it.titulo)}</span>`).join('')}
+      ${itensDia.length > 2 ? `<span style="font-size:8.5px;color:var(--dim2);">+${itensDia.length - 2}</span>` : ''}
+    </button>`)
+  }
 
   $('#mkc-detalhe').innerHTML = `
-    <div class="panel" style="padding:20px;">
+    <div class="panel" style="padding:18px;">
       <div class="cabeca-secao">
         <h3 style="font-family:var(--serif);font-size:18px;margin:0;">${NOMES_MES_MKT[mes]} de ${MKT_CAL_ANO}</h3>
         <div style="display:flex;gap:8px;">
@@ -18171,14 +18173,75 @@ function renderMktDetalheMes (alvo, itens, datasRelevantes, editavel) {
           <button class="btn-secundario mini" id="mkc-fechar-mes">fechar</button>
         </div>
       </div>
-      <p class="texto-dim2" style="font-size:12px;margin:2px 0 14px;">${doMes.length} planejamento(s) do Quadro · ${relevantesDoMes.length} data(s) relevante(s) do mês.</p>
-      ${relevantesDoMes.length ? `<div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;margin:14px 0 6px;">Datas relevantes do mês</div>${linhasRelevantes}` : ''}
-      ${doMes.length ? `<div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;margin:14px 0 6px;">Planejamento (Quadro)</div>${linhas}` : ''}
-      ${!doMes.length && !relevantesDoMes.length ? '<p class="vazio">Nada pra esse mês ainda — adiciona pelo Quadro.</p>' : ''}
+      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:5px;margin:14px 0 6px;">
+        ${['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map(d => `<div class="texto-dim2" style="text-align:center;font-size:10.5px;">${d}</div>`).join('')}
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:5px;">${celulas.join('')}</div>
     </div>`
 
-  $('#mkc-fechar-mes').onclick = () => { MKT_CAL_MES_ABERTO = null; renderMktCalendario(alvo, itens, datasRelevantes, editavel) }
+  $('#mkc-fechar-mes').onclick = () => { MKT_CAL_MES_ABERTO = null; renderMktCalendario(alvo, editavel) }
   $('#mkc-imprimir').onclick = () => mktImprimirPlanejamentoMes(doMes, relevantesDoMes, mes)
+  $('#mkc-detalhe').querySelectorAll('[data-dia]').forEach(el => {
+    el.onclick = () => abrirMktDia(Number(el.dataset.dia), mes, alvo, editavel)
+  })
+}
+
+// ----- ao clicar num dia: mostra o que já tem e deixa agendar algo novo -----
+function abrirMktDia (dia, mes, alvo, editavel) {
+  const dataStr = `${MKT_CAL_ANO}-${String(mes + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`
+  const itensDia = MKT_CAL_ITENS.filter(c => c.data_publicacao === dataStr)
+  const relevantesDia = MKT_CAL_RELEVANTES.filter(d => d.mes === mes + 1 && d.dia === dia)
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>${dia} de ${NOMES_MES_MKT[mes]}</h3>
+    ${relevantesDia.length ? relevantesDia.map(d => `<div class="passo"><span>📅 <b>${esc(d.titulo)}</b></span></div>
+      ${d.orientacao ? `<p class="texto-dim2" style="font-size:12px;margin:-4px 0 8px;">${esc(d.orientacao)}</p>` : ''}`).join('') : ''}
+    <div id="mkc-itens-dia">
+      ${itensDia.map(it => `<div class="passo">
+        <span style="flex:1;"><b>${esc(it.titulo)}</b>
+          <span class="texto-dim2" style="font-size:11px;"> — ${esc(it.canal ?? 'sem canal')}</span></span>
+        <span class="${it.tipo === 'PAGO' ? 'badge-bom' : 'chip'}">${it.tipo === 'PAGO' ? 'pago' : 'orgânico'}</span>
+      </div>`).join('') || (editavel ? '' : '<p class="vazio">Nada agendado nesse dia.</p>')}
+    </div>
+    ${editavel ? `
+      <div class="cabeca-secao" style="margin-top:16px;"><h4 style="font-size:13px;margin:0;">Agendar algo nesse dia</h4></div>
+      <div class="form-grade">
+        <div class="campo" style="grid-column:span 2;"><label>O que é?</label><input id="mkc-novo-titulo" placeholder="ex: Post Instagram — promoção de inverno"></div>
+        <div class="campo"><label>Canal</label><input id="mkc-novo-canal" placeholder="Instagram, Blog..."></div>
+        <div class="campo"><label>Tipo</label><select id="mkc-novo-tipo"><option value="ORGANICO">Orgânico</option><option value="PAGO">Pago</option></select></div>
+      </div>
+      <div class="acoes" style="margin-top:12px;"><button class="btn" id="mkc-agendar">Agendar</button>
+        <button class="btn-secundario" id="mkc-dia-fechar">Fechar</button></div>
+      <div class="recado oculto" id="mkc-dia-recado"></div>
+    ` : `<div class="acoes" style="margin-top:16px;"><button class="btn-secundario" id="mkc-dia-fechar">Fechar</button></div>`}
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#mkc-dia-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  if (!editavel) return
+  fundo.querySelector('#mkc-agendar').onclick = async () => {
+    const el = fundo.querySelector('#mkc-dia-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const titulo = fundo.querySelector('#mkc-novo-titulo').value.trim()
+    if (!titulo) { aviso('Escreve o que é.'); return }
+    const btn = fundo.querySelector('#mkc-agendar'); btn.disabled = true; btn.textContent = 'Agendando...'
+    const tipo = fundo.querySelector('#mkc-novo-tipo').value
+    const { data: codigoGerado } = await db.rpc('gerar_codigo_card_marketing', { p_tipo: tipo })
+    const { error } = await db.from('marketing_card').insert({
+      titulo, tipo, canal: fundo.querySelector('#mkc-novo-canal').value.trim() || null,
+      data_publicacao: dataStr, coluna: 'A_FAZER', codigo: codigoGerado, criado_por: PERFIL.pessoaId
+    })
+    btn.disabled = false; btn.textContent = 'Agendar'
+    if (error) { aviso(error.message); return }
+    fechar()
+    await mktCalendario(alvo, editavel)
+    MKT_CAL_MES_ABERTO = mes
+    renderMesCompletoMkt(alvo, editavel)
+  }
 }
 
 function mktImprimirPlanejamentoMes (doMes, relevantesDoMes, mes) {
@@ -18215,6 +18278,7 @@ function mktImprimirPlanejamentoMes (doMes, relevantesDoMes, mes) {
   fundo.querySelector('#mkc-pdf-gerar').onclick = () => window.print()
   fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
 }
+
 
 
 function formMktDoc (registro, aoSalvar) {
