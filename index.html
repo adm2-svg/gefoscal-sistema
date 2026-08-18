@@ -281,6 +281,52 @@ tbody tr:hover { background: var(--hover-bg); }
 .card-tarefa .alerta-dot.atrasado { background:var(--critico-text); box-shadow:0 0 0 3px rgba(var(--critico-rgb),.18); }
 .painel-funil-kpis { margin-bottom:18px; }
 .painel-funil-secao-titulo { font-family:var(--serif); font-size:15px; margin:22px 0 12px; display:flex; align-items:center; justify-content:space-between; gap:10px; }
+
+/* ---- Cards de KPI do CRM (Painel) — cartão com ícone, número grande e
+   um respiro decorativo no canto, no estilo pedido pela Amanda ---- */
+.crm-kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:14px; }
+.crm-kpi { position:relative; overflow:hidden; background:var(--panel); border:1px solid var(--line);
+           border-radius:16px; padding:16px; }
+.crm-kpi:before { content:""; position:absolute; right:-30px; top:-34px; width:90px; height:90px;
+                   border-radius:50%; background:rgba(var(--rust-rgb),.08); }
+.crm-kpi.gold:before { background:rgba(var(--gold-rgb),.14); }
+.crm-kpi.alerta:before { background:rgba(var(--warn-rgb),.14); }
+.crm-kpi .icone { width:32px; height:32px; border-radius:10px; background:rgba(var(--rust-rgb),.12);
+                   display:flex; align-items:center; justify-content:center; font-size:15px; margin-bottom:10px; }
+.crm-kpi .rot { font-size:10.5px; text-transform:uppercase; letter-spacing:.5px; color:var(--dim2); font-weight:700; }
+.crm-kpi .val { font-size:24px; font-weight:700; margin-top:5px; color:var(--txt); }
+.crm-kpi .nota { font-size:10.5px; color:var(--dim2); margin-top:3px; }
+.crm-kpi.alerta .val { color:var(--warn-text); }
+
+/* ---- Cards do funil (kanban do CRM) — próprios, sem mexer no .card-tarefa
+   que outros módulos (Projetos, Solicitações) também usam ---- */
+.crm-board { display:grid; gap:12px; overflow-x:auto; align-items:start; }
+.crm-col { background:var(--surface2); border:1px solid var(--line); border-radius:14px; min-width:230px; }
+.crm-col-head { padding:11px 13px; font-weight:700; font-size:13px; display:flex; justify-content:space-between;
+                align-items:center; border-bottom:1px solid var(--line); }
+.crm-col-head .contagem { background:var(--panel); border-radius:999px; padding:2px 9px; font-size:11.5px; color:var(--dim); }
+.crm-col-corpo { padding:10px; display:flex; flex-direction:column; gap:10px; min-height:50px; }
+.crm-card { position:relative; background:var(--card); border:1px solid var(--line); border-radius:13px;
+            padding:12px 13px; box-shadow:0 3px 10px rgba(0,0,0,.06); cursor:grab; }
+.crm-card:active { cursor:grabbing; }
+.crm-card .dot { position:absolute; top:13px; right:13px; width:8px; height:8px; border-radius:50%; }
+.crm-card .dot.ok { background:var(--good-text); }
+.crm-card .dot.atencao { background:var(--warn-text); }
+.crm-card .dot.atrasado { background:var(--critico-text); }
+.crm-card .nome { font-weight:700; font-size:13.5px; padding-right:16px; }
+.crm-card .sub { font-size:11px; color:var(--dim2); margin-top:2px; }
+.crm-card .linhas { margin-top:9px; display:grid; gap:4px; }
+.crm-card .linhas div { display:flex; gap:6px; font-size:11.5px; color:var(--dim); align-items:flex-start; }
+.crm-card .linhas div span.ic { width:14px; text-align:center; flex:none; opacity:.75; }
+.crm-card .linhas .alerta-txt.atencao { color:var(--warn-text); font-weight:600; }
+.crm-card .linhas .alerta-txt.atrasado { color:var(--critico-text); font-weight:600; }
+.crm-card select.crm-card-etapa { width:100%; margin-top:9px; font-size:11px; padding:5px 6px; border-radius:8px; }
+.crm-card .rodape { margin-top:9px; padding-top:8px; border-top:1px solid var(--line); display:flex;
+                     justify-content:space-between; align-items:center; gap:8px; }
+.crm-card .rodape .data { font-size:10.5px; color:var(--dim2); }
+.crm-card .btn-agendar { border:0; border-radius:999px; padding:5px 11px; font-size:11px; font-weight:700;
+                          background:rgba(var(--rust-rgb),.13); color:var(--rust); cursor:pointer; }
+.crm-card .btn-agendar:hover { background:rgba(var(--rust-rgb),.22); }
 .prio { font-size:9.5px; padding:2px 8px; border-radius:20px; text-transform:uppercase; letter-spacing:.3px; }
 .prio.ALTA  { border:1px solid var(--warn-text); color:var(--warn-text); background:rgba(var(--warn-rgb),.13); }
 .prio.MEDIA { border:1px solid var(--line2); color:var(--dim); background:var(--surface2); }
@@ -6802,11 +6848,15 @@ function renderPainelResumo (alvo, lista, gerencia) {
   const painel = document.createElement('div')
   painel.className = 'painel-funil-kpis'
   painel.innerHTML = `
-    <div class="resumo-topo">
-      ${[['Leads em aberto', emAberto.length, ''], ['Valor em funil', 'R$ ' + fmtNum(valorPipeline), ''],
-         ['Taxa de conversão', taxaConversao != null ? taxaConversao + '%' : '—', ''],
-         ['Parados há +7 dias', parados, parados ? 'alerta' : (emAberto.length ? 'bom' : '')]]
-        .map(([rot, val, cl]) => `<div class="bloco ${cl}"><div class="rot">${rot}</div><div class="val">${val}</div></div>`).join('')}
+    <div class="crm-kpis">
+      ${[
+        ['👥', 'Leads em aberto', emAberto.length, 'no seu funil agora', ''],
+        ['💰', 'Valor em funil', 'R$ ' + fmtNum(valorPipeline), 'soma dos abertos', 'gold'],
+        ['📈', 'Taxa de conversão', taxaConversao != null ? taxaConversao + '%' : '—', 'ganhos ÷ fechados', ''],
+        ['⏱', 'Parados há +7 dias', parados, parados ? 'precisa de atenção' : 'ritmo em dia', parados ? 'alerta' : '']
+      ].map(([icone, rot, val, nota, cl]) => `
+        <div class="crm-kpi ${cl}"><div class="icone">${icone}</div>
+          <div class="rot">${rot}</div><div class="val">${val}</div><div class="nota">${nota}</div></div>`).join('')}
     </div>
     <div class="panel" style="padding:18px;margin-top:16px;">
       <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Por etapa</h3>
@@ -7537,32 +7587,55 @@ function renderFunilGestao (alvo, lista, editavel, aoMudar, gerencia = true) {
   const cartao = l => {
     const parado = diasDesde(l.atualizado_em)
     const alerta = nivelAlertaLead(l)
-    return `<div class="card-tarefa" data-lead="${l.id}" ${editavel ? 'draggable="true"' : ''}>
-      ${alerta ? `<span class="alerta-dot ${alerta}" title="${alerta === 'atrasado' ? 'Parado há mais de 15 dias' : alerta === 'atencao' ? 'Parado há mais de 7 dias' : 'Dentro do prazo'}"></span>` : ''}
-      <div>${esc(l.nome)}</div>
-      ${l.municipio || l.uf ? `<div class="proj">${esc([l.municipio, l.uf].filter(Boolean).join(' / '))}</div>` : ''}
-      <div class="rodape-t">
-        <span class="texto-dim2" style="font-size:11px;">${esc(l.vendedor?.nome ?? 'sem vendedor')}</span>
-        <span class="texto-dim2" style="font-size:11px;${alerta === 'atencao' ? 'color:var(--warn-text);font-weight:600;' : alerta === 'atrasado' ? 'color:var(--critico-text);font-weight:600;' : ''}">
-          ${parado != null ? `${parado}d parado` : ''}</span>
+    const alertaTxt = alerta === 'atrasado' ? `Atrasado — ${parado}d sem movimento`
+      : alerta === 'atencao' ? `${parado}d sem movimento` : (parado != null ? `${parado}d sem movimento` : '')
+    return `<div class="crm-card" data-lead="${l.id}" ${editavel ? 'draggable="true"' : ''}>
+      ${alerta ? `<span class="dot ${alerta}" title="${alerta === 'atrasado' ? 'Parado há mais de 15 dias' : alerta === 'atencao' ? 'Parado há mais de 7 dias' : 'Dentro do prazo'}"></span>` : ''}
+      <div class="nome">${esc(l.nome)}</div>
+      <div class="sub">${esc([ROTULO_ETAPA_LEAD[l.etapa] ?? l.etapa, gerencia ? (l.vendedor?.nome ?? 'sem vendedor') : null].filter(Boolean).join(' · '))}</div>
+      <div class="linhas">
+        ${l.telefone ? `<div><span class="ic">📞</span>${esc(l.telefone)}</div>` : ''}
+        ${l.municipio || l.uf ? `<div><span class="ic">📍</span>${esc([l.municipio, l.uf].filter(Boolean).join(' / '))}</div>` : ''}
+        ${l.valor_estimado ? `<div><span class="ic">💰</span>R$ ${fmtNum(l.valor_estimado)}</div>` : ''}
+        ${alertaTxt ? `<div class="alerta-txt ${alerta}"><span class="ic">⏱</span>${esc(alertaTxt)}</div>` : ''}
+        ${l.cliente_id ? `<div><span class="ic">✔</span>Convertido em cliente</div>` : ''}
       </div>
-      ${editavel ? `<select class="card-select-etapa" data-mudar-etapa="${l.id}" style="width:100%;margin-top:8px;font-size:11.5px;padding:4px 6px;" onclick="event.stopPropagation()">
+      ${editavel ? `<select class="crm-card-etapa" data-mudar-etapa="${l.id}" onclick="event.stopPropagation()">
         ${ETAPAS_LEAD.map(e => `<option value="${e}" ${e === l.etapa ? 'selected' : ''}>${ROTULO_ETAPA_LEAD[e]}</option>`).join('')}
       </select>` : ''}
+      <div class="rodape">
+        <span class="data">${fmtData((l.criado_em || '').slice(0, 10))}</span>
+        <button type="button" class="btn-agendar" data-agendar="${l.id}" onclick="event.stopPropagation()">📅 Agendar</button>
+      </div>
       </div>`
   }
 
-  alvo.innerHTML = `<div class="kanban" style="grid-template-columns:repeat(${ETAPAS_LEAD.length},1fr);overflow-x:auto;">
-    ${ETAPAS_LEAD.map(et => `<div class="coluna-kanban" data-coluna="${et}" style="min-width:170px;"><h4>${ROTULO_ETAPA_LEAD[et]}
-      <span class="texto-dim2">${lista.filter(l => l.etapa === et).length}</span></h4>
-      <div class="coluna-drop" data-drop="${et}" style="min-height:60px;">
-        ${lista.filter(l => l.etapa === et).map(cartao).join('') || '<p class="vazio" style="padding:10px;">vazio</p>'}
+  alvo.innerHTML = `<div class="crm-board" style="grid-template-columns:repeat(${ETAPAS_LEAD.length},1fr);">
+    ${ETAPAS_LEAD.map(et => `<div class="crm-col" data-coluna="${et}"><div class="crm-col-head"><span>${ROTULO_ETAPA_LEAD[et]}</span>
+      <span class="contagem">${lista.filter(l => l.etapa === et).length}</span></div>
+      <div class="crm-col-corpo" data-drop="${et}">
+        ${lista.filter(l => l.etapa === et).map(cartao).join('') || '<p class="vazio" style="padding:10px;font-size:12px;">vazio</p>'}
       </div></div>`).join('')}
   </div>`
 
-  // clique no card (fora do seletor) abre o lead completo
+  // clique no card (fora do seletor/botão) abre o lead completo
   alvo.querySelectorAll('[data-lead]').forEach(el => {
     el.onclick = () => formLead(lista.find(l => l.id === el.dataset.lead), editavel, gerencia, aoMudar)
+  })
+
+  // agendar rápido, direto do card, sem abrir o lead inteiro
+  alvo.querySelectorAll('[data-agendar]').forEach(btn => {
+    btn.onclick = async () => {
+      const dataTxt = prompt('Data do compromisso (AAAA-MM-DD):', new Date().toISOString().slice(0, 10))
+      if (!dataTxt) return
+      const titulo = prompt('Título / observação (opcional):', '') || ''
+      const { error } = await db.from('lead_compromisso').insert({
+        lead_id: btn.dataset.agendar, data_hora: new Date(`${dataTxt}T09:00:00`).toISOString(),
+        titulo: titulo || null, criado_por: PERFIL.pessoaId
+      })
+      if (error) { alert('Não consegui agendar: ' + error.message); return }
+      alert('Compromisso agendado.')
+    }
   })
 
   if (!editavel) return
