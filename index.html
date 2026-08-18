@@ -6586,7 +6586,7 @@ async function paginaCrm () {
   CRM_CACHE.vendedores = CRM_CACHE.pessoas.filter(p => p.eh_vendedor)
   if (!CRM_CACHE.vendedores.length) CRM_CACHE.vendedores = CRM_CACHE.pessoas
 
-  const abas = [['painel', 'Painel'], ['progresso', 'Progresso'], ['historico', 'Histórico']]
+  const abas = [['painel', 'Painel']]
   if (gerencia) abas.push(['gestao', 'Gestão'])
 
   const inicial = CRM_SUBABA_INICIAL && abas.some(a => a[0] === CRM_SUBABA_INICIAL) ? CRM_SUBABA_INICIAL : abas[0][0]
@@ -6611,11 +6611,9 @@ function abrirCrm (sub, editavel, gerencia) {
   const alvo = $('#sub-crm')
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
   $('#kpis').innerHTML = ''
-  if (sub === 'painel') crmPainelFunil(alvo, editavel, gerencia)
+  if (sub === 'painel') crmPainelProgresso(alvo, editavel, gerencia)
   if (sub === 'atribuir') crmAtribuir(alvo)
-  if (sub === 'progresso') crmLeads(alvo, editavel, gerencia)
-  if (sub === 'historico') crmHistorico(alvo, editavel, gerencia)
-  if (sub === 'gestao') crmGestaoTab(alvo)
+  if (sub === 'gestao') crmGestaoTab(alvo, editavel)
 }
 
 const selLead = `
@@ -6635,42 +6633,90 @@ function filtrarPorDono (q, gerencia) {
 }
 
 // ----- Painel + Funil (KPIs, gráficos e kanban numa página só) -----
-// Antes eram duas abas separadas (Painel só com números, Funil só com o
-// kanban). Fundidas aqui: primeiro a realidade do vendedor em números
-// (o que ele tem, como está indo, onde precisa melhorar), depois o
-// kanban logo abaixo pra ele já trabalhar sem trocar de aba.
-async function crmPainelFunil (alvo, editavel, gerencia) {
+// Antes eram três abas separadas (Painel só com números, Funil só com o
+// kanban, Progresso só com a tabela). Agora: Painel = números + agenda
+// pessoal + tabela de progresso, tudo individual (o que é seu). O kanban
+// visual (arrastar card entre etapas) e o histórico da equipe inteira
+// ficam só dentro de Gestão — só quem gerencia enxerga todo mundo.
+async function crmPainelProgresso (alvo, editavel, gerencia) {
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
-  const [painelRes, funilRes] = await Promise.all([
+  const [painelRes, agendaRes] = await Promise.all([
     filtrarPorDono(db.from('lead').select(`
       id, etapa, origem, valor_estimado, vendedor_id, criado_em, atualizado_em, vendedor:vendedor_id ( nome )
     `), gerencia).order('criado_em', { ascending: false }).limit(1000),
-    filtrarPorDono(db.from('lead').select(selLead), gerencia).order('atualizado_em', { ascending: false }).limit(500)
+    PERFIL.pessoaId
+      ? db.from('lead_compromisso').select('id,data_hora,titulo,observacao,lead_id,lead:lead_id!inner(nome,vendedor_id)')
+          .eq('concluido', false).eq('lead.vendedor_id', PERFIL.pessoaId)
+          .order('data_hora', { ascending: true }).limit(30)
+      : { data: [] }
   ])
 
   if (faltaMigracao(painelRes.error) || painelRes.error) { alvo.innerHTML = `<p class="vazio">${esc(painelRes.error.message)}</p>`; return }
-  if (faltaMigracao(funilRes.error) || funilRes.error) { alvo.innerHTML = `<p class="vazio">${esc(funilRes.error.message)}</p>`; return }
 
   const listaPainel = painelRes.data || []
-  CRM_CACHE.leads = funilRes.data || []
-
   alvo.innerHTML = ''
+
+  renderMinhaAgenda(alvo, agendaRes.data || [], editavel, gerencia)
   renderPainelResumo(alvo, listaPainel, gerencia)
   await crmCardNovoPedido(alvo, gerencia)
 
-  const tituloFunil = document.createElement('div')
-  tituloFunil.className = 'painel-funil-secao-titulo'
-  tituloFunil.innerHTML = `<span>Funil de vendas</span>`
-  alvo.appendChild(tituloFunil)
+  const tituloProgresso = document.createElement('div')
+  tituloProgresso.className = 'painel-funil-secao-titulo'
+  tituloProgresso.innerHTML = `<span>Meus leads</span>`
+  alvo.appendChild(tituloProgresso)
 
-  const areaFunil = document.createElement('div')
-  alvo.appendChild(areaFunil)
-  renderFunil(areaFunil, editavel, gerencia)
+  const areaProgresso = document.createElement('div')
+  alvo.appendChild(areaProgresso)
+  renderCrmProgresso(areaProgresso, editavel, gerencia)
+}
+
+// ----- Card "Minha agenda" no topo do Painel -----
+// Mostra os compromissos em aberto dos MEUS leads (não da equipe toda,
+// mesmo que eu gerencie — isso aqui é pessoal). Atrasado/hoje vem
+// destacado, é o "lembrete" possível numa página estática (sem push).
+function renderMinhaAgenda (alvo, itens, editavel, gerencia) {
+  if (!itens.length) return // sem compromisso pendente, não polui a tela com card vazio
+
+  const agora = Date.now()
+  const comStatus = itens.map(c => {
+    const t = new Date(c.data_hora).getTime()
+    const diffDias = Math.floor((t - agora) / 864e5)
+    const status = t < agora ? 'atrasado' : (diffDias === 0 ? 'hoje' : (diffDias <= 7 ? 'semana' : 'depois'))
+    return { ...c, status, diffDias }
+  })
+  const atrasados = comStatus.filter(c => c.status === 'atrasado').length
+  const hoje = comStatus.filter(c => c.status === 'hoje').length
+
+  const bloco = document.createElement('div')
+  bloco.className = 'panel'
+  bloco.style.cssText = 'padding:18px;margin-bottom:16px;' + (atrasados ? 'border-color:var(--critico-text);' : (hoje ? 'border-color:var(--warn-text);' : ''))
+  bloco.innerHTML = `
+    <div class="cabeca-secao" style="margin-bottom:10px;">
+      <h3 style="font-family:var(--serif);font-size:15px;margin:0;">Minha agenda</h3>
+      ${atrasados ? `<span class="badge-estourado">${atrasados} atrasado${atrasados > 1 ? 's' : ''}</span>`
+        : hoje ? `<span class="badge-alerta">${hoje} hoje</span>` : `<span class="badge-bom">em dia</span>`}
+    </div>
+    <div style="display:flex;flex-direction:column;gap:6px;">
+      ${comStatus.slice(0, 8).map(c => `<div class="passo" data-abrir-agenda="${c.lead_id}" style="cursor:pointer;">
+        <span class="quando">${c.status === 'atrasado' ? `<span class="badge-estourado" style="font-size:10px;">atrasado</span>`
+          : c.status === 'hoje' ? `<span class="badge-alerta" style="font-size:10px;">hoje</span>`
+          : `<span class="texto-dim2" style="font-size:10.5px;">${fmtQuando(c.data_hora) ?? ''}</span>`}</span>
+        <span><b>${esc(c.lead?.nome ?? '—')}</b>${c.titulo ? ` — ${esc(c.titulo)}` : ''}</span>
+      </div>`).join('')}
+    </div>`
+  alvo.appendChild(bloco)
+
+  bloco.querySelectorAll('[data-abrir-agenda]').forEach(el => {
+    el.onclick = async () => {
+      const { data } = await db.from('lead').select(selLead).eq('id', el.dataset.abrirAgenda).single()
+      if (data) formLead(data, editavel, gerencia, () => abrirCrm('painel', editavel, gerencia))
+    }
+  })
 }
 
 // KPIs + gráficos — mesma lógica que já existia em crmPainel, isolada
-// pra poder desenhar acima do kanban na mesma aba.
+// pra poder desenhar em cima da tabela de progresso na mesma aba.
 function renderPainelResumo (alvo, lista, gerencia) {
   const emAberto = lista.filter(l => ETAPAS_LEAD_ABERTAS.includes(l.etapa))
   const ganhos = lista.filter(l => l.etapa === 'GANHO')
@@ -6686,17 +6732,6 @@ function renderPainelResumo (alvo, lista, gerencia) {
 
   const donutEtapa = ETAPAS_LEAD.map(e => ({ rotulo: ROTULO_ETAPA_LEAD[e], valor: lista.filter(l => l.etapa === e).length }))
 
-  let blocoVendedor = ''
-  if (gerencia) {
-    const porVendedor = {}
-    emAberto.forEach(l => { const n = l.vendedor?.nome ?? 'sem vendedor'; porVendedor[n] = (porVendedor[n] || 0) + 1 })
-    const barrasVendedor = Object.entries(porVendedor).sort((a, b) => b[1] - a[1]).map(([rotulo, valor]) => ({ rotulo, valor }))
-    blocoVendedor = `<div class="panel" style="padding:18px;">
-        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Leads em aberto por vendedor</h3>
-        ${barrasHorizontais(barrasVendedor, { unidade: '', casas: 0 })}
-      </div>`
-  }
-
   const painel = document.createElement('div')
   painel.className = 'painel-funil-kpis'
   painel.innerHTML = `
@@ -6706,12 +6741,9 @@ function renderPainelResumo (alvo, lista, gerencia) {
          ['Parados há +7 dias', parados, parados ? 'alerta' : (emAberto.length ? 'bom' : '')]]
         .map(([rot, val, cl]) => `<div class="bloco ${cl}"><div class="rot">${rot}</div><div class="val">${val}</div></div>`).join('')}
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;" class="grade-painel-comb">
-      ${blocoVendedor}
-      <div class="panel" style="padding:18px;">
-        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Por etapa (histórico)</h3>
-        ${svgDonut(donutEtapa)}
-      </div>
+    <div class="panel" style="padding:18px;margin-top:16px;">
+      <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Por etapa</h3>
+      ${svgDonut(donutEtapa)}
     </div>
     <div class="panel" style="padding:18px;margin-top:16px;">
       <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Leads por origem</h3>
@@ -6720,7 +6752,8 @@ function renderPainelResumo (alvo, lista, gerencia) {
   alvo.appendChild(painel)
 }
 
-// dias parado -> nível de alerta visual do card (verde/amarelo/vermelho)
+// dias parado -> nível de alerta visual (verde/amarelo/vermelho) — usado
+// tanto na tabela do Painel quanto no kanban de Gestão.
 function nivelAlertaLead (l) {
   if (['GANHO', 'PERDIDO'].includes(l.etapa)) return null
   const parado = diasDesde(l.atualizado_em)
@@ -6730,40 +6763,8 @@ function nivelAlertaLead (l) {
   return 'ok'
 }
 
-function renderFunil (alvo, editavel, gerencia) {
-  const lista = CRM_CACHE.leads
-  const cartao = l => {
-    const parado = diasDesde(l.atualizado_em)
-    const alerta = nivelAlertaLead(l)
-    return `<div class="card-tarefa" data-lead="${l.id}">
-      ${alerta ? `<span class="alerta-dot ${alerta}" title="${alerta === 'atrasado' ? 'Parado há mais de 15 dias' : alerta === 'atencao' ? 'Parado há mais de 7 dias' : 'Dentro do prazo'}"></span>` : ''}
-      <div>${esc(l.nome)}</div>
-      ${l.municipio || l.uf ? `<div class="proj">${esc([l.municipio, l.uf].filter(Boolean).join(' / '))}</div>` : ''}
-      <div class="rodape-t">
-        <span class="texto-dim2" style="font-size:11px;">${gerencia ? esc(l.vendedor?.nome ?? 'sem vendedor') : (l.valor_estimado ? 'R$ ' + fmtNum(l.valor_estimado) : '')}</span>
-        <span class="texto-dim2" style="font-size:11px;${alerta === 'atencao' ? 'color:var(--warn-text);font-weight:600;' : alerta === 'atrasado' ? 'color:var(--critico-text);font-weight:600;' : ''}">
-          ${gerencia && l.valor_estimado ? 'R$ ' + fmtNum(l.valor_estimado) : (parado != null ? `${parado}d parado` : '')}</span>
-      </div></div>`
-  }
-
-  const podeNovo = editavel && gerencia // criar lead do zero é ação de quem gerencia; vendedor só trabalha o que chega
-  alvo.innerHTML =
-    (podeNovo ? `<div class="acoes" style="margin:0 0 16px;"><button class="btn" id="crm-novo">Novo lead</button></div>` : '') +
-    (!gerencia && !lista.length ? `<p class="vazio">Nenhum lead atribuído a você ainda. Assim que a gerência mandar um cliente pra você, ele aparece aqui.</p>` : '') +
-    `<div class="kanban" style="grid-template-columns:repeat(${ETAPAS_LEAD.length},1fr);overflow-x:auto;">
-      ${ETAPAS_LEAD.map(et => `<div class="coluna-kanban" style="min-width:170px;"><h4>${ROTULO_ETAPA_LEAD[et]}
-        <span class="texto-dim2">${lista.filter(l => l.etapa === et).length}</span></h4>
-        ${lista.filter(l => l.etapa === et).map(cartao).join('') || '<p class="vazio" style="padding:10px;">vazio</p>'}</div>`).join('')}
-    </div>`
-
-  alvo.querySelectorAll('[data-lead]').forEach(el => {
-    el.onclick = () => formLead(lista.find(l => l.id === el.dataset.lead), editavel, gerencia, () => abrirCrm('painel', editavel, gerencia))
-  })
-  if (podeNovo) $('#crm-novo').onclick = () => formLead(null, editavel, gerencia, () => abrirCrm('painel', editavel, gerencia))
-}
-
-// ----- Progresso (lista/busca, com filtro por cliente) -----
-async function crmLeads (alvo, editavel, gerencia) {
+// ----- Progresso (tabela/busca, com filtro por cliente) — individual -----
+function renderCrmProgresso (alvo, editavel, gerencia) {
   const hoje = new Date().toISOString().slice(0, 10)
   const de = new Date(Date.now() - 180 * 864e5).toISOString().slice(0, 10)
 
@@ -6783,19 +6784,11 @@ async function crmLeads (alvo, editavel, gerencia) {
   let baseAtual = []
 
   const renderTabela = lista => {
-    const emAberto = lista.filter(l => ETAPAS_LEAD_ABERTAS.includes(l.etapa))
-    const valorPipeline = emAberto.reduce((s, l) => s + Number(l.valor_estimado || 0), 0)
-
-    $('#kpis').innerHTML = kpi('Leads no filtro', lista.length) +
-      kpi('Em aberto', emAberto.length) +
-      kpi('Valor em funil', 'R$ ' + fmtNum(valorPipeline)) +
-      kpi('Ganhos', lista.filter(l => l.etapa === 'GANHO').length)
-
     $('#cl-conteudo').innerHTML = `
       <div class="panel" style="padding:0;"><div class="tabela-scroll">
         <table><thead><tr>
           <th>Lead</th><th>Local</th><th>Origem</th><th>Etapa</th>
-          <th class="num">Valor estimado</th>${gerencia ? '<th>Vendedor</th>' : ''}<th>Cliente vinculado</th><th>Progresso</th>
+          <th class="num">Valor estimado</th><th>Cliente vinculado</th><th>Progresso</th>
         </tr></thead><tbody>
           ${lista.map(l => { const parado = diasDesde(l.atualizado_em); return `<tr style="cursor:pointer;" data-abrir="${l.id}">
             <td><b>${esc(l.nome)}</b></td>
@@ -6803,11 +6796,10 @@ async function crmLeads (alvo, editavel, gerencia) {
             <td class="texto-dim2">${esc(l.origem ?? '—')}</td>
             <td><span class="${corEtapaLead(l.etapa)}">${esc(ROTULO_ETAPA_LEAD[l.etapa] ?? l.etapa)}</span></td>
             <td class="num">${l.valor_estimado ? 'R$ ' + fmtNum(l.valor_estimado) : '—'}</td>
-            ${gerencia ? `<td class="texto-dim">${esc(l.vendedor?.nome ?? '—')}</td>` : ''}
             <td class="texto-dim">${esc(l.cliente?.nome_fantasia || l.cliente?.razao_social || '—')}</td>
             <td class="texto-dim2" style="font-size:11px;${parado != null && parado > 7 && !['GANHO', 'PERDIDO'].includes(l.etapa) ? 'color:var(--warn-text);' : ''}">
               ${parado != null ? (parado === 0 ? 'hoje' : `há ${parado}d`) : '—'}</td>
-          </tr>`}).join('') || `<tr><td colspan="${gerencia ? 8 : 7}" class="vazio">Nenhum lead no filtro.</td></tr>`}
+          </tr>`}).join('') || `<tr><td colspan="7" class="vazio">Nenhum lead no filtro.</td></tr>`}
         </tbody></table>
       </div></div>`
 
@@ -7087,6 +7079,54 @@ function formAtribuirLead (l, aoFechar) {
 }
 
 // ----- Formulário de lead (criar/editar/mudar etapa/converter) -----
+// ----- Agenda dentro do card do lead -----
+async function carregarAgendaLead (fundo, l, editavel) {
+  const alvoLista = fundo.querySelector('#ld-agenda-lista')
+  const { data, error } = await db.from('lead_compromisso').select('id,data_hora,titulo,observacao,concluido')
+    .eq('lead_id', l.id).order('data_hora', { ascending: true })
+  if (error) { alvoLista.innerHTML = `<p class="vazio" style="font-size:12px;">${esc(error.message)}</p>`; return }
+
+  const itens = data || []
+  alvoLista.innerHTML = itens.length ? itens.map(c => {
+    const atrasado = !c.concluido && new Date(c.data_hora).getTime() < Date.now()
+    return `<div class="passo" style="align-items:center;${c.concluido ? 'opacity:.55;' : ''}">
+      ${editavel ? `<input type="checkbox" data-concluir="${c.id}" ${c.concluido ? 'checked' : ''} style="margin-right:8px;">` : ''}
+      <span class="quando">${atrasado ? `<span class="badge-estourado" style="font-size:10px;">atrasado</span>` : `<span class="texto-dim2" style="font-size:10.5px;">${fmtQuando(c.data_hora) ?? ''}</span>`}</span>
+      <span style="flex:1;${c.concluido ? 'text-decoration:line-through;' : ''}">${esc(c.titulo || 'Compromisso')}</span>
+      ${editavel ? `<button type="button" class="btn-secundario mini" data-excluir-agenda="${c.id}" style="padding:2px 8px;">✕</button>` : ''}
+    </div>`
+  }).join('') : `<p class="texto-dim2" style="font-size:12px;">Nenhum compromisso agendado ainda.</p>`
+
+  alvoLista.querySelectorAll('[data-concluir]').forEach(chk => {
+    chk.onchange = async () => {
+      await db.from('lead_compromisso').update({ concluido: chk.checked }).eq('id', chk.dataset.concluir)
+      carregarAgendaLead(fundo, l, editavel)
+    }
+  })
+  alvoLista.querySelectorAll('[data-excluir-agenda]').forEach(btn => {
+    btn.onclick = async () => {
+      if (!confirm('Excluir este compromisso da agenda?')) return
+      await db.from('lead_compromisso').delete().eq('id', btn.dataset.excluirAgenda)
+      carregarAgendaLead(fundo, l, editavel)
+    }
+  })
+
+  const btnAdd = fundo.querySelector('#ag-adicionar')
+  if (btnAdd) btnAdd.onclick = async () => {
+    const data = fundo.querySelector('#ag-data').value
+    const hora = fundo.querySelector('#ag-hora').value || '09:00'
+    const titulo = fundo.querySelector('#ag-titulo').value.trim()
+    if (!data) { alert('Escolha a data do compromisso.'); return }
+    const { error: e1 } = await db.from('lead_compromisso').insert({
+      lead_id: l.id, data_hora: new Date(`${data}T${hora}:00`).toISOString(),
+      titulo: titulo || null, criado_por: PERFIL.pessoaId
+    })
+    if (e1) { alert('Não consegui salvar: ' + e1.message); return }
+    fundo.querySelector('#ag-titulo').value = ''
+    carregarAgendaLead(fundo, l, editavel)
+  }
+}
+
 function formLead (l, editavel, gerencia, aoFechar) {
   const podeReatribuir = editavel && gerencia // trocar o vendedor é ação de quem gerencia
   const podeExcluir = editavel && gerencia && l
@@ -7122,6 +7162,15 @@ function formLead (l, editavel, gerencia, aoFechar) {
     </div>
     <div class="campo" style="margin-top:10px;"><label>Observações</label>
       <textarea id="ld-obs" style="min-height:80px;" ${editavel ? '' : 'disabled'}>${esc(l?.observacoes ?? '')}</textarea></div>
+    ${l ? `<div class="cabeca-secao" style="margin-top:16px;margin-bottom:4px;">
+        <h3 style="font-family:var(--serif);font-size:14px;">Agenda</h3></div>
+      <div id="ld-agenda-lista" style="margin-bottom:8px;"><p class="texto-dim2" style="font-size:12px;">carregando agenda...</p></div>
+      ${editavel ? `<div class="form-grade" style="grid-template-columns:1fr 1fr 1.4fr auto;align-items:end;">
+        <div class="campo"><label>Data</label><input id="ag-data" type="date"></div>
+        <div class="campo"><label>Hora</label><input id="ag-hora" type="time" value="09:00"></div>
+        <div class="campo"><label>Título / observação</label><input id="ag-titulo" placeholder="ex: ligar, levar proposta..."></div>
+        <button class="btn-secundario mini" id="ag-adicionar" type="button" style="height:38px;">Adicionar</button>
+      </div>` : ''}` : ''}
     ${l?.cliente_id ? `<p class="texto-dim2" style="font-size:12px;margin-top:8px;">Já convertido em cliente: <b>${esc(l.cliente?.nome_fantasia || l.cliente?.razao_social || '—')}</b></p>
       ${editavel ? `<div class="acoes" style="margin-top:8px;"><button class="btn-secundario" id="ld-emitir-pedido" type="button">Emitir pedido</button></div>` : ''}`
       : (editavel && l ? `<div class="acoes" style="margin-top:10px;"><button class="btn-secundario" id="ld-converter" type="button">Converter em cliente</button></div>` : '')}
@@ -7136,6 +7185,8 @@ function formLead (l, editavel, gerencia, aoFechar) {
   const fechar = () => fundo.remove()
   fundo.querySelector('#ld-fechar').onclick = fechar
   fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  if (l) carregarAgendaLead(fundo, l, editavel)
 
   const aviso = (t, ok = false) => {
     const el = fundo.querySelector('#ld-recado'); el.textContent = t; el.classList.remove('oculto')
@@ -7275,14 +7326,92 @@ function formEmitirPedidoCrm (l) {
 // — porque gestor também vende, não só supervisiona. Só olha o funil
 // ativo (arquivado = false); histórico fica na aba Histórico.
 // ---------------------------------------------------------------
-async function crmGestaoTab (alvo) {
-  const { data, error } = await db.from('lead').select(`
-    id, nome, etapa, valor_estimado, vendedor_id, criado_em, atualizado_em, municipio, uf,
-    vendedor:vendedor_id ( nome )
-  `).eq('arquivado', false).order('atualizado_em', { ascending: false }).limit(1500)
+// ----- Funil visual da equipe (dentro de Gestão) -----
+// Dá pra mudar a etapa de duas formas, do jeito que foi pedido:
+// arrastando o card pra outra coluna, OU escolhendo a etapa no
+// seletor que fica dentro do próprio card (mais fácil no celular/
+// touch, onde arrastar às vezes falha).
+async function atualizarEtapaLead (lead, novaEtapa, aoTerminar) {
+  if (novaEtapa === lead.etapa) return
+  const { error } = await db.from('lead').update({ etapa: novaEtapa, atualizado_em: new Date().toISOString() }).eq('id', lead.id)
+  if (error) { alert('Não consegui mover: ' + error.message); return }
+  await db.from('lead_historico').insert({ lead_id: lead.id, etapa_de: lead.etapa, etapa_para: novaEtapa, pessoa_id: PERFIL.pessoaId })
+  aoTerminar()
+}
+
+function renderFunilGestao (alvo, lista, editavel, aoMudar) {
+  let arrastando = null // id do lead sendo arrastado
+
+  const cartao = l => {
+    const parado = diasDesde(l.atualizado_em)
+    const alerta = nivelAlertaLead(l)
+    return `<div class="card-tarefa" data-lead="${l.id}" ${editavel ? 'draggable="true"' : ''}>
+      ${alerta ? `<span class="alerta-dot ${alerta}" title="${alerta === 'atrasado' ? 'Parado há mais de 15 dias' : alerta === 'atencao' ? 'Parado há mais de 7 dias' : 'Dentro do prazo'}"></span>` : ''}
+      <div>${esc(l.nome)}</div>
+      ${l.municipio || l.uf ? `<div class="proj">${esc([l.municipio, l.uf].filter(Boolean).join(' / '))}</div>` : ''}
+      <div class="rodape-t">
+        <span class="texto-dim2" style="font-size:11px;">${esc(l.vendedor?.nome ?? 'sem vendedor')}</span>
+        <span class="texto-dim2" style="font-size:11px;${alerta === 'atencao' ? 'color:var(--warn-text);font-weight:600;' : alerta === 'atrasado' ? 'color:var(--critico-text);font-weight:600;' : ''}">
+          ${parado != null ? `${parado}d parado` : ''}</span>
+      </div>
+      ${editavel ? `<select class="card-select-etapa" data-mudar-etapa="${l.id}" style="width:100%;margin-top:8px;font-size:11.5px;padding:4px 6px;" onclick="event.stopPropagation()">
+        ${ETAPAS_LEAD.map(e => `<option value="${e}" ${e === l.etapa ? 'selected' : ''}>${ROTULO_ETAPA_LEAD[e]}</option>`).join('')}
+      </select>` : ''}
+      </div>`
+  }
+
+  alvo.innerHTML = `<div class="kanban" style="grid-template-columns:repeat(${ETAPAS_LEAD.length},1fr);overflow-x:auto;">
+    ${ETAPAS_LEAD.map(et => `<div class="coluna-kanban" data-coluna="${et}" style="min-width:170px;"><h4>${ROTULO_ETAPA_LEAD[et]}
+      <span class="texto-dim2">${lista.filter(l => l.etapa === et).length}</span></h4>
+      <div class="coluna-drop" data-drop="${et}" style="min-height:60px;">
+        ${lista.filter(l => l.etapa === et).map(cartao).join('') || '<p class="vazio" style="padding:10px;">vazio</p>'}
+      </div></div>`).join('')}
+  </div>`
+
+  // clique no card (fora do seletor) abre o lead completo
+  alvo.querySelectorAll('[data-lead]').forEach(el => {
+    el.onclick = () => formLead(lista.find(l => l.id === el.dataset.lead), editavel, true, aoMudar)
+  })
+
+  if (!editavel) return
+
+  // seletor de etapa dentro do card — alternativa ao arrastar
+  alvo.querySelectorAll('[data-mudar-etapa]').forEach(sel => {
+    sel.onchange = () => {
+      const lead = lista.find(l => l.id === sel.dataset.mudarEtapa)
+      if (lead) atualizarEtapaLead(lead, sel.value, aoMudar)
+    }
+  })
+
+  // arrastar e soltar entre colunas
+  alvo.querySelectorAll('[data-lead]').forEach(card => {
+    card.ondragstart = e => {
+      arrastando = card.dataset.lead
+      e.dataTransfer.effectAllowed = 'move'
+      card.style.opacity = '.4'
+    }
+    card.ondragend = () => { card.style.opacity = '1'; arrastando = null }
+  })
+  alvo.querySelectorAll('[data-drop]').forEach(zona => {
+    zona.ondragover = e => { e.preventDefault(); zona.style.background = 'var(--hover-bg)' }
+    zona.ondragleave = () => { zona.style.background = '' }
+    zona.ondrop = e => {
+      e.preventDefault()
+      zona.style.background = ''
+      if (!arrastando) return
+      const lead = lista.find(l => l.id === arrastando)
+      if (lead) atualizarEtapaLead(lead, zona.dataset.drop, aoMudar)
+    }
+  })
+}
+
+async function crmGestaoTab (alvo, editavel) {
+  const { data, error } = await db.from('lead').select(selLead)
+    .eq('arquivado', false).order('atualizado_em', { ascending: false }).limit(1500)
   if (faltaMigracao(error)) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
 
   const lista = data || []
+  CRM_CACHE.leads = lista
   const atribuidos = lista.filter(l => l.vendedor_id)
   const poolSemVendedor = lista.filter(l => !l.vendedor_id).length
   const emAberto = atribuidos.filter(l => ETAPAS_LEAD_ABERTAS.includes(l.etapa))
@@ -7333,7 +7462,14 @@ async function crmGestaoTab (alvo) {
       <button class="btn-secundario mini" id="cg-ir-atribuir">Atribuir agora</button>
     </div>` : ''}
 
-    <div style="display:grid;grid-template-columns:1.3fr 1fr;gap:16px;" class="grade-painel-comb">
+    <div class="cabeca-secao" style="margin-top:4px;">
+      <h3 style="font-family:var(--serif);font-size:16px;">Funil de vendas (equipe toda)</h3>
+    </div>
+    <p class="texto-dim2" style="font-size:11.5px;margin:-4px 0 12px;">
+      Arraste o card pra outra coluna, ou use o seletor de etapa dentro do card — os dois fazem a mesma coisa.</p>
+    <div id="cg-funil"></div>
+
+    <div style="display:grid;grid-template-columns:1.3fr 1fr;gap:16px;margin-top:20px;" class="grade-painel-comb">
       <div class="panel" style="padding:18px;">
         <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Ritmo por vendedor</h3>
         <div class="tabela-scroll" style="max-height:none;">
@@ -7385,6 +7521,8 @@ async function crmGestaoTab (alvo) {
     </div>
     <div id="cg-banco-painel" class="oculto" style="margin-top:10px;"></div>`
 
+  renderFunilGestao($('#cg-funil'), lista, editavel, () => crmGestaoTab(alvo, editavel))
+
   const painelHistorico = $('#cg-historico-painel')
   $('#cg-toggle-historico').onclick = () => {
     if (painelHistorico.classList.contains('oculto')) {
@@ -7419,7 +7557,7 @@ async function crmGestaoTab (alvo) {
   alvo.querySelectorAll('[data-abrir-parado]').forEach(el => {
     el.onclick = () => {
       const l = parados.find(x => x.id === el.dataset.abrirParado)
-      if (l) irSub('progresso')
+      if (l) irSub('painel')
     }
   })
 }
@@ -7520,66 +7658,9 @@ async function crmCompartilharBanco (alvo) {
   desenharChecklist('')
 }
 
-// ----- Histórico -----
-// Base de suporte/consulta: leads arquivados (ex.: migrados do CRM
-// antigo). NÃO participa do funil ativo nem das métricas de painel —
-// é só referência pra consultar contato/observações antigas. Quem
-// gerencia pode "reativar" um registro de volta pro funil se ele
-// voltar a ficar quente.
-async function crmHistorico (alvo, editavel, gerencia) {
-  alvo.innerHTML = `
-    <div class="filtros" style="margin-bottom:14px;">
-      <div class="campo" style="flex:1;min-width:220px;"><label>Buscar</label>
-        <input id="hi-busca" placeholder="nome, cidade, telefone..."></div>
-    </div>
-    <p class="texto-dim2" style="font-size:12px;margin:-6px 0 14px;">
-      Base de consulta/suporte — não é o funil ativo. Útil pra checar se alguém já foi contatado antes.</p>
-    <div id="hi-conteudo"><p class="texto-dim2">carregando...</p></div>`
-
-  const { data, error } = await filtrarPorDonoHistorico(db.from('lead').select(selLead))
-    .order('criado_em', { ascending: false }).limit(1000)
-  if (faltaMigracao(error) || error) { $('#hi-conteudo').innerHTML = `<p class="vazio">${esc(error?.message ?? '')}</p>`; return }
-  const base = data || []
-
-  const render = lista => {
-    $('#hi-conteudo').innerHTML = `
-      <div class="panel" style="padding:0;"><div class="tabela-scroll">
-        <table><thead><tr>
-          <th>Lead</th><th>Local</th><th>Contato</th><th>Etapa</th><th>Observações</th>${editavel ? '<th></th>' : ''}
-        </tr></thead><tbody>
-          ${lista.map(l => `<tr>
-            <td><b>${esc(l.nome)}</b></td>
-            <td class="texto-dim2">${esc([l.municipio, l.uf].filter(Boolean).join(' / ') || '—')}</td>
-            <td class="texto-dim2">${esc([l.telefone, l.email].filter(Boolean).join(' · ') || '—')}</td>
-            <td><span class="${corEtapaLead(l.etapa)}">${esc(ROTULO_ETAPA_LEAD[l.etapa] ?? l.etapa)}</span></td>
-            <td class="texto-dim2" style="max-width:280px;">${esc(l.observacoes ?? '—')}</td>
-            ${editavel ? `<td><button class="btn-secundario mini" data-reativar="${l.id}">Reativar no funil</button></td>` : ''}
-          </tr>`).join('') || `<tr><td colspan="${editavel ? 6 : 5}" class="vazio">Nada no histórico.</td></tr>`}
-        </tbody></table>
-      </div></div>`
-
-    alvo.querySelectorAll('[data-reativar]').forEach(b => {
-      b.onclick = async () => {
-        if (!confirm('Tirar este lead do histórico e trazer de volta pro funil ativo?')) return
-        await db.from('lead').update({ arquivado: false, atualizado_em: new Date().toISOString() }).eq('id', b.dataset.reativar)
-        crmHistorico(alvo, editavel, gerencia)
-      }
-    })
-  }
-  render(base)
-
-  $('#hi-busca').oninput = () => {
-    const termo = $('#hi-busca').value.trim().toLowerCase()
-    render(!termo ? base : base.filter(l => [l.nome, l.municipio, l.uf, l.telefone, l.email]
-      .some(campo => (campo || '').toLowerCase().includes(termo))))
-  }
-}
-
-// mesmo recorte "só o meu" de filtrarPorDono, mas pro histórico
-// (arquivado = true, sem tocar no funil ativo)
-function filtrarPorDonoHistorico (q) {
-  return q.eq('arquivado', true).eq('vendedor_id', PERFIL.pessoaId)
-}
+// Histórico individual (leads arquivados só do próprio vendedor) foi
+// removido daqui — agora é responsabilidade só da Gestão, que vê o
+// histórico de TODOS (crmHistoricoEquipe, chamado dentro de crmGestaoTab).
 
 // ---------------------------------------------------------------
 // Página: Crédito e Cobrança  (módulo 'cobranca')
