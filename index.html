@@ -854,6 +854,144 @@ function abrirPdfProposta (prop, lead) {
   fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
 }
 
+function badgeCredito (decisao) {
+  if (decisao === 'APROVADO') return { texto: 'APROVADO', bg: '#2f7a4f' }
+  if (decisao === 'REPROVADO') return { texto: 'REPROVADO', bg: '#8a2f2f' }
+  return { texto: 'PENDENTE', bg: '#8a5a12' }
+}
+
+// ----- PDF do Pedido Comercial — gerado a partir do "Ganho" no funil do
+// CRM. Modelo exato que a Amanda mandou (mesmo cabeçalho verde com selo
+// de status, "Resumo Contábil", "Informações Complementares" e
+// "Assinaturas"), só tirando o Frete — ninguém do lado da empresa sabe
+// dessa informação, quem decide é o cliente. -----
+function abrirPdfPedidoComercial (pedido, cliente, vendedor, produto, decisao = null) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  const badge = badgeCredito(decisao?.decisao)
+  const dataPedido = pedido.data_pedido ? new Date(pedido.data_pedido + 'T00:00:00') : new Date()
+  const validade = new Date(dataPedido); validade.setDate(validade.getDate() + 10)
+  const enderecoFat = [cliente?.endereco, cliente?.bairro, cliente?.municipio ? `${cliente.municipio}/${cliente.uf ?? ''}` : null]
+    .filter(Boolean).join(', ')
+
+  const infoBox = (rot, val) => `
+    <div style="border:1px solid var(--borda);border-radius:8px;padding:9px 12px;">
+      <div style="font-size:10.5px;font-weight:700;color:#1b1b1b;">${esc(rot)}</div>
+      <div style="font-size:12.5px;color:#3a4640;margin-top:2px;">${val ? esc(val) : '—'}</div>
+    </div>`
+
+  fundo.innerHTML = `
+    <div class="modal area-impressao" style="max-width:920px;padding:0;background:transparent;border:none;">
+      <div class="doc">
+        <div class="doc-topo" style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;">
+          <div>
+            <h2>GEFOSCAL • Pedido Comercial</h2>
+            <div class="sub">Documento para impressão / envio ao cliente</div>
+          </div>
+          <span style="background:${badge.bg};color:#fff;border-radius:20px;padding:5px 14px;font-size:11.5px;font-weight:700;letter-spacing:.4px;white-space:nowrap;">${badge.texto}</span>
+        </div>
+        <div class="doc-corpo">
+          <div class="doc-linha">
+            ${docBloco('Identificação do Pedido',
+              docLinha('Data', fmtData(dataPedido.toISOString().slice(0, 10))) +
+              docLinha('Nº do Pedido', pedido.numero) +
+              docLinha('Cliente', cliente?.razao_social) +
+              docLinha('Vendedor', vendedor?.nome) +
+              docLinha('Produto', produto?.nome) +
+              docLinha('Quantidade', pedido.quantidade_t != null ? `${fmtNum(pedido.quantidade_t, 2)} ${pedido.unidade ?? 'TL'}` : null) +
+              docLinha('Exige análise de crédito?', 'SIM'))}
+            <div class="bloco">
+              <h4>Resumo Contábil</h4>
+              <div class="conteudo">
+                ${docValor('Valor da Solicitação', '', pedido.valor_total)}
+                ${docValor('Valor Final', '', pedido.valor_total)}
+                ${docValor('Desconto', '', 0)}
+                ${docValor('TOTAL', '', pedido.valor_total, true)}
+              </div>
+            </div>
+          </div>
+
+          <div class="bloco" style="margin-top:12px;">
+            <h4>Informações Complementares</h4>
+            <div class="conteudo" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+              ${infoBox('Condição de Pagamento', pedido.condicao_pagamento || pedido.forma_pagamento)}
+              ${infoBox('Prazo de Validade (PDF)', fmtData(validade.toISOString().slice(0, 10)))}
+              ${infoBox('E-mail do Vendedor', vendedor?.email)}
+              ${infoBox('CPF/CNPJ', cliente?.cnpj_cpf)}
+              ${infoBox('Inscrição Estadual', cliente?.inscricao_estadual)}
+              ${infoBox('Endereço de Faturamento', enderecoFat)}
+              ${infoBox('Telefone', cliente?.telefone)}
+              ${infoBox('E-mail para Assinatura', cliente?.email)}
+            </div>
+          </div>
+
+          <div style="margin-top:14px;">
+            <div style="font-size:11px;font-weight:700;color:var(--verde);text-transform:uppercase;letter-spacing:.5px;">Assinaturas</div>
+            <p class="texto-dim2" style="font-size:11px;margin:2px 0 0;">Assine manualmente após imprimir (cliente e vendedor).</p>
+            ${docAssinaturas([['Cliente', cliente?.razao_social], ['Vendedor', vendedor?.nome]])}
+          </div>
+        </div>
+      </div>
+      <div class="acoes nao-imprime" style="justify-content:center;">
+        <button class="btn" id="ppc-imprimir">Baixar / imprimir PDF</button>
+        <button class="btn-secundario" id="ppc-fechar">Fechar</button>
+      </div>
+    </div>`
+
+  document.body.appendChild(fundo)
+  fundo.querySelector('#ppc-fechar').onclick = () => fundo.remove()
+  fundo.querySelector('#ppc-imprimir').onclick = () => window.print()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+}
+
+// ----- E-mail automático do pedido (vendedor + cliente) — chama a Edge
+// Function 'enviar-pedido-email', que por sua vez chama o Apps Script
+// rodando no Google Workspace da Gefoscal. Se ainda não tiver sido
+// configurado (faltam os segredos no Supabase), ou se faltar e-mail de
+// cliente/vendedor, ela simplesmente avisa no console e segue a vida —
+// nunca trava o fluxo de criar o pedido nem o PDF que já abriu. -----
+function montarEmailPedidoHtml (pedido, cliente, vendedor, produto) {
+  return `
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;border:1px solid #d7e3da;border-radius:10px;overflow:hidden;">
+      <div style="background:#1c5632;color:#fff;padding:18px 22px;border-bottom:4px solid #c8a11a;">
+        <div style="font-size:18px;font-weight:700;">GEFOSCAL &bull; Pedido Comercial</div>
+        <div style="font-size:12px;opacity:.85;margin-top:3px;">Pedido n&ordm; ${esc(pedido.numero)}</div>
+      </div>
+      <div style="padding:20px;color:#1b1b1b;font-size:13.5px;line-height:1.6;">
+        <p>Ol&aacute;,</p>
+        <p>Segue o resumo do pedido comercial:</p>
+        <table style="width:100%;border-collapse:collapse;margin:12px 0;">
+          <tr><td style="padding:6px 0;color:#5b6b60;">Cliente</td><td style="padding:6px 0;text-align:right;font-weight:600;">${esc(cliente?.razao_social || '—')}</td></tr>
+          <tr><td style="padding:6px 0;color:#5b6b60;">Vendedor</td><td style="padding:6px 0;text-align:right;font-weight:600;">${esc(vendedor?.nome || '—')}</td></tr>
+          <tr><td style="padding:6px 0;color:#5b6b60;">Produto</td><td style="padding:6px 0;text-align:right;font-weight:600;">${esc(produto?.nome || '—')}</td></tr>
+          <tr><td style="padding:6px 0;color:#5b6b60;">Quantidade</td><td style="padding:6px 0;text-align:right;font-weight:600;">${pedido.quantidade_t != null ? fmtNum(pedido.quantidade_t, 2) + ' ' + (pedido.unidade || 'TL') : '—'}</td></tr>
+          <tr><td style="padding:10px 0 6px;color:#8a5a12;font-weight:700;border-top:1px solid #d7e3da;">Total</td><td style="padding:10px 0 6px;text-align:right;font-weight:700;color:#8a5a12;border-top:1px solid #d7e3da;">R$ ${fmtNum(pedido.valor_total)}</td></tr>
+        </table>
+        <p style="font-size:12px;color:#6d7c72;">O PDF completo (com identifica&ccedil;&atilde;o, condi&ccedil;&otilde;es e campo de assinatura) foi gerado no sistema pelo vendedor.</p>
+      </div>
+      <div style="background:#1c5632;color:#fff;padding:12px 22px;font-size:11px;">
+        (62) 99232-8743 &middot; R. Pernambuco, 55, Sala 16 - Centro, Lu&iacute;s Eduardo Magalh&atilde;es - BA &middot; www.gefoscal.com.br
+      </div>
+    </div>`
+}
+
+async function enviarEmailPedido (pedido, cliente, vendedor, produto) {
+  const destinatarios = [cliente?.email, vendedor?.email].filter(Boolean)
+  if (!destinatarios.length) { console.warn('E-mail do pedido não enviado: cliente e vendedor sem e-mail cadastrado.'); return }
+  try {
+    const { data, error } = await db.functions.invoke('enviar-pedido-email', {
+      body: {
+        para: destinatarios,
+        assunto: `Pedido Gefoscal nº ${pedido.numero} — ${cliente?.razao_social || ''}`,
+        corpoHtml: montarEmailPedidoHtml(pedido, cliente, vendedor, produto)
+      }
+    })
+    if (error || !data?.ok) console.warn('Falha ao enviar e-mail do pedido:', error || data?.error)
+  } catch (e) {
+    console.warn('Falha ao enviar e-mail do pedido:', e)
+  }
+}
+
 const db = createClient(SUPABASE_URL, SUPABASE_KEY)
 const $ = s => document.querySelector(s)
 const fmtNum = (n, d = 2) => (n ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: d, maximumFractionDigits: d })
@@ -8899,9 +9037,9 @@ async function cobPedidos (alvo, editavel) {
 
 async function formPedidoVenda (p, preset = null) {
   const [{ data: clientes }, { data: produtos }, { data: vendedores }] = await Promise.all([
-    db.from('cliente').select('id,razao_social,cnpj_cpf,conferir_dados').eq('status','ATIVO').order('razao_social'),
+    db.from('cliente').select('id,razao_social,cnpj_cpf,conferir_dados,inscricao_estadual,endereco,bairro,municipio,uf,telefone,email').eq('status','ATIVO').order('razao_social'),
     db.from('produto').select('id,nome').order('nome'),
-    db.from('pessoa').select('id,nome').eq('eh_vendedor', true).order('nome')
+    db.from('pessoa').select('id,nome,email').eq('eh_vendedor', true).order('nome')
   ])
 
   let parcelas = []
@@ -9106,6 +9244,7 @@ async function formPedidoVenda (p, preset = null) {
     }
 
     let pedidoId = p?.id
+    let numeroGerado = p?.numero
     if (p) {
       const { error } = await db.from('pedido').update(corpo).eq('id', p.id)
       if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Salvar'; return }
@@ -9131,6 +9270,7 @@ async function formPedidoVenda (p, preset = null) {
       const { data, error } = await db.from('pedido').insert(corpo).select('id,numero').single()
       if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Emitir pedido'; return }
       pedidoId = data.id
+      numeroGerado = data.numero
     }
 
     await db.from('pedido_parcela').delete().eq('pedido_id', pedidoId)
@@ -9141,7 +9281,21 @@ async function formPedidoVenda (p, preset = null) {
       })))
     }
 
-    fechar(); abrirCobranca('pedidos')
+    fechar()
+    if (preset && !p) {
+      // veio do CRM (card "Ganho") — em vez de ir pra Crédito e Cobrança,
+      // já mostra o PDF do pedido pronto pra imprimir/mandar pro cliente,
+      // e dispara o e-mail automático pro vendedor + cliente (silencioso:
+      // se falhar, não trava o fluxo — o PDF já abriu de qualquer jeito)
+      const clienteObj = (clientes || []).find(c => c.id === corpo.cliente_id)
+      const vendedorObj = (vendedores || []).find(v => v.id === corpo.vendedor_id)
+      const produtoObj = (produtos || []).find(pr => pr.id === corpo.produto_id)
+      const pedidoCompleto = { ...corpo, id: pedidoId, numero: numeroGerado }
+      abrirPdfPedidoComercial(pedidoCompleto, clienteObj, vendedorObj, produtoObj)
+      enviarEmailPedido(pedidoCompleto, clienteObj, vendedorObj, produtoObj)
+    } else {
+      abrirCobranca('pedidos')
+    }
   }
 }
 
