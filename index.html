@@ -320,10 +320,6 @@ tbody tr:hover { background: var(--hover-bg); }
 .crm-card .linhas div span.ic { width:14px; text-align:center; flex:none; opacity:.75; }
 .crm-card .linhas .alerta-txt.atencao { color:var(--warn-text); font-weight:600; }
 .crm-card .linhas .alerta-txt.atrasado { color:var(--critico-text); font-weight:600; }
-.crm-card select.crm-card-etapa { width:100%; margin-top:9px; font-size:11px; padding:5px 6px; border-radius:8px; }
-.crm-card .crm-etapa-toggle { font-size:10.5px; color:var(--dim2); margin-top:9px; cursor:pointer;
-                               text-decoration:underline dotted; display:inline-block; }
-.crm-card .crm-etapa-toggle:hover { color:var(--rust); }
 .crm-card .rodape { margin-top:9px; padding-top:8px; border-top:1px solid var(--line); display:flex;
                      justify-content:space-between; align-items:center; gap:8px; }
 .crm-card .rodape .data { font-size:10.5px; color:var(--dim2); }
@@ -7620,10 +7616,6 @@ function renderFunilGestao (alvo, lista, editavel, aoMudar, gerencia = true) {
         ${alertaTxt ? `<div class="alerta-txt ${alerta}"><span class="ic">⏱</span>${esc(alertaTxt)}</div>` : ''}
         ${l.cliente_id ? `<div><span class="ic">✔</span>Convertido em cliente</div>` : ''}
       </div>
-      ${editavel ? `<div class="crm-etapa-toggle" data-toggle-etapa="${l.id}" onclick="event.stopPropagation()">🔀 mudar etapa</div>
-      <select class="crm-card-etapa oculto" data-mudar-etapa="${l.id}" onclick="event.stopPropagation()">
-        ${ETAPAS_LEAD.map(e => `<option value="${e}" ${e === l.etapa ? 'selected' : ''}>${ROTULO_ETAPA_LEAD[e]}</option>`).join('')}
-      </select>` : ''}
       <div class="rodape">
         <span class="data">${fmtData((l.criado_em || '').slice(0, 10))}</span>
         <button type="button" class="btn-agendar" data-agendar="${l.id}" onclick="event.stopPropagation()">📅 Agendar</button>
@@ -7660,22 +7652,6 @@ function renderFunilGestao (alvo, lista, editavel, aoMudar, gerencia = true) {
   })
 
   if (!editavel) return
-
-  // seletor de etapa dentro do card — fica escondido até clicar em
-  // "mudar etapa", pra não poluir o card com um select sempre visível
-  alvo.querySelectorAll('[data-toggle-etapa]').forEach(link => {
-    link.onclick = () => {
-      link.classList.add('oculto')
-      const sel = alvo.querySelector(`[data-mudar-etapa="${link.dataset.toggleEtapa}"]`)
-      if (sel) { sel.classList.remove('oculto'); sel.focus() }
-    }
-  })
-  alvo.querySelectorAll('[data-mudar-etapa]').forEach(sel => {
-    sel.onchange = () => {
-      const lead = lista.find(l => l.id === sel.dataset.mudarEtapa)
-      if (lead) atualizarEtapaLead(lead, sel.value, aoMudar)
-    }
-  })
 
   // arrastar e soltar entre colunas
   alvo.querySelectorAll('[data-lead]').forEach(card => {
@@ -7760,7 +7736,7 @@ async function crmGestaoTab (alvo, editavel) {
       <h3 style="font-family:var(--serif);font-size:16px;">Funil de vendas (equipe toda)</h3>
     </div>
     <p class="texto-dim2" style="font-size:11.5px;margin:-4px 0 12px;">
-      Arraste o card pra outra coluna, ou use o seletor de etapa dentro do card — os dois fazem a mesma coisa.</p>
+      Arraste o card pra outra coluna, ou clique nele pra abrir e trocar a etapa lá dentro.</p>
     <div id="cg-funil"></div>
 
     <div style="display:grid;grid-template-columns:1.3fr 1fr;gap:16px;margin-top:20px;" class="grade-painel-comb">
