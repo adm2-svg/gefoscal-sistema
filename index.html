@@ -1851,7 +1851,7 @@ async function paginaSolicitacoes () {
   const [{ data: setores }, { data: pessoas }, { data: deptos }, { data: vinculos }] = await Promise.all([
     db.from('setor').select('id,nome').order('nome'),
     db.from('pessoa').select('id,nome,setor_id').eq('status', 'ATIVO').order('nome'),
-    db.from('departamento').select('id,nome,codigo,macro_area').order('ordem'),
+    db.from('departamento').select('id,nome,codigo,macro_area,setor_id').order('ordem'),
     db.from('vinculo_acesso').select('pessoa_id,dept_id')
   ])
   SOLIC_CACHE = { setores: setores || [], pessoas: pessoas || [], deptos: deptos || [], vinculos: vinculos || [] }
@@ -1970,16 +1970,17 @@ async function solicNova (alvo) {
   // nome, e mostra quem tem vínculo de acesso real àquele departamento
   // — combina o dropdown simples de sempre com o modelo novo por trás
   const atualizarResponsaveis = () => {
-    const setorEscolhido = SOLIC_CACHE.setores.find(s => s.id === $('#sn-setor').value)
-    const deptoCorrespondente = SOLIC_CACHE.deptos.find(d => d.nome.trim().toLowerCase() === (setorEscolhido?.nome ?? '').trim().toLowerCase())
+    const setorId = $('#sn-setor').value
+    const deptosCorrespondentes = SOLIC_CACHE.deptos.filter(d => d.setor_id === setorId)
     let doDepto = []
-    if (deptoCorrespondente) {
-      const idsComVinculo = new Set(SOLIC_CACHE.vinculos.filter(v => v.dept_id === deptoCorrespondente.id).map(v => v.pessoa_id))
+    if (deptosCorrespondentes.length) {
+      const idsDepto = new Set(deptosCorrespondentes.map(d => d.id))
+      const idsComVinculo = new Set(SOLIC_CACHE.vinculos.filter(v => idsDepto.has(v.dept_id)).map(v => v.pessoa_id))
       doDepto = SOLIC_CACHE.pessoas.filter(p => idsComVinculo.has(p.id))
     }
-    // sem correspondência de departamento (nome não bateu) — cai pro
-    // jeito antigo, por setor_id da pessoa, pra sempre ter alguém pra mostrar
-    if (!doDepto.length) doDepto = SOLIC_CACHE.pessoas.filter(p => p.setor_id === setorEscolhido?.id)
+    // sem departamento ligado a esse setor — cai pro jeito antigo, por
+    // setor_id da pessoa, pra sempre ter alguém pra mostrar
+    if (!doDepto.length) doDepto = SOLIC_CACHE.pessoas.filter(p => p.setor_id === setorId)
     $('#sn-responsavel').innerHTML = `<option value="">— quem pegar responde —</option>` +
       doDepto.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')
   }
@@ -2003,14 +2004,12 @@ async function solicNova (alvo) {
     if (!titulo) { aviso('Escreva um título.'); return }
     const btn = $('#sn-salvar'); btn.disabled = true; btn.textContent = 'Enviando...'
 
-    const setorEscolhido = SOLIC_CACHE.setores.find(s => s.id === $('#sn-setor').value)
-    // casa por nome com o departamento novo — se achar, grava os dois;
-    // se não achar, grava só o setor mesmo (não trava a solicitação)
-    const deptoCorrespondente = SOLIC_CACHE.deptos.find(d => d.nome.trim().toLowerCase() === (setorEscolhido?.nome ?? '').trim().toLowerCase())
+    const setorId = $('#sn-setor').value
+    const deptoCorrespondente = SOLIC_CACHE.deptos.find(d => d.setor_id === setorId)
 
     const { data: nova, error } = await db.from('solicitacao_interna').insert({
       solicitante_id: PERFIL.pessoaId,
-      setor_destino_id: $('#sn-setor').value,
+      setor_destino_id: setorId,
       departamento_id: deptoCorrespondente?.id ?? null,
       responsavel_id: $('#sn-responsavel').value || null,
       status: $('#sn-responsavel').value ? 'EM_ANDAMENTO' : 'ABERTA',
