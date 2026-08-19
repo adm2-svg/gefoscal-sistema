@@ -2422,6 +2422,7 @@ async function paginaAdministracao () {
       <button data-sub="usuarios" class="ativo">Usuários</button>
       <button data-sub="apoio">Cargos e setores</button>
       <button data-sub="visao">Visão geral</button>
+      <button data-sub="modelo-acesso">🗺️ Modelo de Acesso</button>
     </div>
     <div id="sub-conteudo"></div>`
 
@@ -2440,6 +2441,7 @@ function abrirSub (sub, editavel) {
   if (sub === 'usuarios') subUsuarios(alvo, editavel)
   if (sub === 'apoio') subApoio(alvo, editavel)
   if (sub === 'visao') subVisao(alvo, editavel)
+  if (sub === 'modelo-acesso') subModeloAcesso(alvo, editavel)
 }
 
 // ----- Administração › Usuários -----
@@ -2883,6 +2885,267 @@ async function subApoio (alvo, editavel) {
 }
 
 // ----- Administração › Visão geral -----
+// ==================================================================
+// MODELO DE ACESSO — departamento + nível, em vez de módulo solto.
+// Isso é a fonte de verdade nova; fica sincronizada sozinha com
+// modulo_permissao (o sistema antigo) por um gatilho no banco, então
+// nenhuma das ~100 regras de acesso que já existem precisou mudar.
+// ==================================================================
+const NIVEIS_ACESSO_INFO = {
+  M: { nome: 'Master', cor: '#5B4B9E' },
+  T: { nome: 'Total', cor: '#2E6152' },
+  G: { nome: 'Gestão', cor: '#1F6F8B' },
+  O: { nome: 'Operação', cor: '#B5761A' },
+  C: { nome: 'Consulta', cor: '#7C8A84' }
+}
+const ORDEM_NIVEL = ['M', 'T', 'G', 'O', 'C']
+
+async function subModeloAcesso (alvo, editavel) {
+  alvo.innerHTML = `
+    <div class="subabas">
+      <button data-sub2="organograma" class="ativo">Organograma</button>
+      <button data-sub2="matriz">Matriz</button>
+      <button data-sub2="vinculos">Gerir vínculos</button>
+      <button data-sub2="log">Log de acesso</button>
+    </div>
+    <div id="sub2-conteudo"></div>`
+  alvo.querySelectorAll('.subabas button').forEach(b => {
+    b.onclick = () => {
+      alvo.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
+      abrirSub2Modelo(b.dataset.sub2, editavel)
+    }
+  })
+  abrirSub2Modelo('organograma', editavel)
+}
+function abrirSub2Modelo (sub, editavel) {
+  const alvo = $('#sub2-conteudo')
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  if (sub === 'organograma') maOrganograma(alvo, editavel)
+  if (sub === 'matriz') maMatriz(alvo)
+  if (sub === 'vinculos') maVinculos(alvo, editavel)
+  if (sub === 'log') maLog(alvo)
+}
+
+async function maDados () {
+  const [{ data: deptos }, { data: pessoas }, { data: vinculos }] = await Promise.all([
+    db.from('departamento').select('*').order('ordem'),
+    db.from('pessoa').select('id,nome,cargo').eq('status', 'ATIVO').order('nome'),
+    db.from('vinculo_acesso').select('*, pessoa:pessoa_id(nome), departamento:dept_id(codigo,nome,macro_area)')
+  ])
+  return { deptos: deptos || [], pessoas: pessoas || [], vinculos: vinculos || [] }
+}
+
+// ----- Organograma: agrupa por maior nível que a pessoa tem em qualquer departamento -----
+async function maOrganograma (alvo, editavel) {
+  const { pessoas, vinculos } = await maDados()
+  const maiorNivelDe = pid => {
+    const niveis = vinculos.filter(v => v.pessoa_id === pid).map(v => v.nivel_codigo)
+    for (const n of ORDEM_NIVEL) if (niveis.includes(n)) return n
+    return null
+  }
+  const grupos = {}
+  pessoas.forEach(p => {
+    const n = maiorNivelDe(p.id)
+    if (!n) return
+    ;(grupos[n] = grupos[n] || []).push(p)
+  })
+
+  alvo.innerHTML = `
+    <p class="texto-dim2" style="font-size:12.5px;margin:0 0 16px;">Agrupado pelo maior nível que cada pessoa tem em qualquer departamento. Clica numa pessoa pra ver os acessos.</p>
+    ${ORDEM_NIVEL.filter(n => grupos[n]?.length).map(n => `
+      <div class="panel" style="padding:16px 18px;margin-bottom:14px;border-left:4px solid ${NIVEIS_ACESSO_INFO[n].cor};">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 10px;">${NIVEIS_ACESSO_INFO[n].nome} <span class="texto-dim2" style="font-size:11px;font-weight:400;">(${grupos[n].length})</span></h3>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;">
+          ${grupos[n].map(p => {
+            const qtd = vinculos.filter(v => v.pessoa_id === p.id).length
+            return `<button class="btn-secundario mini" data-ver-pessoa-ma="${p.id}" style="text-align:left;">
+              <b>${esc(p.nome)}</b><br><span style="font-size:10.5px;opacity:.7;">${esc(p.cargo ?? '')} · ${qtd} depto${qtd > 1 ? 's' : ''}</span></button>`
+          }).join('')}
+        </div>
+      </div>`).join('') || '<p class="vazio">Nenhum vínculo cadastrado ainda.</p>'}
+    <div id="ma-detalhe-pessoa"></div>`
+
+  alvo.querySelectorAll('[data-ver-pessoa-ma]').forEach(b => {
+    b.onclick = () => maDetalhePessoa(b.dataset.verPessoaMa, vinculos, pessoas)
+  })
+}
+
+function maDetalhePessoa (pessoaId, vinculos, pessoas) {
+  const p = pessoas.find(x => x.id === pessoaId)
+  const vs = vinculos.filter(v => v.pessoa_id === pessoaId)
+    .sort((a, b) => ORDEM_NIVEL.indexOf(a.nivel_codigo) - ORDEM_NIVEL.indexOf(b.nivel_codigo))
+  $('#ma-detalhe-pessoa').innerHTML = `
+    <div class="panel" style="padding:18px;margin-top:6px;">
+      <h3 style="font-family:var(--serif);font-size:16px;margin:0;">${esc(p.nome)}</h3>
+      <p class="texto-dim2" style="font-size:12.5px;margin:2px 0 12px;">${esc(p.cargo ?? '')}</p>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;">
+        ${vs.map(v => `<span class="chip" style="border-left:3px solid ${NIVEIS_ACESSO_INFO[v.nivel_codigo].cor};">
+          ${esc(v.departamento.nome)} · ${NIVEIS_ACESSO_INFO[v.nivel_codigo].nome}${v.origem === 'excecao' ? ' (exceção)' : ''}</span>`).join('') || '<p class="vazio">sem vínculos</p>'}
+      </div>
+    </div>`
+}
+
+// ----- Matriz departamento × pessoa -----
+async function maMatriz (alvo) {
+  const { deptos, pessoas, vinculos } = await maDados()
+  const nivelDe = (deptoId, pessoaId) => vinculos.find(v => v.dept_id === deptoId && v.pessoa_id === pessoaId)?.nivel_codigo
+
+  alvo.innerHTML = `
+    <p class="texto-dim2" style="font-size:12.5px;margin:0 0 12px;">Leitura por linha: quem entra naquele departamento. Leitura por coluna: o alcance de cada pessoa.</p>
+    <div class="tabela-scroll" style="max-height:75vh;">
+      <table style="min-width:${300 + pessoas.length * 90}px;">
+        <thead><tr><th style="position:sticky;left:0;background:var(--panel);z-index:2;">Departamento</th>
+          ${pessoas.map(p => `<th style="text-align:center;font-size:10.5px;">${esc(p.nome)}</th>`).join('')}</tr></thead>
+        <tbody>
+          ${deptos.map(d => `<tr>
+            <th style="position:sticky;left:0;background:var(--panel);text-align:left;font-weight:500;font-size:12.5px;">
+              ${esc(d.nome)}<div class="texto-dim2" style="font-size:10px;">${esc(d.codigo)}</div></th>
+            ${pessoas.map(p => {
+              const n = nivelDe(d.id, p.id)
+              return `<td style="text-align:center;">${n ? `<span class="chip" style="background:${NIVEIS_ACESSO_INFO[n].cor};color:#fff;border:none;">${n}</span>` : '<span class="texto-dim2">—</span>'}</td>`
+            }).join('')}
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`
+}
+
+// ----- Gerir vínculos: escolhe pessoa, adiciona/edita/revoga -----
+async function maVinculos (alvo, editavel) {
+  const { deptos, pessoas, vinculos } = await maDados()
+  window.__MA_DEPTOS = deptos
+  window.__MA_PESSOAS = pessoas
+
+  alvo.innerHTML = `
+    <div class="campo" style="max-width:360px;margin-bottom:16px;">
+      <label>Escolher pessoa</label>
+      <select id="ma-pessoa-sel"><option value="">selecione...</option>
+        ${pessoas.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')}</select></div>
+    <div id="ma-vinculos-pessoa"></div>`
+
+  $('#ma-pessoa-sel').onchange = () => {
+    const pid = $('#ma-pessoa-sel').value
+    if (pid) renderVinculosDaPessoa(pid, editavel)
+    else $('#ma-vinculos-pessoa').innerHTML = ''
+  }
+}
+
+async function renderVinculosDaPessoa (pessoaId, editavel) {
+  const { data: vinculos } = await db.from('vinculo_acesso').select('*, departamento:dept_id(codigo,nome)').eq('pessoa_id', pessoaId).order('nivel_codigo')
+  const deptos = window.__MA_DEPTOS || []
+  const jaTemDepto = new Set((vinculos || []).map(v => v.dept_id))
+  const disponiveis = deptos.filter(d => !jaTemDepto.has(d.id))
+
+  $('#ma-vinculos-pessoa').innerHTML = `
+    <div class="panel" style="padding:0;margin-bottom:16px;"><div class="tabela-scroll">
+      <table><thead><tr><th>Departamento</th><th>Nível</th><th>Origem</th><th>Válido até</th>${editavel ? '<th></th>' : ''}</tr></thead><tbody>
+        ${(vinculos || []).map(v => `<tr>
+          <td>${esc(v.departamento.nome)}<div class="texto-dim2" style="font-size:10px;">${esc(v.departamento.codigo)}</div></td>
+          <td><span class="chip" style="background:${NIVEIS_ACESSO_INFO[v.nivel_codigo].cor};color:#fff;border:none;">${NIVEIS_ACESSO_INFO[v.nivel_codigo].nome}</span></td>
+          <td class="texto-dim2">${v.origem === 'excecao' ? 'Exceção' : 'Padrão do cargo'}</td>
+          <td class="texto-dim2">${v.valido_ate ? fmtData(v.valido_ate) : '—'}</td>
+          ${editavel ? `<td>
+            <button class="btn-secundario mini" data-editar-vinc="${v.id}">editar</button>
+            <button class="btn-secundario mini" data-revogar-vinc="${v.id}" style="color:var(--warn-text);">revogar</button>
+          </td>` : ''}
+        </tr>`).join('') || `<tr><td colspan="${editavel ? 5 : 4}" class="vazio">Nenhum vínculo ainda.</td></tr>`}
+      </tbody></table>
+    </div></div>
+    ${editavel ? `<button class="btn" id="ma-novo-vinculo">+ Conceder acesso a um departamento</button>` : ''}`
+
+  if (!editavel) return
+  $('#ma-novo-vinculo').onclick = () => formVinculoAcesso(pessoaId, null, disponiveis, () => renderVinculosDaPessoa(pessoaId, editavel))
+  document.querySelectorAll('[data-editar-vinc]').forEach(b => {
+    b.onclick = () => {
+      const v = (vinculos || []).find(x => x.id === b.dataset.editarVinc)
+      formVinculoAcesso(pessoaId, v, deptos, () => renderVinculosDaPessoa(pessoaId, editavel))
+    }
+  })
+  document.querySelectorAll('[data-revogar-vinc]').forEach(b => {
+    b.onclick = async () => {
+      if (!confirm('Revogar esse acesso? A pessoa perde a visibilidade desse departamento na hora.')) return
+      await db.from('vinculo_acesso').delete().eq('id', b.dataset.revogarVinc)
+      renderVinculosDaPessoa(pessoaId, editavel)
+    }
+  })
+}
+
+function formVinculoAcesso (pessoaId, registro, deptosDisponiveis, aoSalvar) {
+  const deptos = window.__MA_DEPTOS || []
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>${registro ? 'Editar' : 'Conceder'} acesso</h3>
+    <div class="form-grade">
+      <div class="campo" style="grid-column:span 2;"><label>Departamento</label>
+        <select id="mv-depto" ${registro ? 'disabled' : ''}>
+          ${(registro ? deptos : deptosDisponiveis).map(d => `<option value="${d.id}" ${d.id === registro?.dept_id ? 'selected' : ''}>${esc(d.nome)} (${esc(d.codigo)})</option>`).join('')}
+        </select></div>
+      <div class="campo"><label>Nível</label>
+        <select id="mv-nivel">${ORDEM_NIVEL.map(n => `<option value="${n}" ${n === (registro?.nivel_codigo ?? 'C') ? 'selected' : ''}>${NIVEIS_ACESSO_INFO[n].nome}</option>`).join('')}</select></div>
+      <div class="campo"><label>Origem</label>
+        <select id="mv-origem">
+          <option value="excecao" ${(!registro || registro.origem === 'excecao') ? 'selected' : ''}>Exceção (com prazo)</option>
+          <option value="cargo" ${registro?.origem === 'cargo' ? 'selected' : ''}>Padrão do cargo</option>
+        </select></div>
+      <div class="campo" id="mv-linha-validade"><label>Válido até</label><input type="date" id="mv-validade" value="${registro?.valido_ate ?? ''}"></div>
+    </div>
+    <div class="acoes" style="margin-top:14px;"><button class="btn" id="mv-salvar">Salvar</button>
+      <button class="btn-secundario" id="mv-fechar">Fechar</button></div>
+    <div class="recado oculto" id="mv-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#mv-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const alternarValidade = () => fundo.querySelector('#mv-linha-validade').style.display = fundo.querySelector('#mv-origem').value === 'excecao' ? '' : 'none'
+  fundo.querySelector('#mv-origem').onchange = alternarValidade
+  alternarValidade()
+
+  fundo.querySelector('#mv-salvar').onclick = async () => {
+    const el = fundo.querySelector('#mv-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const origem = fundo.querySelector('#mv-origem').value
+    const validade = fundo.querySelector('#mv-validade').value || null
+    if (origem === 'excecao' && !validade) { aviso('Exceção precisa de uma data de validade.'); return }
+    const btn = fundo.querySelector('#mv-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const corpo = {
+      pessoa_id: pessoaId, dept_id: fundo.querySelector('#mv-depto').value, nivel_codigo: fundo.querySelector('#mv-nivel').value,
+      origem, valido_ate: origem === 'excecao' ? validade : null, concedido_por: PERFIL.pessoaId
+    }
+    let error
+    if (registro) { ({ error } = await db.from('vinculo_acesso').update(corpo).eq('id', registro.id)) }
+    else { ({ error } = await db.from('vinculo_acesso').insert(corpo)) }
+    btn.disabled = false; btn.textContent = 'Salvar'
+    if (error) { aviso(error.message); return }
+    fechar(); aoSalvar()
+  }
+}
+
+// ----- Log de acesso -----
+async function maLog (alvo) {
+  const { data } = await db.from('log_acesso').select('*, pessoa:pessoa_id(nome), quem_concedeu:concedido_por(nome)')
+    .order('criado_em', { ascending: false }).limit(200)
+  const lista = data || []
+  const corAcao = a => a === 'REVOGADO' ? 'badge-alerta' : a === 'CONCEDIDO' ? 'badge-bom' : 'chip'
+
+  alvo.innerHTML = `
+    <p class="texto-dim2" style="font-size:12.5px;margin:0 0 12px;">Toda concessão, alteração ou revogação de acesso fica registrada aqui — não dá pra apagar.</p>
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr><th>Quando</th><th>Pessoa</th><th>Ação</th><th>Departamento</th><th>Nível</th><th>Concedido por</th></tr></thead><tbody>
+        ${lista.map(l => `<tr>
+          <td class="texto-dim2">${fmtQuando(l.criado_em)}</td>
+          <td>${esc(l.pessoa?.nome ?? '—')}</td>
+          <td><span class="${corAcao(l.acao)}">${esc(l.acao)}</span></td>
+          <td class="texto-dim">${esc(l.dept_codigo ?? '—')}</td>
+          <td class="texto-dim2">${l.nivel_codigo ? NIVEIS_ACESSO_INFO[l.nivel_codigo]?.nome ?? l.nivel_codigo : '—'}</td>
+          <td class="texto-dim2">${esc(l.quem_concedeu?.nome ?? '—')}</td>
+        </tr>`).join('') || `<tr><td colspan="6" class="vazio">Nenhum registro ainda.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+}
+
 async function subVisao (alvo, editavel) {
   if (!editavel) {
     alvo.innerHTML = `<div class="panel" style="padding:22px;"><p class="texto-dim">
