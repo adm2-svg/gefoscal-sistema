@@ -316,6 +316,12 @@ tbody tr:hover { background: var(--hover-bg); }
 .chip-filtro { border:1px solid var(--line2); background:var(--surface2); color:var(--dim); border-radius:20px;
   padding:8px 16px; font-size:12.5px; font-weight:600; cursor:pointer; }
 .mes-cal-mkt { transition:.15s ease; }
+.linha-os-manut { display:flex; align-items:center; justify-content:space-between; gap:10px;
+  padding:12px 18px; cursor:pointer; border-bottom:1px solid var(--line); transition:.12s ease; }
+.linha-os-manut:last-child { border-bottom:none; }
+.linha-os-manut:hover { background:var(--hover-bg); }
+.linha-os-manut .botao-editar-os { opacity:0; transition:.12s ease; flex:none; font-size:13px; }
+.linha-os-manut:hover .botao-editar-os { opacity:.75; }
 .mes-cal-mkt:hover { transform:translateY(-2px); box-shadow:0 8px 20px rgba(0,0,0,.25); border-color:var(--rust) !important; }
 .chip-filtro.ativo { background:var(--rust); border-color:var(--rust); color:#fff; }
 
@@ -13345,7 +13351,14 @@ function corStatusOS (s) {
   if (s === 'CONCLUIDA') return 'badge-bom'
   if (s === 'CANCELADA') return 'texto-dim2'
   if (s === 'ABERTA') return 'badge-alerta'
+  if (s === 'AGUARDANDO_PECA') return 'badge-alerta'
   return 'chip'
+}
+function corPrioridadeOS (p) {
+  if (p === 'CRITICA') return 'badge-alerta'
+  if (p === 'ALTA') return 'badge-alerta'
+  if (p === 'MEDIA') return 'chip'
+  return 'texto-dim2'
 }
 
 // alvo unificado: equipamento (sem placa) ou veículo (com placa) numa lista só,
@@ -13528,16 +13541,24 @@ async function manutPainel (alvo, editavel) {
       </div>
     </div>`
 
-  const linhaOS = os => `<div class="passo" style="cursor:pointer;padding:10px 18px;" data-abrir-os="${os.id}">
-      <span class="quando" style="width:auto;">
-        <span class="${corStatusOS(os.status)}" style="font-size:10px;">${esc(ROTULO_STATUS_OS[os.status] ?? os.status)}</span>
-      </span>
-      <span style="flex:1;"><b>${esc(os.codigo)}</b>
-        <span class="texto-dim2"> — ${esc(nomeAlvoOS(os))}</span>
-        ${os.prioridade ? `<br><span class="texto-dim2" style="font-size:11.5px;">${esc(ROTULO_PRIORIDADE_OS[os.prioridade] ?? '')}${os.tipo ? ' · ' + esc(os.tipo) : ''}</span>` : ''}
-      </span>
-      <span title="editar materiais e dados da OS" style="opacity:.6;">✏️</span>
+  const linhaOS = os => {
+    const alvo = nomeAlvoOS(os)
+    const temAlvo = alvo && alvo !== '—'
+    return `<div class="linha-os-manut" data-abrir-os="${os.id}">
+      <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;">
+        <span class="${corStatusOS(os.status)}" style="flex:none;">${esc(ROTULO_STATUS_OS[os.status] ?? os.status)}</span>
+        <div style="min-width:0;">
+          <div style="font-weight:600;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+            ${esc(os.codigo)}${temAlvo ? ` <span class="texto-dim2" style="font-weight:400;">— ${esc(alvo)}</span>` : ''}</div>
+          ${(os.prioridade || os.tipo) ? `<div style="margin-top:3px;display:flex;gap:6px;align-items:center;">
+            ${os.prioridade ? `<span class="${corPrioridadeOS(os.prioridade)}" style="font-size:10px;padding:2px 8px;">${esc(ROTULO_PRIORIDADE_OS[os.prioridade] ?? '')}</span>` : ''}
+            ${os.tipo ? `<span class="texto-dim2" style="font-size:11px;">${esc(os.tipo)}</span>` : ''}
+          </div>` : ''}
+        </div>
+      </div>
+      <span class="botao-editar-os" title="editar">✏️</span>
     </div>`
+  }
 
   const andamento = lista.filter(os => ['EM_PROGRAMACAO', 'EM_EXECUCAO', 'AGUARDANDO_PECA', 'SERVICO_TERCEIRO', 'ABERTA'].includes(os.status))
   const concluidas = lista.filter(os => os.status === 'CONCLUIDA')
