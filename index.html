@@ -1073,6 +1073,8 @@ function irPara (chave) {
   $('#area-livre').innerHTML = ''; $('#area-livre').classList.add('oculto')
   $('#painel-tabela').classList.remove('oculto')
   $('#rodape').textContent = ''
+  window.scrollTo(0, 0)
+  document.querySelector('.conteudo')?.scrollTo(0, 0)
   p.render()
 }
 
@@ -1721,6 +1723,8 @@ async function solicLista (alvo, { meuSetor }) {
         <select id="sl-setor"><option value="">Todos</option>${SOLIC_CACHE.setores.map(s => `<option value="${s.id}">${esc(s.nome)}</option>`).join('')}</select></div>` : ''}
       <div class="campo"><label>Status</label>
         <select id="sl-status"><option value="">Todos (em andamento)</option>${STATUS_SOLICITACAO.map(s => `<option value="${s}">${ROTULO_STATUS_SOLICITACAO[s]}</option>`).join('')}</select></div>
+      <div class="campo" style="flex:1;min-width:200px;"><label>Pesquisar</label>
+        <input id="sl-busca" placeholder="código, título, quem pediu..."></div>
       <button class="btn" id="sl-buscar">Buscar</button>
       <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:400;color:var(--dim);align-self:center;">
         <input type="checkbox" id="sl-mostrar-concluidas"> mostrar concluídas/canceladas também</label>
@@ -1745,7 +1749,16 @@ async function solicLista (alvo, { meuSetor }) {
 
     const { data, error } = await q
     if (error) { $('#sl-conteudo').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-    const lista = data || []
+    let lista = data || []
+
+    // busca por texto — feita no que já veio (código/título são
+    // simples, e "quem pediu" só dá pra achar depois do join),
+    // evita mais uma volta no banco pra cada letra digitada
+    const termo = $('#sl-busca').value.trim().toLowerCase()
+    if (termo) {
+      lista = lista.filter(s => [s.codigo, s.titulo, s.descricao, s.solicitante?.nome, s.responsavel?.nome, s.setor?.nome]
+        .some(campo => (campo || '').toLowerCase().includes(termo)))
+    }
 
     $('#kpis').innerHTML = kpi('Solicitações', lista.length) +
       kpi('Em aberto', lista.filter(s => s.status === 'ABERTA').length) +
@@ -1784,6 +1797,8 @@ async function solicLista (alvo, { meuSetor }) {
 
   $('#sl-buscar').onclick = buscar
   $('#sl-mostrar-concluidas').onchange = buscar
+  let temporizadorBusca
+  $('#sl-busca').oninput = () => { clearTimeout(temporizadorBusca); temporizadorBusca = setTimeout(buscar, 300) }
   $('#sl-status').onchange = buscar
   if (!meuSetor) $('#sl-setor').onchange = buscar
   buscar()
@@ -19669,6 +19684,20 @@ async function onflyColaboradores (alvo, editavel) {
     onflyColaboradores(alvo, editavel)
   }
 }
+
+// ---------------------------------------------------------------
+// Sempre que clicar numa sub-aba (dentro de qualquer módulo), volta
+// a rolagem pro topo — sem isso, trocar de sub-aba mantinha a posição
+// de rolagem de antes e a pessoa achava que "sumiu" o cabeçalho
+// ---------------------------------------------------------------
+document.addEventListener('click', e => {
+  if (e.target.closest('.subabas button')) {
+    setTimeout(() => {
+      window.scrollTo(0, 0)
+      document.querySelector('.conteudo')?.scrollTo(0, 0)
+    }, 0)
+  }
+})
 
 // ---------------------------------------------------------------
 // Se já houver sessão salva, entra direto
