@@ -1844,15 +1844,17 @@ function corStatusSolicitacao (s) {
 }
 
 async function paginaSolicitacoes () {
-  $('#subtitulo-pagina').textContent = 'Peça algo pra qualquer setor da Gefoscal'
+  $('#subtitulo-pagina').textContent = 'Peça algo pra qualquer departamento da Gefoscal'
   const area = areaLivre()
   area.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
-  const [{ data: setores }, { data: pessoas }] = await Promise.all([
+  const [{ data: setores }, { data: pessoas }, { data: deptos }, { data: vinculos }] = await Promise.all([
     db.from('setor').select('id,nome').order('nome'),
-    db.from('pessoa').select('id,nome,setor_id').eq('status', 'ATIVO').order('nome')
+    db.from('pessoa').select('id,nome,setor_id').eq('status', 'ATIVO').order('nome'),
+    db.from('departamento').select('id,nome,codigo,macro_area').order('ordem'),
+    db.from('vinculo_acesso').select('pessoa_id,dept_id')
   ])
-  SOLIC_CACHE = { setores: setores || [], pessoas: pessoas || [] }
+  SOLIC_CACHE = { setores: setores || [], pessoas: pessoas || [], deptos: deptos || [], vinculos: vinculos || [] }
 
   const abas = [['painel', 'Painel'], ['nova', 'Nova solicitação'], ['meu-setor', 'Meu setor'], ['todas', 'Todas']]
   area.innerHTML = `
@@ -1923,9 +1925,13 @@ async function solicPainel (alvo) {
 // ----- Nova solicitação -----
 async function solicNova (alvo) {
   if (!SETOR_TI_ID) {
-    const { data: setorTI } = await db.from('setor').select('id').ilike('nome', 'TI').maybeSingle()
-    SETOR_TI_ID = setorTI?.id ?? null
+    const { data: deptoTI } = await db.from('departamento').select('id').eq('codigo', 'GOV-TI').maybeSingle()
+    SETOR_TI_ID = deptoTI?.id ?? null
   }
+  const rotuloMacro = { GOV: 'Governança', ADM: 'Administrativo', FIN: 'Financeiro', IND: 'Industrial', COM: 'Comercial' }
+  const deptosPorMacro = {}
+  SOLIC_CACHE.deptos.forEach(d => { (deptosPorMacro[d.macro_area] = deptosPorMacro[d.macro_area] || []).push(d) })
+
   alvo.innerHTML = `
     <div class="panel" style="padding:20px;max-width:760px;">
       <h3 style="font-family:var(--serif);font-size:18px;margin:0 0 14px;">Nova solicitação</h3>
@@ -1933,8 +1939,9 @@ async function solicNova (alvo) {
         <button class="btn-secundario mini" id="sn-atalho-melhoria" type="button">💡 Solicitação de melhoria pro sistema</button>
       </div>` : ''}
       <div class="form-grade">
-        <div class="campo"><label>Setor de destino *</label>
-          <select id="sn-setor">${SOLIC_CACHE.setores.map(s => `<option value="${s.id}">${esc(s.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Departamento de destino *</label>
+          <select id="sn-setor">${Object.entries(deptosPorMacro).map(([macro, ds]) => `<optgroup label="${esc(rotuloMacro[macro] ?? macro)}">
+            ${ds.map(d => `<option value="${d.id}">${esc(d.nome)}</option>`).join('')}</optgroup>`).join('')}</select></div>
         <div class="campo"><label>Responsável (opcional)</label>
           <select id="sn-responsavel"><option value="">— quem pegar responde —</option></select></div>
         <div class="campo"><label>Urgência</label>
@@ -1963,13 +1970,14 @@ async function solicNova (alvo) {
     $('#sn-descricao').placeholder = 'Descreva a melhoria que você gostaria de ver no sistema — o que você precisa e por quê'
   }
 
-  // a lista de responsável acompanha o setor escolhido — só faz sentido
-  // apontar alguém que já é daquele setor
+  // responsável = quem tem vínculo de acesso real com esse departamento
+  // (o modelo novo), não mais quem tem o mesmo setor_id antigo
   const atualizarResponsaveis = () => {
-    const setorId = $('#sn-setor').value
-    const doSetor = SOLIC_CACHE.pessoas.filter(p => p.setor_id === setorId)
+    const deptoId = $('#sn-setor').value
+    const idsComVinculo = new Set(SOLIC_CACHE.vinculos.filter(v => v.dept_id === deptoId).map(v => v.pessoa_id))
+    const doDepto = SOLIC_CACHE.pessoas.filter(p => idsComVinculo.has(p.id))
     $('#sn-responsavel').innerHTML = `<option value="">— quem pegar responde —</option>` +
-      doSetor.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')
+      doDepto.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')
   }
   $('#sn-setor').onchange = atualizarResponsaveis
   atualizarResponsaveis()
@@ -1990,9 +1998,17 @@ async function solicNova (alvo) {
     const titulo = $('#sn-titulo').value.trim()
     if (!titulo) { aviso('Escreva um título.'); return }
     const btn = $('#sn-salvar'); btn.disabled = true; btn.textContent = 'Enviando...'
+
+    const deptoEscolhido = SOLIC_CACHE.deptos.find(d => d.id === $('#sn-setor').value)
+    // casa por nome com o setor antigo, só pros painéis que ainda
+    // agrupam por setor continuarem funcionando — se não achar
+    // correspondência, fica null mesmo (departamento_id é o que vale)
+    const setorCorrespondente = SOLIC_CACHE.setores.find(s => s.nome.trim().toLowerCase() === (deptoEscolhido?.nome ?? '').trim().toLowerCase())
+
     const { data: nova, error } = await db.from('solicitacao_interna').insert({
       solicitante_id: PERFIL.pessoaId,
-      setor_destino_id: $('#sn-setor').value,
+      departamento_id: $('#sn-setor').value,
+      setor_destino_id: setorCorrespondente?.id ?? null,
       responsavel_id: $('#sn-responsavel').value || null,
       status: $('#sn-responsavel').value ? 'EM_ANDAMENTO' : 'ABERTA',
       titulo, descricao: $('#sn-descricao').value.trim() || null,
