@@ -3017,16 +3017,84 @@ async function maVinculos (alvo, editavel) {
   window.__MA_PESSOAS = pessoas
 
   alvo.innerHTML = `
-    <div class="campo" style="max-width:360px;margin-bottom:16px;">
-      <label>Escolher pessoa</label>
-      <select id="ma-pessoa-sel"><option value="">selecione...</option>
-        ${pessoas.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')}</select></div>
+    <div class="filtros" style="align-items:end;margin-bottom:16px;">
+      <div class="campo" style="max-width:360px;">
+        <label>Escolher pessoa</label>
+        <select id="ma-pessoa-sel"><option value="">selecione...</option>
+          ${pessoas.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')}</select></div>
+      ${editavel ? `<button class="btn" id="ma-novo-usuario">+ Novo usuário</button>` : ''}
+    </div>
     <div id="ma-vinculos-pessoa"></div>`
 
   $('#ma-pessoa-sel').onchange = () => {
     const pid = $('#ma-pessoa-sel').value
     if (pid) renderVinculosDaPessoa(pid, editavel)
     else $('#ma-vinculos-pessoa').innerHTML = ''
+  }
+  if (editavel) $('#ma-novo-usuario').onclick = () => formNovoUsuarioMa(deptos, novoId => {
+    maVinculos(alvo, editavel).then(() => {
+      $('#ma-pessoa-sel').value = novoId
+      renderVinculosDaPessoa(novoId, editavel)
+    })
+  })
+}
+
+// ----- Criar pessoa + login, direto do Modelo de Acesso (substitui a
+// aba antiga "Usuários" — reaproveita a mesma lógica que já funciona
+// de criar login, só que termina abrindo os vínculos por departamento
+// em vez da grade antiga de módulos) -----
+function formNovoUsuarioMa (deptos, aoCriar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>Novo usuário</h3>
+    <p class="texto-dim2" style="font-size:12px;margin:-6px 0 12px;">Depois de criar, você concede o acesso por departamento na tela seguinte.</p>
+    <div class="form-grade">
+      <div class="campo" style="grid-column:span 2;"><label>Nome *</label><input id="mu-nome"></div>
+      <div class="campo" style="grid-column:span 2;"><label>E-mail *</label><input id="mu-email" type="email" placeholder="é o que liga a pessoa ao login"></div>
+      <div class="campo"><label>Senha (opcional agora)</label><input id="mu-senha" type="password" placeholder="mín. 8 caracteres"></div>
+    </div>
+    <div class="acoes" style="margin-top:14px;"><button class="btn" id="mu-salvar">Criar usuário</button>
+      <button class="btn-secundario" id="mu-fechar">Fechar</button></div>
+    <div class="recado oculto" id="mu-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#mu-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  fundo.querySelector('#mu-salvar').onclick = async () => {
+    const el = fundo.querySelector('#mu-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const nome = fundo.querySelector('#mu-nome').value.trim()
+    const email = fundo.querySelector('#mu-email').value.trim().toLowerCase()
+    if (!nome) { aviso('Escreva o nome.'); return }
+    if (!email) { aviso('Escreva o e-mail.'); return }
+    const btn = fundo.querySelector('#mu-salvar'); btn.disabled = true; btn.textContent = 'Criando...'
+
+    const { data: pessoa, error: e1 } = await db.from('pessoa').upsert({ nome, email }, { onConflict: 'email' }).select('id').single()
+    if (e1) { aviso(e1.message); btn.disabled = false; btn.textContent = 'Criar usuário'; return }
+
+    // pré-cadastro com papel mínimo (LEITOR) — o acesso de verdade vem
+    // dos vínculos por departamento que a pessoa vai receber a seguir
+    const { error: e2 } = await db.from('usuario_precadastro').upsert({
+      email, papeis: ['LEITOR'], pessoa_id: pessoa.id
+    }, { onConflict: 'email' })
+    if (e2) { aviso(e2.message); btn.disabled = false; btn.textContent = 'Criar usuário'; return }
+
+    const senha = fundo.querySelector('#mu-senha').value.trim()
+    if (senha) {
+      if (senha.length < 8) {
+        aviso('Pessoa criada, mas a senha precisa de 8+ caracteres — defina depois.')
+      } else {
+        const { error: e3 } = await db.functions.invoke('criar-usuario', { body: { email, senha } })
+        if (e3) aviso('Pessoa criada, mas a senha não foi definida: ' + e3.message)
+      }
+    }
+
+    btn.disabled = false; btn.textContent = 'Criar usuário'
+    fechar()
+    aoCriar(pessoa.id)
   }
 }
 
