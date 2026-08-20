@@ -21332,7 +21332,7 @@ function formMktDoc (registro, aoSalvar) {
 async function mktAniversariantes (alvo, editavel) {
   const [{ data: funcionarios, error: e1 }, { data: externos, error: e2 }] = await Promise.all([
     db.from('pessoa').select('id,nome,foto_url,data_nascimento,cargo').eq('status', 'ATIVO').not('data_nascimento', 'is', null),
-    db.from('marketing_aniversariante').select('id,nome,empresa,mes,dia,contato')
+    db.from('marketing_aniversariante').select('id,nome,empresa,mes,dia,contato,foto_url')
   ])
   if (e1 || e2) { alvo.innerHTML = `<p class="vazio">${esc((e1 || e2).message)}</p>`; return }
 
@@ -21451,11 +21451,17 @@ function formAniversarianteMkt (alvoPai, editavel, registro) {
       <div class="campo"><label>Mês</label><select id="av-mes">${MESES_MKT.map((m, i) => `<option value="${i + 1}" ${registro?.mes === i + 1 ? 'selected' : ''}>${m}</option>`).join('')}</select></div>
       <div class="campo"><label>Contato</label><input id="av-contato" placeholder="telefone" value="${esc(registro?.contato ?? '')}"></div>
     </div>
+    <div class="campo" style="margin-top:10px;"><label>Foto</label>
+      <div style="display:flex;gap:10px;align-items:center;">
+        ${registro?.foto_url ? `<img src="${esc(registro.foto_url)}" style="width:52px;height:52px;border-radius:50%;object-fit:cover;">` : ''}
+        <input type="file" id="av-foto" accept="image/*" style="flex:1;">
+      </div></div>
     <div class="acoes" style="margin-top:14px;">
       <button class="btn" id="av-salvar">${registro ? 'Salvar' : 'Adicionar'}</button>
       ${registro ? `<button class="btn-secundario" id="av-excluir" style="color:var(--warn-text);">Excluir</button>` : ''}
       <button class="btn-secundario" id="av-cancelar">Cancelar</button>
     </div>
+    <div class="recado oculto" id="av-recado"></div>
   </div>`
   document.body.appendChild(fundo)
   const fechar = () => fundo.remove()
@@ -21467,16 +21473,31 @@ function formAniversarianteMkt (alvoPai, editavel, registro) {
     fechar(); mktAniversariantes(alvoPai, editavel)
   }
   fundo.querySelector('#av-salvar').onclick = async () => {
+    const el = fundo.querySelector('#av-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
     const nome = fundo.querySelector('#av-nome').value.trim()
     if (!nome) return
+    const btn = fundo.querySelector('#av-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+
+    let fotoUrl = registro?.foto_url ?? null
+    const arquivoFoto = fundo.querySelector('#av-foto').files[0]
+    if (arquivoFoto) {
+      try {
+        const enviado = await enviarArquivo(arquivoFoto, 'fotos-contatos-externos')
+        const { data: signed } = await db.storage.from('documentos').createSignedUrl(enviado.caminho, 60 * 60 * 24 * 365 * 5)
+        fotoUrl = signed?.signedUrl || enviado.caminho
+      } catch (e) { aviso('Não deu pra enviar a foto: ' + e.message); btn.disabled = false; btn.textContent = registro ? 'Salvar' : 'Adicionar'; return }
+    }
+
     const corpo = {
       nome, empresa: fundo.querySelector('#av-empresa').value.trim() || null,
       dia: fundo.querySelector('#av-dia').value ? Number(fundo.querySelector('#av-dia').value) : null,
       mes: Number(fundo.querySelector('#av-mes').value),
-      contato: fundo.querySelector('#av-contato').value.trim() || null
+      contato: fundo.querySelector('#av-contato').value.trim() || null, foto_url: fotoUrl
     }
     if (registro) await db.from('marketing_aniversariante').update(corpo).eq('id', registro.id)
     else await db.from('marketing_aniversariante').insert(corpo)
+    btn.disabled = false; btn.textContent = registro ? 'Salvar' : 'Adicionar'
     fechar(); mktAniversariantes(alvoPai, editavel)
   }
 }
@@ -21628,7 +21649,10 @@ async function abrirItemEstoqueMkt (item, alvoPai, editavel) {
         <div class="campo"><label>Quem liberou</label>
           <select id="mke-baixa-liberou">${listaPessoas.map(p => `<option value="${p.id}" ${p.id === PERFIL.pessoaId ? 'selected' : ''}>${esc(p.nome)}</option>`).join('')}</select></div>
         <div class="campo" style="grid-column:span 2;"><label>Quem pegou</label>
-          <select id="mke-baixa-quem"><option value="">selecione a pessoa...</option>${listaPessoas.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')}</select></div>
+          <select id="mke-baixa-quem"><option value="">selecione a pessoa...</option>
+            ${listaPessoas.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')}
+            <option value="__outro">— pessoa não cadastrada (digitar nome) —</option></select>
+          <input id="mke-baixa-quem-livre" placeholder="nome de quem pegou" class="oculto" style="margin-top:6px;"></div>
         <div class="campo" style="grid-column:span 2;"><label>Motivo</label><input id="mke-baixa-motivo" placeholder="ex: feira X, brinde pra cliente Y..."></div>
       </div>
       <div class="form-grade" style="margin-top:12px;">
@@ -21673,23 +21697,29 @@ async function abrirItemEstoqueMkt (item, alvoPai, editavel) {
   if (btnEditar) btnEditar.onclick = () => { fechar(); formItemEstoqueMkt(item, () => mktEstoque(alvoPai, editavel)) }
 
   const assinLiberou = montarAssinatura(fundo.querySelector('#mke-assin-liberou'))
+  fundo.querySelector('#mke-baixa-quem').onchange = () => {
+    fundo.querySelector('#mke-baixa-quem-livre').classList.toggle('oculto', fundo.querySelector('#mke-baixa-quem').value !== '__outro')
+  }
   const assinPegou = montarAssinatura(fundo.querySelector('#mke-assin-pegou'))
 
   fundo.querySelector('#mke-confirmar-baixa').onclick = async () => {
     const el = fundo.querySelector('#mke-baixa-recado')
     const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
     const qtd = Number(fundo.querySelector('#mke-baixa-qtd').value)
-    const pessoaPegouId = fundo.querySelector('#mke-baixa-quem').value
+    const pessoaPegouSel = fundo.querySelector('#mke-baixa-quem').value
+    const nomeLivrePegou = fundo.querySelector('#mke-baixa-quem-livre').value.trim()
     const pessoaLiberouId = fundo.querySelector('#mke-baixa-liberou').value
     if (!qtd || qtd <= 0) { aviso('Informe uma quantidade válida.'); return }
-    if (!pessoaPegouId) { aviso('Escolha quem está retirando.'); return }
+    if (!pessoaPegouSel) { aviso('Escolha quem está retirando.'); return }
+    if (pessoaPegouSel === '__outro' && !nomeLivrePegou) { aviso('Escreva o nome de quem está retirando.'); return }
     if (item.quantidade != null && qtd > item.quantidade) { aviso(`Só tem ${fmtNum(item.quantidade, 0)} em estoque.`); return }
     if (!assinPegou.temAssinatura()) { aviso('Falta a assinatura de quem pegou.'); return }
     if (!assinLiberou.temAssinatura()) { aviso('Falta a assinatura de quem liberou.'); return }
 
     const btn = fundo.querySelector('#mke-confirmar-baixa'); btn.disabled = true; btn.textContent = 'Registrando...'
     const motivo = fundo.querySelector('#mke-baixa-motivo').value.trim() || null
-    const nomePegou = listaPessoas.find(p => p.id === pessoaPegouId)?.nome ?? null
+    const pessoaPegouId = pessoaPegouSel === '__outro' ? null : pessoaPegouSel
+    const nomePegou = pessoaPegouSel === '__outro' ? nomeLivrePegou + ' (não cadastrado)' : listaPessoas.find(p => p.id === pessoaPegouSel)?.nome ?? null
     const nomeLiberou = listaPessoas.find(p => p.id === pessoaLiberouId)?.nome ?? null
     const { data: mov, error: e1 } = await db.from('marketing_estoque_movimento').insert({
       item_id: item.id, tipo: 'SAIDA', quantidade: qtd,
