@@ -1342,7 +1342,7 @@ const GRUPOS_MENU = [
   ['Comercial', ['crm', 'crm_tecnico', 'cadastro', 'expedicao', 'cobranca', 'marketing']],
   ['Operações', ['estoque', 'combustivel', 'manutencao', 'frota', 'laboratorio']],
   ['Gestão', ['financeiro', 'desempenho', 'dp', 'onfly', 'juridico', 'ferramentas', 'banco', 'gestao_ti', 'dashboard_diretor']],
-  ['Administração', ['ti']]
+  ['Administração Sistema', ['ti']]
 ]
 
 function montarMenu () {
@@ -1848,14 +1848,15 @@ async function paginaSolicitacoes () {
   const area = areaLivre()
   area.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
-  const [{ data: setores }, { data: pessoas }, { data: deptos }, { data: vinculos }] = await Promise.all([
+  const [{ data: setores }, { data: pessoas }, { data: deptos }, { data: vinculos }, { data: cargos }] = await Promise.all([
     db.from('setor').select('id,nome').order('nome'),
     db.from('pessoa').select('id,nome,setor_id,cargo').eq('status', 'ATIVO').order('nome'),
     db.from('departamento').select('id,nome,codigo,macro_area,setor_id').order('ordem'),
-    db.from('vinculo_acesso').select('pessoa_id,dept_id')
+    db.from('vinculo_acesso').select('pessoa_id,dept_id'),
+    db.from('cargo').select('id,nome').order('nome')
   ])
   SOLIC_CACHE = { setores: setores || [], pessoas: pessoas || [], deptos: deptos || [], vinculos: vinculos || [] }
-  SOLIC_CACHE.cargos = [...new Set((pessoas || []).map(p => p.cargo).filter(Boolean))].sort((a, b) => a.localeCompare(b))
+  SOLIC_CACHE.cargos = (cargos || []).map(c => c.nome)
 
   const abas = [['painel', 'Painel'], ['nova', 'Nova solicitação'], ['meu-setor', 'Meu setor'], ['todas', 'Todas']]
   area.innerHTML = `
@@ -1960,7 +1961,7 @@ async function solicNova (alvo) {
   // de destino é herdado da pessoa escolhida, não precisa selecionar
   const atualizarResponsaveis = () => {
     const cargo = $('#sn-cargo').value
-    const doCargo = cargo ? SOLIC_CACHE.pessoas.filter(p => p.cargo === cargo) : []
+    const doCargo = cargo ? SOLIC_CACHE.pessoas.filter(p => (p.cargo ?? '').trim().toLowerCase() === cargo.trim().toLowerCase()) : []
     $('#sn-responsavel').innerHTML = `<option value="">— quem pegar responde —</option>` +
       doCargo.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')
   }
