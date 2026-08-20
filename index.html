@@ -5509,8 +5509,24 @@ function telaDecisao (s, nomeEtapa) {
     abrirCompras(nomeEtapa === 'coordenacao' ? 'coordenar' : 'aprovar', true)
   }
 
-  q('#d-avancar').onclick = () => decidir(etapa.avancar.status)
-  q('#d-recusar').onclick = () => decidir(etapa.recusar.status)
+  q('#d-avancar').onclick = () => confirmarDecisaoDuplaClique(q('#d-avancar'), () => decidir(etapa.avancar.status), etapa.avancar.rotulo)
+  q('#d-recusar').onclick = () => confirmarDecisaoDuplaClique(q('#d-recusar'), () => decidir(etapa.recusar.status), etapa.recusar.rotulo)
+
+  // aprovação/reprovação é decisão final — exige clicar duas vezes pra
+  // confirmar, pra evitar erro de toque/clique num momento tão sensível
+  function confirmarDecisaoDuplaClique (botao, aoConfirmar, rotuloOriginal) {
+    if (nomeEtapa !== 'aprovacao') { aoConfirmar(); return }
+    if (botao.dataset.confirmando) { aoConfirmar(); return }
+    botao.dataset.confirmando = '1'
+    botao.textContent = 'Clica de novo pra confirmar'
+    botao.style.background = 'var(--warn-text)'
+    setTimeout(() => {
+      if (!botao.isConnected) return
+      delete botao.dataset.confirmando
+      botao.textContent = rotuloOriginal
+      botao.style.background = ''
+    }, 4000)
+  }
 
   // na aprovação, mostra o quadro de orçamentos abaixo do parecer da cotação
   if (nomeEtapa === 'aprovacao') {
