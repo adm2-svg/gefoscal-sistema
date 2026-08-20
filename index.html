@@ -6417,6 +6417,11 @@ async function expedMotoristasVeiculos (alvo) {
   ])
   const listaMot = motoristas || []
   const listaVei = veiculosCliente || []
+  // mantém o cache usado em Lançar / Ordem de Carregamento sempre
+  // atualizado — sem isso, um motorista recém-cadastrado só aparecia
+  // nos dropdowns depois de sair e voltar na aba de Faturamento
+  EXPED_CACHE.motoristas = listaMot.filter(m => m.ativo).map(m => ({ id: m.id, nome: m.nome, telefone: m.telefone }))
+  EXPED_CACHE.veiculosCliente = listaVei.filter(v => v.ativo).map(v => ({ id: v.id, placa: v.placa, descricao: v.descricao, motorista_id: v.motorista_id }))
   let buscaVei = ''
 
   const iniciais = n => (n || '').trim().split(/\s+/).slice(0, 2).map(p => p[0]).join('').toUpperCase()
