@@ -1716,6 +1716,7 @@ async function paginaVisaoGeral () {
   await painelGerencial(area)
   await minhasSolicitacoes(area)
   await minhasCompras(area)
+  await painelExpedicao(area)
   await areaDeTrabalho(area)
 
   if (podeVer('financeiro')) await painelFinanceiro(area)
@@ -3815,6 +3816,70 @@ function barrasMes (serie) {
 
 // ----- Minhas solicitações de compra, no painel pessoal -----
 // Cada um acompanha o que pediu, e vê o motivo de cada decisão.
+// ---------------------------------------------------------------
+// Painel de Expedição — pra quem trabalha em Faturamento/Expedição
+// (não é gestor de setor, então não cai no Painel do Gestor). Mostra
+// pedidos com saldo pra montar ordem de carregamento, e o que já foi
+// expedido recentemente.
+// ---------------------------------------------------------------
+async function painelExpedicao (area) {
+  if (!PERFIL.pessoaId || !podeEditar('expedicao')) return
+
+  const [{ data: pedidos }, { data: carregRecentes }] = await Promise.all([
+    db.from('pedido').select(`
+      id, numero, quantidade_t, cliente:cliente_id(razao_social), produto:produto_id(nome,unidade),
+      carregamento(quantidade_t,status)
+    `).not('status', 'in', '(CANCELADO,CONCLUIDO)').limit(300),
+    db.from('carregamento').select(`
+      id, quantidade_t, data_carregamento, criado_em, motorista,
+      pedido:pedido_id(numero), cliente:cliente_id(razao_social)
+    `).order('criado_em', { ascending: false }).limit(8)
+  ])
+
+  const comSaldo = (pedidos || []).map(p => {
+    const expedido = (p.carregamento || []).filter(c => c.status !== 'CANCELADO').reduce((s, c) => s + Number(c.quantidade_t || 0), 0)
+    return { ...p, saldo: Math.max(0, Number(p.quantidade_t || 0) - expedido) }
+  }).filter(p => p.saldo > 0.01).sort((a, b) => b.saldo - a.saldo)
+
+  const totalSaldo = comSaldo.reduce((s, p) => s + p.saldo, 0)
+  const hoje = hojeISO()
+  const expedidoHoje = (carregRecentes || []).filter(c => c.data_carregamento === hoje).reduce((s, c) => s + Number(c.quantidade_t || 0), 0)
+
+  const bloco = document.createElement('div')
+  bloco.className = 'panel'
+  bloco.style.cssText = 'padding:18px;margin-bottom:16px;'
+  bloco.innerHTML = `
+    <div class="cabeca-secao">
+      <h3 style="font-family:var(--serif);font-size:17px;">🚚 Painel de Expedição</h3>
+      <button class="btn-secundario mini" id="pe-ir-ordem">montar ordem de carregamento</button>
+    </div>
+    <div class="resumo-topo" style="margin:10px 0 14px;">
+      <div class="bloco"><div class="rot">Pedidos com saldo</div><div class="val">${comSaldo.length}</div></div>
+      <div class="bloco alerta"><div class="rot">Saldo total a expedir</div><div class="val">${fmtNum(totalSaldo)} t</div></div>
+      <div class="bloco"><div class="rot">Expedido hoje</div><div class="val">${fmtNum(expedidoHoje)} t</div></div>
+    </div>
+
+    <div class="cabeca-secao" style="margin-bottom:6px;"><h4 style="font-size:13px;margin:0;">Prontos pra carregar (maior saldo primeiro)</h4></div>
+    ${comSaldo.slice(0, 6).map(p => `<div class="passo">
+        <span style="flex:1;"><b>${esc(p.numero)}</b> — ${esc(p.cliente?.razao_social ?? '—')}
+          <span class="texto-dim2" style="font-size:11px;"> · ${esc(p.produto?.nome ?? '—')}</span></span>
+        <span class="badge-alerta" style="font-size:10.5px;">${fmtNum(p.saldo, casasPara(p.produto?.unidade))} ${esc(p.produto?.unidade ?? 't')}</span>
+      </div>`).join('') || '<p class="vazio">Nenhum pedido com saldo pendente.</p>'}
+
+    <div class="cabeca-secao" style="margin-top:14px;margin-bottom:6px;"><h4 style="font-size:13px;margin:0;">Últimas expedições lançadas</h4></div>
+    ${(carregRecentes || []).slice(0, 5).map(c => `<div class="passo">
+        <span class="quando">${fmtData(c.data_carregamento) ?? '—'}</span>
+        <span style="flex:1;"><b>${esc(c.pedido?.numero ?? '—')}</b> — ${esc(c.cliente?.razao_social ?? '—')}
+          ${c.motorista ? `<span class="texto-dim2" style="font-size:11px;"> · ${esc(c.motorista)}</span>` : ''}</span>
+        <span class="texto-dim2" style="font-size:11px;">${fmtNum(c.quantidade_t)} t</span>
+      </div>`).join('') || '<p class="vazio">Nenhuma expedição lançada ainda.</p>'}`
+  area.appendChild(bloco)
+  bloco.querySelector('#pe-ir-ordem').onclick = () => {
+    irPara('expedicao')
+    setTimeout(() => document.querySelector('.subabas button[data-sub="ordem"]')?.click(), 150)
+  }
+}
+
 async function minhasCompras (area) {
   if (!PERFIL.pessoaId || !podeVer('compras')) return
 
