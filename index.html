@@ -1717,6 +1717,7 @@ async function paginaVisaoGeral () {
   await minhasSolicitacoes(area)
   await minhasCompras(area)
   await painelExpedicao(area)
+  await painelExecutivoCompleto(area)
   await areaDeTrabalho(area)
 
   if (podeVer('financeiro')) await painelFinanceiro(area)
@@ -3878,6 +3879,113 @@ async function painelExpedicao (area) {
     irPara('expedicao')
     setTimeout(() => document.querySelector('.subabas button[data-sub="ordem"]')?.click(), 150)
   }
+}
+
+// ---------------------------------------------------------------
+// Painel Executivo — visão de tudo, num lugar só. Só aparece pra quem
+// tem acesso total (Master/Admin/Diretoria). Cada bloco puxa um
+// resuminho de uma área diferente do sistema (inclusive Fazenda, que
+// mora no mesmo banco mesmo sendo outro site). Se alguma consulta
+// falhar, só aquele bloco some — não trava o resto do painel.
+// ---------------------------------------------------------------
+async function painelExecutivoCompleto (area) {
+  if (!ehTotal()) return
+  const tentar = async fn => { try { return await fn() } catch { return null } }
+  const hoje = hojeISO()
+
+  const [financeiro, compras, os, frota, dp, juridico, marketing, gestaoTi, fazenda, crm, lab] = await Promise.all([
+    tentar(async () => {
+      const { data } = await db.from('lancamento_financeiro').select('valor,tipo,status,data_vencimento').eq('status', 'PENDENTE')
+      const aPagar = (data || []).filter(l => l.tipo === 'PAGAR').reduce((s, l) => s + Number(l.valor || 0), 0)
+      const vencidos = (data || []).filter(l => l.data_vencimento && l.data_vencimento < hoje).length
+      return { aPagar, vencidos }
+    }),
+    tentar(async () => {
+      const { data } = await db.from('solicitacao_compra').select('status').not('status', 'in', '(APROVADA,REPROVADA,PAGA,RECEBIDA,CANCELADA)')
+      return { pendentes: (data || []).length }
+    }),
+    tentar(async () => {
+      const { data } = await db.from('ordem_servico').select('status,data_limite').not('status', 'in', '(CONCLUIDA,CANCELADA)')
+      const atrasadas = (data || []).filter(o => o.data_limite && o.data_limite < hoje).length
+      return { abertas: (data || []).length, atrasadas }
+    }),
+    tentar(async () => {
+      const { data } = await db.from('frota_debito_veiculo').select('valor').eq('situacao', 'PENDENTE')
+      return { debitos: (data || []).length, valor: (data || []).reduce((s, d) => s + Number(d.valor || 0), 0) }
+    }),
+    tentar(async () => {
+      const { data } = await db.from('dp_documento').select('data_validade').lt('data_validade', new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10))
+      return { vencendo: (data || []).length }
+    }),
+    tentar(async () => {
+      const { data } = await db.from('juridico_contrato').select('data_fim').neq('status', 'ENCERRADO').not('data_fim', 'is', null)
+      const vencendo = (data || []).filter(c => diasParaVencer(c.data_fim) !== null && diasParaVencer(c.data_fim) <= 30).length
+      return { ativos: (data || []).length, vencendo }
+    }),
+    tentar(async () => {
+      const [{ data: aniv }, { data: estq }] = await Promise.all([
+        db.from('pessoa').select('data_nascimento').eq('status', 'ATIVO').not('data_nascimento', 'is', null),
+        db.from('marketing_estoque').select('quantidade').lte('quantidade', 3).gt('quantidade', 0)
+      ])
+      const hj = new Date()
+      const aniversariantesHoje = (aniv || []).filter(p => Number(p.data_nascimento.slice(5, 7)) === hj.getMonth() + 1 && Number(p.data_nascimento.slice(8, 10)) === hj.getDate()).length
+      return { aniversariantesHoje, estoqueBaixo: (estq || []).length }
+    }),
+    tentar(async () => {
+      const { data } = await db.from('despesa_ti').select('valor,periodicidade').eq('status', 'ATIVA')
+      const mensal = (data || []).reduce((s, d) => s + (d.periodicidade === 'ANUAL' ? Number(d.valor || 0) / 12 : Number(d.valor || 0)), 0)
+      return { ativas: (data || []).length, mensal }
+    }),
+    tentar(async () => {
+      const [{ count: pesagens }, { data: mov }] = await Promise.all([
+        db.from('fazenda_pesagem_individual').select('*', { count: 'exact', head: true }),
+        db.from('fazenda_movimentacao').select('valor,tipo,data_vencimento,status').eq('status', 'PENDENTE').limit(500)
+      ])
+      const aPagar = (mov || []).filter(m => m.tipo === 'DESPESA').reduce((s, m) => s + Number(m.valor || 0), 0)
+      return { pesagens: pesagens || 0, aPagar }
+    }),
+    tentar(async () => {
+      const { data } = await db.from('crm_negociacao').select('etapa').not('etapa', 'in', '(GANHO,POS_VENDA)')
+      return { abertas: (data || []).length }
+    }),
+    tentar(async () => {
+      const { data } = await db.from('lab_amostra').select('status').eq('status', 'AGUARDANDO')
+      return { fila: (data || []).length }
+    })
+  ])
+
+  const bloco = document.createElement('div')
+  bloco.className = 'panel'
+  bloco.style.cssText = 'padding:20px;margin-bottom:16px;background:linear-gradient(120deg,var(--panel),var(--panel));border:1px solid var(--gold,#c8a11a);'
+  const cartao = (icone, titulo, chave, linhas) => `<div class="panel mke-card" data-ir-painel="${chave}" style="padding:14px 16px;cursor:pointer;">
+      <div style="font-size:12.5px;font-weight:600;margin-bottom:8px;">${icone} ${titulo}</div>
+      ${linhas.map(([rot, val, alerta]) => `<div style="display:flex;justify-content:space-between;font-size:12px;margin-top:3px;">
+        <span class="texto-dim2">${rot}</span><span style="${alerta ? 'color:var(--warn-text);font-weight:600;' : ''}">${val}</span></div>`).join('')}
+    </div>`
+
+  bloco.innerHTML = `
+    <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:18px;">👑 Painel Executivo — tudo num lugar só</h3></div>
+    <p class="texto-dim2" style="font-size:12px;margin:-6px 0 14px;">Clica num card pra ir direto naquela área.</p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;">
+      ${financeiro ? cartao('💰', 'Financeiro', 'financeiro', [['A pagar', 'R$ ' + fmtNum(financeiro.aPagar)], ['Vencidos', financeiro.vencidos, financeiro.vencidos > 0]]) : ''}
+      ${compras ? cartao('🛒', 'Compras', 'compras', [['Pendentes', compras.pendentes, compras.pendentes > 0]]) : ''}
+      ${crm ? cartao('🤝', 'CRM Comercial', 'crm', [['Negociações abertas', crm.abertas]]) : ''}
+      ${os ? cartao('🔧', 'Manutenção', 'manutencao', [['OS abertas', os.abertas], ['Atrasadas', os.atrasadas, os.atrasadas > 0]]) : ''}
+      ${frota ? cartao('🚗', 'Frota', 'frota', [['Débitos pendentes', frota.debitos, frota.debitos > 0], ['Valor', 'R$ ' + fmtNum(frota.valor)]]) : ''}
+      ${dp ? cartao('📋', 'DP e Segurança', 'dp', [['Documentos vencendo (30d)', dp.vencendo, dp.vencendo > 0]]) : ''}
+      ${juridico ? cartao('⚖️', 'Jurídico', 'juridico', [['Contratos ativos', juridico.ativos], ['Vencendo (30d)', juridico.vencendo, juridico.vencendo > 0]]) : ''}
+      ${marketing ? cartao('📣', 'Marketing', 'marketing', [['Aniversariantes hoje', marketing.aniversariantesHoje], ['Estoque baixo', marketing.estoqueBaixo, marketing.estoqueBaixo > 0]]) : ''}
+      ${gestaoTi ? cartao('💻', 'Gestão de TI', 'gestao_ti', [['Despesas ativas', gestaoTi.ativas], ['Custo mensal', 'R$ ' + fmtNum(gestaoTi.mensal)]]) : ''}
+      ${lab ? cartao('🔬', 'Laboratório', 'laboratorio', [['Amostras na fila', lab.fila, lab.fila > 0]]) : ''}
+      ${fazenda ? cartao('🌾', 'Fazenda Ouro Branco', '', [['Pesagens registradas', fazenda.pesagens], ['Despesas a pagar', 'R$ ' + fmtNum(fazenda.aPagar)]]) : ''}
+    </div>`
+  area.appendChild(bloco)
+
+  bloco.querySelectorAll('[data-ir-painel]').forEach(c => {
+    const chave = c.dataset.irPainel
+    if (chave) c.onclick = () => irPara(chave)
+    else c.style.cursor = 'default' // Fazenda é outro site, sem link direto por aqui
+  })
 }
 
 async function minhasCompras (area) {
