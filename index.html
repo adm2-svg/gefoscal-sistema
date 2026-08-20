@@ -1819,6 +1819,7 @@ function podeAtualizarSolicitacao (s) {
   if (ehTotal()) return true
   if (s.responsavel_id && s.responsavel_id === PERFIL.pessoaId) return true
   if (s.setor_destino_id && s.setor_destino_id === PERFIL.setorId) return true
+  if ((s.participantes || []).some(p => p.pessoa_id === PERFIL.pessoaId)) return true
   return false
 }
 
@@ -2057,7 +2058,8 @@ async function solicLista (alvo, { meuSetor }) {
       id, codigo, titulo, descricao, urgencia, status, data_solicitacao, data_limite, data_conclusao, resposta,
       progresso_pct, pontuacao_agilidade, setor_destino_id, responsavel_id, setor_envolvido_id,
       setor:setor_destino_id ( id, nome ), solicitante:solicitante_id ( nome ), responsavel:responsavel_id ( nome ),
-      setorEnvolvido:setor_envolvido_id ( nome )
+      setorEnvolvido:setor_envolvido_id ( nome ),
+      participantes:solicitacao_participante ( pessoa_id, pessoa:pessoa_id ( nome ) )
     `).gte('data_solicitacao', $('#sl-de').value).lte('data_solicitacao', $('#sl-ate').value + 'T23:59:59')
       .order('data_solicitacao', { ascending: false }).limit(500)
     if (meuSetor) q = q.eq('setor_destino_id', PERFIL.setorId)
@@ -2173,6 +2175,17 @@ function detalheSolicitacao (s, aoFechar) {
       <span class="texto-dim2" style="font-size:11px;">cria uma solicitação vinculada pro outro setor e marca aqui que o pedido envolve os dois</span>
     </div>` : ''}
 
+    <div class="cabeca-secao" style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px;">
+      <h3 style="font-family:var(--serif);font-size:14px;margin:0;">Quem participa</h3>
+    </div>
+    <p class="texto-dim2" style="font-size:11px;margin:2px 0 8px;">Solicitante e responsável já podem editar. Quem for citado aqui também passa a poder.</p>
+    <div id="ds-participantes" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;"></div>
+    ${editavel ? `<div style="display:flex;gap:8px;">
+      <select id="ds-citar-pessoa" style="flex:1;"><option value="">— citar alguém —</option>
+        ${SOLIC_CACHE.pessoas.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')}</select>
+      <button class="btn-secundario mini" id="ds-citar-add" type="button">Citar</button>
+    </div>` : ''}
+
     <div class="acoes" style="margin-top:12px;"><button class="btn" id="ds-salvar" ${editavel ? '' : 'disabled'}>Salvar</button>
       <button class="btn-secundario" id="ds-fechar">Fechar</button></div>
     <div class="recado oculto" id="ds-recado"></div>
@@ -2181,6 +2194,26 @@ function detalheSolicitacao (s, aoFechar) {
   const fechar = () => fundo.remove()
   fundo.querySelector('#ds-fechar').onclick = fechar
   fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const carregarParticipantes = async () => {
+    const { data } = await db.from('solicitacao_participante').select('id,pessoa_id,pessoa:pessoa_id(nome)').eq('solicitacao_id', s.id)
+    const lista = data || []
+    fundo.querySelector('#ds-participantes').innerHTML = lista.map(p => `<span class="chip">
+        ${esc(p.pessoa?.nome ?? '—')} <button data-remover-citado="${p.id}" style="border:none;background:none;color:var(--warn-text);cursor:pointer;margin-left:4px;">×</button>
+      </span>`).join('') || `<p class="texto-dim2" style="font-size:12px;">Ninguém citado ainda.</p>`
+    fundo.querySelectorAll('[data-remover-citado]').forEach(b => {
+      b.onclick = async () => { await db.from('solicitacao_participante').delete().eq('id', b.dataset.removerCitado); carregarParticipantes() }
+    })
+  }
+  carregarParticipantes()
+  const btnCitarAdd = fundo.querySelector('#ds-citar-add')
+  if (btnCitarAdd) btnCitarAdd.onclick = async () => {
+    const pessoaId = fundo.querySelector('#ds-citar-pessoa').value
+    if (!pessoaId) return
+    await db.from('solicitacao_participante').insert({ solicitacao_id: s.id, pessoa_id: pessoaId, adicionado_por: PERFIL.pessoaId })
+    fundo.querySelector('#ds-citar-pessoa').value = ''
+    carregarParticipantes()
+  }
 
   const aviso = (t, ok = false) => {
     const el = fundo.querySelector('#ds-recado'); el.textContent = t; el.classList.remove('oculto')
@@ -2287,11 +2320,13 @@ async function painelGerencial (area) {
   const selDoSetor = `
     id, codigo, titulo, urgencia, status, data_solicitacao, data_limite, data_conclusao,
     progresso_pct, pontuacao_agilidade, setor_destino_id, responsavel_id,
-    responsavel:responsavel_id ( nome )`
+    responsavel:responsavel_id ( nome ),
+    participantes:solicitacao_participante ( pessoa_id, pessoa:pessoa_id ( nome ) )`
   const selParaMim = `
     id, codigo, titulo, urgencia, status, data_solicitacao, data_limite, data_conclusao,
     progresso_pct, pontuacao_agilidade, setor_destino_id, responsavel_id,
-    setor:setor_destino_id ( nome )`
+    setor:setor_destino_id ( nome ),
+    participantes:solicitacao_participante ( pessoa_id, pessoa:pessoa_id ( nome ) )`
 
   const [{ data: doSetorRaw, error }, { data: paraMim }] = await Promise.all([
     db.from('solicitacao_interna').select(selDoSetor)
@@ -19519,7 +19554,7 @@ async function paginaDesempenho () {
   ])
   DESEMP_CACHE = { pessoas: pessoas || [], setores: setores || [] }
 
-  const abas = [['painel', 'Painel de conduta'], ['agilidade', 'Agilidade e prazos'], ['conduta', 'Avaliar conduta'],
+  const abas = [['painel', 'Painel de conduta'], ['agilidade', 'Agilidade e prazos'], ['solicitacoes', 'Solicitações'], ['conduta', 'Avaliar conduta'],
                 ['360', 'Avaliação 360'], ['pdi', 'Planos de desenvolvimento'], ['meu', 'Meu RH']]
   area.innerHTML = `
     <div class="subabas">
@@ -19542,6 +19577,7 @@ function abrirDesempenho (sub, editavel) {
   $('#kpis').innerHTML = ''
   if (sub === 'painel') desempPainel(alvo, editavel)
   if (sub === 'agilidade') desempAgilidade(alvo, editavel)
+  if (sub === 'solicitacoes') desempSolicitacoes(alvo, editavel)
   if (sub === 'conduta') desempConduta(alvo, editavel)
   if (sub === '360') desemp360(alvo, editavel)
   if (sub === 'pdi') desempPdi(alvo, editavel)
@@ -19714,6 +19750,71 @@ async function desempAgilidade (alvo, editavel) {
 }
 
 // checa se uma solicitação já concluída foi entregue atrasada (SLA/prazo)
+// ----- RH › Solicitações (com participantes, filtrável por departamento) -----
+async function desempSolicitacoes (alvo, editavel) {
+  if (!editavel) { alvo.innerHTML = `<div class="panel" style="padding:22px;">
+    <p class="texto-dim">Esse painel é sensível e só quem edita o módulo de RH enxerga.</p></div>`; return }
+
+  const [{ data: deptos }] = await Promise.all([
+    db.from('departamento').select('id,nome,codigo,macro_area').order('ordem')
+  ])
+  const rotuloMacro = { GOV: 'Governança', ADM: 'Administrativo', FIN: 'Financeiro', IND: 'Industrial', COM: 'Comercial' }
+
+  const hoje = new Date().toISOString().slice(0, 10)
+  const de = new Date(Date.now() - 90 * 864e5).toISOString().slice(0, 10)
+
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>De</label><input type="date" id="rs-de" value="${de}"></div>
+      <div class="campo"><label>Até</label><input type="date" id="rs-ate" value="${hoje}"></div>
+      <div class="campo"><label>Departamento</label>
+        <select id="rs-depto"><option value="">Todos</option>
+          ${Object.entries((deptos || []).reduce((acc, d) => { (acc[d.macro_area] = acc[d.macro_area] || []).push(d); return acc }, {}))
+            .map(([macro, ds]) => `<optgroup label="${esc(rotuloMacro[macro] ?? macro)}">
+              ${ds.map(d => `<option value="${d.id}">${esc(d.nome)}</option>`).join('')}</optgroup>`).join('')}
+        </select></div>
+      <button class="btn" id="rs-buscar">Buscar</button>
+    </div>
+    <div id="rs-conteudo"><p class="texto-dim2">carregando...</p></div>`
+
+  const buscar = async () => {
+    let q = db.from('solicitacao_interna').select(`
+      id, codigo, titulo, urgencia, status, data_solicitacao, data_limite, data_conclusao,
+      departamento_id, setor:setor_destino_id ( nome ), solicitante:solicitante_id ( nome ), responsavel:responsavel_id ( nome ),
+      participantes:solicitacao_participante ( pessoa:pessoa_id ( nome ) )
+    `).gte('data_solicitacao', $('#rs-de').value).lte('data_solicitacao', $('#rs-ate').value + 'T23:59:59')
+      .order('data_solicitacao', { ascending: false }).limit(500)
+    if ($('#rs-depto').value) q = q.eq('departamento_id', $('#rs-depto').value)
+
+    const { data, error } = await q
+    if (faltaMigracao(error)) { $('#rs-conteudo').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+    const lista = data || []
+
+    $('#rs-conteudo').innerHTML = `
+      <div class="resumo-topo" style="margin-bottom:14px;">
+        <div class="bloco"><div class="rot">Total no período</div><div class="val">${lista.length}</div></div>
+        <div class="bloco"><div class="rot">Com participantes citados</div><div class="val">${lista.filter(s => (s.participantes || []).length).length}</div></div>
+        <div class="bloco"><div class="rot">Em aberto</div><div class="val">${lista.filter(s => !['CONCLUIDA', 'CANCELADA'].includes(s.status)).length}</div></div>
+      </div>
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr><th>Código</th><th>Título</th><th>Setor</th><th>Solicitante</th><th>Responsável</th><th>Participantes</th><th>Status</th><th>Quando</th></tr></thead><tbody>
+          ${lista.map(s => `<tr>
+            <td class="texto-dim2">${esc(s.codigo)}</td>
+            <td>${esc(s.titulo)}</td>
+            <td class="texto-dim">${esc(s.setor?.nome ?? '—')}</td>
+            <td class="texto-dim2">${esc(s.solicitante?.nome ?? '—')}</td>
+            <td class="texto-dim2">${esc(s.responsavel?.nome ?? '—')}</td>
+            <td class="texto-dim2">${(s.participantes || []).map(p => esc(p.pessoa?.nome)).join(', ') || '—'}</td>
+            <td><span class="${corStatusSolicitacao(s.status)}">${esc(ROTULO_STATUS_SOLICITACAO[s.status])}</span></td>
+            <td class="texto-dim2">${fmtQuando(s.data_solicitacao)}</td>
+          </tr>`).join('') || `<tr><td colspan="8" class="vazio">Nenhuma solicitação nesse período/departamento.</td></tr>`}
+        </tbody></table>
+      </div></div>`
+  }
+  $('#rs-buscar').onclick = buscar
+  buscar()
+}
+
 function estaAtrasadaConcluida (s) {
   if (!s.data_conclusao) return false
   return new Date(s.data_conclusao).getTime() > prazoSlaSolicitacao(s)
