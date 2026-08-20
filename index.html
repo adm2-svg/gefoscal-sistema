@@ -6417,41 +6417,74 @@ async function expedMotoristasVeiculos (alvo) {
   ])
   const listaMot = motoristas || []
   const listaVei = veiculosCliente || []
+  let buscaVei = ''
 
-  alvo.innerHTML = `
-    <div class="duas-colunas" style="align-items:start;gap:20px;">
-      <div>
-        <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:15px;">Motoristas</h3>
-          <button class="btn-secundario mini" id="em-novo-mot">+ novo</button></div>
-        <div class="panel" style="padding:0;">
-          ${listaMot.map(m => `<div class="passo">
-            <span style="flex:1;"><b>${esc(m.nome)}</b>${m.telefone ? ` <span class="texto-dim2" style="font-size:11.5px;">${esc(m.telefone)}</span>` : ''}</span>
-            <button class="btn-secundario mini" data-editar-mot="${m.id}">editar</button>
-          </div>`).join('') || '<p class="vazio">Nenhum motorista cadastrado.</p>'}
-        </div>
-      </div>
-      <div>
-        <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:15px;">Veículos de cliente</h3>
-          <button class="btn-secundario mini" id="em-novo-vei">+ novo</button></div>
-        <div class="panel" style="padding:0;">
-          ${listaVei.map(v => `<div class="passo">
-            <span style="flex:1;"><b>${esc(v.placa)}</b>${v.descricao ? ' — ' + esc(v.descricao) : ''}
-              ${v.cliente?.razao_social ? `<br><span class="texto-dim2" style="font-size:11.5px;">${esc(v.cliente.razao_social)}</span>` : ''}
-              ${v.motorista?.nome ? `<br><span class="chip" style="font-size:10.5px;margin-top:3px;display:inline-block;">🧑‍✈️ ${esc(v.motorista.nome)}</span>` : ''}</span>
-            <button class="btn-secundario mini" data-editar-vei="${v.id}">editar</button>
-          </div>`).join('') || '<p class="vazio">Nenhum veículo de cliente cadastrado.</p>'}
-        </div>
-      </div>
-    </div>`
+  const iniciais = n => (n || '').trim().split(/\s+/).slice(0, 2).map(p => p[0]).join('').toUpperCase()
 
-  $('#em-novo-mot').onclick = () => formMotoristaExped(null, () => expedMotoristasVeiculos(alvo))
-  alvo.querySelectorAll('[data-editar-mot]').forEach(b => {
-    b.onclick = () => formMotoristaExped(listaMot.find(m => m.id === b.dataset.editarMot), () => expedMotoristasVeiculos(alvo))
-  })
-  $('#em-novo-vei').onclick = () => formVeiculoClienteExped(null, () => expedMotoristasVeiculos(alvo))
-  alvo.querySelectorAll('[data-editar-vei]').forEach(b => {
-    b.onclick = () => formVeiculoClienteExped(listaVei.find(v => v.id === b.dataset.editarVei), () => expedMotoristasVeiculos(alvo))
-  })
+  const desenhar = () => {
+    const veiFiltrados = buscaVei ? listaVei.filter(v => v.placa.toUpperCase().includes(buscaVei.toUpperCase())) : listaVei
+
+    alvo.innerHTML = `
+      <div class="resumo-topo" style="margin-bottom:18px;">
+        <div class="bloco"><div class="rot">🧑‍✈️ Motoristas</div><div class="val">${listaMot.length}</div></div>
+        <div class="bloco"><div class="rot">🚚 Veículos de cliente</div><div class="val">${listaVei.length}</div></div>
+        <div class="bloco"><div class="rot">🔗 Com motorista vinculado</div><div class="val">${listaVei.filter(v => v.motorista_id).length}</div></div>
+      </div>
+
+      <div class="duas-colunas" style="align-items:start;gap:22px;">
+        <div>
+          <div class="cabeca-secao" style="margin-bottom:12px;">
+            <h3 style="font-family:var(--serif);font-size:16px;margin:0;">🧑‍✈️ Motoristas</h3>
+            <button class="btn" id="em-novo-mot">+ novo</button></div>
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            ${listaMot.map(m => `<div class="panel mke-card" data-editar-mot="${m.id}" style="padding:12px 16px;cursor:pointer;display:flex;align-items:center;gap:12px;">
+              <div style="width:38px;height:38px;border-radius:50%;background:var(--surface2);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;flex:none;">${esc(iniciais(m.nome))}</div>
+              <div style="flex:1;min-width:0;">
+                <div style="font-weight:600;font-size:13.5px;">${esc(m.nome)}</div>
+                <div class="texto-dim2" style="font-size:11px;">${esc(m.telefone || 'sem telefone')}${m.cpf ? ' · ' + esc(m.cpf) : ''}</div>
+              </div>
+              ${!m.ativo ? '<span class="chip" style="font-size:10px;">inativo</span>' : ''}
+            </div>`).join('') || '<p class="vazio">Nenhum motorista cadastrado.</p>'}
+          </div>
+        </div>
+        <div>
+          <div class="cabeca-secao" style="margin-bottom:12px;">
+            <h3 style="font-family:var(--serif);font-size:16px;margin:0;">🚚 Veículos de cliente</h3>
+            <button class="btn" id="em-novo-vei">+ novo</button></div>
+          <input id="em-busca-vei" placeholder="🔎 buscar placa..." value="${esc(buscaVei)}" style="margin-bottom:10px;">
+          <div style="display:flex;flex-direction:column;gap:8px;max-height:520px;overflow-y:auto;">
+            ${veiFiltrados.map(v => `<div class="panel mke-card" data-editar-vei="${v.id}" style="padding:12px 16px;cursor:pointer;border-left:3px solid var(--rust);">
+              <div style="display:flex;justify-content:space-between;align-items:start;gap:8px;">
+                <div>
+                  <div style="font-weight:700;font-size:14px;letter-spacing:.02em;">${esc(v.placa)}</div>
+                  ${v.descricao ? `<div class="texto-dim2" style="font-size:11.5px;">${esc(v.descricao)}</div>` : ''}
+                </div>
+                ${!v.ativo ? '<span class="chip" style="font-size:10px;">inativo</span>' : ''}
+              </div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">
+                ${v.cliente?.razao_social ? `<span class="texto-dim2" style="font-size:11px;">🏢 ${esc(v.cliente.razao_social)}</span>` : ''}
+              </div>
+              ${v.motorista?.nome ? `<div class="chip" style="font-size:10.5px;margin-top:6px;display:inline-block;">🧑‍✈️ ${esc(v.motorista.nome)}</div>` : `<div class="texto-dim2" style="font-size:10.5px;margin-top:6px;">sem motorista vinculado</div>`}
+            </div>`).join('') || `<p class="vazio">${buscaVei ? 'Nenhuma placa encontrada.' : 'Nenhum veículo de cliente cadastrado.'}</p>`}
+          </div>
+        </div>
+      </div>`
+
+    $('#em-novo-mot').onclick = () => formMotoristaExped(null, () => expedMotoristasVeiculos(alvo))
+    alvo.querySelectorAll('[data-editar-mot]').forEach(b => {
+      b.onclick = () => formMotoristaExped(listaMot.find(m => m.id === b.dataset.editarMot), () => expedMotoristasVeiculos(alvo))
+    })
+    $('#em-novo-vei').onclick = () => formVeiculoClienteExped(null, () => expedMotoristasVeiculos(alvo))
+    alvo.querySelectorAll('[data-editar-vei]').forEach(b => {
+      b.onclick = () => formVeiculoClienteExped(listaVei.find(v => v.id === b.dataset.editarVei), () => expedMotoristasVeiculos(alvo))
+    })
+    let temporizador
+    $('#em-busca-vei').oninput = () => {
+      clearTimeout(temporizador)
+      temporizador = setTimeout(() => { buscaVei = $('#em-busca-vei').value; desenhar(); $('#em-busca-vei').focus() }, 200)
+    }
+  }
+  desenhar()
 }
 
 function formMotoristaExped (registro, aoSalvar) {
