@@ -1297,7 +1297,7 @@ const PAGINAS = {
   onfly:       { nome: 'Viagens (Onfly)', render: paginaOnfly },
   dp:          { nome: 'DP e Segurança', render: paginaDpSeguranca },
   laboratorio: { nome: 'Laboratório', render: paginaLaboratorio },
-  ti:          { nome: 'Administração', render: paginaAdministracao },
+  ti:          { nome: 'Administração Sistema', render: paginaAdministracao },
   gestao_ti:   { nome: 'Gestão de TI', render: paginaGestaoTI }
 }
 
@@ -1850,11 +1850,12 @@ async function paginaSolicitacoes () {
 
   const [{ data: setores }, { data: pessoas }, { data: deptos }, { data: vinculos }] = await Promise.all([
     db.from('setor').select('id,nome').order('nome'),
-    db.from('pessoa').select('id,nome,setor_id').eq('status', 'ATIVO').order('nome'),
+    db.from('pessoa').select('id,nome,setor_id,cargo').eq('status', 'ATIVO').order('nome'),
     db.from('departamento').select('id,nome,codigo,macro_area,setor_id').order('ordem'),
     db.from('vinculo_acesso').select('pessoa_id,dept_id')
   ])
   SOLIC_CACHE = { setores: setores || [], pessoas: pessoas || [], deptos: deptos || [], vinculos: vinculos || [] }
+  SOLIC_CACHE.cargos = [...new Set((pessoas || []).map(p => p.cargo).filter(Boolean))].sort((a, b) => a.localeCompare(b))
 
   const abas = [['painel', 'Painel'], ['nova', 'Nova solicitação'], ['meu-setor', 'Meu setor'], ['todas', 'Todas']]
   area.innerHTML = `
@@ -1932,12 +1933,10 @@ async function solicNova (alvo) {
   alvo.innerHTML = `
     <div class="panel" style="padding:20px;max-width:760px;">
       <h3 style="font-family:var(--serif);font-size:18px;margin:0 0 14px;">Nova solicitação</h3>
-      ${SETOR_TI_ID ? `<div class="acoes" style="margin:0 0 16px;">
-        <button class="btn-secundario mini" id="sn-atalho-melhoria" type="button">💡 Solicitação de melhoria pro sistema</button>
-      </div>` : ''}
       <div class="form-grade">
-        <div class="campo"><label>Setor de destino *</label>
-          <select id="sn-setor">${SOLIC_CACHE.setores.map(s => `<option value="${s.id}">${esc(s.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Cargo *</label>
+          <select id="sn-cargo"><option value="">selecione...</option>
+            ${SOLIC_CACHE.cargos.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}</select></div>
         <div class="campo"><label>Responsável (opcional)</label>
           <select id="sn-responsavel"><option value="">— quem pegar responde —</option></select></div>
         <div class="campo"><label>Urgência</label>
@@ -1957,34 +1956,15 @@ async function solicNova (alvo) {
       <div class="recado oculto" id="sn-recado"></div>
     </div>`
 
-  if (SETOR_TI_ID) $('#sn-atalho-melhoria').onclick = () => {
-    $('#sn-setor').value = SETOR_TI_ID
-    atualizarResponsaveis()
-    $('#sn-titulo').value = 'Sugestão de melhoria: '
-    $('#sn-titulo').focus()
-    $('#sn-titulo').setSelectionRange($('#sn-titulo').value.length, $('#sn-titulo').value.length)
-    $('#sn-descricao').placeholder = 'Descreva a melhoria que você gostaria de ver no sistema — o que você precisa e por quê'
-  }
-
-  // responsável = casa o setor escolhido com o departamento novo pelo
-  // nome, e mostra quem tem vínculo de acesso real àquele departamento
-  // — combina o dropdown simples de sempre com o modelo novo por trás
+  // responsável = quem tem esse cargo cadastrado — o setor/departamento
+  // de destino é herdado da pessoa escolhida, não precisa selecionar
   const atualizarResponsaveis = () => {
-    const setorId = $('#sn-setor').value
-    const deptosCorrespondentes = SOLIC_CACHE.deptos.filter(d => d.setor_id === setorId)
-    let doDepto = []
-    if (deptosCorrespondentes.length) {
-      const idsDepto = new Set(deptosCorrespondentes.map(d => d.id))
-      const idsComVinculo = new Set(SOLIC_CACHE.vinculos.filter(v => idsDepto.has(v.dept_id)).map(v => v.pessoa_id))
-      doDepto = SOLIC_CACHE.pessoas.filter(p => idsComVinculo.has(p.id))
-    }
-    // sem departamento ligado a esse setor — cai pro jeito antigo, por
-    // setor_id da pessoa, pra sempre ter alguém pra mostrar
-    if (!doDepto.length) doDepto = SOLIC_CACHE.pessoas.filter(p => p.setor_id === setorId)
+    const cargo = $('#sn-cargo').value
+    const doCargo = cargo ? SOLIC_CACHE.pessoas.filter(p => p.cargo === cargo) : []
     $('#sn-responsavel').innerHTML = `<option value="">— quem pegar responde —</option>` +
-      doDepto.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')
+      doCargo.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')
   }
-  $('#sn-setor').onchange = atualizarResponsaveis
+  $('#sn-cargo').onchange = atualizarResponsaveis
   atualizarResponsaveis()
 
   const atualizarSlaTexto = () => {
@@ -2002,10 +1982,14 @@ async function solicNova (alvo) {
   $('#sn-salvar').onclick = async () => {
     const titulo = $('#sn-titulo').value.trim()
     if (!titulo) { aviso('Escreva um título.'); return }
+    if (!$('#sn-cargo').value) { aviso('Escolha o cargo.'); return }
     const btn = $('#sn-salvar'); btn.disabled = true; btn.textContent = 'Enviando...'
 
-    const setorId = $('#sn-setor').value
-    const deptoCorrespondente = SOLIC_CACHE.deptos.find(d => d.setor_id === setorId)
+    // herda setor/departamento de quem foi escolhido como responsável
+    // (a pessoa já é o dono verdadeiro do vínculo, não precisa escolher setor à parte)
+    const responsavelEscolhido = SOLIC_CACHE.pessoas.find(p => p.id === $('#sn-responsavel').value)
+    const setorId = responsavelEscolhido?.setor_id ?? null
+    const deptoCorrespondente = setorId ? SOLIC_CACHE.deptos.find(d => d.setor_id === setorId) : null
 
     const { data: nova, error } = await db.from('solicitacao_interna').insert({
       solicitante_id: PERFIL.pessoaId,
@@ -2033,7 +2017,7 @@ async function solicNova (alvo) {
     btn.disabled = false; btn.textContent = 'Enviar solicitação'
     aviso('Solicitação enviada.', false)
     $('#sn-titulo').value = ''; $('#sn-descricao').value = ''; $('#sn-prazo').value = ''; $('#sn-arquivos').value = ''
-    $('#sn-responsavel').value = ''
+    $('#sn-cargo').value = ''; atualizarResponsaveis()
   }
 }
 
