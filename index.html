@@ -6428,6 +6428,9 @@ function formDespesaTi (registro, aoSalvar) {
 }
 
 // ----- Solicitações direcionadas ao setor TI (reaproveita o helpdesk) -----
+let TI_SOLIC_FILTRO = 'todas'
+let TI_SOLIC_CACHE = []
+
 async function tiSolicitacoes (alvo, editavel) {
   if (!SETOR_TI_ID) { alvo.innerHTML = `<p class="vazio">Setor "TI" não encontrado no cadastro de setores — confira em Administração → Cargos e setores.</p>`; return }
   const { data, error } = await db.from('solicitacao_interna').select(`
@@ -6436,33 +6439,59 @@ async function tiSolicitacoes (alvo, editavel) {
     setor:setor_destino_id ( id, nome ), solicitante:solicitante_id ( nome ), responsavel:responsavel_id ( nome )
   `).eq('setor_destino_id', SETOR_TI_ID).order('data_solicitacao', { ascending: false }).limit(300)
   if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-  const lista = data || []
+  TI_SOLIC_CACHE = data || []
+  renderTiSolicitacoes(alvo, editavel)
+}
+
+function renderTiSolicitacoes (alvo, editavel) {
+  const lista = TI_SOLIC_CACHE
   const abertas = lista.filter(s => ['ABERTA', 'EM_ANDAMENTO'].includes(s.status))
+  const atrasadas = abertas.filter(estaAtrasadaSolicitacao)
+  const concluidas = lista.filter(s => s.status === 'CONCLUIDA')
+
+  const grupos = { todas: lista, abertas, atrasadas, concluidas }
+  const exibida = grupos[TI_SOLIC_FILTRO] || lista
+
+  const cardKpi = (chave, rotulo, valor, cor) => `<div class="bloco mke-card" data-filtro-ti="${chave}"
+      style="cursor:pointer;border-bottom:3px solid ${TI_SOLIC_FILTRO === chave ? cor : 'transparent'};${TI_SOLIC_FILTRO === chave ? 'background:var(--hover-bg);' : ''}">
+      <div class="rot">${rotulo}</div><div class="val" style="${valor > 0 && chave === 'atrasadas' ? 'color:var(--critico-text);' : ''}">${valor}</div></div>`
 
   alvo.innerHTML = `
-    <div class="resumo-topo" style="margin-bottom:16px;">
-      ${[['Total', lista.length, ''], ['Em aberto', abertas.length, ''],
-         ['Atrasadas', abertas.filter(estaAtrasadaSolicitacao).length, '']]
-        .map(([rot, val]) => `<div class="bloco"><div class="rot">${rot}</div><div class="val">${val}</div></div>`).join('')}
+    <div class="resumo-topo" style="margin-bottom:18px;">
+      ${cardKpi('todas', 'Total', lista.length, 'var(--rust)')}
+      ${cardKpi('abertas', 'Em aberto', abertas.length, 'var(--rust)')}
+      ${cardKpi('atrasadas', 'Atrasadas', atrasadas.length, 'var(--critico-text)')}
+      ${cardKpi('concluidas', 'Concluídas', concluidas.length, 'var(--good-text)')}
     </div>
-    <div class="panel" style="padding:0;"><div class="tabela-scroll">
-      <table><thead><tr>
-        <th>Código</th><th>Título</th><th>Urgência</th><th>Status</th><th>Solicitante</th><th>Responsável</th><th>Progresso</th>
-      </tr></thead><tbody>
-        ${lista.map(s => `<tr style="cursor:pointer;" data-abrir="${s.id}">
-          <td><b>${esc(s.codigo)}</b></td>
-          <td>${esc(s.titulo)}</td>
-          <td><span class="${corUrgenciaSolicitacao(s.urgencia)}">${esc(ROTULO_URGENCIA_SOLICITACAO[s.urgencia])}</span></td>
-          <td><span class="${corStatusSolicitacao(s.status)}">${esc(ROTULO_STATUS_SOLICITACAO[s.status])}</span></td>
-          <td class="texto-dim">${esc(s.solicitante?.nome ?? '—')}</td>
-          <td class="texto-dim">${esc(s.responsavel?.nome ?? '—')}</td>
-          <td class="texto-dim2">${s.progresso_pct ?? 0}%</td>
-        </tr>`).join('') || `<tr><td colspan="7" class="vazio">Nenhuma solicitação pro setor de TI ainda.</td></tr>`}
-      </tbody></table>
-    </div></div>`
+    <div class="panel" style="padding:0;">
+      ${exibida.map(s => {
+        const atrasada = estaAtrasadaSolicitacao(s)
+        return `<div class="linha-os-manut" data-abrir="${s.id}">
+          <div style="display:flex;align-items:center;gap:12px;flex:1;min-width:0;">
+            <span class="${corStatusSolicitacao(s.status)}" style="flex:none;">${esc(ROTULO_STATUS_SOLICITACAO[s.status])}</span>
+            <div style="min-width:0;flex:1;">
+              <div style="font-weight:600;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                ${esc(s.titulo)} <span class="texto-dim2" style="font-weight:400;font-size:11.5px;">${esc(s.codigo)}</span></div>
+              <div style="margin-top:3px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <span class="${corUrgenciaSolicitacao(s.urgencia)}" style="font-size:10px;padding:2px 8px;">${esc(ROTULO_URGENCIA_SOLICITACAO[s.urgencia])}</span>
+                <span class="texto-dim2" style="font-size:11px;">${esc(s.solicitante?.nome ?? '—')} → ${esc(s.responsavel?.nome ?? 'sem responsável')}</span>
+                ${atrasada ? `<span class="badge-alerta" style="font-size:10px;">atrasada</span>` : ''}
+              </div>
+            </div>
+          </div>
+          <div style="text-align:right;flex:none;padding-left:10px;">
+            <div style="font-family:var(--serif);font-size:16px;">${s.progresso_pct ?? 0}%</div>
+            <div class="texto-dim2" style="font-size:10.5px;">${fmtData(s.data_limite) || '—'}</div>
+          </div>
+        </div>`
+      }).join('') || `<p class="vazio" style="padding:30px;">Nenhuma solicitação ${TI_SOLIC_FILTRO !== 'todas' ? 'nesse filtro' : 'pro setor de TI ainda'}.</p>`}
+    </div>`
 
-  alvo.querySelectorAll('[data-abrir]').forEach(tr => {
-    tr.onclick = () => detalheSolicitacao(lista.find(s => s.id === tr.dataset.abrir), () => tiSolicitacoes(alvo, editavel))
+  alvo.querySelectorAll('[data-filtro-ti]').forEach(c => {
+    c.onclick = () => { TI_SOLIC_FILTRO = c.dataset.filtroTi; renderTiSolicitacoes(alvo, editavel) }
+  })
+  alvo.querySelectorAll('[data-abrir]').forEach(linha => {
+    linha.onclick = () => detalheSolicitacao(TI_SOLIC_CACHE.find(s => s.id === linha.dataset.abrir), () => tiSolicitacoes(alvo, editavel))
   })
 }
 
