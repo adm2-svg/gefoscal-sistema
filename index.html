@@ -450,6 +450,7 @@ tbody tr:hover { background: var(--hover-bg); }
 .chip-filtro { border:1px solid var(--line2); background:var(--surface2); color:var(--dim); border-radius:20px;
   padding:8px 16px; font-size:12.5px; font-weight:600; cursor:pointer; }
 .mes-cal-mkt { transition:.15s ease; }
+.mk-aniv-linha:hover { background:var(--hover-bg); }
 .mes-cal-mkt:hover { transform:translateY(-2px); box-shadow:0 8px 20px rgba(0,0,0,.25); border-color:var(--rust) !important; }
 .chip-filtro.ativo { background:var(--rust); border-color:var(--rust); color:#fff; }
 .linha-os-manut { display:flex; align-items:center; justify-content:space-between; gap:10px;
@@ -21368,30 +21369,54 @@ function renderMktAniversariantes (alvo, editavel) {
     return false
   })
 
+  const doDia = unificados.filter(a => a.mes === hoje.getMonth() + 1 && a.dia === hoje.getDate())
+  const dataHojeTexto = `${String(hoje.getDate()).padStart(2, '0')} de ${MESES_MKT[hoje.getMonth()]}`
+
+  const linhaPessoa = a => `<div class="mk-aniv-linha" data-abrir-aniv="${a.id}" data-origem-aniv="${a.origem}"
+      style="display:flex;align-items:center;gap:10px;padding:8px 4px;cursor:${editavel ? 'pointer' : 'default'};border-radius:8px;">
+      ${a.foto_url
+        ? `<img src="${esc(a.foto_url)}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;flex:none;">`
+        : `<div style="width:32px;height:32px;border-radius:50%;background:var(--surface2);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:11px;flex:none;">${esc(nomeIniciais(a.nome))}</div>`}
+      <span style="font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(a.nome)}</span>
+      <span class="texto-dim2" style="font-size:11.5px;flex:none;">${String(a.dia).padStart(2, '0')}/${String(a.mes).padStart(2, '0')}</span>
+    </div>`
+
   alvo.innerHTML = `
-    <div class="cabeca-secao" style="margin-bottom:14px;">
+    <div class="cabeca-secao" style="margin-bottom:16px;">
       <div>
-        <h3 style="font-family:var(--serif);font-size:20px;margin:0;">Aniversariantes</h3>
-        <p class="texto-dim2" style="font-size:12.5px;margin:2px 0 0;">Funcionários puxados direto do cadastro (DP e Segurança) — editar aqui atualiza lá também.</p>
+        <h3 style="font-family:var(--serif);font-size:20px;margin:0;color:#005229;">Aniversariantes</h3>
+        <p class="texto-dim2" style="font-size:12.5px;margin:2px 0 0;">Funcionários puxados do cadastro (DP e Segurança) — editar aqui atualiza lá também.</p>
       </div>
-      ${editavel ? `<button class="btn" id="mk-novo-aniv">+ Contato externo (cliente, parceiro...)</button>` : ''}
+      ${editavel ? `<button class="btn-secundario mini" id="mk-novo-aniv">+ Contato externo</button>` : ''}
     </div>
-    <div class="filtros" style="margin-bottom:16px;">
+
+    <div style="background:#005229;border-radius:14px;padding:26px 28px;margin-bottom:22px;">
+      <div style="color:rgba(255,255,255,.65);font-size:11px;text-transform:uppercase;letter-spacing:.09em;font-weight:600;">Aniversariantes de hoje · ${dataHojeTexto}</div>
+      ${doDia.length
+        ? `<div style="display:flex;flex-wrap:wrap;gap:22px;margin-top:12px;">
+            ${doDia.map(a => `<div style="display:flex;align-items:center;gap:10px;cursor:${editavel ? 'pointer' : 'default'};" data-abrir-aniv-hoje="${a.id}" data-origem-aniv-hoje="${a.origem}">
+              ${a.foto_url
+                ? `<img src="${esc(a.foto_url)}" style="width:44px;height:44px;border-radius:50%;object-fit:cover;border:2px solid #e6c15a;">`
+                : `<div style="width:44px;height:44px;border-radius:50%;background:rgba(255,255,255,.12);border:2px solid #e6c15a;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;color:#e6c15a;">${esc(nomeIniciais(a.nome))}</div>`}
+              <span style="font-family:var(--serif);font-size:22px;color:#e6c15a;">${esc(a.nome)}</span>
+            </div>`).join('')}
+          </div>`
+        : `<div style="color:rgba(255,255,255,.8);font-size:14px;margin-top:10px;">Ninguém faz aniversário hoje.</div>`}
+    </div>
+
+    <div class="filtros" style="margin-bottom:18px;">
       <input id="mk-aniv-busca" placeholder="Buscar por nome ou dia (ex: 15 ou 15/08)..." style="flex:1;min-width:220px;" value="${esc(MKT_ANIV_BUSCA)}">
     </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px;">
-      ${unificados.map(a => {
-        const ehHoje = a.mes === hoje.getMonth() + 1 && a.dia === hoje.getDate()
-        return `<div class="panel mke-card" data-abrir-aniv="${a.id}" data-origem-aniv="${a.origem}" style="padding:14px;text-align:center;cursor:${editavel ? 'pointer' : 'default'};
-          ${ehHoje ? 'border-color:var(--gold);box-shadow:0 0 0 1px var(--gold);' : ''}">
-          ${a.foto_url
-            ? `<img src="${esc(a.foto_url)}" style="width:56px;height:56px;border-radius:50%;object-fit:cover;margin:0 auto;display:block;">`
-            : `<div style="width:56px;height:56px;border-radius:50%;background:var(--surface2);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;margin:0 auto;">${esc(nomeIniciais(a.nome))}</div>`}
-          <div style="font-weight:600;font-size:13px;margin-top:8px;">${esc(a.nome)}${ehHoje ? ' 🎂' : ''}</div>
-          <div class="texto-dim2" style="font-size:11px;margin-top:2px;">${esc(a.cargo || a.empresa || (a.origem === 'externo' ? 'contato externo' : ''))}</div>
-          <div style="font-family:var(--serif);font-size:15px;margin-top:6px;${ehHoje ? 'color:var(--gold);' : ''}">${String(a.dia).padStart(2, '0')}/${String(a.mes).padStart(2, '0')}</div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px;">
+      ${MESES_MKT.map((nomeMes, i) => {
+        const doMes = unificados.filter(a => a.mes === i + 1).sort((a, b) => a.nome.localeCompare(b.nome))
+        if (!doMes.length && termo) return ''
+        return `<div class="panel" style="padding:16px 14px;">
+          <div style="font-family:var(--serif);font-size:14.5px;color:#005229;font-weight:600;border-bottom:2px solid #f0f0ec;padding-bottom:8px;margin-bottom:6px;">${nomeMes}</div>
+          ${doMes.length ? doMes.map(linhaPessoa).join('') : '<p class="texto-dim2" style="font-size:12px;padding:8px 4px;">sem aniversariantes</p>'}
         </div>`
-      }).join('') || `<p class="vazio">${termo ? 'Nenhum aniversariante encontrado com essa busca.' : 'Nenhum aniversariante com data cadastrada ainda.'}</p>`}
+      }).join('') || `<p class="vazio">Nenhum aniversariante encontrado com essa busca.</p>`}
     </div>`
 
   let temporizador
@@ -21399,13 +21424,14 @@ function renderMktAniversariantes (alvo, editavel) {
     clearTimeout(temporizador)
     temporizador = setTimeout(() => { MKT_ANIV_BUSCA = $('#mk-aniv-busca').value; renderMktAniversariantes(alvo, editavel) }, 250)
   }
-  alvo.querySelectorAll('[data-abrir-aniv]').forEach(c => {
-    c.onclick = () => {
-      const a = MKT_ANIV_CACHE.find(x => x.id === c.dataset.abrirAniv && x.origem === c.dataset.origemAniv)
-      if (a.origem === 'pessoa') formEditarNascimentoPessoa(a, () => mktAniversariantes(alvo, editavel))
-      else formAniversarianteMkt(alvo, editavel, a)
-    }
-  })
+  const abrirRegistro = (id, origem) => {
+    const a = MKT_ANIV_CACHE.find(x => x.id === id && x.origem === origem)
+    if (!a) return
+    if (a.origem === 'pessoa') formEditarNascimentoPessoa(a, () => mktAniversariantes(alvo, editavel))
+    else formAniversarianteMkt(alvo, editavel, a)
+  }
+  alvo.querySelectorAll('[data-abrir-aniv]').forEach(c => { c.onclick = () => abrirRegistro(c.dataset.abrirAniv, c.dataset.origemAniv) })
+  alvo.querySelectorAll('[data-abrir-aniv-hoje]').forEach(c => { c.onclick = () => abrirRegistro(c.dataset.abrirAnivHoje, c.dataset.origemAnivHoje) })
   if (!editavel) return
   $('#mk-novo-aniv').onclick = () => formAniversarianteMkt(alvo, editavel)
 }
