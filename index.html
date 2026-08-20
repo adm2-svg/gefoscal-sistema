@@ -3367,7 +3367,7 @@ function montarWidgetAssistente () {
   document.body.appendChild(painel)
 
   const chat = () => $('#as-chat')
-  const renderMensagem = (autor, texto, chaveIr) => {
+  const renderMensagem = (autor, texto, chaveIr, subIr) => {
     const minha = autor === 'user'
     const bolhaMsg = document.createElement('div')
     bolhaMsg.style.cssText = `align-self:${minha ? 'flex-end' : 'flex-start'};max-width:88%;`
@@ -3375,11 +3375,27 @@ function montarWidgetAssistente () {
     bolhaMsg.innerHTML = `
       <div style="background:${minha ? 'var(--rust)' : 'var(--surface2)'};color:${minha ? '#fff' : 'inherit'};
                   padding:8px 12px;border-radius:10px;font-size:12.5px;line-height:1.5;white-space:pre-wrap;">${esc(texto)}</div>
-      ${nomePagina ? `<button data-ir-para-assist="${esc(chaveIr)}" class="btn mini" style="margin-top:6px;width:100%;">📍 Ir para ${esc(nomePagina)}</button>` : ''}`
+      ${nomePagina ? `<button data-ir-para-assist="${esc(chaveIr)}" data-sub-assist="${esc(subIr || '')}" class="btn mini" style="margin-top:6px;width:100%;">📍 Ir para ${esc(nomePagina)}</button>` : ''}`
     chat().appendChild(bolhaMsg)
     chat().scrollTop = chat().scrollHeight
     const btnIr = bolhaMsg.querySelector('[data-ir-para-assist]')
-    if (btnIr) btnIr.onclick = () => { abrirFechar(); irPara(btnIr.dataset.irParaAssist) }
+    if (btnIr) btnIr.onclick = () => {
+      abrirFechar()
+      const chave = btnIr.dataset.irParaAssist
+      const sub = btnIr.dataset.subAssist
+      irPara(chave)
+      // a página renderiza de forma assíncrona — espera aparecer as
+      // sub-abas antes de tentar clicar na certa
+      if (sub) {
+        let tentativas = 0
+        const tentar = () => {
+          const botaoSub = document.querySelector(`.subabas button[data-sub="${sub}"]`)
+          if (botaoSub) { botaoSub.click(); return }
+          if (++tentativas < 20) setTimeout(tentar, 100)
+        }
+        setTimeout(tentar, 100)
+      }
+    }
     return bolhaMsg
   }
 
@@ -3443,7 +3459,7 @@ function montarWidgetAssistente () {
       return
     }
     ASSIST_HISTORICO.push({ role: 'assistant', content: data.resposta })
-    renderMensagem('assistant', data.resposta, data.irPara)
+    renderMensagem('assistant', data.resposta, data.irPara, data.irParaSub)
   }
   $('#as-enviar').onclick = enviar
   $('#as-pergunta').onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); enviar() } }
