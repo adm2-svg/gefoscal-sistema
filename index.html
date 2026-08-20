@@ -18203,6 +18203,44 @@ async function frotaPainel (alvo, editavel) {
 }
 
 // ----- Frota › Itens -----
+// ----- Consulta rápida de IPVA direto do card do veículo (Itens) —
+// mesma edge function da aba Débitos, só que sem sair da tela -----
+function abrirConsultaIpvaRapida (veiculo, aoConcluir) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:380px;">
+    <h3>Consultar IPVA — ${esc(veiculo.placa)}</h3>
+    <p class="texto-dim2" style="font-size:12px;margin:-6px 0 12px;">Busca direto na Zapay o valor e vencimento atualizados.</p>
+    <div class="campo"><label>UF do veículo *</label>
+      <select id="ciq-uf">${['TO', 'GO', 'BA', 'MG', 'SP', 'DF', 'MT', 'MS', 'PA', 'MA', 'PI'].map(uf => `<option value="${uf}">${uf}</option>`).join('')}</select></div>
+    <div class="acoes" style="margin-top:12px;"><button class="btn" id="ciq-consultar">Consultar na Zapay</button>
+      <button class="btn-secundario" id="ciq-fechar">Fechar</button></div>
+    <div class="recado oculto" id="ciq-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#ciq-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  fundo.querySelector('#ciq-consultar').onclick = async () => {
+    const el = fundo.querySelector('#ciq-recado')
+    const aviso = (t, ok) => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = ok ? 'var(--good-text)' : 'var(--warn-text)'; el.style.color = ok ? 'var(--good-text)' : 'var(--warn-text)' }
+    const btn = fundo.querySelector('#ciq-consultar'); btn.disabled = true; btn.textContent = 'Consultando...'
+    const uf = fundo.querySelector('#ciq-uf').value
+    await db.from('veiculo').update({ uf }).eq('id', veiculo.id).is('uf', null)
+    const { data, error } = await db.functions.invoke('frota-zapay-consultar', { body: { veiculoId: veiculo.id, uf } })
+    btn.disabled = false; btn.textContent = 'Consultar na Zapay'
+    if (error || data?.erro) {
+      let msg = data?.erro || error?.message
+      if (error?.context?.json) { try { const c = await error.context.json(); msg = c?.erro || msg } catch {} }
+      aviso(msg + (data?.aviso ? '\n\n' + data.aviso : ''), false)
+      return
+    }
+    aviso('Consulta pedida — o valor aparece no card em instantes, sem precisar recarregar a página inteira.', true)
+    setTimeout(() => { fechar(); aoConcluir() }, 2500)
+  }
+}
+
 async function frotaItens (alvo, editavel) {
   const [{ data, error }, { data: custosDoc }, { data: custosManut }, custosComb, custosPecas] = await Promise.all([
     db.from('veiculo').select(`id,placa,descricao,eh_proprio,ano_modelo,renavam,chassi,contraparte,
@@ -18235,6 +18273,14 @@ async function frotaItens (alvo, editavel) {
   }
   const fotoPrincipal = {}
   ;(fotosRaw || []).forEach(f => { if (!fotoPrincipal[f.registro_id]) fotoPrincipal[f.registro_id] = urlPorCaminho[f.storage_path] })
+
+  // IPVA de verdade, vindo da consulta na Zapay (quando já foi feita)
+  // — mais confiável que o vencimento digitado à mão
+  const { data: ipvasRaw } = ids.length
+    ? await db.from('frota_debito_veiculo').select('veiculo_id,valor,vencimento,situacao,atualizado_em').ilike('tipo', '%ipva%').in('veiculo_id', ids).order('atualizado_em', { ascending: false })
+    : { data: [] }
+  const ipvaPorVeiculo = {}
+  ;(ipvasRaw || []).forEach(d => { if (!ipvaPorVeiculo[d.veiculo_id]) ipvaPorVeiculo[d.veiculo_id] = d })
 
   let modo = 'vitrine'
 
@@ -18279,6 +18325,7 @@ async function frotaItens (alvo, editavel) {
           const preco = i.status_frota === 'VENDIDO' ? i.valor_venda : (i.valor_venda ?? i.valor_entrada)
           const rotuloPreco = i.status_frota === 'VENDIDO' ? 'vendido por' : i.valor_venda != null ? 'à venda por' : 'valor de entrada'
           const dias = diasAteVencimento(i.ipva_vencimento)
+          const ipvaApi = ipvaPorVeiculo[i.id]
           const foto = fotoPrincipal[i.id]
           return `<div class="panel" style="padding:0;overflow:hidden;cursor:pointer;" data-abrir="${i.id}">
             <div style="height:150px;background:${foto ? `url('${foto}') center/cover` : 'var(--surface2)'};display:flex;align-items:center;justify-content:center;">
@@ -18304,7 +18351,17 @@ async function frotaItens (alvo, editavel) {
                 <span>combustível<br><b class="texto-dim2">R$ ${fmtNum(gastoComb)}</b></span>
                 ${gastoPecas ? `<span>peças<br><b class="texto-dim2">R$ ${fmtNum(gastoPecas)}</b></span>` : ''}
               </div>
-              ${dias !== null && dias <= 10 ? `<div class="badge-alerta" style="margin-top:10px;display:inline-block;">
+              <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:8px;">
+                <div style="font-size:11.5px;">
+                  <span class="texto-dim2" style="text-transform:uppercase;font-size:10px;">IPVA</span><br>
+                  ${ipvaApi
+                    ? `<b>R$ ${fmtNum(ipvaApi.valor)}</b> <span class="texto-dim2">${ipvaApi.vencimento ? '· vence ' + fmtData(ipvaApi.vencimento) : ''}</span>
+                       <div class="texto-dim2" style="font-size:9.5px;">consultado em ${fmtData(ipvaApi.atualizado_em?.slice(0, 10))} via Zapay</div>`
+                    : `<span class="texto-dim2">${i.ipva_vencimento ? 'vencimento ' + fmtData(i.ipva_vencimento) + ' (digitado)' : 'sem consulta ainda'}</span>`}
+                </div>
+                ${editavel && i.placa ? `<button class="btn-secundario mini" data-consultar-ipva="${i.id}" onclick="event.stopPropagation()">🔄 consultar</button>` : ''}
+              </div>
+              ${dias !== null && dias <= 10 && !ipvaApi ? `<div class="badge-alerta" style="margin-top:10px;display:inline-block;">
                 ${dias < 0 ? `IPVA vencido há ${Math.abs(dias)}d` : dias === 0 ? 'IPVA vence hoje' : `IPVA vence em ${dias}d`}</div>` : ''}
             </div>
           </div>`
@@ -18312,6 +18369,9 @@ async function frotaItens (alvo, editavel) {
       </div>`
     $('#fr-conteudo').querySelectorAll('[data-abrir]').forEach(el => {
       el.onclick = () => formFrotaItem(lista.find(x => x.id === el.dataset.abrir))
+    })
+    $('#fr-conteudo').querySelectorAll('[data-consultar-ipva]').forEach(b => {
+      b.onclick = () => abrirConsultaIpvaRapida(lista.find(x => x.id === b.dataset.consultarIpva), () => frotaItens(alvo, editavel))
     })
   }
 
