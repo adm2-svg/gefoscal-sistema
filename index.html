@@ -1234,6 +1234,7 @@ async function abrirApp () {
   $('#tela-login').classList.add('oculto')
   $('#tela-app').classList.remove('oculto')
   irPara('visao_geral')
+  montarWidgetAssistente()
 }
 
 const ehTotal = () => PERFIL.papeis.some(p => PAPEIS_TOTAIS.includes(p))
@@ -1712,7 +1713,6 @@ async function paginaVisaoGeral () {
   await painelGerencial(area)
   await minhasSolicitacoes(area)
   await minhasCompras(area)
-  await assistenteSistema(area)
   await areaDeTrabalho(area)
 
   if (podeVer('financeiro')) await painelFinanceiro(area)
@@ -3319,48 +3319,99 @@ async function subVisao (alvo, editavel) {
 const ROTULO_RECORRENCIA_TAREFA = { diaria: 'diária', semanal: 'semanal', mensal: 'mensal' }
 
 // ---------------------------------------------------------------
-// Assistente do Sistema — IA que ajuda a usar o Gefoscal, disponível
-// pra todo mundo na Visão Geral (não depende de módulo liberado).
-// Não mexe em dados, só orienta como navegar/usar as telas.
+// Assistente do Sistema — bolha flutuante em qualquer tela (estilo
+// "Maria Campos" do site institucional), não depende de módulo
+// liberado. Clica pra abrir/fechar. Tem botão de áudio (fala e
+// transcreve pro campo de texto, usando reconhecimento de voz do
+// próprio navegador — não sai nenhum áudio do aparelho da pessoa).
+// Não mexe em dado nenhum, só orienta como usar o sistema.
 // ---------------------------------------------------------------
 let ASSIST_HISTORICO = []
+let ASSIST_ABERTO = false
+let ASSIST_RECONHECIMENTO = null
 
-async function assistenteSistema (area) {
-  const bloco = document.createElement('div')
-  bloco.className = 'panel'
-  bloco.style.cssText = 'padding:0;margin-bottom:16px;'
-  bloco.innerHTML = `
-    <div style="padding:16px 18px;border-bottom:1px solid var(--line);">
-      <h3 style="font-family:var(--serif);font-size:16px;margin:0 0 4px;">🤖 Assistente do Sistema</h3>
-      <p class="texto-dim2" style="font-size:12px;margin:0;">Tira dúvida de como usar o Gefoscal — onde fica cada coisa, como fazer uma tarefa.</p>
+function montarWidgetAssistente () {
+  if ($('#assist-bolha')) return // já montado, não duplica
+
+  const bolha = document.createElement('button')
+  bolha.id = 'assist-bolha'
+  bolha.type = 'button'
+  bolha.innerHTML = '✨ Assistente'
+  bolha.style.cssText = `
+    position:fixed; right:22px; bottom:22px; z-index:9000;
+    background:var(--gold,#c8a11a); color:#3a2e08; border:none; border-radius:24px;
+    padding:12px 20px; font-weight:700; font-size:13.5px; cursor:pointer;
+    box-shadow:0 6px 20px rgba(0,0,0,.35);`
+  document.body.appendChild(bolha)
+
+  const painel = document.createElement('div')
+  painel.id = 'assist-painel'
+  painel.style.cssText = `
+    position:fixed; right:22px; bottom:78px; z-index:9000; width:360px; max-width:calc(100vw - 32px);
+    height:min(520px, calc(100vh - 120px)); background:var(--panel); border:1px solid var(--line);
+    border-radius:14px; box-shadow:0 12px 40px rgba(0,0,0,.45); display:none; flex-direction:column; overflow:hidden;`
+  painel.innerHTML = `
+    <div style="background:var(--gold,#c8a11a); color:#3a2e08; padding:12px 16px; display:flex; justify-content:space-between; align-items:center;">
+      <div><b style="font-size:14px;">✨ Assistente do Sistema</b>
+        <div style="font-size:10.5px;opacity:.8;">tira dúvida de como usar o Gefoscal</div></div>
+      <button id="assist-fechar" style="background:none;border:none;font-size:20px;cursor:pointer;color:#3a2e08;line-height:1;">−</button>
     </div>
-    <div id="as-chat" style="padding:18px;display:flex;flex-direction:column;gap:12px;max-height:340px;overflow-y:auto;"></div>
-    <div style="padding:14px 18px;border-top:1px solid var(--line);">
-      <div style="display:flex;gap:8px;align-items:flex-end;">
-        <textarea id="as-pergunta" placeholder="Ex: onde eu abro um chamado de manutenção?" style="flex:1;min-height:44px;max-height:100px;"></textarea>
-        <button class="btn" id="as-enviar">Enviar</button>
-      </div>
+    <div id="as-chat" style="flex:1;padding:14px;display:flex;flex-direction:column;gap:10px;overflow-y:auto;"></div>
+    <div style="padding:10px 12px;border-top:1px solid var(--line);display:flex;gap:6px;align-items:flex-end;">
+      <button id="as-mic" type="button" title="Falar" style="flex:none;border:1px solid var(--line2);background:var(--surface2);
+        border-radius:50%;width:36px;height:36px;cursor:pointer;font-size:15px;">🎤</button>
+      <textarea id="as-pergunta" placeholder="Escreve ou fala sua dúvida..." style="flex:1;min-height:36px;max-height:80px;font-size:13px;"></textarea>
+      <button id="as-enviar" class="btn mini" style="flex:none;">Enviar</button>
     </div>`
-  area.appendChild(bloco)
+  document.body.appendChild(painel)
 
-  const chat = $('#as-chat')
+  const chat = () => $('#as-chat')
   const renderMensagem = (autor, texto) => {
     const minha = autor === 'user'
-    const bolha = document.createElement('div')
-    bolha.style.cssText = `align-self:${minha ? 'flex-end' : 'flex-start'};max-width:85%;`
-    bolha.innerHTML = `
-      <div class="texto-dim2" style="font-size:10.5px;margin-bottom:3px;${minha ? 'text-align:right;' : ''}">${minha ? 'Você' : 'Assistente'}</div>
+    const bolhaMsg = document.createElement('div')
+    bolhaMsg.style.cssText = `align-self:${minha ? 'flex-end' : 'flex-start'};max-width:88%;`
+    bolhaMsg.innerHTML = `
       <div style="background:${minha ? 'var(--rust)' : 'var(--surface2)'};color:${minha ? '#fff' : 'inherit'};
-                  padding:9px 13px;border-radius:10px;font-size:13px;line-height:1.5;white-space:pre-wrap;">${esc(texto)}</div>`
-    chat.appendChild(bolha)
-    chat.scrollTop = chat.scrollHeight
-    return bolha
+                  padding:8px 12px;border-radius:10px;font-size:12.5px;line-height:1.5;white-space:pre-wrap;">${esc(texto)}</div>`
+    chat().appendChild(bolhaMsg)
+    chat().scrollTop = chat().scrollHeight
+    return bolhaMsg
   }
 
-  if (!ASSIST_HISTORICO.length) {
-    renderMensagem('assistant', 'Oi! Posso te ajudar a achar qualquer coisa no sistema ou explicar como fazer uma tarefa. O que você precisa?')
+  const abrirFechar = () => {
+    ASSIST_ABERTO = !ASSIST_ABERTO
+    painel.style.display = ASSIST_ABERTO ? 'flex' : 'none'
+    if (ASSIST_ABERTO && !chat().childElementCount) {
+      renderMensagem('assistant', 'Oi! Posso te ajudar a achar qualquer coisa no sistema ou explicar como fazer uma tarefa. O que você precisa?')
+      ASSIST_HISTORICO.forEach(m => renderMensagem(m.role === 'user' ? 'user' : 'assistant', m.content))
+    }
+  }
+  bolha.onclick = abrirFechar
+  $('#assist-fechar').onclick = abrirFechar
+
+  // ---- áudio: reconhecimento de voz do navegador, transcreve pro campo ----
+  const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition
+  const btnMic = $('#as-mic')
+  if (!SpeechRec) {
+    btnMic.disabled = true
+    btnMic.title = 'Seu navegador não suporta reconhecimento de voz'
+    btnMic.style.opacity = '.4'
   } else {
-    ASSIST_HISTORICO.forEach(m => renderMensagem(m.role === 'user' ? 'user' : 'assistant', m.content))
+    btnMic.onclick = () => {
+      if (ASSIST_RECONHECIMENTO) { ASSIST_RECONHECIMENTO.stop(); return }
+      const rec = new SpeechRec()
+      rec.lang = 'pt-BR'
+      rec.interimResults = false
+      rec.onstart = () => { btnMic.style.background = 'var(--warn-text)'; btnMic.textContent = '⏺️' }
+      rec.onresult = e => {
+        const texto = e.results[0][0].transcript
+        $('#as-pergunta').value = ($('#as-pergunta').value + ' ' + texto).trim()
+      }
+      rec.onerror = () => { renderMensagem('assistant', 'Não consegui ouvir direito — tenta de novo ou escreve mesmo.') }
+      rec.onend = () => { btnMic.style.background = 'var(--surface2)'; btnMic.textContent = '🎤'; ASSIST_RECONHECIMENTO = null }
+      ASSIST_RECONHECIMENTO = rec
+      rec.start()
+    }
   }
 
   const enviar = async () => {
@@ -3368,7 +3419,7 @@ async function assistenteSistema (area) {
     if (!texto) return
     renderMensagem('user', texto)
     $('#as-pergunta').value = ''
-    const btn = $('#as-enviar'); btn.disabled = true; btn.textContent = 'Pensando...'
+    const btn = $('#as-enviar'); btn.disabled = true; btn.textContent = '...'
     const carregando = renderMensagem('assistant', 'Pensando...')
 
     ASSIST_HISTORICO.push({ role: 'user', content: texto })
