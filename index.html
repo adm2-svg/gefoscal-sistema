@@ -20477,7 +20477,7 @@ async function paginaMarketing () {
   const editavel = podeEditar('marketing')
   $('#subtitulo-pagina').textContent = 'Redes sociais, conteúdo e mercado'
   const area = areaLivre()
-  const abas = [['visao', 'Painel'], ['quadro', 'Quadro'], ['calendario', 'Calendário'], ['redes', 'Redes Sociais'], ['mercado', 'Mercado'], ['docs', 'Docs'], ['aniversariantes', 'Aniversariantes']]
+  const abas = [['visao', 'Painel'], ['quadro', 'Quadro'], ['calendario', 'Calendário'], ['redes', 'Redes Sociais'], ['mercado', 'Mercado'], ['docs', 'Docs'], ['aniversariantes', 'Aniversariantes'], ['estoque', 'Estoque Marketing']]
   area.innerHTML = `
     <div class="subabas">${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}</div>
     <div id="sub-marketing"></div>`
@@ -20500,6 +20500,7 @@ function abrirMarketing (sub, editavel) {
   if (sub === 'quadro') mktQuadro(alvo, editavel)
   if (sub === 'calendario') mktCalendario(alvo, editavel)
   if (sub === 'aniversariantes') mktAniversariantes(alvo, editavel)
+  if (sub === 'estoque') mktEstoque(alvo, editavel)
 }
 
 // ----- Visão Geral -----
@@ -21362,6 +21363,280 @@ function formAniversarianteMkt (alvoPai, editavel) {
 // tonelada, energia por tonelada), a seção mostra um aviso honesto em vez
 // de inventar número — "vai enchendo com o tempo", como o Adão pediu.
 // ---------------------------------------------------------------
+
+// ==================================================================
+// Estoque Marketing — brindes, materiais promocionais, equipamentos
+// e vestuário do setor. Dá baixa registrando quem pegou, e gera um
+// comprovante em PDF com linha de assinatura.
+// ==================================================================
+const ICONE_CATEGORIA_ESTOQUE_MKT = {
+  'Materiais diversos': '📦', 'Equipamentos': '💻', 'Materiais promocionais': '🎁',
+  'Instalações': '💡', 'Utilidades': '☕', 'Vestuário': '🧢'
+}
+const COR_CATEGORIA_ESTOQUE_MKT = {
+  'Materiais diversos': 'var(--dim2)', 'Equipamentos': '#4a90d9', 'Materiais promocionais': 'var(--gold)',
+  'Instalações': '#c9a227', 'Utilidades': 'var(--good-text)', 'Vestuário': 'var(--rust)'
+}
+let MKT_ESTOQUE_CACHE = []
+let MKT_ESTOQUE_BUSCA = ''
+let MKT_ESTOQUE_CATEGORIA = ''
+
+async function mktEstoque (alvo, editavel) {
+  const { data, error } = await db.from('marketing_estoque').select('*').order('categoria').order('item')
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  MKT_ESTOQUE_CACHE = data || []
+  renderMktEstoque(alvo, editavel)
+}
+
+function renderMktEstoque (alvo, editavel) {
+  const total = MKT_ESTOQUE_CACHE.length
+  const aConferir = MKT_ESTOQUE_CACHE.filter(i => i.status === 'A_CONFERIR').length
+  const totalUnidades = MKT_ESTOQUE_CACHE.reduce((s, i) => s + Number(i.quantidade || 0), 0)
+  const baixoEstoque = MKT_ESTOQUE_CACHE.filter(i => i.quantidade != null && i.quantidade > 0 && i.quantidade <= 3).length
+  const categorias = [...new Set(MKT_ESTOQUE_CACHE.map(i => i.categoria))].sort()
+
+  const termo = MKT_ESTOQUE_BUSCA.trim().toLowerCase()
+  const filtrados = MKT_ESTOQUE_CACHE.filter(i =>
+    (!MKT_ESTOQUE_CATEGORIA || i.categoria === MKT_ESTOQUE_CATEGORIA) &&
+    (!termo || [i.item, i.detalhe, i.categoria].some(v => (v || '').toLowerCase().includes(termo))))
+
+  const porCategoria = {}
+  filtrados.forEach(i => { (porCategoria[i.categoria] = porCategoria[i.categoria] || []).push(i) })
+
+  alvo.innerHTML = `
+    <div class="cabeca-secao" style="margin-bottom:14px;">
+      <div>
+        <h3 style="font-family:var(--serif);font-size:20px;margin:0;">Estoque Marketing</h3>
+        <p class="texto-dim2" style="font-size:12.5px;margin:2px 0 0;">Brindes, materiais promocionais, equipamentos e vestuário do setor.</p>
+      </div>
+      ${editavel ? `<button class="btn" id="mke-novo">+ Novo item</button>` : ''}
+    </div>
+
+    <div class="resumo-topo" style="margin-bottom:16px;">
+      <div class="bloco"><div class="rot">Itens cadastrados</div><div class="val">${total}</div></div>
+      <div class="bloco ${aConferir ? 'alerta' : ''}"><div class="rot">A conferir</div><div class="val">${aConferir}</div></div>
+      <div class="bloco"><div class="rot">Unidades no total</div><div class="val">${fmtNum(totalUnidades, 0)}</div></div>
+      <div class="bloco ${baixoEstoque ? 'alerta' : ''}"><div class="rot">Estoque baixo (≤3)</div><div class="val">${baixoEstoque}</div></div>
+    </div>
+
+    <div class="filtros" style="margin-bottom:16px;">
+      <button class="chip-filtro ${!MKT_ESTOQUE_CATEGORIA ? 'ativo' : ''}" data-cat-mke="">Todas</button>
+      ${categorias.map(c => `<button class="chip-filtro ${MKT_ESTOQUE_CATEGORIA === c ? 'ativo' : ''}" data-cat-mke="${esc(c)}">${ICONE_CATEGORIA_ESTOQUE_MKT[c] || ''} ${esc(c)}</button>`).join('')}
+      <input id="mke-busca" placeholder="Buscar item..." style="flex:1;min-width:180px;" value="${esc(MKT_ESTOQUE_BUSCA)}">
+    </div>
+
+    ${Object.keys(porCategoria).sort().map(cat => `
+      <div class="cabeca-secao" style="margin:18px 0 10px;">
+        <h4 style="font-family:var(--serif);font-size:14.5px;margin:0;border-left:4px solid ${COR_CATEGORIA_ESTOQUE_MKT[cat] || 'var(--line2)'};padding-left:10px;">
+          ${ICONE_CATEGORIA_ESTOQUE_MKT[cat] || '📦'} ${esc(cat)} <span class="texto-dim2" style="font-size:11px;font-weight:400;">(${porCategoria[cat].length})</span></h4>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;margin-bottom:8px;">
+        ${porCategoria[cat].map(i => {
+          const semQtd = i.quantidade == null
+          const baixo = !semQtd && i.quantidade > 0 && i.quantidade <= 3
+          const zerado = !semQtd && i.quantidade <= 0
+          return `<div class="panel mke-card" data-abrir-item="${i.id}" style="padding:14px 16px;cursor:pointer;
+            border-left:3px solid ${COR_CATEGORIA_ESTOQUE_MKT[cat] || 'var(--line2)'};">
+            <div style="font-weight:600;font-size:13.5px;">${esc(i.item)}</div>
+            ${i.detalhe ? `<div class="texto-dim2" style="font-size:11.5px;margin-top:2px;">${esc(i.detalhe)}</div>` : ''}
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;">
+              <span style="font-family:var(--serif);font-size:19px;color:${zerado ? 'var(--critico-text)' : baixo ? 'var(--warn-text)' : 'var(--txt)'};">
+                ${semQtd ? '—' : fmtNum(i.quantidade, 0)}</span>
+              <span class="texto-dim2" style="font-size:11px;">${esc(i.unidade || 'UN')}</span>
+            </div>
+            ${i.status === 'A_CONFERIR' ? '<span class="chip" style="margin-top:6px;display:inline-block;">a conferir</span>' : ''}
+            ${zerado ? '<span class="badge-alerta" style="margin-top:6px;display:inline-block;">zerado</span>' : ''}
+            ${baixo ? '<span class="badge-alerta" style="margin-top:6px;display:inline-block;">estoque baixo</span>' : ''}
+          </div>`
+        }).join('')}
+      </div>`).join('') || '<p class="vazio">Nenhum item encontrado.</p>'}`
+
+  alvo.querySelectorAll('[data-cat-mke]').forEach(b => {
+    b.onclick = () => { MKT_ESTOQUE_CATEGORIA = b.dataset.catMke; renderMktEstoque(alvo, editavel) }
+  })
+  let temporizador
+  $('#mke-busca').oninput = () => { clearTimeout(temporizador); temporizador = setTimeout(() => { MKT_ESTOQUE_BUSCA = $('#mke-busca').value; renderMktEstoque(alvo, editavel) }, 250) }
+  alvo.querySelectorAll('[data-abrir-item]').forEach(c => {
+    c.onclick = () => abrirItemEstoqueMkt(MKT_ESTOQUE_CACHE.find(i => i.id === c.dataset.abrirItem), alvo, editavel)
+  })
+  if (editavel) $('#mke-novo').onclick = () => formItemEstoqueMkt(null, () => mktEstoque(alvo, editavel))
+}
+
+// ----- Detalhe do item: histórico + dar baixa -----
+async function abrirItemEstoqueMkt (item, alvoPai, editavel) {
+  const { data: movs } = await db.from('marketing_estoque_movimento').select('*').eq('item_id', item.id).order('criado_em', { ascending: false })
+  const lista = movs || []
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <div class="cabeca-secao">
+      <div><h3 style="margin:0;">${esc(item.item)}</h3>
+        ${item.detalhe ? `<p class="texto-dim2" style="font-size:12.5px;margin:2px 0 0;">${esc(item.detalhe)}</p>` : ''}</div>
+      <div style="text-align:right;">
+        <div style="font-family:var(--serif);font-size:24px;">${item.quantidade == null ? '—' : fmtNum(item.quantidade, 0)}</div>
+        <div class="texto-dim2" style="font-size:11px;">${esc(item.unidade || 'UN')} em estoque</div>
+      </div>
+    </div>
+
+    ${editavel ? `<div class="panel" style="padding:14px;margin:14px 0;background:var(--surface2);">
+      <h4 style="font-size:13px;margin:0 0 10px;">Dar baixa (retirada)</h4>
+      <div class="form-grade">
+        <div class="campo"><label>Quantidade</label><input type="number" id="mke-baixa-qtd" min="1" value="1"></div>
+        <div class="campo"><label>Quem pegou</label><input id="mke-baixa-quem" placeholder="nome de quem retirou"></div>
+        <div class="campo" style="grid-column:span 2;"><label>Motivo</label><input id="mke-baixa-motivo" placeholder="ex: feira X, brinde pra cliente Y..."></div>
+      </div>
+      <div class="acoes" style="margin-top:10px;">
+        <button class="btn" id="mke-confirmar-baixa">Confirmar retirada</button>
+        <button class="btn-secundario mini" id="mke-editar-item">editar item</button>
+      </div>
+      <div class="recado oculto" id="mke-baixa-recado"></div>
+    </div>` : ''}
+
+    <h4 style="font-family:var(--serif);font-size:13px;margin:16px 0 8px;">Histórico de movimentações</h4>
+    <div class="tabela-scroll" style="max-height:220px;">
+      <table><tbody>
+        ${lista.map(m => `<tr>
+          <td class="texto-dim2" style="font-size:11.5px;">${fmtData(m.data_movimento)}</td>
+          <td><span class="${m.tipo === 'SAIDA' ? 'badge-alerta' : 'badge-bom'}" style="font-size:10.5px;">${m.tipo === 'SAIDA' ? '−' : '+'}${fmtNum(m.quantidade, 0)}</span></td>
+          <td style="font-size:12.5px;">${esc(m.retirado_por_nome ?? '—')}</td>
+          <td class="texto-dim2" style="font-size:11.5px;">${esc(m.motivo ?? '')}</td>
+          <td>${m.tipo === 'SAIDA' ? `<button class="btn-secundario mini" data-pdf-retirada="${m.id}">📄 PDF</button>` : ''}</td>
+        </tr>`).join('') || '<tr><td class="vazio">Nenhuma movimentação ainda.</td></tr>'}
+      </tbody></table>
+    </div>
+    <div class="acoes" style="margin-top:14px;"><button class="btn-secundario" id="mke-fechar">Fechar</button></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#mke-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  fundo.querySelectorAll('[data-pdf-retirada]').forEach(b => {
+    b.onclick = () => {
+      const mov = lista.find(m => m.id === b.dataset.pdfRetirada)
+      gerarPdfRetiradaEstoqueMkt(item, mov)
+    }
+  })
+
+  if (!editavel) return
+  const btnEditar = fundo.querySelector('#mke-editar-item')
+  if (btnEditar) btnEditar.onclick = () => { fechar(); formItemEstoqueMkt(item, () => mktEstoque(alvoPai, editavel)) }
+
+  fundo.querySelector('#mke-confirmar-baixa').onclick = async () => {
+    const el = fundo.querySelector('#mke-baixa-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const qtd = Number(fundo.querySelector('#mke-baixa-qtd').value)
+    const quem = fundo.querySelector('#mke-baixa-quem').value.trim()
+    if (!qtd || qtd <= 0) { aviso('Informe uma quantidade válida.'); return }
+    if (!quem) { aviso('Informe quem está retirando.'); return }
+    if (item.quantidade != null && qtd > item.quantidade) { aviso(`Só tem ${fmtNum(item.quantidade, 0)} em estoque.`); return }
+
+    const btn = fundo.querySelector('#mke-confirmar-baixa'); btn.disabled = true; btn.textContent = 'Registrando...'
+    const motivo = fundo.querySelector('#mke-baixa-motivo').value.trim() || null
+    const { data: mov, error: e1 } = await db.from('marketing_estoque_movimento').insert({
+      item_id: item.id, tipo: 'SAIDA', quantidade: qtd, retirado_por_nome: quem, motivo,
+      registrado_por: PERFIL.pessoaId
+    }).select().single()
+    if (e1) { aviso(e1.message); btn.disabled = false; btn.textContent = 'Confirmar retirada'; return }
+
+    if (item.quantidade != null) {
+      await db.from('marketing_estoque').update({ quantidade: item.quantidade - qtd }).eq('id', item.id)
+    }
+    btn.disabled = false; btn.textContent = 'Confirmar retirada'
+    fechar()
+    gerarPdfRetiradaEstoqueMkt(item, mov)
+    mktEstoque(alvoPai, editavel)
+  }
+}
+
+// ----- PDF do comprovante de retirada, com linha de assinatura -----
+function gerarPdfRetiradaEstoqueMkt (item, mov) {
+  const corpo = `
+    <div class="grade-doc" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;">
+      ${docLinha('Item', item.item)}${docLinha('Detalhe', item.detalhe ?? '—')}
+      ${docLinha('Quantidade retirada', `${fmtNum(mov.quantidade, 0)} ${item.unidade ?? 'UN'}`)}${docLinha('Data', fmtData(mov.data_movimento))}
+      ${docLinha('Retirado por', mov.retirado_por_nome ?? '—')}${docLinha('Motivo', mov.motivo ?? '—')}
+    </div>
+    <div style="margin-top:60px;display:grid;grid-template-columns:1fr 1fr;gap:40px;">
+      <div style="text-align:center;"><div style="border-top:1px solid #333;padding-top:6px;">Assinatura de quem retirou</div></div>
+      <div style="text-align:center;"><div style="border-top:1px solid #333;padding-top:6px;">Assinatura do Marketing</div></div>
+    </div>
+    <p style="margin-top:24px;font-size:11px;color:#666;">Comprovante gerado em ${fmtData(hojeISO())} pelo Sistema Gefoscal.</p>`
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = documentoPDF({
+    titulo: 'COMPROVANTE DE RETIRADA — ESTOQUE MARKETING', subtitulo: item.item, corpo,
+    acoes: `<button class="btn" id="mke-pdf-gerar">Gerar PDF</button>
+      <button class="btn-secundario" id="mke-pdf-fechar">Fechar</button>`
+  })
+  document.body.appendChild(fundo)
+  fundo.querySelector('#mke-pdf-fechar').onclick = () => fundo.remove()
+  fundo.querySelector('#mke-pdf-gerar').onclick = () => window.print()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+}
+
+// ----- Criar / editar item -----
+function formItemEstoqueMkt (registro, aoSalvar) {
+  const categoriasConhecidas = Object.keys(ICONE_CATEGORIA_ESTOQUE_MKT)
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>${registro ? 'Editar' : 'Novo'} item</h3>
+    <div class="form-grade">
+      <div class="campo"><label>Categoria *</label>
+        <input id="mke-cat" list="mke-cats" value="${esc(registro?.categoria ?? '')}">
+        <datalist id="mke-cats">${categoriasConhecidas.map(c => `<option value="${esc(c)}"></option>`).join('')}</datalist></div>
+      <div class="campo"><label>Item *</label><input id="mke-item" value="${esc(registro?.item ?? '')}"></div>
+      <div class="campo"><label>Detalhe</label><input id="mke-detalhe" value="${esc(registro?.detalhe ?? '')}"></div>
+      <div class="campo"><label>Quantidade</label><input type="number" id="mke-qtd" value="${registro?.quantidade ?? ''}" placeholder="deixe vazio se não sabe"></div>
+      <div class="campo"><label>Unidade</label><input id="mke-unid" value="${esc(registro?.unidade ?? 'UN')}"></div>
+      <div class="campo"><label>Status</label><select id="mke-status">
+        <option value="CONFERIDO" ${(!registro || registro.status === 'CONFERIDO') ? 'selected' : ''}>Conferido</option>
+        <option value="A_CONFERIR" ${registro?.status === 'A_CONFERIR' ? 'selected' : ''}>A conferir</option>
+      </select></div>
+    </div>
+    <div class="campo" style="margin-top:10px;"><label>Observação</label><textarea id="mke-obs" style="min-height:56px;">${esc(registro?.observacao ?? '')}</textarea></div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="mke-salvar">Salvar</button>
+      ${registro ? `<button class="btn-secundario" id="mke-excluir" style="color:var(--warn-text);">Excluir</button>` : ''}
+      <button class="btn-secundario" id="mke-fechar-form">Fechar</button>
+    </div>
+    <div class="recado oculto" id="mke-form-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#mke-fechar-form').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  if (registro) fundo.querySelector('#mke-excluir').onclick = async () => {
+    if (!confirm('Excluir esse item e todo o histórico dele?')) return
+    await db.from('marketing_estoque').delete().eq('id', registro.id)
+    fechar(); aoSalvar()
+  }
+
+  fundo.querySelector('#mke-salvar').onclick = async () => {
+    const el = fundo.querySelector('#mke-form-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const categoria = fundo.querySelector('#mke-cat').value.trim()
+    const item = fundo.querySelector('#mke-item').value.trim()
+    if (!categoria || !item) { aviso('Preencha categoria e item.'); return }
+    const btn = fundo.querySelector('#mke-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const corpo = {
+      categoria, item, detalhe: fundo.querySelector('#mke-detalhe').value.trim() || null,
+      quantidade: fundo.querySelector('#mke-qtd').value === '' ? null : Number(fundo.querySelector('#mke-qtd').value),
+      unidade: fundo.querySelector('#mke-unid').value.trim() || 'UN', status: fundo.querySelector('#mke-status').value,
+      observacao: fundo.querySelector('#mke-obs').value.trim() || null
+    }
+    let error
+    if (registro) { ({ error } = await db.from('marketing_estoque').update(corpo).eq('id', registro.id)) }
+    else { ({ error } = await db.from('marketing_estoque').insert(corpo)) }
+    btn.disabled = false; btn.textContent = 'Salvar'
+    if (error) { aviso(error.message); return }
+    fechar(); aoSalvar()
+  }
+}
 
 function statusCor (valor, limiteBom, limiteRuim, invertido = false) {
   // invertido=true quando "maior é pior" (ex: inadimplência, OS em atraso)
