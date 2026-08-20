@@ -5784,14 +5784,13 @@ async function paginaExpedicao () {
     db.from('veiculo').select('id,placa,descricao').order('placa'),
     db.from('empresa').select('id,nome,regime_tributario').eq('status', 'ATIVO').order('nome'),
     db.from('expedicao_motorista').select('id,nome,telefone').eq('ativo', true).order('nome'),
-    db.from('expedicao_veiculo_cliente').select('id,placa,descricao,cliente_id').eq('ativo', true).order('placa')
+    db.from('expedicao_veiculo_cliente').select('id,placa,descricao,cliente_id,motorista_id').eq('ativo', true).order('placa')
   ])
   EXPED_CACHE = { clientes: clientes || [], vendedores: vendedores || [], produtos: produtos || [], veiculos: veiculos || [], empresas: empresas || [],
     motoristas: motoristas || [], veiculosCliente: veiculosCliente || [] }
 
   const abas = [['painel', 'Painel'], ['lancamentos', 'Lançamentos']]
   if (editavel) abas.push(['lancar', 'Lançar'], ['ordem', 'Ordem de Carregamento'], ['motoristas', 'Motoristas e Veículos'])
-  abas.push(['ia', 'Fale com a Especialista Contábil'])
   abas.push(['ia', 'Fale com a Especialista Contábil'])
 
   area.innerHTML = `
@@ -6018,9 +6017,12 @@ function expedLancar (alvo) {
           ${EXPED_CACHE.vendedores.map(v => `<option value="${v.id}">${esc(v.nome)}</option>`).join('')}</select></div>
         <div class="campo"><label>Produto *</label><select id="el-produto"><option value="">selecione...</option>
           ${EXPED_CACHE.produtos.map(p => `<option value="${p.id}" data-un="${esc(p.unidade)}">${esc(p.nome)}</option>`).join('')}</select></div>
-        <div class="campo"><label>Veículo</label><select id="el-veiculo"><option value="">—</option>
-          ${EXPED_CACHE.veiculos.map(v => `<option value="${v.id}">${esc(v.placa)}${v.descricao ? ' — ' + esc(v.descricao) : ''}</option>`).join('')}</select></div>
-        <div class="campo"><label>Motorista</label><input id="el-motorista"></div>
+        <div class="campo"><label>Veículo</label><div id="el-busca-veiculo"></div></div>
+        <div class="campo"><label>Motorista</label>
+          <select id="el-motorista"><option value="">—</option>
+            ${EXPED_CACHE.motoristas.map(m => `<option value="${esc(m.nome)}">${esc(m.nome)}</option>`).join('')}
+            <option value="__outro">— outro (digitar nome) —</option></select>
+          <input id="el-motorista-livre" placeholder="nome do motorista" class="oculto" style="margin-top:6px;"></div>
         <div class="campo"><label>Quantidade *</label><input id="el-qtd" inputmode="decimal" placeholder="ex: 32,5"></div>
         <div class="campo"><label>Preço unitário</label><input id="el-preco" inputmode="decimal" placeholder="R$/t"></div>
         <div class="campo"><label>Número da NF</label><input id="el-nf"></div>
@@ -6033,6 +6035,13 @@ function expedLancar (alvo) {
       <div class="acoes" style="margin-top:14px;"><button class="btn" id="el-salvar">Salvar lançamento</button></div>
       <div class="recado oculto" id="el-recado"></div>
     </div>`
+
+  const buscaVeiculo = montarBuscaVeiculo($('#el-busca-veiculo'), v => {
+    if (v.motoristaId) $('#el-motorista').value = EXPED_CACHE.motoristas.find(m => m.id === v.motoristaId)?.nome ?? ''
+  })
+  $('#el-motorista').onchange = () => {
+    $('#el-motorista-livre').classList.toggle('oculto', $('#el-motorista').value !== '__outro')
+  }
 
   $('#el-salvar').onclick = async () => {
     const el = $('#el-recado')
@@ -6047,12 +6056,17 @@ function expedLancar (alvo) {
     if (qtd === null || qtd <= 0) { aviso('Informe a quantidade.'); return }
     if (casasPara(produtoSel.dataset.un) === 0) qtd = Math.round(qtd)
     const preco = numeroBR($('#el-preco').value) || 0
+    const veiculoSel = buscaVeiculo.pegarSelecionado()
+    const motoristaSel = $('#el-motorista').value
+    const motorista = motoristaSel === '__outro' ? $('#el-motorista-livre').value.trim() : motoristaSel
 
     const btn = $('#el-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
     const { error } = await db.from('carregamento').insert({
       empresa_id: empresaId, cliente_id: clienteId, vendedor_id: $('#el-vendedor').value || null,
-      produto_id: produtoSel.value, veiculo_id: $('#el-veiculo').value || null,
-      motorista: $('#el-motorista').value.trim() || null,
+      produto_id: produtoSel.value,
+      veiculo_id: veiculoSel?.origem === 'frota' ? veiculoSel.id : null,
+      veiculo_cliente_id: veiculoSel?.origem === 'cliente' ? veiculoSel.id : null,
+      motorista: motorista || null,
       quantidade_t: qtd, preco_unitario: preco || null, valor_nf: preco ? qtd * preco : null,
       numero_nf: $('#el-nf').value.trim() || null, uf_destino: $('#el-uf').value.trim().toUpperCase() || null,
       data_carregamento: $('#el-data').value, status: $('#el-status').value,
@@ -6062,8 +6076,10 @@ function expedLancar (alvo) {
     if (error) { aviso(error.message); return }
     el.textContent = 'Lançamento salvo.'; el.classList.remove('oculto')
     el.style.borderColor = 'var(--good-text)'; el.style.color = 'var(--good-text)'
-    ;['el-motorista', 'el-qtd', 'el-preco', 'el-nf', 'el-uf', 'el-obs'].forEach(id => { $('#' + id).value = '' })
-    $('#el-empresa').value = ''; $('#el-cliente').value = ''; $('#el-produto').value = ''; $('#el-veiculo').value = ''
+    ;['el-motorista-livre', 'el-qtd', 'el-preco', 'el-nf', 'el-uf', 'el-obs'].forEach(id => { $('#' + id).value = '' })
+    buscaVeiculo.limpar()
+    $('#el-empresa').value = ''; $('#el-cliente').value = ''; $('#el-produto').value = ''; $('#el-motorista').value = ''
+    $('#el-motorista-livre').classList.add('oculto')
   }
 }
 
@@ -6128,10 +6144,7 @@ function formOrdemCarregamento (pedido) {
     <div class="form-grade">
       <div class="campo"><label>Empresa *</label><select id="oc-empresa"><option value="">selecione...</option>
         ${EXPED_CACHE.empresas.map(e => `<option value="${e.id}" ${e.id === (pedido.empresa_id || EXPED_CACHE.empresas.find(x => x.nome === 'Gefoscal')?.id) ? 'selected' : ''}>${esc(e.nome)}${e.regime_tributario ? ' — ' + esc(e.regime_tributario) : ''}</option>`).join('')}</select></div>
-      <div class="campo"><label>Veículo *</label><select id="oc-veiculo"><option value="">selecione...</option>
-        <optgroup label="Frota Gefoscal">${EXPED_CACHE.veiculos.map(v => `<option value="frota:${v.id}">${esc(v.placa)}${v.descricao ? ' — ' + esc(v.descricao) : ''}</option>`).join('')}</optgroup>
-        <optgroup label="Veículo de cliente">${EXPED_CACHE.veiculosCliente.map(v => `<option value="cliente:${v.id}">${esc(v.placa)}${v.descricao ? ' — ' + esc(v.descricao) : ''}</option>`).join('')}</optgroup>
-      </select></div>
+      <div class="campo"><label>Veículo *</label><div id="oc-busca-veiculo"></div></div>
       <div class="campo"><label>Motorista *</label>
         <select id="oc-motorista"><option value="">selecione...</option>
           ${EXPED_CACHE.motoristas.map(m => `<option value="${esc(m.nome)}">${esc(m.nome)}</option>`).join('')}
@@ -6158,11 +6171,14 @@ function formOrdemCarregamento (pedido) {
   fundo.querySelector('#oc-motorista').onchange = () => {
     fundo.querySelector('#oc-motorista-livre').classList.toggle('oculto', fundo.querySelector('#oc-motorista').value !== '__outro')
   }
+  const buscaVeiculo = montarBuscaVeiculo(fundo.querySelector('#oc-busca-veiculo'), v => {
+    if (v.motoristaId) fundo.querySelector('#oc-motorista').value = EXPED_CACHE.motoristas.find(m => m.id === v.motoristaId)?.nome ?? ''
+  })
 
   fundo.querySelector('#oc-salvar').onclick = async () => {
     const el = fundo.querySelector('#oc-recado')
     const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
-    const veiculoSel = fundo.querySelector('#oc-veiculo').value
+    const veiculoSel = buscaVeiculo.pegarSelecionado()
     const empresaId = fundo.querySelector('#oc-empresa').value
     const motoristaSel = fundo.querySelector('#oc-motorista').value
     const motorista = motoristaSel === '__outro' ? fundo.querySelector('#oc-motorista-livre').value.trim() : motoristaSel
@@ -6175,12 +6191,11 @@ function formOrdemCarregamento (pedido) {
     if (!dataProg) { aviso('Informe a data programada.'); return }
     if (casasPara(pedido.produto?.unidade) === 0) qtd = Math.round(qtd)
 
-    const [origemVeiculo, veiculoId] = veiculoSel.split(':')
     const btn = fundo.querySelector('#oc-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
     const { data: novo, error } = await db.from('carregamento').insert({
       pedido_id: pedido.id, empresa_id: empresaId, cliente_id: pedido.cliente?.id, produto_id: pedido.produto?.id,
-      veiculo_id: origemVeiculo === 'frota' ? veiculoId : null,
-      veiculo_cliente_id: origemVeiculo === 'cliente' ? veiculoId : null,
+      veiculo_id: veiculoSel.origem === 'frota' ? veiculoSel.id : null,
+      veiculo_cliente_id: veiculoSel.origem === 'cliente' ? veiculoSel.id : null,
       motorista, quantidade_t: qtd,
       preco_unitario: pedido.preco_unitario || null,
       valor_nf: pedido.preco_unitario ? qtd * pedido.preco_unitario : null,
@@ -6191,12 +6206,11 @@ function formOrdemCarregamento (pedido) {
     btn.disabled = false; btn.textContent = 'Criar ordem e gerar PDF'
     if (error) { aviso(error.message); return }
 
-    const veiculo = origemVeiculo === 'frota' ? EXPED_CACHE.veiculos.find(v => v.id === veiculoId) : EXPED_CACHE.veiculosCliente.find(v => v.id === veiculoId)
     const empresa = EXPED_CACHE.empresas.find(e => e.id === empresaId)
     fechar()
     abrirPdfOrdemCarregamento({
       numeroPedido: pedido.numero, empresa: empresa?.nome, cliente: pedido.cliente?.razao_social, produto: pedido.produto?.nome,
-      quantidade: qtd, unidade: pedido.produto?.unidade ?? 't', placa: veiculo?.placa, motorista,
+      quantidade: qtd, unidade: pedido.produto?.unidade ?? 't', placa: veiculoSel.placa, motorista,
       dataProgramada: dataProg, local: fundo.querySelector('#oc-local').value.trim(),
       observacao: fundo.querySelector('#oc-obs').value.trim(), carregamentoId: novo?.id
     })
@@ -6208,7 +6222,7 @@ function formOrdemCarregamento (pedido) {
 async function expedMotoristasVeiculos (alvo) {
   const [{ data: motoristas }, { data: veiculosCliente }] = await Promise.all([
     db.from('expedicao_motorista').select('*').order('nome'),
-    db.from('expedicao_veiculo_cliente').select('*, cliente:cliente_id(razao_social)').order('placa')
+    db.from('expedicao_veiculo_cliente').select('*, cliente:cliente_id(razao_social), motorista:motorista_id(nome)').order('placa')
   ])
   const listaMot = motoristas || []
   const listaVei = veiculosCliente || []
@@ -6231,7 +6245,8 @@ async function expedMotoristasVeiculos (alvo) {
         <div class="panel" style="padding:0;">
           ${listaVei.map(v => `<div class="passo">
             <span style="flex:1;"><b>${esc(v.placa)}</b>${v.descricao ? ' — ' + esc(v.descricao) : ''}
-              ${v.cliente?.razao_social ? `<br><span class="texto-dim2" style="font-size:11.5px;">${esc(v.cliente.razao_social)}</span>` : ''}</span>
+              ${v.cliente?.razao_social ? `<br><span class="texto-dim2" style="font-size:11.5px;">${esc(v.cliente.razao_social)}</span>` : ''}
+              ${v.motorista?.nome ? `<br><span class="chip" style="font-size:10.5px;margin-top:3px;display:inline-block;">🧑‍✈️ ${esc(v.motorista.nome)}</span>` : ''}</span>
             <button class="btn-secundario mini" data-editar-vei="${v.id}">editar</button>
           </div>`).join('') || '<p class="vazio">Nenhum veículo de cliente cadastrado.</p>'}
         </div>
@@ -6298,6 +6313,10 @@ function formVeiculoClienteExped (registro, aoSalvar) {
       <div class="campo"><label>Descrição</label><input id="fv-desc" value="${esc(registro?.descricao ?? '')}" placeholder="ex: Carreta, Truck..."></div>
       <div class="campo" style="grid-column:1/-1;"><label>Cliente dono</label>
         <select id="fv-cliente"><option value="">—</option>${EXPED_CACHE.clientes.map(c => `<option value="${c.id}" ${c.id === registro?.cliente_id ? 'selected' : ''}>${esc(c.razao_social)}</option>`).join('')}</select></div>
+      <div class="campo" style="grid-column:1/-1;"><label>Motorista de costume</label>
+        <select id="fv-motorista"><option value="">— nenhum vinculado —</option>
+          ${EXPED_CACHE.motoristas.map(m => `<option value="${m.id}" ${m.id === registro?.motorista_id ? 'selected' : ''}>${esc(m.nome)}</option>`).join('')}</select>
+        <span class="texto-dim2" style="font-size:11px;">ao escolher esse veículo na Ordem de Carregamento, o motorista já vem preenchido sozinho</span></div>
     </div>
     ${registro ? `<label class="linha-modulo" style="margin-top:10px;"><input type="checkbox" id="fv-ativo" ${registro.ativo ? 'checked' : ''}><span class="nome">Ativo</span></label>` : ''}
     <div class="acoes" style="margin-top:14px;"><button class="btn" id="fv-salvar">Salvar</button>
@@ -6319,7 +6338,8 @@ function formVeiculoClienteExped (registro, aoSalvar) {
     const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
     const placa = fundo.querySelector('#fv-placa').value.trim()
     if (!placa) { aviso('Escreve a placa.'); return }
-    const corpo = { placa: placa.toUpperCase(), descricao: fundo.querySelector('#fv-desc').value.trim() || null, cliente_id: fundo.querySelector('#fv-cliente').value || null }
+    const corpo = { placa: placa.toUpperCase(), descricao: fundo.querySelector('#fv-desc').value.trim() || null,
+      cliente_id: fundo.querySelector('#fv-cliente').value || null, motorista_id: fundo.querySelector('#fv-motorista').value || null }
     if (registro) corpo.ativo = fundo.querySelector('#fv-ativo').checked
     let error
     if (registro) { ({ error } = await db.from('expedicao_veiculo_cliente').update(corpo).eq('id', registro.id)) }
@@ -13725,6 +13745,55 @@ observadorIaTextareas.observe(document.body, { childList: true, subtree: true })
 // funções pra pegar a imagem (base64) e limpar. Usado em qualquer
 // lugar que precise de "assinado por" de verdade, não só uma linha.
 // ==================================================================
+// ==================================================================
+// Busca de placa — componente reaproveitável pra achar veículo (frota
+// ou de cliente) digitando parte da placa, em vez de rolar um
+// dropdown gigante. Usado em Lançar e Ordem de Carregamento.
+// ==================================================================
+function montarBuscaVeiculo (container, aoSelecionar, valorInicial) {
+  const todos = [
+    ...EXPED_CACHE.veiculos.map(v => ({ origem: 'frota', id: v.id, placa: v.placa, descricao: v.descricao, motoristaId: null })),
+    ...EXPED_CACHE.veiculosCliente.map(v => ({ origem: 'cliente', id: v.id, placa: v.placa, descricao: v.descricao, motoristaId: v.motorista_id }))
+  ]
+  container.innerHTML = `
+    <div style="position:relative;">
+      <input id="bv-busca" placeholder="digita a placa..." autocomplete="off" value="${esc(valorInicial ?? '')}">
+      <div id="bv-resultados" class="oculto" style="position:absolute;z-index:20;top:100%;left:0;right:0;
+        background:var(--panel);border:1px solid var(--line2);border-radius:8px;margin-top:4px;max-height:220px;overflow-y:auto;box-shadow:0 8px 20px rgba(0,0,0,.3);"></div>
+    </div>`
+  const input = container.querySelector('#bv-busca')
+  const resultados = container.querySelector('#bv-resultados')
+  let selecionado = null
+
+  const renderResultados = termo => {
+    const t = termo.trim().toUpperCase()
+    const filtrados = t ? todos.filter(v => v.placa.toUpperCase().includes(t)) : todos
+    resultados.innerHTML = filtrados.slice(0, 30).map(v => `<div class="passo" data-sel-placa="${v.origem}:${v.id}" style="cursor:pointer;padding:8px 12px;">
+        <span style="flex:1;"><b>${esc(v.placa)}</b>${v.descricao ? ' — ' + esc(v.descricao) : ''}</span>
+        <span class="chip" style="font-size:10px;">${v.origem === 'frota' ? 'Frota' : 'Cliente'}</span>
+      </div>`).join('') || `<p class="texto-dim2" style="font-size:12px;padding:10px;">Nenhuma placa encontrada.</p>`
+    resultados.classList.remove('oculto')
+    resultados.querySelectorAll('[data-sel-placa]').forEach(el => {
+      el.onclick = () => {
+        const [origem, id] = el.dataset.selPlaca.split(':')
+        const v = todos.find(x => x.origem === origem && x.id === id)
+        selecionado = v
+        input.value = v.placa
+        resultados.classList.add('oculto')
+        aoSelecionar(v)
+      }
+    })
+  }
+  input.oninput = () => { selecionado = null; renderResultados(input.value) }
+  input.onfocus = () => renderResultados(input.value)
+  document.addEventListener('click', e => { if (!container.contains(e.target)) resultados.classList.add('oculto') })
+
+  return {
+    pegarSelecionado: () => selecionado,
+    limpar: () => { selecionado = null; input.value = '' }
+  }
+}
+
 function montarAssinatura (container) {
   container.innerHTML = `
     <canvas style="width:100%;height:110px;background:#fff;border:1px solid var(--line2);border-radius:8px;touch-action:none;cursor:crosshair;"></canvas>
