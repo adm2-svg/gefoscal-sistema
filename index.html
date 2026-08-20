@@ -6266,6 +6266,13 @@ async function paginaGestaoTI () {
 
   const abas = [['orcamento', 'Orçamento'], ['solicitacoes', 'Solicitações'], ['mapa', 'Mapa (MAPA/Trimestral)']]
   area.innerHTML = `
+    <div style="background:linear-gradient(120deg,#0b1f1a 0%,#122e26 55%,#0b1f1a 100%);border-radius:14px;padding:22px 26px;margin-bottom:18px;position:relative;overflow:hidden;">
+      <div style="position:absolute;right:-30px;top:-30px;font-size:130px;opacity:.08;line-height:1;">⚙️</div>
+      <div style="position:relative;">
+        <div style="color:var(--gold,#c8a11a);font-size:11px;text-transform:uppercase;letter-spacing:.12em;font-weight:700;">Gestão de TI</div>
+        <div style="color:#fff;font-family:var(--serif);font-size:22px;margin-top:2px;">Infraestrutura, orçamento e suporte do sistema</div>
+      </div>
+    </div>
     <div class="subabas">
       ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
     </div>
@@ -6310,8 +6317,9 @@ async function tiOrcamento (alvo, editavel) {
 
   alvo.innerHTML = `
     <div class="resumo-topo" style="margin-bottom:16px;">
-      ${[['Despesas ativas', ativas.length], ['Custo mensal estimado', 'R$ ' + fmtNum(totalMensal)], ['Projeção anual', 'R$ ' + fmtNum(totalAnual)]]
-        .map(([rot, val]) => `<div class="bloco"><div class="rot">${rot}</div><div class="val">${val}</div></div>`).join('')}
+      <div class="bloco"><div class="rot">💳 Despesas ativas</div><div class="val">${ativas.length}</div></div>
+      <div class="bloco"><div class="rot">📅 Custo mensal estimado</div><div class="val" style="color:var(--rust);">R$ ${fmtNum(totalMensal)}</div></div>
+      <div class="bloco"><div class="rot">📈 Projeção anual</div><div class="val">R$ ${fmtNum(totalAnual)}</div></div>
     </div>
 
     ${Object.keys(porCategoria).length ? `<div class="panel" style="padding:18px;margin-bottom:16px;">
@@ -6320,7 +6328,7 @@ async function tiOrcamento (alvo, editavel) {
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
           <span style="width:110px;font-size:12.5px;flex:none;">${ICONE_CATEGORIA_TI[cat] || ''} ${esc(ROTULO_CATEGORIA_TI[cat] ?? cat)}</span>
           <div style="flex:1;background:var(--surface2);border-radius:6px;overflow:hidden;height:16px;">
-            <div style="width:${(val / maiorCategoria * 100).toFixed(0)}%;height:100%;background:${COR_CATEGORIA_TI[cat] || 'var(--rust)'};"></div>
+            <div style="width:${(val / maiorCategoria * 100).toFixed(0)}%;height:100%;background:${COR_CATEGORIA_TI[cat] || 'var(--rust)'};border-radius:6px;transition:width .4s ease;"></div>
           </div>
           <span style="width:90px;text-align:right;font-size:12.5px;flex:none;">R$ ${fmtNum(val)}</span>
         </div>`).join('')}
@@ -6331,7 +6339,8 @@ async function tiOrcamento (alvo, editavel) {
       ${editavel ? `<button class="btn" id="dt-nova">+ Nova despesa</button>` : ''}
     </div>
 
-    ${lista.map(d => `<div class="panel" style="padding:14px 18px;margin-bottom:10px;border-left:4px solid ${d.status === 'ATIVA' ? (COR_CATEGORIA_TI[d.categoria] || 'var(--line2)') : 'var(--line2)'};${d.status !== 'ATIVA' ? 'opacity:.6;' : ''}">
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;">
+    ${lista.map(d => `<div class="panel mke-card" style="padding:16px 18px;border-left:4px solid ${d.status === 'ATIVA' ? (COR_CATEGORIA_TI[d.categoria] || 'var(--line2)') : 'var(--line2)'};${d.status !== 'ATIVA' ? 'opacity:.6;' : ''}">
       <div class="cabeca-secao">
         <div style="display:flex;align-items:center;gap:10px;">
           <span style="font-size:19px;">${ICONE_CATEGORIA_TI[d.categoria] || '🧾'}</span>
@@ -6345,8 +6354,8 @@ async function tiOrcamento (alvo, editavel) {
           <div class="texto-dim2" style="font-size:11px;">${esc(ROTULO_PERIODICIDADE_TI[d.periodicidade] ?? d.periodicidade)}</div>
         </div>
       </div>
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;">
-        <div style="display:flex;gap:8px;align-items:center;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;flex-wrap:wrap;gap:8px;">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
           ${d.status === 'ATIVA' ? '<span class="badge-bom">ativa</span>' : '<span class="chip">cancelada</span>'}
           ${d.proxima_cobranca ? `<span class="texto-dim2" style="font-size:11.5px;">próxima cobrança: ${fmtData(d.proxima_cobranca)}</span>` : ''}
         </div>
@@ -6357,7 +6366,8 @@ async function tiOrcamento (alvo, editavel) {
         </div>` : ''}
       </div>
       ${d.observacoes ? `<p class="texto-dim2" style="font-size:12px;margin:8px 0 0;">${esc(d.observacoes)}</p>` : ''}
-    </div>`).join('') || `<p class="vazio">Nenhuma despesa cadastrada.</p>`}`
+    </div>`).join('') || `<p class="vazio">Nenhuma despesa cadastrada.</p>`}
+    </div>`
 
   if (!editavel) return
   $('#dt-nova').onclick = () => formDespesaTi(null, () => tiOrcamento(alvo, editavel))
