@@ -2062,7 +2062,7 @@ async function solicLista (alvo, { meuSetor }) {
   const buscar = async () => {
     let q = db.from('solicitacao_interna').select(`
       id, codigo, titulo, descricao, urgencia, status, data_solicitacao, data_limite, data_conclusao, resposta,
-      progresso_pct, pontuacao_agilidade, setor_destino_id, responsavel_id, setor_envolvido_id,
+      progresso_pct, pontuacao_agilidade, setor_destino_id, responsavel_id, setor_envolvido_id, data_planejada, hora_planejada, tarefa_agenda_id,
       setor:setor_destino_id ( id, nome ), solicitante:solicitante_id ( nome ), responsavel:responsavel_id ( nome ),
       setorEnvolvido:setor_envolvido_id ( nome ),
       participantes:solicitacao_participante ( pessoa_id, pessoa:pessoa_id ( nome ) )
@@ -2089,7 +2089,7 @@ async function solicLista (alvo, { meuSetor }) {
       <div class="panel" style="padding:0;"><div class="tabela-scroll">
         <table><thead><tr>
           <th>Código</th><th>Quando</th>${meuSetor ? '' : '<th>Setor</th>'}<th>Título</th>
-          <th>Urgência</th><th>Prazo</th><th>Progresso</th><th>Status</th><th>Solicitante</th><th>Responsável</th><th>Agilidade</th>
+          <th>Urgência</th><th>Prazo</th><th>Planejado</th><th>Progresso</th><th>Status</th><th>Solicitante</th><th>Responsável</th><th>Agilidade</th>
         </tr></thead><tbody>
           ${lista.map(s => { const prazo = textoPrazoSolicitacao(s); const pts = pontuacaoAgilidadeSolicitacao(s); return `<tr style="cursor:pointer;" data-abrir="${s.id}">
             <td><b>${esc(s.codigo)}</b>${s.setor_envolvido_id ? ' <span title="Envolve outro setor">🔗</span>' : ''}</td>
@@ -2098,12 +2098,13 @@ async function solicLista (alvo, { meuSetor }) {
             <td>${esc(s.titulo)}</td>
             <td><span class="${corUrgenciaSolicitacao(s.urgencia)}">${esc(ROTULO_URGENCIA_SOLICITACAO[s.urgencia])}</span></td>
             <td>${prazo ? `<span class="${prazo.atrasada ? 'badge-alerta' : 'texto-dim2'}" style="font-size:11px;">${prazo.texto}</span>` : '<span class="texto-dim2">—</span>'}</td>
+            <td>${s.data_planejada ? `<span class="chip" style="font-size:10.5px;">📅 ${fmtData(s.data_planejada)}${s.hora_planejada ? ' ' + s.hora_planejada.slice(0, 5) : ''}</span>` : '<span class="texto-dim2">—</span>'}</td>
             <td style="min-width:70px;"><span class="texto-dim2" style="font-size:11px;">${s.progresso_pct ?? 0}%</span></td>
             <td><span class="${corStatusSolicitacao(s.status)}">${esc(ROTULO_STATUS_SOLICITACAO[s.status])}</span></td>
             <td class="texto-dim">${esc(s.solicitante?.nome ?? '—')}</td>
             <td class="texto-dim">${esc(s.responsavel?.nome ?? '—')}</td>
             <td>${pts != null ? `<span class="${corAgilidade(pts)}" style="font-size:11px;">${pts}</span>` : '<span class="texto-dim2">—</span>'}</td>
-          </tr>`}).join('') || `<tr><td colspan="${meuSetor ? 9 : 10}" class="vazio">Nenhuma solicitação no filtro.</td></tr>`}
+          </tr>`}).join('') || `<tr><td colspan="${meuSetor ? 10 : 11}" class="vazio">Nenhuma solicitação no filtro.</td></tr>`}
         </tbody></table>
       </div></div>`
 
@@ -2147,6 +2148,7 @@ function detalheSolicitacao (s, aoFechar) {
 
     ${s.data_planejada ? `<div class="chip" style="margin-bottom:12px;display:inline-block;">
       📅 Planejado pra ${fmtData(s.data_planejada)}${s.hora_planejada ? ' às ' + s.hora_planejada.slice(0, 5) : ''}</div>` : ''}
+    ${editavel ? `<div class="acoes" style="margin-bottom:12px;"><button class="btn-secundario mini" id="ds-programar">📅 ${s.data_planejada ? 'Reprogramar' : 'Programar quando vou fazer'}</button></div>` : ''}
 
     <div class="caixa-texto" style="margin-bottom:12px;">
       <div class="rot">${esc(s.titulo)}</div>
@@ -2203,6 +2205,9 @@ function detalheSolicitacao (s, aoFechar) {
   const fechar = () => fundo.remove()
   fundo.querySelector('#ds-fechar').onclick = fechar
   fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const btnProgramar = fundo.querySelector('#ds-programar')
+  if (btnProgramar) btnProgramar.onclick = () => abrirProgramarSolicitacao(s, () => { fechar(); aoFechar() })
 
   const carregarParticipantes = async () => {
     const { data } = await db.from('solicitacao_participante').select('id,pessoa_id,pessoa:pessoa_id(nome)').eq('solicitacao_id', s.id)
