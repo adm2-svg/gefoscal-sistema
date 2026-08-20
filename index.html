@@ -1848,14 +1848,20 @@ async function paginaSolicitacoes () {
   const area = areaLivre()
   area.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
-  const [{ data: setores }, { data: pessoas }, { data: deptos }, { data: vinculos }, { data: cargos }] = await Promise.all([
+  const [{ data: setores }, { data: pessoas }, { data: deptos }, { data: vinculos }, { data: cargos }, { data: perfisAtivos }] = await Promise.all([
     db.from('setor').select('id,nome').order('nome'),
     db.from('pessoa').select('id,nome,setor_id,cargo').eq('status', 'ATIVO').order('nome'),
     db.from('departamento').select('id,nome,codigo,macro_area,setor_id').order('ordem'),
     db.from('vinculo_acesso').select('pessoa_id,dept_id'),
-    db.from('cargo').select('id,nome').order('nome')
+    db.from('cargo').select('id,nome').order('nome'),
+    db.from('usuario_perfil').select('pessoa_id').eq('ativo', true)
   ])
-  SOLIC_CACHE = { setores: setores || [], pessoas: pessoas || [], deptos: deptos || [], vinculos: vinculos || [] }
+  // "Responsável" só mostra quem tem login de verdade e usa o sistema —
+  // gente cadastrada só no DP/Cadastro (sem acesso) não pode responder
+  // uma solicitação por aqui
+  const idsComLogin = new Set((perfisAtivos || []).map(p => p.pessoa_id))
+  const pessoasComLogin = (pessoas || []).filter(p => idsComLogin.has(p.id))
+  SOLIC_CACHE = { setores: setores || [], pessoas: pessoasComLogin, deptos: deptos || [], vinculos: vinculos || [] }
   SOLIC_CACHE.cargos = (cargos || []).map(c => c.nome)
 
   const abas = [['painel', 'Painel'], ['nova', 'Nova solicitação'], ['meu-setor', 'Meu setor'], ['todas', 'Todas']]
