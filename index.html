@@ -5789,11 +5789,18 @@ async function paginaExpedicao () {
   EXPED_CACHE = { clientes: clientes || [], vendedores: vendedores || [], produtos: produtos || [], veiculos: veiculos || [], empresas: empresas || [],
     motoristas: motoristas || [], veiculosCliente: veiculosCliente || [] }
 
-  const abas = [['painel', 'Painel'], ['lancamentos', 'Lançamentos'], ['conferencia', 'Conferência de Clientes']]
-  if (editavel) abas.push(['lancar', 'Lançar'], ['ordem', 'Ordem de Carregamento'], ['motoristas', 'Motoristas e Veículos'])
-  abas.push(['ia', 'Fale com a Especialista Contábil'])
+  const abas = [['painel', '📊 Painel'], ['lancamentos', '📋 Lançamentos'], ['conferencia', '🔎 Conferência de Clientes']]
+  if (editavel) abas.push(['lancar', '➕ Lançar'], ['ordem', '🚛 Ordem de Carregamento'], ['motoristas', '🧑‍✈️ Motoristas e Veículos'])
+  abas.push(['ia', '💬 Fale com a Especialista Contábil'])
 
   area.innerHTML = `
+    <div style="background:linear-gradient(120deg,#0d1f2e 0%,#16324a 55%,#0d1f2e 100%);border-radius:14px;padding:22px 26px;margin-bottom:18px;position:relative;overflow:hidden;border:1px solid #1f3d57;">
+      <div style="position:absolute;right:-20px;top:-24px;font-size:120px;opacity:.09;line-height:1;">🚛</div>
+      <div style="position:relative;">
+        <div style="color:var(--gold,#c8a11a);font-size:11px;text-transform:uppercase;letter-spacing:.14em;font-weight:700;">Faturamento</div>
+        <div style="color:#eaf2f8;font-family:var(--serif);font-size:22px;margin-top:3px;">Notas fiscais, expedição e ordens de carregamento</div>
+      </div>
+    </div>
     <div class="subabas">
       ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
     </div>
@@ -5961,46 +5968,95 @@ async function expedConferenciaClientes (alvo) {
   const porVendedor = {}
   linhas.forEach(l => { porVendedor[l.vendedor] = (porVendedor[l.vendedor] || 0) + l.expedido })
 
-  alvo.innerHTML = `
-    <div class="resumo-topo" style="margin-bottom:16px;">
-      <div class="bloco"><div class="rot">Pedidos</div><div class="val">${linhas.length}</div></div>
-      <div class="bloco"><div class="rot">Expedido</div><div class="val">${fmtNum(totalExpedido)} t</div></div>
-      <div class="bloco"><div class="rot">Total dos pedidos</div><div class="val">${fmtNum(totalPedido)} t</div></div>
-      <div class="bloco ${totalSaldo > 0 ? 'alerta' : ''}"><div class="rot">Saldo a expedir</div><div class="val">${fmtNum(totalSaldo)} t</div></div>
-      <div class="bloco"><div class="rot">Já totalmente expedidos</div><div class="val">${totalmenteExpedidos}</div></div>
-    </div>
+  let filtro = 'todos'
+  const desenhar = () => {
+    const exibidas = filtro === 'saldo' ? linhas.filter(l => l.saldo > 0.01)
+      : filtro === 'concluidos' ? linhas.filter(l => l.saldo <= 0.01 && l.total > 0)
+      : linhas
 
-    <p class="texto-dim2" style="font-size:12px;margin:0 0 12px;">Em <span class="badge-bom" style="font-size:10px;">verde</span>: cliente sem saldo — já foi tudo expedido.</p>
+    alvo.innerHTML = `
+      <div class="resumo-topo" style="margin-bottom:16px;">
+        <div class="bloco mke-card" data-card-filtro="todos" style="cursor:pointer;${filtro === 'todos' ? 'border-color:var(--rust);' : ''}">
+          <div class="rot">📦 Pedidos</div><div class="val">${linhas.length}</div></div>
+        <div class="bloco mke-card" data-card-expedido style="cursor:pointer;">
+          <div class="rot">🚚 Expedido</div><div class="val">${fmtNum(totalExpedido)} t</div></div>
+        <div class="bloco"><div class="rot">📊 Total dos pedidos</div><div class="val">${fmtNum(totalPedido)} t</div></div>
+        <div class="bloco mke-card ${totalSaldo > 0 ? 'alerta' : ''}" data-card-filtro="saldo" style="cursor:pointer;${filtro === 'saldo' ? 'border-color:var(--rust);' : ''}">
+          <div class="rot">⏳ Saldo a expedir</div><div class="val">${fmtNum(totalSaldo)} t</div></div>
+        <div class="bloco mke-card" data-card-filtro="concluidos" style="cursor:pointer;${filtro === 'concluidos' ? 'border-color:var(--rust);' : ''}">
+          <div class="rot">✅ Já totalmente expedidos</div><div class="val">${totalmenteExpedidos}</div></div>
+      </div>
 
-    <div class="panel" style="padding:0;"><div class="tabela-scroll">
-      <table><thead><tr><th>Pedido</th><th>Ano</th><th>Cliente</th><th class="num">Expedido</th><th class="num">Total/Pedido</th><th class="num">Saldo a expedir</th><th>Vendedor</th></tr></thead><tbody>
-        ${linhas.map(l => {
-          const totalmenteExpedido = l.saldo <= 0.01 && l.total > 0
-          return `<tr style="cursor:pointer;${totalmenteExpedido ? 'background:rgba(88,166,90,.12);' : ''}" data-abrir-pedido="${l.numero}">
-            <td><b>${esc(l.numero)}</b></td>
-            <td class="texto-dim2">${esc(l.ano)}</td>
-            <td>${esc(l.cliente)}</td>
-            <td class="num">${fmtNum(l.expedido)}</td>
-            <td class="num">${fmtNum(l.total)}</td>
-            <td class="num">${totalmenteExpedido ? `<span class="badge-bom">expedido</span>` : fmtNum(l.saldo)}</td>
-            <td class="texto-dim">${esc(l.vendedor)}</td>
-          </tr>`
-        }).join('') || `<tr><td colspan="7" class="vazio">Nenhum pedido cadastrado ainda.</td></tr>`}
-      </tbody></table>
-    </div></div>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 12px;">Clica num card pra filtrar a lista. Em <span class="badge-bom" style="font-size:10px;">verde</span>: cliente sem saldo.</p>
 
-    <div class="cabeca-secao" style="margin-top:18px;"><h3 style="font-family:var(--serif);font-size:15px;">Expedido por vendedor</h3></div>
-    <div class="panel" style="padding:0;"><div class="tabela-scroll">
-      <table><tbody>
-        ${Object.entries(porVendedor).sort((a, b) => b[1] - a[1]).map(([v, val]) => `<tr>
-          <td>${esc(v)}</td><td class="num">${fmtNum(val)} t</td>
-        </tr>`).join('')}
-      </tbody></table>
-    </div></div>`
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr><th>Pedido</th><th>Ano</th><th>Cliente</th><th class="num">Expedido</th><th class="num">Total/Pedido</th><th class="num">Saldo a expedir</th><th>Vendedor</th></tr></thead><tbody>
+          ${exibidas.map(l => {
+            const totalmenteExpedido = l.saldo <= 0.01 && l.total > 0
+            return `<tr style="cursor:pointer;${totalmenteExpedido ? 'background:rgba(88,166,90,.12);' : ''}" data-abrir-pedido="${l.numero}">
+              <td><b>${esc(l.numero)}</b></td>
+              <td class="texto-dim2">${esc(l.ano)}</td>
+              <td>${esc(l.cliente)}</td>
+              <td class="num">${fmtNum(l.expedido)}</td>
+              <td class="num">${fmtNum(l.total)}</td>
+              <td class="num">${totalmenteExpedido ? `<span class="badge-bom">expedido</span>` : fmtNum(l.saldo)}</td>
+              <td class="texto-dim">${esc(l.vendedor)}</td>
+            </tr>`
+          }).join('') || `<tr><td colspan="7" class="vazio">Nenhum pedido nesse filtro.</td></tr>`}
+        </tbody></table>
+      </div></div>
 
-  alvo.querySelectorAll('[data-abrir-pedido]').forEach(tr => {
-    tr.onclick = () => abrirDetalhePedidoConferencia(linhas.find(l => l.numero === tr.dataset.abrirPedido))
+      <div class="cabeca-secao" style="margin-top:18px;"><h3 style="font-family:var(--serif);font-size:15px;">📈 Expedido por vendedor</h3></div>
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><tbody>
+          ${Object.entries(porVendedor).sort((a, b) => b[1] - a[1]).map(([v, val]) => `<tr>
+            <td>${esc(v)}</td><td class="num">${fmtNum(val)} t</td>
+          </tr>`).join('')}
+        </tbody></table>
+      </div></div>`
+
+    alvo.querySelectorAll('[data-card-filtro]').forEach(c => {
+      c.onclick = () => { filtro = c.dataset.cardFiltro; desenhar() }
+    })
+    const cardExpedido = alvo.querySelector('[data-card-expedido]')
+    if (cardExpedido) cardExpedido.onclick = () => abrirDetalheExpedicaoGeral(linhas)
+    alvo.querySelectorAll('[data-abrir-pedido]').forEach(tr => {
+      tr.onclick = () => abrirDetalhePedidoConferencia(linhas.find(l => l.numero === tr.dataset.abrirPedido))
+    })
+  }
+  desenhar()
+}
+
+// ----- Detalhe de todas as expedições (carregamentos), cada uma
+// com o pedido/cliente de onde veio -----
+function abrirDetalheExpedicaoGeral (linhas) {
+  const todasExp = []
+  linhas.forEach(l => {
+    l.carregamentos.forEach(c => todasExp.push({ ...c, numero: l.numero, cliente: l.cliente, vendedor: l.vendedor }))
   })
+  todasExp.sort((a, b) => (b.data_carregamento ?? '').localeCompare(a.data_carregamento ?? ''))
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:720px;">
+    <h3 style="margin:0 0 4px;">🚚 Todas as expedições</h3>
+    <p class="texto-dim2" style="font-size:12px;margin:0 0 14px;">${todasExp.length} carregamento(s) lançado(s), de todos os pedidos.</p>
+    <div class="tabela-scroll" style="max-height:400px;">
+      <table><thead><tr><th>Data</th><th>Pedido</th><th>Cliente</th><th class="num">Quantidade</th><th>Vendedor</th></tr></thead><tbody>
+        ${todasExp.map(c => `<tr>
+          <td class="texto-dim2">${fmtData(c.data_carregamento)}</td>
+          <td><b>${esc(c.numero)}</b></td>
+          <td>${esc(c.cliente)}</td>
+          <td class="num">${fmtNum(c.quantidade_t)} t</td>
+          <td class="texto-dim">${esc(c.vendedor)}</td>
+        </tr>`).join('') || `<tr><td colspan="5" class="vazio">Nenhuma expedição lançada ainda.</td></tr>`}
+      </tbody></table>
+    </div>
+    <div class="acoes" style="margin-top:14px;"><button class="btn-secundario" id="de-fechar">Fechar</button></div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.querySelector('#de-fechar').onclick = () => fundo.remove()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
 }
 
 function abrirDetalhePedidoConferencia (l) {
@@ -6220,19 +6276,23 @@ async function expedOrdem (alvo) {
       <button class="btn" id="oc-buscar">Buscar</button>
     </div>
     <p class="texto-dim2" style="font-size:12px;margin:-8px 0 14px;">
-      Pedidos ainda não totalmente carregados aparecem aqui — escolha um pra montar a ordem de carregamento.</p>
+      Só pedidos com saldo pra expedir aparecem aqui — os já concluídos não entram. Mostra o que ainda falta, não o total do pedido.</p>
     <div id="oc-lista"><p class="texto-dim2">carregando...</p></div>`
 
   const buscar = async () => {
     let q = db.from('pedido').select(`
       id, numero, quantidade_t, preco_unitario, data_pedido, local_entrega, empresa_id,
-      cliente:cliente_id ( id, razao_social ), produto:produto_id ( id, nome, unidade )
-    `).neq('status', 'CANCELADO').order('data_pedido', { ascending: false }).limit(100)
+      cliente:cliente_id ( id, razao_social ), produto:produto_id ( id, nome, unidade ),
+      carregamento ( quantidade_t, status )
+    `).not('status', 'in', '(CANCELADO,CONCLUIDO)').order('data_pedido', { ascending: false }).limit(100)
     const termo = $('#oc-busca').value.trim()
     if (termo) q = q.or(`numero.ilike.%${termo}%`)
     const { data, error } = await q
     if (error) { $('#oc-lista').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-    let lista = data || []
+    let lista = (data || []).map(p => {
+      const expedido = (p.carregamento || []).filter(c => c.status !== 'CANCELADO').reduce((s, c) => s + Number(c.quantidade_t || 0), 0)
+      return { ...p, saldo: Math.max(0, Number(p.quantidade_t || 0) - expedido) }
+    }).filter(p => p.saldo > 0.01)
     if (termo) {
       const t = termo.toLowerCase()
       lista = lista.filter(p => (p.numero ?? '').toLowerCase().includes(t) || (p.cliente?.razao_social ?? '').toLowerCase().includes(t))
@@ -6240,20 +6300,24 @@ async function expedOrdem (alvo) {
 
     $('#oc-lista').innerHTML = lista.length ? `
       <div class="panel" style="padding:0;"><div class="tabela-scroll">
-        <table><thead><tr><th>PD</th><th>Cliente</th><th>Produto</th><th class="num">Qtd</th><th>Data</th><th></th></tr></thead><tbody>
+        <table><thead><tr><th>PD</th><th>Cliente</th><th>Produto</th><th class="num">Saldo a expedir</th><th>Data</th><th></th></tr></thead><tbody>
           ${lista.map(p => `<tr>
             <td><b>${esc(p.numero ?? '—')}</b></td>
             <td>${esc(p.cliente?.razao_social ?? '—')}</td>
             <td>${esc(p.produto?.nome ?? '—')}</td>
-            <td class="num">${fmtNum(p.quantidade_t, casasPara(p.produto?.unidade))} ${esc(p.produto?.unidade ?? 't')}</td>
+            <td class="num">${fmtNum(p.saldo, casasPara(p.produto?.unidade))} ${esc(p.produto?.unidade ?? 't')}</td>
             <td class="texto-dim2">${fmtData(p.data_pedido)}</td>
             <td><button class="btn-secundario mini" data-montar="${p.id}">Montar ordem</button></td>
           </tr>`).join('')}
         </tbody></table>
-      </div></div>` : `<p class="vazio">Nenhum pedido encontrado.</p>`
+      </div></div>` : `<p class="vazio">Nenhum pedido com saldo pra expedir.</p>`
 
     $('#oc-lista').querySelectorAll('[data-montar]').forEach(b => {
-      b.onclick = () => formOrdemCarregamento(lista.find(p => p.id === b.dataset.montar))
+      b.onclick = () => {
+        const pedido = lista.find(p => p.id === b.dataset.montar)
+        // a ordem já sugere o saldo restante, não o total do pedido
+        formOrdemCarregamento({ ...pedido, quantidade_t: pedido.saldo })
+      }
     })
   }
   $('#oc-buscar').onclick = buscar
