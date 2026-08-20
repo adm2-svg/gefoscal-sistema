@@ -3367,15 +3367,19 @@ function montarWidgetAssistente () {
   document.body.appendChild(painel)
 
   const chat = () => $('#as-chat')
-  const renderMensagem = (autor, texto) => {
+  const renderMensagem = (autor, texto, chaveIr) => {
     const minha = autor === 'user'
     const bolhaMsg = document.createElement('div')
     bolhaMsg.style.cssText = `align-self:${minha ? 'flex-end' : 'flex-start'};max-width:88%;`
+    const nomePagina = chaveIr ? (PAGINAS[chaveIr]?.nome ?? chaveIr) : null
     bolhaMsg.innerHTML = `
       <div style="background:${minha ? 'var(--rust)' : 'var(--surface2)'};color:${minha ? '#fff' : 'inherit'};
-                  padding:8px 12px;border-radius:10px;font-size:12.5px;line-height:1.5;white-space:pre-wrap;">${esc(texto)}</div>`
+                  padding:8px 12px;border-radius:10px;font-size:12.5px;line-height:1.5;white-space:pre-wrap;">${esc(texto)}</div>
+      ${nomePagina ? `<button data-ir-para-assist="${esc(chaveIr)}" class="btn mini" style="margin-top:6px;width:100%;">📍 Ir para ${esc(nomePagina)}</button>` : ''}`
     chat().appendChild(bolhaMsg)
     chat().scrollTop = chat().scrollHeight
+    const btnIr = bolhaMsg.querySelector('[data-ir-para-assist]')
+    if (btnIr) btnIr.onclick = () => { abrirFechar(); irPara(btnIr.dataset.irParaAssist) }
     return bolhaMsg
   }
 
@@ -3439,7 +3443,7 @@ function montarWidgetAssistente () {
       return
     }
     ASSIST_HISTORICO.push({ role: 'assistant', content: data.resposta })
-    renderMensagem('assistant', data.resposta)
+    renderMensagem('assistant', data.resposta, data.irPara)
   }
   $('#as-enviar').onclick = enviar
   $('#as-pergunta').onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); enviar() } }
