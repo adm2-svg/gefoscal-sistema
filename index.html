@@ -1935,11 +1935,11 @@ async function solicNova (alvo) {
     <div class="panel" style="padding:20px;max-width:760px;">
       <h3 style="font-family:var(--serif);font-size:18px;margin:0 0 14px;">Nova solicitação</h3>
       <div class="form-grade">
-        <div class="campo"><label>Cargo *</label>
-          <select id="sn-cargo"><option value="">selecione...</option>
-            ${SOLIC_CACHE.cargos.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}</select></div>
-        <div class="campo"><label>Responsável (opcional)</label>
-          <select id="sn-responsavel"><option value="">— quem pegar responde —</option></select></div>
+        <div class="campo" style="grid-column:span 2;"><label>Responsável *</label>
+          <select id="sn-responsavel"><option value="">selecione a pessoa...</option>
+            ${SOLIC_CACHE.pessoas.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Cargo</label><input id="sn-cargo-mostrar" disabled placeholder="—"></div>
+        <div class="campo"><label>Setor</label><input id="sn-setor-mostrar" disabled placeholder="—"></div>
         <div class="campo"><label>Urgência</label>
           <select id="sn-urgencia">${URGENCIAS_SOLICITACAO.map(u => `<option value="${u}" ${u === 'MEDIA' ? 'selected' : ''}>${ROTULO_URGENCIA_SOLICITACAO[u]}</option>`).join('')}</select>
           <span class="texto-dim2" style="font-size:11px;" id="sn-sla-texto"></span></div>
@@ -1957,16 +1957,16 @@ async function solicNova (alvo) {
       <div class="recado oculto" id="sn-recado"></div>
     </div>`
 
-  // responsável = quem tem esse cargo cadastrado — o setor/departamento
-  // de destino é herdado da pessoa escolhida, não precisa selecionar
-  const atualizarResponsaveis = () => {
-    const cargo = $('#sn-cargo').value
-    const doCargo = cargo ? SOLIC_CACHE.pessoas.filter(p => (p.cargo ?? '').trim().toLowerCase() === cargo.trim().toLowerCase()) : []
-    $('#sn-responsavel').innerHTML = `<option value="">— quem pegar responde —</option>` +
-      doCargo.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')
+  // escolhe a pessoa primeiro — cargo e setor aparecem sozinhos,
+  // puxados do cadastro dela (a função que ela tem é o que fica gravado)
+  const atualizarCargoSetor = () => {
+    const p = SOLIC_CACHE.pessoas.find(x => x.id === $('#sn-responsavel').value)
+    const setorNome = SOLIC_CACHE.setores.find(s => s.id === p?.setor_id)?.nome ?? ''
+    $('#sn-cargo-mostrar').value = p?.cargo ?? ''
+    $('#sn-setor-mostrar').value = setorNome
   }
-  $('#sn-cargo').onchange = atualizarResponsaveis
-  atualizarResponsaveis()
+  $('#sn-responsavel').onchange = atualizarCargoSetor
+  atualizarCargoSetor()
 
   const atualizarSlaTexto = () => {
     $('#sn-sla-texto').textContent = 'prazo padrão: ' + SLA_TEXTO_URGENCIA[$('#sn-urgencia').value]
@@ -1983,7 +1983,7 @@ async function solicNova (alvo) {
   $('#sn-salvar').onclick = async () => {
     const titulo = $('#sn-titulo').value.trim()
     if (!titulo) { aviso('Escreva um título.'); return }
-    if (!$('#sn-cargo').value) { aviso('Escolha o cargo.'); return }
+    if (!$('#sn-responsavel').value) { aviso('Escolha o responsável.'); return }
     const btn = $('#sn-salvar'); btn.disabled = true; btn.textContent = 'Enviando...'
 
     // herda setor/departamento de quem foi escolhido como responsável
@@ -2018,7 +2018,7 @@ async function solicNova (alvo) {
     btn.disabled = false; btn.textContent = 'Enviar solicitação'
     aviso('Solicitação enviada.', false)
     $('#sn-titulo').value = ''; $('#sn-descricao').value = ''; $('#sn-prazo').value = ''; $('#sn-arquivos').value = ''
-    $('#sn-cargo').value = ''; atualizarResponsaveis()
+    $('#sn-responsavel').value = ''; atualizarCargoSetor()
   }
 }
 
