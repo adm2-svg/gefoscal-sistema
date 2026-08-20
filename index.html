@@ -1577,7 +1577,11 @@ async function painelAtencao (area) {
     comprasAndando = (data || []).length
   })())
 
-  await Promise.all(tarefas)
+  // allSettled em vez de all: se UMA consulta de fundo falhar (ex: uma
+  // tabela nova ainda sem RLS pra algum papel específico), o resto da
+  // Visão Geral continua renderizando normalmente — antes, um erro
+  // aqui travava até o painel de gestor que vem depois
+  await Promise.allSettled(tarefas)
 
   itens.sort((a, b) => {
     if (a.urgente !== b.urgente) return a.urgente ? -1 : 1
@@ -1708,6 +1712,7 @@ async function paginaVisaoGeral () {
   await painelGerencial(area)
   await minhasSolicitacoes(area)
   await minhasCompras(area)
+  await assistenteSistema(area)
   await areaDeTrabalho(area)
 
   if (podeVer('financeiro')) await painelFinanceiro(area)
@@ -3312,6 +3317,81 @@ async function subVisao (alvo, editavel) {
 // pelo pessoa_id do perfil, não pelo que o navegador manda.
 // ---------------------------------------------------------------
 const ROTULO_RECORRENCIA_TAREFA = { diaria: 'diária', semanal: 'semanal', mensal: 'mensal' }
+
+// ---------------------------------------------------------------
+// Assistente do Sistema — IA que ajuda a usar o Gefoscal, disponível
+// pra todo mundo na Visão Geral (não depende de módulo liberado).
+// Não mexe em dados, só orienta como navegar/usar as telas.
+// ---------------------------------------------------------------
+let ASSIST_HISTORICO = []
+
+async function assistenteSistema (area) {
+  const bloco = document.createElement('div')
+  bloco.className = 'panel'
+  bloco.style.cssText = 'padding:0;margin-bottom:16px;'
+  bloco.innerHTML = `
+    <div style="padding:16px 18px;border-bottom:1px solid var(--line);">
+      <h3 style="font-family:var(--serif);font-size:16px;margin:0 0 4px;">🤖 Assistente do Sistema</h3>
+      <p class="texto-dim2" style="font-size:12px;margin:0;">Tira dúvida de como usar o Gefoscal — onde fica cada coisa, como fazer uma tarefa.</p>
+    </div>
+    <div id="as-chat" style="padding:18px;display:flex;flex-direction:column;gap:12px;max-height:340px;overflow-y:auto;"></div>
+    <div style="padding:14px 18px;border-top:1px solid var(--line);">
+      <div style="display:flex;gap:8px;align-items:flex-end;">
+        <textarea id="as-pergunta" placeholder="Ex: onde eu abro um chamado de manutenção?" style="flex:1;min-height:44px;max-height:100px;"></textarea>
+        <button class="btn" id="as-enviar">Enviar</button>
+      </div>
+    </div>`
+  area.appendChild(bloco)
+
+  const chat = $('#as-chat')
+  const renderMensagem = (autor, texto) => {
+    const minha = autor === 'user'
+    const bolha = document.createElement('div')
+    bolha.style.cssText = `align-self:${minha ? 'flex-end' : 'flex-start'};max-width:85%;`
+    bolha.innerHTML = `
+      <div class="texto-dim2" style="font-size:10.5px;margin-bottom:3px;${minha ? 'text-align:right;' : ''}">${minha ? 'Você' : 'Assistente'}</div>
+      <div style="background:${minha ? 'var(--rust)' : 'var(--surface2)'};color:${minha ? '#fff' : 'inherit'};
+                  padding:9px 13px;border-radius:10px;font-size:13px;line-height:1.5;white-space:pre-wrap;">${esc(texto)}</div>`
+    chat.appendChild(bolha)
+    chat.scrollTop = chat.scrollHeight
+    return bolha
+  }
+
+  if (!ASSIST_HISTORICO.length) {
+    renderMensagem('assistant', 'Oi! Posso te ajudar a achar qualquer coisa no sistema ou explicar como fazer uma tarefa. O que você precisa?')
+  } else {
+    ASSIST_HISTORICO.forEach(m => renderMensagem(m.role === 'user' ? 'user' : 'assistant', m.content))
+  }
+
+  const enviar = async () => {
+    const texto = $('#as-pergunta').value.trim()
+    if (!texto) return
+    renderMensagem('user', texto)
+    $('#as-pergunta').value = ''
+    const btn = $('#as-enviar'); btn.disabled = true; btn.textContent = 'Pensando...'
+    const carregando = renderMensagem('assistant', 'Pensando...')
+
+    ASSIST_HISTORICO.push({ role: 'user', content: texto })
+    const { data, error } = await db.functions.invoke('assistente-sistema', { body: { mensagens: ASSIST_HISTORICO } })
+    btn.disabled = false; btn.textContent = 'Enviar'
+    carregando.remove()
+
+    if (error || data?.erro) {
+      let detalhe = data?.erro || error?.message || 'Erro ao consultar.'
+      let aviso = data?.aviso
+      if (error?.context?.json) {
+        try { const corpo = await error.context.json(); detalhe = corpo?.erro || detalhe; aviso = corpo?.aviso || aviso } catch {}
+      }
+      renderMensagem('assistant', detalhe + (aviso ? '\n\n' + aviso : ''))
+      ASSIST_HISTORICO.pop()
+      return
+    }
+    ASSIST_HISTORICO.push({ role: 'assistant', content: data.resposta })
+    renderMensagem('assistant', data.resposta)
+  }
+  $('#as-enviar').onclick = enviar
+  $('#as-pergunta').onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); enviar() } }
+}
 
 async function areaDeTrabalho (area) {
   const bloco = document.createElement('div')
