@@ -1300,7 +1300,8 @@ const PAGINAS = {
   dp:          { nome: 'DP e Segurança', render: paginaDpSeguranca },
   laboratorio: { nome: 'Laboratório', render: paginaLaboratorio },
   ti:          { nome: 'Administração Sistema', render: paginaAdministracao },
-  gestao_ti:   { nome: 'Gestão de TI', render: paginaGestaoTI }
+  gestao_ti:   { nome: 'Gestão de TI', render: paginaGestaoTI },
+  ia_treinamento: { nome: 'Treinamento IA', render: paginaTreinamentoIA }
 }
 
 // ---------------------------------------------------------------
@@ -1332,6 +1333,7 @@ const ICONES_MODULO = {
   desempenho: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a8 8 0 0 1 16 0v1"/></svg>',
   ti: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8 3.5v6c0 5-3.4 8.6-8 10.5-4.6-1.9-8-5.5-8-10.5v-6z"/></svg>',
   gestao_ti: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
+  ia_treinamento: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 0-4 4c0 1.2.5 2 1 2.5C7.5 9.5 6 11 6 13a4 4 0 0 0 4 4v3h4v-3a4 4 0 0 0 4-4c0-2-1.5-3.5-3-4.5.5-.5 1-1.3 1-2.5a4 4 0 0 0-4-4Z"/></svg>',
   laboratorio: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6"/><path d="M10 3v6l-5.5 9.5A1.5 1.5 0 0 0 5.8 21h12.4a1.5 1.5 0 0 0 1.3-2.5L14 9V3"/><path d="M7.5 14.5h9"/></svg>',
   _padrao: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/></svg>'
 }
@@ -1343,7 +1345,7 @@ const ICONES_MODULO = {
 const GRUPOS_MENU = [
   ['Comercial', ['crm', 'crm_tecnico', 'cadastro', 'expedicao', 'cobranca', 'marketing']],
   ['Operações', ['estoque', 'combustivel', 'manutencao', 'frota', 'laboratorio']],
-  ['Gestão', ['financeiro', 'desempenho', 'dp', 'onfly', 'juridico', 'ferramentas', 'banco', 'gestao_ti', 'dashboard_diretor']],
+  ['Gestão', ['financeiro', 'desempenho', 'dp', 'onfly', 'juridico', 'ferramentas', 'banco', 'gestao_ti', 'ia_treinamento', 'dashboard_diretor']],
   ['Administração Sistema', ['ti']]
 ]
 
@@ -6340,6 +6342,248 @@ function corStatusMelhoria (s) {
 }
 
 let SETOR_TI_ID = null
+
+// ==================================================================
+// Treinamento IA — cria e treina quantos "especialistas" quiser
+// (Vendas, Técnica, o que precisar). Uma edge function genérica
+// (ia-agente-chat) atende todos, então criar um agente novo não
+// precisa de código novo nenhum.
+// ==================================================================
+const ROTULO_ESPECIALIDADE_IA = { VENDAS: 'Vendas', TECNICA: 'Técnica', OUTRO: 'Outro' }
+const COR_ESPECIALIDADE_IA = { VENDAS: 'var(--rust)', TECNICA: '#4a90d9', OUTRO: 'var(--dim2)' }
+
+async function paginaTreinamentoIA () {
+  const editavel = podeEditar('ia_treinamento')
+  $('#subtitulo-pagina').textContent = 'Crie e treine especialistas de IA pra cada área da empresa'
+  const area = areaLivre()
+  area.innerHTML = `<p class="texto-dim2">carregando...</p>`
+
+  area.innerHTML = `
+    <div style="background:linear-gradient(120deg,#1a1030 0%,#241a42 55%,#1a1030 100%);border-radius:14px;padding:22px 26px;margin-bottom:18px;position:relative;overflow:hidden;border:1px solid #362757;">
+      <div style="position:absolute;right:-20px;top:-24px;font-size:120px;opacity:.09;line-height:1;">🧠</div>
+      <div style="position:relative;">
+        <div style="color:var(--gold,#c8a11a);font-size:11px;text-transform:uppercase;letter-spacing:.14em;font-weight:700;">Treinamento IA</div>
+        <div style="color:#f0ecf9;font-family:var(--serif);font-size:22px;margin-top:3px;">Especialistas próprios, treinados do jeito que sua empresa precisa</div>
+      </div>
+    </div>
+    <div id="ia-conteudo"></div>`
+
+  renderListaAgentesIA($('#ia-conteudo'), editavel)
+}
+
+async function renderListaAgentesIA (alvo, editavel) {
+  const { data, error } = await db.from('ia_agente').select('*').order('criado_em')
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  const lista = data || []
+
+  alvo.innerHTML = `
+    <div class="cabeca-secao" style="margin-bottom:14px;">
+      <h3 style="font-family:var(--serif);font-size:16px;margin:0;">Seus especialistas</h3>
+      ${editavel ? `<button class="btn" id="ia-novo-agente">+ Criar especialista</button>` : ''}
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;">
+      ${lista.map(a => `<div class="panel mke-card" data-abrir-agente="${a.id}" style="padding:18px;cursor:pointer;
+        border-left:4px solid ${COR_ESPECIALIDADE_IA[a.especialidade] || 'var(--line2)'};${a.ativo ? '' : 'opacity:.55;'}">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <span style="font-size:26px;">${esc(a.icone || '🤖')}</span>
+          <div>
+            <div style="font-weight:600;font-size:15px;">${esc(a.nome)}</div>
+            <span class="chip" style="font-size:10px;">${esc(ROTULO_ESPECIALIDADE_IA[a.especialidade] ?? a.especialidade)}</span>
+            ${!a.ativo ? '<span class="chip" style="font-size:10px;">desativado</span>' : ''}
+          </div>
+        </div>
+        <p class="texto-dim2" style="font-size:11.5px;margin-top:10px;max-height:40px;overflow:hidden;">${esc((a.instrucoes || '').slice(0, 110))}${(a.instrucoes || '').length > 110 ? '…' : ''}</p>
+      </div>`).join('') || '<p class="vazio">Nenhum especialista criado ainda.</p>'}
+    </div>`
+
+  alvo.querySelectorAll('[data-abrir-agente]').forEach(c => {
+    c.onclick = () => abrirAgenteIA(lista.find(a => a.id === c.dataset.abrirAgente), alvo, editavel)
+  })
+  if (editavel) $('#ia-novo-agente').onclick = () => formAgenteIA(null, () => renderListaAgentesIA(alvo, editavel))
+}
+
+// ----- Tela do agente: conversa de teste + treinamento -----
+async function abrirAgenteIA (agente, alvoLista, editavel) {
+  const { data: conhecimento } = await db.from('ia_agente_conhecimento').select('*').eq('agente_id', agente.id).order('criado_em')
+  const lista = conhecimento || []
+  let historico = []
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:820px;">
+    <div class="cabeca-secao">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:28px;">${esc(agente.icone || '🤖')}</span>
+        <div><h3 style="margin:0;">${esc(agente.nome)}</h3>
+          <span class="chip" style="font-size:10px;">${esc(ROTULO_ESPECIALIDADE_IA[agente.especialidade] ?? agente.especialidade)}</span></div>
+      </div>
+      ${editavel ? `<button class="btn-secundario mini" id="ia-editar-agente">✏️ editar treinamento</button>` : ''}
+    </div>
+
+    <div class="subabas" style="margin:14px 0;">
+      <button data-sub3="conversar" class="ativo">Conversar</button>
+      <button data-sub3="conhecimento">Base de conhecimento (${lista.length})</button>
+    </div>
+    <div id="ia-agente-conteudo"></div>
+
+    <div class="acoes" style="margin-top:14px;"><button class="btn-secundario" id="ia-fechar-agente">Fechar</button></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#ia-fechar-agente').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const btnEditar = fundo.querySelector('#ia-editar-agente')
+  if (btnEditar) btnEditar.onclick = () => formAgenteIA(agente, () => { fechar(); renderListaAgentesIA(alvoLista, editavel) })
+
+  const abaConversar = () => {
+    const conteudo = fundo.querySelector('#ia-agente-conteudo')
+    conteudo.innerHTML = `
+      <div id="ia-chat" style="display:flex;flex-direction:column;gap:10px;max-height:340px;overflow-y:auto;padding:4px;"></div>
+      <div style="display:flex;gap:8px;margin-top:10px;align-items:flex-end;">
+        <textarea id="ia-pergunta-agente" placeholder="Testa uma pergunta pra ${esc(agente.nome)}..." style="flex:1;min-height:44px;max-height:100px;"></textarea>
+        <button class="btn" id="ia-enviar-agente">Enviar</button>
+      </div>`
+    const chat = () => conteudo.querySelector('#ia-chat')
+    const renderMsg = (autor, texto) => {
+      const minha = autor === 'user'
+      const b = document.createElement('div')
+      b.style.cssText = `align-self:${minha ? 'flex-end' : 'flex-start'};max-width:85%;`
+      b.innerHTML = `<div style="background:${minha ? 'var(--rust)' : 'var(--surface2)'};color:${minha ? '#fff' : 'inherit'};
+        padding:8px 12px;border-radius:10px;font-size:13px;line-height:1.5;white-space:pre-wrap;">${esc(texto)}</div>`
+      chat().appendChild(b); chat().scrollTop = chat().scrollHeight
+    }
+    if (!historico.length) renderMsg('assistant', `Oi! Sou ${agente.nome}. Pode perguntar.`)
+    else historico.forEach(m => renderMsg(m.role === 'user' ? 'user' : 'assistant', m.content))
+
+    const enviar = async () => {
+      const texto = conteudo.querySelector('#ia-pergunta-agente').value.trim()
+      if (!texto) return
+      renderMsg('user', texto)
+      conteudo.querySelector('#ia-pergunta-agente').value = ''
+      const btn = conteudo.querySelector('#ia-enviar-agente'); btn.disabled = true; btn.textContent = '...'
+      historico.push({ role: 'user', content: texto })
+      const { data, error } = await db.functions.invoke('ia-agente-chat', { body: { agenteId: agente.id, mensagens: historico } })
+      btn.disabled = false; btn.textContent = 'Enviar'
+      if (error || data?.erro) {
+        let msg = data?.erro || error?.message
+        if (error?.context?.json) { try { const c = await error.context.json(); msg = c?.erro || msg } catch {} }
+        renderMsg('assistant', msg); historico.pop(); return
+      }
+      historico.push({ role: 'assistant', content: data.resposta })
+      renderMsg('assistant', data.resposta)
+    }
+    conteudo.querySelector('#ia-enviar-agente').onclick = enviar
+    conteudo.querySelector('#ia-pergunta-agente').onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); enviar() } }
+  }
+
+  const abaConhecimento = () => {
+    const conteudo = fundo.querySelector('#ia-agente-conteudo')
+    conteudo.innerHTML = `
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 10px;">Trechos de informação que ${esc(agente.nome)} sempre vai considerar ao responder — isso é o "treino" dela.</p>
+      <div id="ia-lista-conhecimento" style="margin-bottom:14px;"></div>
+      ${editavel ? `<div class="panel" style="padding:14px;background:var(--surface2);">
+        <div class="campo"><label>Título</label><input id="ia-con-titulo" placeholder="Ex: Tabela de preços, Política de desconto..."></div>
+        <div class="campo" style="margin-top:8px;"><label>Conteúdo</label><textarea id="ia-con-conteudo" style="min-height:80px;"></textarea></div>
+        <div class="acoes" style="margin-top:10px;"><button class="btn-secundario" id="ia-con-add">Adicionar ao treinamento</button></div>
+      </div>` : ''}`
+    const renderLista = () => {
+      conteudo.querySelector('#ia-lista-conhecimento').innerHTML = lista.map(c => `<div class="passo">
+          <span style="flex:1;"><b>${esc(c.titulo)}</b><br><span class="texto-dim2" style="font-size:11.5px;">${esc(c.conteudo.slice(0, 140))}${c.conteudo.length > 140 ? '…' : ''}</span></span>
+          ${editavel ? `<button class="btn-secundario mini" data-del-conhecimento="${c.id}" style="color:var(--warn-text);">excluir</button>` : ''}
+        </div>`).join('') || '<p class="texto-dim2" style="font-size:12px;">Nada adicionado ainda.</p>'
+      conteudo.querySelectorAll('[data-del-conhecimento]').forEach(b => {
+        b.onclick = async () => {
+          await db.from('ia_agente_conhecimento').delete().eq('id', b.dataset.delConhecimento)
+          const idx = lista.findIndex(c => c.id === b.dataset.delConhecimento)
+          if (idx > -1) lista.splice(idx, 1)
+          renderLista()
+        }
+      })
+    }
+    renderLista()
+    const btnAdd = conteudo.querySelector('#ia-con-add')
+    if (btnAdd) btnAdd.onclick = async () => {
+      const titulo = conteudo.querySelector('#ia-con-titulo').value.trim()
+      const texto = conteudo.querySelector('#ia-con-conteudo').value.trim()
+      if (!titulo || !texto) return
+      const { data: novo, error } = await db.from('ia_agente_conhecimento').insert({ agente_id: agente.id, titulo, conteudo: texto }).select().single()
+      if (error) { alert(error.message); return }
+      lista.push(novo)
+      conteudo.querySelector('#ia-con-titulo').value = ''; conteudo.querySelector('#ia-con-conteudo').value = ''
+      renderLista()
+      fundo.querySelector('[data-sub3="conhecimento"]').textContent = `Base de conhecimento (${lista.length})`
+    }
+  }
+
+  fundo.querySelectorAll('[data-sub3]').forEach(b => {
+    b.onclick = () => {
+      fundo.querySelectorAll('[data-sub3]').forEach(x => x.classList.toggle('ativo', x === b))
+      b.dataset.sub3 === 'conversar' ? abaConversar() : abaConhecimento()
+    }
+  })
+  abaConversar()
+}
+
+// ----- Criar / editar (treinar) um agente -----
+function formAgenteIA (registro, aoSalvar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.style.zIndex = 10001
+  fundo.innerHTML = `<div class="modal" style="max-width:640px;">
+    <h3>${registro ? 'Editar treinamento' : 'Criar especialista'}</h3>
+    <div class="form-grade">
+      <div class="campo"><label>Nome *</label><input id="ag-nome" value="${esc(registro?.nome ?? '')}" placeholder="Ex: Especialista em Vendas"></div>
+      <div class="campo"><label>Especialidade</label>
+        <select id="ag-especialidade">${Object.entries(ROTULO_ESPECIALIDADE_IA).map(([k, v]) => `<option value="${k}" ${registro?.especialidade === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+      <div class="campo"><label>Ícone (emoji)</label><input id="ag-icone" value="${esc(registro?.icone ?? '🤖')}" maxlength="4"></div>
+    </div>
+    <div class="campo" style="margin-top:10px;"><label>Instruções de treinamento *</label>
+      <textarea id="ag-instrucoes" style="min-height:160px;" placeholder="Descreva como ela deve se comportar, o que sabe, como deve responder...">${esc(registro?.instrucoes ?? '')}</textarea>
+      <span class="texto-dim2" style="font-size:11px;">seleciona um trecho pra usar o "✨ Melhorar com IA" e deixar mais completo</span></div>
+    ${registro ? `<label class="linha-modulo" style="margin-top:10px;">
+      <input type="checkbox" id="ag-ativo" ${registro.ativo ? 'checked' : ''}>
+      <span class="nome">Ativo (aparece disponível pra conversar)</span></label>` : ''}
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="ag-salvar">Salvar</button>
+      ${registro ? `<button class="btn-secundario" id="ag-excluir" style="color:var(--warn-text);">Excluir especialista</button>` : ''}
+      <button class="btn-secundario" id="ag-fechar">Fechar</button>
+    </div>
+    <div class="recado oculto" id="ag-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#ag-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  if (registro) fundo.querySelector('#ag-excluir').onclick = async () => {
+    if (!confirm(`Excluir "${registro.nome}" e todo o treinamento dela? Não tem como desfazer.`)) return
+    await db.from('ia_agente').delete().eq('id', registro.id)
+    fechar(); aoSalvar()
+  }
+
+  fundo.querySelector('#ag-salvar').onclick = async () => {
+    const el = fundo.querySelector('#ag-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const nome = fundo.querySelector('#ag-nome').value.trim()
+    const instrucoes = fundo.querySelector('#ag-instrucoes').value.trim()
+    if (!nome) { aviso('Dá um nome pro especialista.'); return }
+    if (!instrucoes) { aviso('Escreve as instruções de treinamento.'); return }
+    const btn = fundo.querySelector('#ag-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const corpo = {
+      nome, especialidade: fundo.querySelector('#ag-especialidade').value,
+      icone: fundo.querySelector('#ag-icone').value.trim() || '🤖', instrucoes,
+      atualizado_em: new Date().toISOString()
+    }
+    if (registro) corpo.ativo = fundo.querySelector('#ag-ativo').checked
+    let error
+    if (registro) { ({ error } = await db.from('ia_agente').update(corpo).eq('id', registro.id)) }
+    else { corpo.criado_por = PERFIL.pessoaId; ({ error } = await db.from('ia_agente').insert(corpo)) }
+    btn.disabled = false; btn.textContent = 'Salvar'
+    if (error) { aviso(error.message); return }
+    fechar(); aoSalvar()
+  }
+}
 
 async function paginaGestaoTI () {
   const editavel = podeEditar('gestao_ti')
