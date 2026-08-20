@@ -4816,7 +4816,7 @@ function formSolicitacao (s = null) {
                     'par', 'jogo', 'rolo', 'saco', 'balde', 'galão',
                     'peça', 'hora', 'mês', 'serviço']
   const TIPOS = ['Material', 'Peça de reposição', 'Equipamento', 'Ferramenta',
-                 'EPI', 'Insumo', 'Serviço', 'Manutenção', 'Locação',
+                 'EPI', 'Insumo', 'Combustível', 'Serviço', 'Manutenção', 'Locação',
                  'Software ou licença', 'Frete', 'Obra', 'Outro']
   const RECORRENCIAS = ['Única', 'Sob demanda', 'Semanal', 'Quinzenal', 'Mensal',
                         'Bimestral', 'Trimestral', 'Semestral', 'Anual']
@@ -22612,7 +22612,10 @@ function formDpRegistro (tipo, registro, aoSalvar) {
         <option value="PENDENTE">Pendente</option><option value="VENCIDO">Vencido</option>
       </select></div>
     </div>
-    <div class="campo" style="margin-top:10px;"><label>Link do arquivo</label><input id="dpr-link" placeholder="link do Drive, se tiver"></div>
+    <div class="campo" style="margin-top:10px;"><label>Anexar arquivo</label>
+      <input type="file" id="dpr-arquivo" accept="image/*,application/pdf,.doc,.docx">
+      <span class="texto-dim2" style="font-size:10.5px;">ou, se preferir, cola um link do Drive abaixo</span></div>
+    <div class="campo" style="margin-top:6px;"><label>Link do arquivo (opcional)</label><input id="dpr-link" placeholder="link do Drive, se tiver"></div>
     <div class="campo" style="margin-top:10px;"><label>Observações</label><textarea id="dpr-obs" style="min-height:56px;"></textarea></div>
     <div class="acoes" style="margin-top:14px;"><button class="btn" id="dpr-salvar">Salvar</button>
       <button class="btn-secundario" id="dpr-fechar">Fechar</button></div>
@@ -22631,13 +22634,24 @@ function formDpRegistro (tipo, registro, aoSalvar) {
     if (!pessoaId) { aviso('Escolha o funcionário.'); return }
     if (!tipoVal) { aviso('Informe o tipo.'); return }
     const btn = fundo.querySelector('#dpr-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+
+    let linkArquivo = fundo.querySelector('#dpr-link').value.trim() || null
+    const arquivo = fundo.querySelector('#dpr-arquivo').files[0]
+    if (arquivo) {
+      try {
+        const enviado = await enviarArquivo(arquivo, `dp-documentos/${pessoaId}`)
+        const { data: signed } = await db.storage.from('documentos').createSignedUrl(enviado.caminho, 60 * 60 * 24 * 365 * 5)
+        linkArquivo = signed?.signedUrl || enviado.caminho
+      } catch (e) { aviso('Não deu pra enviar o arquivo: ' + e.message); btn.disabled = false; btn.textContent = 'Salvar'; return }
+    }
+
     const corpo = tipo === 'documento'
       ? { pessoa_id: pessoaId, tipo_documento: tipoVal, numero_documento: fundo.querySelector('#dpr-numero').value.trim() || null,
           data_validade: fundo.querySelector('#dpr-validade').value || null, status: fundo.querySelector('#dpr-status').value,
-          link_arquivo: fundo.querySelector('#dpr-link').value.trim() || null, observacoes: fundo.querySelector('#dpr-obs').value.trim() || null }
+          link_arquivo: linkArquivo, observacoes: fundo.querySelector('#dpr-obs').value.trim() || null }
       : { pessoa_id: pessoaId, tipo_exame: tipoVal, clinica: fundo.querySelector('#dpr-clinica').value.trim() || null,
           data_validade: fundo.querySelector('#dpr-validade').value || null, status: fundo.querySelector('#dpr-status').value,
-          link_arquivo: fundo.querySelector('#dpr-link').value.trim() || null, observacoes: fundo.querySelector('#dpr-obs').value.trim() || null }
+          link_arquivo: linkArquivo, observacoes: fundo.querySelector('#dpr-obs').value.trim() || null }
     const { error } = await db.from(tabela).insert(corpo)
     btn.disabled = false; btn.textContent = 'Salvar'
     if (error) { aviso(error.message); return }
