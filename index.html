@@ -2145,6 +2145,9 @@ function detalheSolicitacao (s, aoFechar) {
       ${s.setorEnvolvido?.nome ? ` · também envolve <b>${esc(s.setorEnvolvido.nome)}</b>` : ''}
       ${!editavel ? ' · <span class="texto-dim2">somente leitura pra você</span>' : ''}</p>
 
+    ${s.data_planejada ? `<div class="chip" style="margin-bottom:12px;display:inline-block;">
+      📅 Planejado pra ${fmtData(s.data_planejada)}${s.hora_planejada ? ' às ' + s.hora_planejada.slice(0, 5) : ''}</div>` : ''}
+
     <div class="caixa-texto" style="margin-bottom:12px;">
       <div class="rot">${esc(s.titulo)}</div>
       <p>${esc(s.descricao ?? 'sem descrição adicional')}</p>
@@ -2315,6 +2318,64 @@ function detalheSolicitacao (s, aoFechar) {
 // o que foi pedido direto pra ela (em qualquer setor), e um atalho
 // pros módulos que o usuário dela tem liberado.
 // ---------------------------------------------------------------
+// Programar quando vai fazer uma solicitação — grava na própria
+// solicitação (pra quem pediu ver) e cria/atualiza um compromisso na
+// agenda pessoal de quem está programando, pra aparecer na semana dela
+function abrirProgramarSolicitacao (s, aoSalvar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:380px;">
+    <h3>Programar — ${esc(s.titulo)}</h3>
+    <p class="texto-dim2" style="font-size:12px;margin:-6px 0 12px;">Fica na sua agenda da semana, e quem pediu já vê quando você planeja fazer.</p>
+    <div class="form-grade">
+      <div class="campo"><label>Dia *</label><input type="date" id="pg-data" value="${s.data_planejada ?? hojeISO()}"></div>
+      <div class="campo"><label>Hora</label><input type="time" id="pg-hora" value="${s.hora_planejada?.slice(0, 5) ?? ''}"></div>
+    </div>
+    <div class="acoes" style="margin-top:14px;"><button class="btn" id="pg-salvar">Programar</button>
+      ${s.data_planejada ? `<button class="btn-secundario" id="pg-limpar" style="color:var(--warn-text);">Tirar da agenda</button>` : ''}
+      <button class="btn-secundario" id="pg-fechar">Fechar</button></div>
+    <div class="recado oculto" id="pg-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#pg-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  fundo.querySelector('#pg-salvar').onclick = async () => {
+    const el = fundo.querySelector('#pg-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const data = fundo.querySelector('#pg-data').value
+    if (!data) { aviso('Escolhe o dia.'); return }
+    const hora = fundo.querySelector('#pg-hora').value || null
+    const btn = fundo.querySelector('#pg-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+
+    let tarefaId = s.tarefa_agenda_id
+    if (tarefaId) {
+      await db.from('tarefa').update({ prazo: data, hora, titulo: '📋 ' + s.titulo, detalhe: 'Solicitação ' + s.codigo }).eq('id', tarefaId)
+    } else {
+      const { data: novaTarefa } = await db.from('tarefa').insert({
+        pessoa_id: PERFIL.pessoaId, titulo: '📋 ' + s.titulo, detalhe: 'Solicitação ' + s.codigo,
+        prazo: data, hora, prioridade: 'MEDIA'
+      }).select('id').single()
+      tarefaId = novaTarefa?.id ?? null
+    }
+
+    const { error } = await db.from('solicitacao_interna').update({
+      data_planejada: data, hora_planejada: hora, tarefa_agenda_id: tarefaId
+    }).eq('id', s.id)
+    btn.disabled = false; btn.textContent = 'Programar'
+    if (error) { aviso(error.message); return }
+    fechar(); aoSalvar()
+  }
+
+  const btnLimpar = fundo.querySelector('#pg-limpar')
+  if (btnLimpar) btnLimpar.onclick = async () => {
+    if (s.tarefa_agenda_id) await db.from('tarefa').delete().eq('id', s.tarefa_agenda_id)
+    await db.from('solicitacao_interna').update({ data_planejada: null, hora_planejada: null, tarefa_agenda_id: null }).eq('id', s.id)
+    fechar(); aoSalvar()
+  }
+}
+
 async function painelGerencial (area) {
   if (!PERFIL.pessoaId) return
   const { data: setoresGeridos } = await db.from('setor').select('id,nome').eq('gestor_id', PERFIL.pessoaId)
@@ -2325,25 +2386,27 @@ async function painelGerencial (area) {
 
   const selDoSetor = `
     id, codigo, titulo, urgencia, status, data_solicitacao, data_limite, data_conclusao,
-    progresso_pct, pontuacao_agilidade, setor_destino_id, responsavel_id,
+    progresso_pct, pontuacao_agilidade, setor_destino_id, responsavel_id, data_planejada, hora_planejada, tarefa_agenda_id,
     responsavel:responsavel_id ( nome ),
     participantes:solicitacao_participante ( pessoa_id, pessoa:pessoa_id ( nome ) )`
   const selParaMim = `
     id, codigo, titulo, urgencia, status, data_solicitacao, data_limite, data_conclusao,
-    progresso_pct, pontuacao_agilidade, setor_destino_id, responsavel_id,
+    progresso_pct, pontuacao_agilidade, setor_destino_id, responsavel_id, data_planejada, hora_planejada,
     setor:setor_destino_id ( nome ),
     participantes:solicitacao_participante ( pessoa_id, pessoa:pessoa_id ( nome ) )`
 
-  const [{ data: doSetorRaw, error }, { data: paraMim }] = await Promise.all([
+  const [{ data: doSetorRaw, error }, { data: paraMim }, { data: ocultadasRaw }] = await Promise.all([
     db.from('solicitacao_interna').select(selDoSetor)
       .in('setor_destino_id', idsSetor).gte('data_solicitacao', de)
       .order('data_solicitacao', { ascending: false }).limit(300),
     db.from('solicitacao_interna').select(selParaMim)
       .eq('responsavel_id', PERFIL.pessoaId).in('status', ['ABERTA', 'EM_ANDAMENTO'])
-      .order('urgencia', { ascending: false }).order('data_solicitacao').limit(20)
+      .order('urgencia', { ascending: false }).order('data_solicitacao').limit(20),
+    db.from('solicitacao_ocultada_painel').select('solicitacao_id').eq('pessoa_id', PERFIL.pessoaId)
   ])
   if (faltaMigracao(error)) return
-  const lista = doSetorRaw || []
+  const idsOcultados = new Set((ocultadasRaw || []).map(o => o.solicitacao_id))
+  const lista = (doSetorRaw || []).filter(s => !idsOcultados.has(s.id))
   const nomesSetores = setoresGeridos.map(s => s.nome).join(', ')
 
   const cartaoKanban = s => {
@@ -2352,12 +2415,17 @@ async function painelGerencial (area) {
     return `<div class="card-tarefa" data-abrir-solic-gestor="${s.id}">
       <div>${esc(s.titulo)}</div>
       <div class="proj">${esc(s.responsavel?.nome ?? 'sem responsável')}</div>
+      ${s.data_planejada ? `<div class="chip" style="font-size:9.5px;margin-top:4px;display:inline-block;">📅 planejado ${fmtData(s.data_planejada)}${s.hora_planejada ? ' ' + s.hora_planejada.slice(0, 5) : ''}</div>` : ''}
       <div style="background:var(--surface2);border-radius:4px;height:5px;overflow:hidden;margin:6px 0 4px;">
         <div style="width:${s.progresso_pct ?? 0}%;height:100%;background:${bandCor(s.progresso_pct ?? 0)};"></div>
       </div>
       <div class="rodape-t">
         <span class="${corUrgenciaSolicitacao(s.urgencia)}" style="font-size:9.5px;">${esc(ROTULO_URGENCIA_SOLICITACAO[s.urgencia])}</span>
         <span class="texto-dim2" style="font-size:11px;${prazo?.atrasada ? 'color:var(--warn-text);font-weight:600;' : ''}">${prazo ? prazo.texto : (pts != null ? pts + ' pts' : '')}</span>
+      </div>
+      <div style="display:flex;gap:4px;margin-top:6px;">
+        <button class="btn-secundario mini" data-programar-solic="${s.id}" style="flex:1;font-size:10px;padding:3px 6px;" onclick="event.stopPropagation()">📅 programar</button>
+        <button class="btn-secundario mini" data-guardar-solic="${s.id}" style="flex:none;font-size:10px;padding:3px 6px;" onclick="event.stopPropagation()" title="tirar da minha visão, sem apagar nada">guardar</button>
       </div></div>`
   }
 
@@ -2383,6 +2451,18 @@ async function painelGerencial (area) {
     el.onclick = () => {
       const s = lista.find(x => x.id === el.dataset.abrirSolicGestor)
       if (s) detalheSolicitacao(s, reabrir)
+    }
+  })
+  bloco.querySelectorAll('[data-guardar-solic]').forEach(el => {
+    el.onclick = async () => {
+      await db.from('solicitacao_ocultada_painel').insert({ pessoa_id: PERFIL.pessoaId, solicitacao_id: el.dataset.guardarSolic })
+      painelGerencial(area)
+    }
+  })
+  bloco.querySelectorAll('[data-programar-solic]').forEach(el => {
+    el.onclick = () => {
+      const s = lista.find(x => x.id === el.dataset.programarSolic)
+      if (s) abrirProgramarSolicitacao(s, () => painelGerencial(area))
     }
   })
 
@@ -19008,6 +19088,13 @@ async function paginaJuridico () {
   const abas = [['painel', 'Painel'], ['contratos', 'Contratos'], ['licencas', 'Licenças e certidões'],
     ['processos', 'Processos'], ['notificacoes', 'Notificações e autuações'], ['documentos', 'Documentos']]
   area.innerHTML = `
+    <div style="background:linear-gradient(120deg,#1a1410 0%,#2b2018 55%,#1a1410 100%);border-radius:14px;padding:22px 26px;margin-bottom:18px;position:relative;overflow:hidden;border:1px solid #3a2e20;">
+      <div style="position:absolute;right:-20px;top:-24px;font-size:120px;opacity:.08;line-height:1;">⚖️</div>
+      <div style="position:relative;">
+        <div style="color:var(--gold,#c8a11a);font-size:11px;text-transform:uppercase;letter-spacing:.14em;font-weight:700;">Departamento Jurídico</div>
+        <div style="color:#f2ece0;font-family:var(--serif);font-size:23px;margin-top:3px;">Contratos, licenças, processos e notificações</div>
+      </div>
+    </div>
     <div class="subabas">
       ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
     </div>
@@ -19060,9 +19147,9 @@ async function juridicoPainel (alvo, editavel) {
   ])
 
   const pendencias = [
-    ...(contratos || []).filter(c => c.data_fim).map(c => ({ tipo: 'Contrato', nome: c.titulo, extra: c.contraparte, data: c.data_fim })),
-    ...(licencas || []).filter(l => l.data_validade).map(l => ({ tipo: 'Licença', nome: l.nome, extra: l.categoria, data: l.data_validade })),
-    ...(notificacoes || []).filter(n => n.prazo_resposta).map(n => ({ tipo: 'Notificação', nome: n.descricao, extra: ROTULO_TIPO_NOTIFICACAO[n.tipo], data: n.prazo_resposta }))
+    ...(contratos || []).filter(c => c.data_fim).map(c => ({ tipo: 'Contrato', tabela: 'contrato', id: c.id, nome: c.titulo, extra: c.contraparte, data: c.data_fim })),
+    ...(licencas || []).filter(l => l.data_validade).map(l => ({ tipo: 'Licença', tabela: 'licenca', id: l.id, nome: l.nome, extra: l.categoria, data: l.data_validade })),
+    ...(notificacoes || []).filter(n => n.prazo_resposta).map(n => ({ tipo: 'Notificação', tabela: 'notificacao', id: n.id, nome: n.descricao, extra: ROTULO_TIPO_NOTIFICACAO[n.tipo], data: n.prazo_resposta }))
   ].map(p => ({ ...p, dias: diasParaVencer(p.data) })).sort((a, b) => (a.dias ?? 9e9) - (b.dias ?? 9e9))
 
   const vencidas = pendencias.filter(p => p.dias < 0)
@@ -19083,9 +19170,13 @@ async function juridicoPainel (alvo, editavel) {
         ${a.fornecedor?.nome ? ' · cobrar ' + esc(a.fornecedor.nome) : ''} — ${esc(a.descricao)}</div>`).join('')}
     </div>` : ''}
 
+    <div class="cabeca-secao" style="margin-bottom:12px;">
+      <h3 style="font-family:var(--serif);font-size:16px;margin:0;">Pendências e vencimentos</h3>
+      ${editavel ? `<button class="btn" id="jp-novo-contrato">+ Novo contrato</button>` : ''}
+    </div>
     <div class="panel" style="padding:0;margin-bottom:16px;"><div class="tabela-scroll">
       <table><thead><tr><th>Tipo</th><th>Item</th><th>Contraparte / categoria</th><th>Vencimento</th><th>Situação</th></tr></thead><tbody>
-      ${pendencias.slice(0, 25).map(p => `<tr>
+      ${pendencias.slice(0, 25).map(p => `<tr style="${editavel && p.tabela === 'contrato' ? 'cursor:pointer;' : ''}" ${editavel && p.tabela === 'contrato' ? `data-editar-contrato-painel="${p.id}"` : ''}>
         <td><span class="chip">${esc(p.tipo)}</span></td>
         <td><b>${esc(p.nome)}</b></td>
         <td class="texto-dim">${esc(p.extra || '—')}</td>
@@ -19105,6 +19196,15 @@ async function juridicoPainel (alvo, editavel) {
       </tr>`).join('') || `<tr><td colspan="3" class="vazio">Nenhum processo ativo com próxima data marcada.</td></tr>`}
       </tbody></table>
     </div></div>`
+
+  if (!editavel) return
+  $('#jp-novo-contrato').onclick = () => formContrato(null)
+  alvo.querySelectorAll('[data-editar-contrato-painel]').forEach(tr => {
+    tr.onclick = async () => {
+      const { data: contratoCompleto } = await db.from('juridico_contrato').select('*').eq('id', tr.dataset.editarContratoPainel).maybeSingle()
+      if (contratoCompleto) formContrato(contratoCompleto)
+    }
+  })
 }
 
 // ----- Jurídico › Contratos -----
@@ -19185,8 +19285,11 @@ function formContrato (c) {
           <select id="ct-resp">${opcoesFin(JUR_CACHE.pessoas, 'sem responsável', c?.responsavel_id)}</select></div>
         <div class="campo"><label>Empresa</label>
           <select id="ct-empresa">${opcoesFin(JUR_CACHE.empresas, '—', c?.empresa_id)}</select></div>
-        <div class="campo" style="grid-column:1/-1;"><label>Link do anexo</label>
-          <input id="ct-anexo" value="${v('anexo_link')}" placeholder="link do Drive"></div>
+        <div class="campo" style="grid-column:1/-1;"><label>Anexar arquivo do contrato</label>
+          <input type="file" id="ct-arquivo" accept="application/pdf,image/*,.doc,.docx">
+          ${c?.anexo_link ? `<span class="texto-dim2" style="font-size:11px;">já tem um anexo — escolher outro arquivo substitui</span>` : ''}</div>
+        <div class="campo" style="grid-column:1/-1;"><label>Ou link do anexo (opcional)</label>
+          <input id="ct-anexo" value="${v('anexo_link')}" placeholder="link do Drive, se preferir"></div>
       </div>
       <div class="campo" style="margin-top:12px;"><label>Observações</label>
         <textarea id="ct-obs" style="min-height:64px;">${v('observacoes')}</textarea></div>
@@ -19230,6 +19333,18 @@ function formContrato (c) {
   q('#ct-salvar').onclick = async () => {
     const titulo = q('#ct-titulo').value.trim()
     if (!titulo) { aviso('Escreva o título ou objeto do contrato.'); return }
+    const btnSalvar = q('#ct-salvar'); btnSalvar.disabled = true; btnSalvar.textContent = 'Salvando...'
+
+    let anexoLink = q('#ct-anexo').value.trim() || null
+    const arquivo = q('#ct-arquivo').files[0]
+    if (arquivo) {
+      try {
+        const enviado = await enviarArquivo(arquivo, `juridico-contratos/${c?.id ?? 'novo'}`)
+        const { data: signed } = await db.storage.from('documentos').createSignedUrl(enviado.caminho, 60 * 60 * 24 * 365 * 5)
+        anexoLink = signed?.signedUrl || enviado.caminho
+      } catch (e) { aviso('Não deu pra enviar o arquivo: ' + e.message); btnSalvar.disabled = false; btnSalvar.textContent = 'Salvar'; return }
+    }
+
     const categoria = q('#ct-cat').value
     const corpo = {
       titulo,
@@ -19244,7 +19359,7 @@ function formContrato (c) {
       status: q('#ct-status').value,
       responsavel_id: q('#ct-resp').value || null,
       empresa_id: q('#ct-empresa').value || null,
-      anexo_link: q('#ct-anexo').value.trim() || null,
+      anexo_link: anexoLink,
       observacoes: q('#ct-obs').value.trim() || null
     }
     let error
@@ -19255,8 +19370,12 @@ function formContrato (c) {
       corpo.criado_por = PERFIL.pessoaId
       ;({ error } = await db.from('juridico_contrato').insert(corpo))
     }
+    btnSalvar.disabled = false; btnSalvar.textContent = 'Salvar'
     if (error) { aviso(error.message); return }
-    fechar(); abrirJuridico('contratos', true)
+    fechar()
+    // sempre volta pra aba Contratos — é lá que o registro salvo aparece,
+    // seja aberto pelo Painel ou pela própria aba de Contratos
+    abrirJuridico('contratos', true)
   }
 
   const bx = q('#ct-excluir')
