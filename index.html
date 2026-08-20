@@ -5777,17 +5777,21 @@ async function paginaExpedicao () {
   const area = areaLivre()
   area.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
-  const [{ data: clientes }, { data: vendedores }, { data: produtos }, { data: veiculos }, { data: empresas }] = await Promise.all([
+  const [{ data: clientes }, { data: vendedores }, { data: produtos }, { data: veiculos }, { data: empresas }, { data: motoristas }, { data: veiculosCliente }] = await Promise.all([
     db.from('cliente').select('id,razao_social').order('razao_social'),
     db.from('pessoa').select('id,nome').eq('eh_vendedor', true).order('nome'),
     db.from('produto').select('id,nome,unidade').order('nome'),
     db.from('veiculo').select('id,placa,descricao').order('placa'),
-    db.from('empresa').select('id,nome,regime_tributario').eq('status', 'ATIVO').order('nome')
+    db.from('empresa').select('id,nome,regime_tributario').eq('status', 'ATIVO').order('nome'),
+    db.from('expedicao_motorista').select('id,nome,telefone').eq('ativo', true).order('nome'),
+    db.from('expedicao_veiculo_cliente').select('id,placa,descricao,cliente_id').eq('ativo', true).order('placa')
   ])
-  EXPED_CACHE = { clientes: clientes || [], vendedores: vendedores || [], produtos: produtos || [], veiculos: veiculos || [], empresas: empresas || [] }
+  EXPED_CACHE = { clientes: clientes || [], vendedores: vendedores || [], produtos: produtos || [], veiculos: veiculos || [], empresas: empresas || [],
+    motoristas: motoristas || [], veiculosCliente: veiculosCliente || [] }
 
   const abas = [['painel', 'Painel'], ['lancamentos', 'Lançamentos']]
-  if (editavel) abas.push(['lancar', 'Lançar'], ['ordem', 'Ordem de Carregamento'])
+  if (editavel) abas.push(['lancar', 'Lançar'], ['ordem', 'Ordem de Carregamento'], ['motoristas', 'Motoristas e Veículos'])
+  abas.push(['ia', 'Fale com a Especialista Contábil'])
   abas.push(['ia', 'Fale com a Especialista Contábil'])
 
   area.innerHTML = `
@@ -5812,6 +5816,7 @@ function abrirExped (sub, editavel) {
   if (sub === 'lancamentos') expedLancamentos(alvo, editavel)
   if (sub === 'lancar') expedLancar(alvo)
   if (sub === 'ordem') expedOrdem(alvo)
+  if (sub === 'motoristas') expedMotoristasVeiculos(alvo)
   if (sub === 'ia') expedEspecialistaFiscal(alvo)
 }
 
@@ -6124,8 +6129,14 @@ function formOrdemCarregamento (pedido) {
       <div class="campo"><label>Empresa *</label><select id="oc-empresa"><option value="">selecione...</option>
         ${EXPED_CACHE.empresas.map(e => `<option value="${e.id}" ${e.id === (pedido.empresa_id || EXPED_CACHE.empresas.find(x => x.nome === 'Gefoscal')?.id) ? 'selected' : ''}>${esc(e.nome)}${e.regime_tributario ? ' — ' + esc(e.regime_tributario) : ''}</option>`).join('')}</select></div>
       <div class="campo"><label>Veículo *</label><select id="oc-veiculo"><option value="">selecione...</option>
-        ${EXPED_CACHE.veiculos.map(v => `<option value="${v.id}">${esc(v.placa)}${v.descricao ? ' — ' + esc(v.descricao) : ''}</option>`).join('')}</select></div>
-      <div class="campo"><label>Motorista *</label><input id="oc-motorista"></div>
+        <optgroup label="Frota Gefoscal">${EXPED_CACHE.veiculos.map(v => `<option value="frota:${v.id}">${esc(v.placa)}${v.descricao ? ' — ' + esc(v.descricao) : ''}</option>`).join('')}</optgroup>
+        <optgroup label="Veículo de cliente">${EXPED_CACHE.veiculosCliente.map(v => `<option value="cliente:${v.id}">${esc(v.placa)}${v.descricao ? ' — ' + esc(v.descricao) : ''}</option>`).join('')}</optgroup>
+      </select></div>
+      <div class="campo"><label>Motorista *</label>
+        <select id="oc-motorista"><option value="">selecione...</option>
+          ${EXPED_CACHE.motoristas.map(m => `<option value="${esc(m.nome)}">${esc(m.nome)}</option>`).join('')}
+          <option value="__outro">— outro (digitar nome) —</option></select>
+        <input id="oc-motorista-livre" placeholder="nome do motorista" class="oculto" style="margin-top:6px;"></div>
       <div class="campo"><label>Quantidade *</label>
         <input id="oc-qtd" inputmode="decimal" value="${String(pedido.quantidade_t ?? '').replace('.', ',')}"></div>
       <div class="campo"><label>Data programada *</label><input type="datetime-local" id="oc-data"></div>
@@ -6144,26 +6155,33 @@ function formOrdemCarregamento (pedido) {
   const fechar = () => fundo.remove()
   fundo.querySelector('#oc-cancelar').onclick = fechar
   fundo.onclick = e => { if (e.target === fundo) fechar() }
+  fundo.querySelector('#oc-motorista').onchange = () => {
+    fundo.querySelector('#oc-motorista-livre').classList.toggle('oculto', fundo.querySelector('#oc-motorista').value !== '__outro')
+  }
 
   fundo.querySelector('#oc-salvar').onclick = async () => {
     const el = fundo.querySelector('#oc-recado')
     const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
-    const veiculoId = fundo.querySelector('#oc-veiculo').value
+    const veiculoSel = fundo.querySelector('#oc-veiculo').value
     const empresaId = fundo.querySelector('#oc-empresa').value
-    const motorista = fundo.querySelector('#oc-motorista').value.trim()
+    const motoristaSel = fundo.querySelector('#oc-motorista').value
+    const motorista = motoristaSel === '__outro' ? fundo.querySelector('#oc-motorista-livre').value.trim() : motoristaSel
     let qtd = numeroBR(fundo.querySelector('#oc-qtd').value)
     const dataProg = fundo.querySelector('#oc-data').value
     if (!empresaId) { aviso('Escolha a empresa (Gefoscal ou P-TEC).'); return }
-    if (!veiculoId) { aviso('Escolha o veículo.'); return }
+    if (!veiculoSel) { aviso('Escolha o veículo.'); return }
     if (!motorista) { aviso('Informe o motorista.'); return }
     if (qtd === null || qtd <= 0) { aviso('Informe a quantidade.'); return }
     if (!dataProg) { aviso('Informe a data programada.'); return }
     if (casasPara(pedido.produto?.unidade) === 0) qtd = Math.round(qtd)
 
+    const [origemVeiculo, veiculoId] = veiculoSel.split(':')
     const btn = fundo.querySelector('#oc-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
     const { data: novo, error } = await db.from('carregamento').insert({
       pedido_id: pedido.id, empresa_id: empresaId, cliente_id: pedido.cliente?.id, produto_id: pedido.produto?.id,
-      veiculo_id: veiculoId, motorista, quantidade_t: qtd,
+      veiculo_id: origemVeiculo === 'frota' ? veiculoId : null,
+      veiculo_cliente_id: origemVeiculo === 'cliente' ? veiculoId : null,
+      motorista, quantidade_t: qtd,
       preco_unitario: pedido.preco_unitario || null,
       valor_nf: pedido.preco_unitario ? qtd * pedido.preco_unitario : null,
       data_programada: new Date(dataProg).toISOString(), data_carregamento: dataProg.slice(0, 10),
@@ -6173,7 +6191,7 @@ function formOrdemCarregamento (pedido) {
     btn.disabled = false; btn.textContent = 'Criar ordem e gerar PDF'
     if (error) { aviso(error.message); return }
 
-    const veiculo = EXPED_CACHE.veiculos.find(v => v.id === veiculoId)
+    const veiculo = origemVeiculo === 'frota' ? EXPED_CACHE.veiculos.find(v => v.id === veiculoId) : EXPED_CACHE.veiculosCliente.find(v => v.id === veiculoId)
     const empresa = EXPED_CACHE.empresas.find(e => e.id === empresaId)
     fechar()
     abrirPdfOrdemCarregamento({
@@ -6182,6 +6200,132 @@ function formOrdemCarregamento (pedido) {
       dataProgramada: dataProg, local: fundo.querySelector('#oc-local').value.trim(),
       observacao: fundo.querySelector('#oc-obs').value.trim(), carregamentoId: novo?.id
     })
+  }
+}
+
+// ----- Motoristas e Veículos de cliente — cadastro próprio, pra
+// escolher em vez de digitar toda vez na Ordem de Carregamento -----
+async function expedMotoristasVeiculos (alvo) {
+  const [{ data: motoristas }, { data: veiculosCliente }] = await Promise.all([
+    db.from('expedicao_motorista').select('*').order('nome'),
+    db.from('expedicao_veiculo_cliente').select('*, cliente:cliente_id(razao_social)').order('placa')
+  ])
+  const listaMot = motoristas || []
+  const listaVei = veiculosCliente || []
+
+  alvo.innerHTML = `
+    <div class="duas-colunas" style="align-items:start;gap:20px;">
+      <div>
+        <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:15px;">Motoristas</h3>
+          <button class="btn-secundario mini" id="em-novo-mot">+ novo</button></div>
+        <div class="panel" style="padding:0;">
+          ${listaMot.map(m => `<div class="passo">
+            <span style="flex:1;"><b>${esc(m.nome)}</b>${m.telefone ? ` <span class="texto-dim2" style="font-size:11.5px;">${esc(m.telefone)}</span>` : ''}</span>
+            <button class="btn-secundario mini" data-editar-mot="${m.id}">editar</button>
+          </div>`).join('') || '<p class="vazio">Nenhum motorista cadastrado.</p>'}
+        </div>
+      </div>
+      <div>
+        <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:15px;">Veículos de cliente</h3>
+          <button class="btn-secundario mini" id="em-novo-vei">+ novo</button></div>
+        <div class="panel" style="padding:0;">
+          ${listaVei.map(v => `<div class="passo">
+            <span style="flex:1;"><b>${esc(v.placa)}</b>${v.descricao ? ' — ' + esc(v.descricao) : ''}
+              ${v.cliente?.razao_social ? `<br><span class="texto-dim2" style="font-size:11.5px;">${esc(v.cliente.razao_social)}</span>` : ''}</span>
+            <button class="btn-secundario mini" data-editar-vei="${v.id}">editar</button>
+          </div>`).join('') || '<p class="vazio">Nenhum veículo de cliente cadastrado.</p>'}
+        </div>
+      </div>
+    </div>`
+
+  $('#em-novo-mot').onclick = () => formMotoristaExped(null, () => expedMotoristasVeiculos(alvo))
+  alvo.querySelectorAll('[data-editar-mot]').forEach(b => {
+    b.onclick = () => formMotoristaExped(listaMot.find(m => m.id === b.dataset.editarMot), () => expedMotoristasVeiculos(alvo))
+  })
+  $('#em-novo-vei').onclick = () => formVeiculoClienteExped(null, () => expedMotoristasVeiculos(alvo))
+  alvo.querySelectorAll('[data-editar-vei]').forEach(b => {
+    b.onclick = () => formVeiculoClienteExped(listaVei.find(v => v.id === b.dataset.editarVei), () => expedMotoristasVeiculos(alvo))
+  })
+}
+
+function formMotoristaExped (registro, aoSalvar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>${registro ? 'Editar' : 'Novo'} motorista</h3>
+    <div class="form-grade">
+      <div class="campo" style="grid-column:1/-1;"><label>Nome *</label><input id="fm-nome" value="${esc(registro?.nome ?? '')}"></div>
+      <div class="campo"><label>CPF</label><input id="fm-cpf" value="${esc(registro?.cpf ?? '')}"></div>
+      <div class="campo"><label>Telefone</label><input id="fm-tel" value="${esc(registro?.telefone ?? '')}"></div>
+    </div>
+    ${registro ? `<label class="linha-modulo" style="margin-top:10px;"><input type="checkbox" id="fm-ativo" ${registro.ativo ? 'checked' : ''}><span class="nome">Ativo</span></label>` : ''}
+    <div class="acoes" style="margin-top:14px;"><button class="btn" id="fm-salvar">Salvar</button>
+      ${registro ? `<button class="btn-secundario" id="fm-excluir" style="color:var(--warn-text);">Excluir</button>` : ''}
+      <button class="btn-secundario" id="fm-fechar">Fechar</button></div>
+    <div class="recado oculto" id="fm-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#fm-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  if (registro) fundo.querySelector('#fm-excluir').onclick = async () => {
+    if (!confirm('Excluir esse motorista?')) return
+    await db.from('expedicao_motorista').delete().eq('id', registro.id)
+    fechar(); aoSalvar()
+  }
+  fundo.querySelector('#fm-salvar').onclick = async () => {
+    const el = fundo.querySelector('#fm-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const nome = fundo.querySelector('#fm-nome').value.trim()
+    if (!nome) { aviso('Escreve o nome.'); return }
+    const corpo = { nome, cpf: fundo.querySelector('#fm-cpf').value.trim() || null, telefone: fundo.querySelector('#fm-tel').value.trim() || null }
+    if (registro) corpo.ativo = fundo.querySelector('#fm-ativo').checked
+    let error
+    if (registro) { ({ error } = await db.from('expedicao_motorista').update(corpo).eq('id', registro.id)) }
+    else { ({ error } = await db.from('expedicao_motorista').insert(corpo)) }
+    if (error) { aviso(error.message); return }
+    fechar(); aoSalvar()
+  }
+}
+
+function formVeiculoClienteExped (registro, aoSalvar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>${registro ? 'Editar' : 'Novo'} veículo de cliente</h3>
+    <div class="form-grade">
+      <div class="campo"><label>Placa *</label><input id="fv-placa" value="${esc(registro?.placa ?? '')}"></div>
+      <div class="campo"><label>Descrição</label><input id="fv-desc" value="${esc(registro?.descricao ?? '')}" placeholder="ex: Carreta, Truck..."></div>
+      <div class="campo" style="grid-column:1/-1;"><label>Cliente dono</label>
+        <select id="fv-cliente"><option value="">—</option>${EXPED_CACHE.clientes.map(c => `<option value="${c.id}" ${c.id === registro?.cliente_id ? 'selected' : ''}>${esc(c.razao_social)}</option>`).join('')}</select></div>
+    </div>
+    ${registro ? `<label class="linha-modulo" style="margin-top:10px;"><input type="checkbox" id="fv-ativo" ${registro.ativo ? 'checked' : ''}><span class="nome">Ativo</span></label>` : ''}
+    <div class="acoes" style="margin-top:14px;"><button class="btn" id="fv-salvar">Salvar</button>
+      ${registro ? `<button class="btn-secundario" id="fv-excluir" style="color:var(--warn-text);">Excluir</button>` : ''}
+      <button class="btn-secundario" id="fv-fechar">Fechar</button></div>
+    <div class="recado oculto" id="fv-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#fv-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  if (registro) fundo.querySelector('#fv-excluir').onclick = async () => {
+    if (!confirm('Excluir esse veículo?')) return
+    await db.from('expedicao_veiculo_cliente').delete().eq('id', registro.id)
+    fechar(); aoSalvar()
+  }
+  fundo.querySelector('#fv-salvar').onclick = async () => {
+    const el = fundo.querySelector('#fv-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const placa = fundo.querySelector('#fv-placa').value.trim()
+    if (!placa) { aviso('Escreve a placa.'); return }
+    const corpo = { placa: placa.toUpperCase(), descricao: fundo.querySelector('#fv-desc').value.trim() || null, cliente_id: fundo.querySelector('#fv-cliente').value || null }
+    if (registro) corpo.ativo = fundo.querySelector('#fv-ativo').checked
+    let error
+    if (registro) { ({ error } = await db.from('expedicao_veiculo_cliente').update(corpo).eq('id', registro.id)) }
+    else { ({ error } = await db.from('expedicao_veiculo_cliente').insert(corpo)) }
+    if (error) { aviso(error.message); return }
+    fechar(); aoSalvar()
   }
 }
 
