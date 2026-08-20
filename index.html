@@ -2355,15 +2355,18 @@ function abrirProgramarSolicitacao (s, aoSalvar) {
     const btn = fundo.querySelector('#pg-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
 
     let tarefaId = s.tarefa_agenda_id
+    let erroTarefa = null
     if (tarefaId) {
-      await db.from('tarefa').update({ prazo: data, hora, titulo: '📋 ' + s.titulo, detalhe: 'Solicitação ' + s.codigo }).eq('id', tarefaId)
+      ;({ error: erroTarefa } = await db.from('tarefa').update({ prazo: data, hora, titulo: '📋 ' + s.titulo, detalhe: 'Solicitação ' + s.codigo }).eq('id', tarefaId))
     } else {
-      const { data: novaTarefa } = await db.from('tarefa').insert({
+      const { data: novaTarefa, error: e1 } = await db.from('tarefa').insert({
         pessoa_id: PERFIL.pessoaId, titulo: '📋 ' + s.titulo, detalhe: 'Solicitação ' + s.codigo,
-        prazo: data, hora, prioridade: 'MEDIA'
+        prazo: data, hora, prioridade: 'normal'
       }).select('id').single()
+      erroTarefa = e1
       tarefaId = novaTarefa?.id ?? null
     }
+    if (erroTarefa) { aviso('Não deu pra criar o compromisso na agenda: ' + erroTarefa.message); btn.disabled = false; btn.textContent = 'Programar'; return }
 
     const { error } = await db.from('solicitacao_interna').update({
       data_planejada: data, hora_planejada: hora, tarefa_agenda_id: tarefaId
