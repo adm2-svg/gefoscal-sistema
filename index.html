@@ -21329,6 +21329,9 @@ function formMktDoc (registro, aoSalvar) {
 }
 
 // ----- Aniversariantes -----
+let MKT_ANIV_CACHE = []
+let MKT_ANIV_BUSCA = ''
+
 async function mktAniversariantes (alvo, editavel) {
   const [{ data: funcionarios, error: e1 }, { data: externos, error: e2 }] = await Promise.all([
     db.from('pessoa').select('id,nome,foto_url,data_nascimento,cargo').eq('status', 'ATIVO').not('data_nascimento', 'is', null),
@@ -21339,16 +21342,31 @@ async function mktAniversariantes (alvo, editavel) {
   // junta os dois — funcionário vem do cadastro de pessoa (o mesmo que
   // o DP e Segurança usa, então editar aqui atualiza lá também), e
   // quem não é funcionário (cliente, parceiro) fica no cadastro à parte
-  const unificados = [
+  MKT_ANIV_CACHE = [
     ...(funcionarios || []).map(f => ({
       origem: 'pessoa', id: f.id, nome: f.nome, foto_url: f.foto_url, cargo: f.cargo,
       mes: Number(f.data_nascimento.slice(5, 7)), dia: Number(f.data_nascimento.slice(8, 10))
     })),
-    ...(externos || []).map(a => ({ origem: 'externo', id: a.id, nome: a.nome, empresa: a.empresa, contato: a.contato, mes: a.mes, dia: a.dia }))
+    ...(externos || []).map(a => ({ origem: 'externo', id: a.id, nome: a.nome, empresa: a.empresa, contato: a.contato, mes: a.mes, dia: a.dia, foto_url: a.foto_url }))
   ].filter(a => a.mes && a.dia).sort((a, b) => a.mes - b.mes || a.dia - b.dia)
 
+  renderMktAniversariantes(alvo, editavel)
+}
+
+function renderMktAniversariantes (alvo, editavel) {
   const hoje = new Date()
   const nomeIniciais = n => (n || '').trim().split(/\s+/).slice(0, 2).map(p => p[0]).join('').toUpperCase()
+
+  const termo = MKT_ANIV_BUSCA.trim().toLowerCase()
+  const termoNumero = /^\d{1,2}$/.test(termo) ? Number(termo) : null
+  const unificados = MKT_ANIV_CACHE.filter(a => {
+    if (!termo) return true
+    if ((a.nome || '').toLowerCase().includes(termo)) return true
+    if (termoNumero != null && a.dia === termoNumero) return true
+    const dataFormatada = `${String(a.dia).padStart(2, '0')}/${String(a.mes).padStart(2, '0')}`
+    if (dataFormatada.includes(termo)) return true
+    return false
+  })
 
   alvo.innerHTML = `
     <div class="cabeca-secao" style="margin-bottom:14px;">
@@ -21357,6 +21375,9 @@ async function mktAniversariantes (alvo, editavel) {
         <p class="texto-dim2" style="font-size:12.5px;margin:2px 0 0;">Funcionários puxados direto do cadastro (DP e Segurança) — editar aqui atualiza lá também.</p>
       </div>
       ${editavel ? `<button class="btn" id="mk-novo-aniv">+ Contato externo (cliente, parceiro...)</button>` : ''}
+    </div>
+    <div class="filtros" style="margin-bottom:16px;">
+      <input id="mk-aniv-busca" placeholder="Buscar por nome ou dia (ex: 15 ou 15/08)..." style="flex:1;min-width:220px;" value="${esc(MKT_ANIV_BUSCA)}">
     </div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px;">
       ${unificados.map(a => {
@@ -21370,18 +21391,23 @@ async function mktAniversariantes (alvo, editavel) {
           <div class="texto-dim2" style="font-size:11px;margin-top:2px;">${esc(a.cargo || a.empresa || (a.origem === 'externo' ? 'contato externo' : ''))}</div>
           <div style="font-family:var(--serif);font-size:15px;margin-top:6px;${ehHoje ? 'color:var(--gold);' : ''}">${String(a.dia).padStart(2, '0')}/${String(a.mes).padStart(2, '0')}</div>
         </div>`
-      }).join('') || '<p class="vazio">Nenhum aniversariante com data cadastrada ainda.</p>'}
+      }).join('') || `<p class="vazio">${termo ? 'Nenhum aniversariante encontrado com essa busca.' : 'Nenhum aniversariante com data cadastrada ainda.'}</p>`}
     </div>`
 
-  if (!editavel) return
-  $('#mk-novo-aniv').onclick = () => formAniversarianteMkt(alvo, editavel)
+  let temporizador
+  $('#mk-aniv-busca').oninput = () => {
+    clearTimeout(temporizador)
+    temporizador = setTimeout(() => { MKT_ANIV_BUSCA = $('#mk-aniv-busca').value; renderMktAniversariantes(alvo, editavel) }, 250)
+  }
   alvo.querySelectorAll('[data-abrir-aniv]').forEach(c => {
     c.onclick = () => {
-      const a = unificados.find(x => x.id === c.dataset.abrirAniv && x.origem === c.dataset.origemAniv)
+      const a = MKT_ANIV_CACHE.find(x => x.id === c.dataset.abrirAniv && x.origem === c.dataset.origemAniv)
       if (a.origem === 'pessoa') formEditarNascimentoPessoa(a, () => mktAniversariantes(alvo, editavel))
       else formAniversarianteMkt(alvo, editavel, a)
     }
   })
+  if (!editavel) return
+  $('#mk-novo-aniv').onclick = () => formAniversarianteMkt(alvo, editavel)
 }
 
 // Editar funcionário aqui grava direto em `pessoa` — é a mesma tabela
@@ -21649,10 +21675,7 @@ async function abrirItemEstoqueMkt (item, alvoPai, editavel) {
         <div class="campo"><label>Quem liberou</label>
           <select id="mke-baixa-liberou">${listaPessoas.map(p => `<option value="${p.id}" ${p.id === PERFIL.pessoaId ? 'selected' : ''}>${esc(p.nome)}</option>`).join('')}</select></div>
         <div class="campo" style="grid-column:span 2;"><label>Quem pegou</label>
-          <select id="mke-baixa-quem"><option value="">selecione a pessoa...</option>
-            ${listaPessoas.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')}
-            <option value="__outro">— pessoa não cadastrada (digitar nome) —</option></select>
-          <input id="mke-baixa-quem-livre" placeholder="nome de quem pegou" class="oculto" style="margin-top:6px;"></div>
+          <input id="mke-baixa-quem" placeholder="nome de quem está retirando"></div>
         <div class="campo" style="grid-column:span 2;"><label>Motivo</label><input id="mke-baixa-motivo" placeholder="ex: feira X, brinde pra cliente Y..."></div>
       </div>
       <div class="form-grade" style="margin-top:12px;">
@@ -21697,33 +21720,29 @@ async function abrirItemEstoqueMkt (item, alvoPai, editavel) {
   if (btnEditar) btnEditar.onclick = () => { fechar(); formItemEstoqueMkt(item, () => mktEstoque(alvoPai, editavel)) }
 
   const assinLiberou = montarAssinatura(fundo.querySelector('#mke-assin-liberou'))
-  fundo.querySelector('#mke-baixa-quem').onchange = () => {
-    fundo.querySelector('#mke-baixa-quem-livre').classList.toggle('oculto', fundo.querySelector('#mke-baixa-quem').value !== '__outro')
-  }
   const assinPegou = montarAssinatura(fundo.querySelector('#mke-assin-pegou'))
 
   fundo.querySelector('#mke-confirmar-baixa').onclick = async () => {
     const el = fundo.querySelector('#mke-baixa-recado')
     const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
     const qtd = Number(fundo.querySelector('#mke-baixa-qtd').value)
-    const pessoaPegouSel = fundo.querySelector('#mke-baixa-quem').value
-    const nomeLivrePegou = fundo.querySelector('#mke-baixa-quem-livre').value.trim()
+    const nomePegou = fundo.querySelector('#mke-baixa-quem').value.trim()
     const pessoaLiberouId = fundo.querySelector('#mke-baixa-liberou').value
     if (!qtd || qtd <= 0) { aviso('Informe uma quantidade válida.'); return }
-    if (!pessoaPegouSel) { aviso('Escolha quem está retirando.'); return }
-    if (pessoaPegouSel === '__outro' && !nomeLivrePegou) { aviso('Escreva o nome de quem está retirando.'); return }
+    if (!nomePegou) { aviso('Escreva o nome de quem está retirando.'); return }
     if (item.quantidade != null && qtd > item.quantidade) { aviso(`Só tem ${fmtNum(item.quantidade, 0)} em estoque.`); return }
     if (!assinPegou.temAssinatura()) { aviso('Falta a assinatura de quem pegou.'); return }
     if (!assinLiberou.temAssinatura()) { aviso('Falta a assinatura de quem liberou.'); return }
 
     const btn = fundo.querySelector('#mke-confirmar-baixa'); btn.disabled = true; btn.textContent = 'Registrando...'
     const motivo = fundo.querySelector('#mke-baixa-motivo').value.trim() || null
-    const pessoaPegouId = pessoaPegouSel === '__outro' ? null : pessoaPegouSel
-    const nomePegou = pessoaPegouSel === '__outro' ? nomeLivrePegou + ' (não cadastrado)' : listaPessoas.find(p => p.id === pessoaPegouSel)?.nome ?? null
+    // se o nome digitado bater certinho com alguém cadastrado, já liga
+    // o registro à pessoa de verdade — sem exigir isso pra poder salvar
+    const pessoaBatida = listaPessoas.find(p => p.nome.trim().toLowerCase() === nomePegou.toLowerCase())
     const nomeLiberou = listaPessoas.find(p => p.id === pessoaLiberouId)?.nome ?? null
     const { data: mov, error: e1 } = await db.from('marketing_estoque_movimento').insert({
       item_id: item.id, tipo: 'SAIDA', quantidade: qtd,
-      retirado_por_id: pessoaPegouId, retirado_por_nome: nomePegou,
+      retirado_por_id: pessoaBatida?.id ?? null, retirado_por_nome: nomePegou,
       liberado_por_id: pessoaLiberouId, liberado_por_nome: nomeLiberou,
       assinatura_retirou: assinPegou.pegarImagem(), assinatura_liberou: assinLiberou.pegarImagem(),
       motivo, registrado_por: PERFIL.pessoaId
