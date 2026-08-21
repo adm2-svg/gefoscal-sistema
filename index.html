@@ -752,6 +752,25 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
   .modal-fundo { position:static; background:none; padding:0; }
   .modal { border:none; max-width:100%; padding:0; }
 }
+
+/* ---- Visão Geral personalizada (Painel Executivo, calendário, planner,
+   secretária) — ver PESSOA_PAINEL_DIRETOR no JS ---- */
+.grade-mini-cal { display:grid; grid-template-columns:repeat(7,1fr); gap:4px; margin:10px 0 16px; }
+.grade-mini-cal .dow { font-size:10px; text-transform:uppercase; color:var(--dim2); text-align:center; padding-bottom:2px; }
+.grade-mini-cal .dia-cal { aspect-ratio:1; display:flex; align-items:center; justify-content:center;
+  font-size:12.5px; border-radius:6px; color:var(--dim); position:relative; }
+.grade-mini-cal .dia-cal.hoje { background:var(--rust); color:#fff; font-weight:700; }
+.grade-mini-cal .dia-cal.evento::after { content:''; position:absolute; bottom:3px; width:4px; height:4px;
+  border-radius:50%; background:var(--gold,#c8a11a); }
+.guias-planner { display:flex; gap:2px; flex-wrap:wrap; border-bottom:1px solid var(--line); margin-bottom:10px; }
+.guias-planner button { background:none; border:none; padding:7px 11px; font-size:12.3px; color:var(--dim);
+  cursor:pointer; border-bottom:2px solid transparent; font-family:inherit; }
+.guias-planner button.ativa { color:var(--txt); border-color:var(--rust); font-weight:600; }
+.sec-chat { background:var(--surface2); border:1px solid var(--line2); border-radius:9px; padding:12px;
+  margin-bottom:10px; display:flex; flex-direction:column; gap:8px; max-height:280px; overflow-y:auto; }
+.sec-msg { max-width:80%; padding:8px 12px; border-radius:10px; font-size:12.8px; line-height:1.5; }
+.sec-msg.sec-user { align-self:flex-end; background:var(--rust); color:#fff; border-bottom-right-radius:2px; }
+.sec-msg.sec-ia { align-self:flex-start; background:var(--panel); border:1px solid var(--line2); border-bottom-left-radius:2px; }
 </style>
 </head>
 <body>
@@ -1176,6 +1195,11 @@ window.sair = async () => { await db.auth.signOut(); location.reload() }
 // ---------------------------------------------------------------
 const CHAVE_ADMIN = 'ti'          // módulo "Administração do sistema"
 const PAPEIS_TOTAIS = ['ADMIN', 'DIRETORIA']   // enxergam tudo, por tem_modulo()
+
+// pessoa.id do Fabiano Comin — Visão Geral personalizada (painel executivo,
+// calendário+planner, secretária, resumo de solicitações/projetos) só pra
+// ele; todo mundo continua vendo a Visão Geral padrão de sempre.
+const PESSOA_PAINEL_DIRETOR = 'b22d848d-8b11-4cb7-b6c8-4dc8f2ca8c62'
 
 let PERFIL = {
   userId: '', email: '', nome: '',
@@ -1659,6 +1683,430 @@ async function painelAtencao (area) {
   })
 }
 
+// =================================================================
+// Visão Geral personalizada do Fabiano (PESSOA_PAINEL_DIRETOR)
+// Painel Executivo · Calendário+Planner · Minha Secretária · Resumos
+// =================================================================
+
+// ---------------------------------------------------------------
+// Painel Executivo — os módulos que ele acompanha no dia a dia, num
+// grid de cards clicáveis, mais o botão do resumo matinal (tabela
+// resumo_matinal, alimentada por fora via API). Cada consulta é
+// isolada (tentar()) pra um módulo com erro não derrubar o resto.
+// ---------------------------------------------------------------
+async function painelExecutivoDiretor (area) {
+  const hoje = hojeISO()
+  const em30 = new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10)
+  const tentar = async fn => { try { return await fn() } catch { return null } }
+
+  const [financeiro, cobranca, compras, crm, crmTecnico, marketing, juridico, dp, estoque, combustivel, manutencao, resumoHoje] =
+    await Promise.all([
+      tentar(async () => (await db.from('painel_financeiro').select('*').maybeSingle()).data),
+      tentar(async () => {
+        const { data } = await db.from('pedido').select('id,vencimento,situacao_pagamento')
+          .neq('situacao_pagamento', 'QUITADO').not('vencimento', 'is', null).lte('vencimento', hoje)
+        return { vencidos: (data || []).length }
+      }),
+      tentar(async () => {
+        const { data } = await db.from('solicitacao_compra').select('id').not('status', 'in', `(${ENCERRADOS.join(',')})`)
+        return { pendentes: (data || []).length }
+      }),
+      tentar(async () => {
+        const { data } = await db.from('crm_negociacao').select('id').eq('tipo_funil', 'AQUISICAO').eq('status', 'ATIVA')
+        return { abertas: (data || []).length }
+      }),
+      tentar(async () => {
+        const [{ data: demandas }, { data: ocorrencias }] = await Promise.all([
+          db.from('tecnico_demanda').select('id').in('status', ['rascunho', 'enviada', 'negociacao']),
+          db.from('tecnico_ocorrencia').select('id').in('status', ['aberta', 'analise'])
+        ])
+        return { demandas: (demandas || []).length, ocorrencias: (ocorrencias || []).length }
+      }),
+      tentar(async () => {
+        const [{ data: demandas }, { data: posts }] = await Promise.all([
+          db.from('marketing_demanda').select('id').eq('concluida', false),
+          db.from('marketing_post_agenda').select('id').eq('status', 'PENDENTE')
+        ])
+        return { demandas: (demandas || []).length, posts: (posts || []).length }
+      }),
+      tentar(async () => {
+        const [{ data: contratos }, { data: notificacoes }] = await Promise.all([
+          db.from('juridico_contrato').select('data_fim').neq('status', 'ENCERRADO').not('data_fim', 'is', null),
+          db.from('juridico_notificacao').select('id').eq('status', 'ABERTA')
+        ])
+        const vencendo = (contratos || []).filter(c => diasParaVencer(c.data_fim) !== null && diasParaVencer(c.data_fim) <= 30).length
+        return { vencendo, notificacoes: (notificacoes || []).length }
+      }),
+      tentar(async () => {
+        const { data } = await db.from('dp_documento').select('id').not('data_validade', 'is', null).lte('data_validade', em30)
+        return { vencendo: (data || []).length }
+      }),
+      tentar(async () => {
+        const [{ data: saldos }, { data: produtos }, { count: carregHoje }] = await Promise.all([
+          db.from('saldo_estoque').select('produto_id,saldo'),
+          db.from('produto').select('id,estoque_minimo').not('estoque_minimo', 'is', null),
+          db.from('carregamento').select('id', { count: 'exact', head: true }).eq('data_carregamento', hoje)
+        ])
+        const minimos = {}
+        ;(produtos || []).forEach(p => { minimos[p.id] = Number(p.estoque_minimo) })
+        const abaixo = (saldos || []).filter(s => minimos[s.produto_id] != null && Number(s.saldo) < minimos[s.produto_id]).length
+        return { abaixo, carregHoje: carregHoje || 0 }
+      }),
+      tentar(async () => {
+        const [{ data: entradas }, { data: saidas }, { count: hojeCount }] = await Promise.all([
+          db.from('entrada_combustivel').select('litros'),
+          db.from('abastecimento').select('litros'),
+          db.from('abastecimento').select('id', { count: 'exact', head: true }).gte('data_abastecimento', hoje)
+        ])
+        const saldo = (entradas || []).reduce((s, e) => s + Number(e.litros || 0), 0) -
+                      (saidas || []).reduce((s, a) => s + Number(a.litros || 0), 0)
+        return { saldo, hoje: hojeCount || 0 }
+      }),
+      tentar(async () => {
+        const { data } = await db.from('ordem_servico').select('status,data_limite').not('status', 'in', '(CONCLUIDA,CANCELADA)')
+        const atrasadas = (data || []).filter(o => o.data_limite && o.data_limite < hoje).length
+        return { abertas: (data || []).length, atrasadas }
+      }),
+      tentar(async () => (await db.from('resumo_matinal').select('html_conteudo,criado_em')
+        .eq('pessoa_id', PERFIL.pessoaId).eq('data', hoje).maybeSingle()).data)
+    ])
+
+  const cartao = (chave, titulo, linhas) => `
+    <div class="panel mke-card" data-ir-painel="${chave}" style="padding:14px 16px;cursor:pointer;">
+      <div style="display:flex;align-items:center;gap:9px;font-size:12.5px;font-weight:600;margin-bottom:10px;">
+        <span style="width:17px;height:17px;color:var(--dim);flex:none;display:flex;">${ICONES_MODULO[chave] || ICONES_MODULO._padrao}</span>
+        ${esc(titulo)}
+      </div>
+      ${linhas.map(([rot, val, alerta]) => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;margin-top:4px;">
+        <span class="texto-dim2">${esc(rot)}</span><span style="${alerta ? 'color:var(--warn-text);font-weight:700;' : ''}">${val}</span></div>`).join('')}
+    </div>`
+
+  const bloco = document.createElement('div')
+  bloco.className = 'panel'
+  bloco.style.cssText = 'padding:20px;margin-bottom:16px;'
+  bloco.innerHTML = `
+    <div class="cabeca-secao" style="align-items:flex-start;">
+      <div style="display:flex;gap:10px;align-items:center;">
+        <span style="width:20px;height:20px;color:var(--dim);display:flex;">${ICONES_MODULO.dashboard_diretor}</span>
+        <h3 style="font-family:var(--serif);font-size:18px;margin:0;">Painel Executivo</h3>
+      </div>
+      <button class="btn mini" id="pe-resumo-matinal">
+        <span style="width:14px;height:14px;display:inline-flex;margin-right:6px;vertical-align:-2px;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v8"/><path d="m4.93 10.93 1.41 1.41"/><path d="M2 18h2"/><path d="M20 18h2"/><path d="m19.07 10.93-1.41 1.41"/><path d="M22 22H2"/><path d="m16 6-4 4-4-4"/><path d="M16 18a4 4 0 0 0-8 0"/></svg>
+        </span>Resumo matinal
+      </button>
+    </div>
+    <p class="texto-dim2" style="font-size:11.5px;margin:10px 0 14px;">Clique num card pra ir direto naquela área.</p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px;">
+      ${financeiro ? cartao('financeiro', 'Financeiro', [
+          ['A pagar (7 dias)', 'R$ ' + fmtNum(financeiro.pagar_semana)],
+          ['A receber (7 dias)', 'R$ ' + fmtNum(financeiro.receber_semana)],
+          ['Vencido a pagar', financeiro.pagar_vencidos, financeiro.pagar_vencidos > 0]]) : ''}
+      ${cobranca ? cartao('cobranca', 'Crédito e Cobrança', [['Pedidos vencidos', cobranca.vencidos, cobranca.vencidos > 0]]) : ''}
+      ${compras ? cartao('compras', 'Compras', [['Solicitações pendentes', compras.pendentes, compras.pendentes > 0]]) : ''}
+      ${crm ? cartao('crm', 'CRM Comercial', [['Negociações abertas', crm.abertas]]) : ''}
+      ${crmTecnico ? cartao('crm_tecnico', 'CRM Técnico', [
+          ['Demandas em aberto', crmTecnico.demandas],
+          ['Ocorrências abertas', crmTecnico.ocorrencias, crmTecnico.ocorrencias > 0]]) : ''}
+      ${marketing ? cartao('marketing', 'Marketing', [['Demandas em aberto', marketing.demandas], ['Posts pendentes', marketing.posts]]) : ''}
+      ${juridico ? cartao('juridico', 'Jurídico', [
+          ['Contratos vencendo (30d)', juridico.vencendo, juridico.vencendo > 0],
+          ['Notificações abertas', juridico.notificacoes, juridico.notificacoes > 0]]) : ''}
+      ${dp ? cartao('dp', 'DP e Segurança', [['Documentos vencendo (30d)', dp.vencendo, dp.vencendo > 0]]) : ''}
+      ${estoque ? cartao('estoque', 'Estoque e Produção', [
+          ['Carregamentos hoje', estoque.carregHoje],
+          ['Itens abaixo do mínimo', estoque.abaixo, estoque.abaixo > 0]]) : ''}
+      ${combustivel ? cartao('combustivel', 'Combustível', [
+          ['Saldo em estoque', fmtNum(combustivel.saldo) + ' L', combustivel.saldo < 0],
+          ['Abastecimentos hoje', combustivel.hoje]]) : ''}
+      ${manutencao ? cartao('manutencao', 'Manutenção', [
+          ['OS abertas', manutencao.abertas], ['Atrasadas', manutencao.atrasadas, manutencao.atrasadas > 0]]) : ''}
+    </div>`
+  area.appendChild(bloco)
+
+  bloco.querySelectorAll('[data-ir-painel]').forEach(c => { c.onclick = () => irPara(c.dataset.irPainel) })
+  bloco.querySelector('#pe-resumo-matinal').onclick = () => modalResumoMatinal(resumoHoje)
+}
+
+function modalResumoMatinal (resumo) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal" style="max-width:760px;">
+      <h3>Resumo matinal</h3>
+      ${resumo?.html_conteudo
+        ? `<p class="texto-dim2" style="font-size:11.5px;margin:-10px 0 12px;">Recebido ${fmtQuando(resumo.criado_em) || ''}</p>
+           <iframe sandbox style="width:100%;height:60vh;border:1px solid var(--line);border-radius:8px;background:#fff;"></iframe>`
+        : `<p class="texto-dim">O resumo de hoje ainda não chegou.</p>`}
+      <div class="acoes" style="margin-top:16px;justify-content:flex-end;">
+        <button class="btn-secundario" id="rm-fechar">Fechar</button>
+      </div>
+    </div>`
+  document.body.appendChild(fundo)
+  if (resumo?.html_conteudo) fundo.querySelector('iframe').srcdoc = resumo.html_conteudo
+  fundo.querySelector('#rm-fechar').onclick = () => fundo.remove()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+}
+
+// ---------------------------------------------------------------
+// Calendário + Planner lado a lado. Calendário: enquanto não tiver o
+// link de incorporação do Google Calendar (URL_CALENDARIO_DIRETOR),
+// mostra um mini-calendário do mês marcando dias com tarefa/compromisso,
+// mais os próximos compromissos do CRM. Planner: guias = lista_pessoal
+// (cria as 4 padrão na primeira vez), tarefas de cada guia = tarefa
+// filtrada por lista_id — tudo editável (check, apagar, adicionar).
+// ---------------------------------------------------------------
+const URL_CALENDARIO_DIRETOR = '' // cole aqui o link de incorporação do Google Calendar quando tiver
+
+async function blocoCalendarioPlanner (area) {
+  const bloco = document.createElement('div')
+  bloco.className = 'grade-trabalho'
+  bloco.innerHTML = `
+    <div class="panel" style="padding:18px;" id="bloco-calendario-diretor"></div>
+    <div class="panel" style="padding:18px;" id="bloco-planner-diretor"></div>`
+  area.appendChild(bloco)
+  await montarCalendarioDiretor($('#bloco-calendario-diretor'))
+  await montarPlannerDiretor($('#bloco-planner-diretor'))
+}
+
+async function montarCalendarioDiretor (container) {
+  const agora = new Date()
+  const ano = agora.getFullYear(), mes = agora.getMonth()
+  const primeiroDia = new Date(ano, mes, 1)
+  const ultimoDia = new Date(ano, mes + 1, 0)
+  const inicioISO = primeiroDia.toISOString().slice(0, 10)
+  const fimISO = ultimoDia.toISOString().slice(0, 10)
+
+  const [{ data: tarefas }, { data: compromissosMes }, { data: proximos }] = await Promise.all([
+    db.from('tarefa').select('prazo').eq('pessoa_id', PERFIL.pessoaId)
+      .gte('prazo', inicioISO).lte('prazo', fimISO).not('prazo', 'is', null),
+    db.from('crm_compromisso').select('data_hora').eq('criado_por', PERFIL.pessoaId)
+      .gte('data_hora', inicioISO).lte('data_hora', fimISO + 'T23:59:59'),
+    db.from('crm_compromisso').select('id,titulo,data_hora,cliente:cliente_id(razao_social,nome_fantasia)')
+      .eq('criado_por', PERFIL.pessoaId).eq('concluido', false)
+      .gte('data_hora', agora.toISOString()).order('data_hora').limit(5)
+  ])
+  const diasComEvento = new Set([
+    ...(tarefas || []).map(t => t.prazo),
+    ...(compromissosMes || []).map(c => c.data_hora?.slice(0, 10))
+  ])
+
+  const hojeISOStr = hojeISO()
+  const nomeMes = agora.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
+  let celulas = ''
+  for (let i = 0; i < primeiroDia.getDay(); i++) celulas += `<div></div>`
+  for (let d = 1; d <= ultimoDia.getDate(); d++) {
+    const iso = `${ano}-${String(mes + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+    const classes = ['dia-cal']
+    if (iso === hojeISOStr) classes.push('hoje')
+    if (diasComEvento.has(iso)) classes.push('evento')
+    celulas += `<div class="${classes.join(' ')}">${d}</div>`
+  }
+
+  container.innerHTML = `
+    <div class="cabeca-secao">
+      <h3 style="font-family:var(--serif);font-size:17px;">Calendário</h3>
+      <span class="texto-dim2" style="font-size:12px;text-transform:capitalize;">${esc(nomeMes)}</span>
+    </div>
+    ${URL_CALENDARIO_DIRETOR
+      ? `<iframe src="${esc(URL_CALENDARIO_DIRETOR)}" style="width:100%;height:280px;border:1px solid var(--line);border-radius:8px;" frameborder="0"></iframe>`
+      : `<div class="grade-mini-cal">
+          <div class="dow">D</div><div class="dow">S</div><div class="dow">T</div><div class="dow">Q</div><div class="dow">Q</div><div class="dow">S</div><div class="dow">S</div>
+          ${celulas}
+        </div>
+        <p class="texto-dim2" style="font-size:11px;margin:0 0 4px;">
+          Ainda sem o Google Calendar ligado — os pontinhos são tarefas e compromissos já no sistema.
+          Passa o link de incorporação (Configurações do Google Calendar → Integrar calendário) que eu troco por um calendário de verdade.</p>`}
+    <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;margin:14px 0 4px;">Próximos compromissos</div>
+    ${(proximos || []).length ? proximos.map(c => `
+      <div class="passo">
+        <span class="quando">${fmtQuando(c.data_hora) || '—'}</span>
+        <span><b>${esc(c.titulo)}</b>${c.cliente ? `<br><span class="texto-dim2" style="font-size:11.5px;">${esc(c.cliente.nome_fantasia || c.cliente.razao_social)}</span>` : ''}</span>
+      </div>`).join('')
+      : `<p class="texto-dim2" style="font-size:13px;padding:6px 0;">Nenhum compromisso futuro registrado no CRM ainda.</p>`}`
+}
+
+async function montarPlannerDiretor (container) {
+  let { data: listas } = await db.from('lista_pessoal').select('*').eq('pessoa_id', PERFIL.pessoaId).order('ordem')
+  if (!listas?.length) {
+    const padrao = ['Hoje', 'Esta semana', 'Comercial', 'Backlog'].map((nome, i) => ({ pessoa_id: PERFIL.pessoaId, nome, ordem: i }))
+    const { data: criadas } = await db.from('lista_pessoal').insert(padrao).select().order('ordem')
+    listas = criadas || []
+  }
+  let listaAtiva = listas[0]?.id || null
+
+  container.innerHTML = `
+    <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:17px;">Planner</h3></div>
+    <div class="guias-planner">
+      ${listas.map(l => `<button data-lista="${l.id}" class="${l.id === listaAtiva ? 'ativa' : ''}">${esc(l.nome)}</button>`).join('')}
+    </div>
+    <div id="pl-lista"></div>
+    <div class="linha-add" style="margin-top:10px;">
+      <input id="pl-nova" placeholder="Adicionar tarefa nesta guia...">
+      <button class="btn mini" id="pl-add">Adicionar</button>
+    </div>`
+
+  const carregarLista = async () => {
+    const { data: tarefas } = await db.from('tarefa').select('*').eq('pessoa_id', PERFIL.pessoaId)
+      .eq('lista_id', listaAtiva).order('concluida_em', { nullsFirst: true }).order('prazo', { nullsFirst: false })
+    $('#pl-lista').innerHTML = (tarefas || []).length ? tarefas.map(t => `
+      <div class="tarefa ${t.concluida_em ? 'feita' : ''}">
+        <input type="checkbox" data-check-pl="${t.id}" ${t.concluida_em ? 'checked' : ''}>
+        <div class="txt">${esc(t.titulo)}${t.prazo ? `<small> · ${fmtData(t.prazo)}</small>` : ''}</div>
+        <button class="apagar" data-apagar-pl="${t.id}" title="apagar">×</button>
+      </div>`).join('') : `<p class="texto-dim2" style="font-size:13px;padding:10px 0;">Nada nesta guia ainda.</p>`
+
+    $('#pl-lista').querySelectorAll('[data-check-pl]').forEach(c => {
+      c.onchange = async () => {
+        await db.from('tarefa').update({ concluida_em: c.checked ? new Date().toISOString() : null }).eq('id', c.dataset.checkPl)
+        carregarLista()
+      }
+    })
+    $('#pl-lista').querySelectorAll('[data-apagar-pl]').forEach(b => {
+      b.onclick = async () => { await db.from('tarefa').delete().eq('id', b.dataset.apagarPl); carregarLista() }
+    })
+  }
+
+  container.querySelectorAll('[data-lista]').forEach(b => {
+    b.onclick = () => {
+      listaAtiva = b.dataset.lista
+      container.querySelectorAll('[data-lista]').forEach(x => x.classList.toggle('ativa', x === b))
+      carregarLista()
+    }
+  })
+
+  const adicionar = async () => {
+    const titulo = $('#pl-nova').value.trim()
+    if (!titulo) return
+    await db.from('tarefa').insert({ pessoa_id: PERFIL.pessoaId, titulo, lista_id: listaAtiva })
+    $('#pl-nova').value = ''
+    carregarLista()
+  }
+  $('#pl-add').onclick = adicionar
+  $('#pl-nova').onkeydown = e => { if (e.key === 'Enter') adicionar() }
+
+  carregarLista()
+}
+
+// ---------------------------------------------------------------
+// Minha Secretária — painel embutido (além da bolha flutuante que já
+// existe pra todo mundo), usando a mesma function assistente-sistema.
+// Hoje ela só orienta/explica; gravar dados no sistema é capacidade
+// futura, a combinar antes de liberar.
+// ---------------------------------------------------------------
+async function blocoSecretaria (area) {
+  const bloco = document.createElement('div')
+  bloco.className = 'panel'
+  bloco.style.cssText = 'padding:18px;margin-bottom:16px;'
+  bloco.innerHTML = `
+    <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:17px;">Minha Secretária</h3></div>
+    <p class="texto-dim2" style="font-size:12px;margin:-6px 0 14px;">
+      Por enquanto ela orienta e explica o sistema — gravar dados direto é o próximo passo.</p>
+    <div id="sec-chat" class="sec-chat"></div>
+    <div class="linha-add">
+      <input id="sec-pergunta" placeholder="Pergunte algo pra secretária...">
+      <button class="btn mini" id="sec-enviar">Enviar</button>
+    </div>`
+  area.appendChild(bloco)
+
+  let historico = []
+  const chat = $('#sec-chat')
+  const renderMsg = (autor, texto) => {
+    const div = document.createElement('div')
+    div.className = 'sec-msg ' + (autor === 'user' ? 'sec-user' : 'sec-ia')
+    div.textContent = texto
+    chat.appendChild(div)
+    chat.scrollTop = chat.scrollHeight
+  }
+  renderMsg('assistant', 'Oi! Posso te ajudar a achar algo no sistema ou explicar como fazer uma tarefa.')
+
+  const enviar = async () => {
+    const texto = $('#sec-pergunta').value.trim()
+    if (!texto) return
+    renderMsg('user', texto)
+    $('#sec-pergunta').value = ''
+    historico.push({ role: 'user', content: texto })
+    const { data, error } = await db.functions.invoke('assistente-sistema', { body: { mensagens: historico } })
+    if (error || data?.erro) {
+      let detalhe = data?.erro || error?.message || 'Não consegui responder agora.'
+      if (error?.context?.json) { try { const c = await error.context.json(); detalhe = c?.erro || detalhe } catch {} }
+      renderMsg('assistant', detalhe)
+      historico.pop()
+      return
+    }
+    historico.push({ role: 'assistant', content: data.resposta })
+    renderMsg('assistant', data.resposta)
+  }
+  $('#sec-enviar').onclick = enviar
+  $('#sec-pergunta').onkeydown = e => { if (e.key === 'Enter') enviar() }
+}
+
+// ---------------------------------------------------------------
+// Resumo de Solicitações (minhas compras + solicitações internas) e
+// resumo de Projetos (progresso/etapa/SLA), lado a lado.
+// ---------------------------------------------------------------
+async function blocoResumoSolicitacoesProjetos (area) {
+  const bloco = document.createElement('div')
+  bloco.className = 'grade-trabalho'
+  bloco.innerHTML = `
+    <div class="panel" style="padding:18px;" id="bloco-resumo-solic"></div>
+    <div class="panel" style="padding:18px;" id="bloco-resumo-proj"></div>`
+  area.appendChild(bloco)
+
+  let internasQuery = db.from('solicitacao_interna').select('id,codigo,titulo,status,data_solicitacao')
+    .in('status', ['ABERTA', 'EM_ANDAMENTO']).order('data_solicitacao', { ascending: false }).limit(6)
+  internasQuery = PERFIL.setorId
+    ? internasQuery.or(`solicitante_id.eq.${PERFIL.pessoaId},setor_destino_id.eq.${PERFIL.setorId}`)
+    : internasQuery.eq('solicitante_id', PERFIL.pessoaId)
+
+  const [{ data: compras }, { data: internas }] = await Promise.all([
+    db.from('solicitacao_compra').select('id,numero,produto_servico,status,data_solicitacao,valor_estimado')
+      .eq('solicitante_id', PERFIL.pessoaId).not('status', 'in', `(${ENCERRADOS.join(',')})`)
+      .order('data_solicitacao', { ascending: false }).limit(6),
+    internasQuery
+  ])
+
+  const solic = $('#bloco-resumo-solic')
+  const listaSolic = [...(compras || []), ...(internas || [])]
+  solic.innerHTML = `
+    <div class="cabeca-secao">
+      <h3 style="font-family:var(--serif);font-size:17px;">Solicitações</h3>
+      <button class="btn-secundario mini" data-ir="solicitacoes">ver todas</button>
+    </div>
+    ${(compras || []).map(s => `<div class="passo">
+      <span class="quando">${fmtQuando(s.data_solicitacao) || '—'}</span>
+      <span><b>${esc(s.produto_servico ?? '')}</b> <span class="chip">${esc((s.status || '').replaceAll('_', ' ').toLowerCase())}</span>
+        <br><span class="texto-dim2" style="font-size:11.5px;">${esc(s.numero ?? '')}${s.valor_estimado ? ' · estimado R$ ' + fmtNum(s.valor_estimado) : ''}</span></span>
+    </div>`).join('')}
+    ${(internas || []).map(s => `<div class="passo">
+      <span class="quando">${fmtQuando(s.data_solicitacao) || '—'}</span>
+      <span><b>${esc(s.codigo)}</b> — ${esc(s.titulo)} <span class="chip">${esc(ROTULO_STATUS_SOLICITACAO[s.status] || s.status)}</span></span>
+    </div>`).join('')}
+    ${!listaSolic.length ? `<p class="texto-dim2" style="font-size:13px;padding:6px 0;">Nada em andamento.</p>` : ''}`
+  solic.querySelector('[data-ir]').onclick = () => irPara('solicitacoes')
+
+  const { data: projetos } = await db.from('projeto').select('id,nome,progresso,etapa_kanban,sla,pausado')
+    .eq('arquivado', false).order('sla', { nullsFirst: false }).limit(6)
+  const proj = $('#bloco-resumo-proj')
+  proj.innerHTML = `
+    <div class="cabeca-secao">
+      <h3 style="font-family:var(--serif);font-size:17px;">Projetos</h3>
+      <button class="btn-secundario mini" data-ir="projetos">ver todos</button>
+    </div>
+    ${(projetos || []).length ? projetos.map((p, i) => `
+      <div style="padding:10px 0;${i ? 'border-top:1px solid var(--line);' : ''}">
+        <div style="display:flex;justify-content:space-between;gap:8px;">
+          <b style="font-size:13px;">${esc(p.nome)}</b>
+          <span class="chip" style="flex:none;">${esc(p.pausado ? 'pausado' : (p.etapa_kanban || '—'))}</span>
+        </div>
+        <div class="texto-dim2" style="font-size:11px;margin-top:2px;">${p.sla ? 'SLA ' + fmtData(p.sla) : 'sem SLA'}</div>
+        <div style="height:6px;background:var(--line);border-radius:4px;overflow:hidden;margin-top:7px;">
+          <div style="height:100%;width:${Math.max(0, Math.min(100, p.progresso || 0))}%;background:var(--rust);"></div>
+        </div>
+      </div>`).join('') : `<p class="texto-dim2" style="font-size:13px;padding:6px 0;">Nenhum projeto ativo.</p>`}`
+  proj.querySelector('[data-ir]').onclick = () => irPara('projetos')
+}
+
 async function paginaVisaoGeral () {
   $('#subtitulo-pagina').textContent = 'O painel montado para você'
   const area = areaLivre()
@@ -1711,6 +2159,17 @@ async function paginaVisaoGeral () {
         .in('id', avisos.map(a => a.id))
       irPara('visao_geral')
     }
+  }
+
+  // Visão Geral personalizada — só pro Fabiano; o resto do fluxo padrão
+  // (central de atenção, painéis por módulo, painel montado por admin
+  // em visao_geral_pessoa) não roda pra ele, pra não duplicar conteúdo
+  if (PERFIL.pessoaId === PESSOA_PAINEL_DIRETOR) {
+    await painelExecutivoDiretor(area)
+    await blocoCalendarioPlanner(area)
+    await blocoSecretaria(area)
+    await blocoResumoSolicitacoesProjetos(area)
+    return
   }
 
   // painel do financeiro, para quem trabalha nele
