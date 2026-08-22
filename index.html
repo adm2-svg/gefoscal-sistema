@@ -755,6 +755,8 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
 
 /* ---- Visão Geral personalizada (Painel Executivo, calendário, planner,
    secretária) — ver PESSOA_PAINEL_DIRETOR no JS ---- */
+.grade-cal-planner { display:grid; grid-template-columns:.72fr 1.28fr; gap:16px; margin-bottom:18px; }
+@media (max-width: 980px) { .grade-cal-planner { grid-template-columns:1fr; } }
 .grade-mini-cal { display:grid; grid-template-columns:repeat(7,1fr); gap:4px; margin:10px 0 16px; }
 .grade-mini-cal .dow { font-size:10px; text-transform:uppercase; color:var(--dim2); text-align:center; padding-bottom:2px; }
 .grade-mini-cal .dia-cal { aspect-ratio:1; display:flex; align-items:center; justify-content:center;
@@ -766,6 +768,9 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
 .guias-planner button { background:none; border:none; padding:7px 11px; font-size:12.3px; color:var(--dim);
   cursor:pointer; border-bottom:2px solid transparent; font-family:inherit; }
 .guias-planner button.ativa { color:var(--txt); border-color:var(--rust); font-weight:600; }
+.guias-planner button.guia-nova { color:var(--rust); font-weight:700; font-size:14px; padding:7px 10px; }
+.linha-link-cal { display:flex; gap:6px; margin:8px 0 12px; }
+.linha-link-cal input { flex:1; font-size:12px; }
 .sec-chat { background:var(--surface2); border:1px solid var(--line2); border-radius:9px; padding:12px;
   margin-bottom:10px; display:flex; flex-direction:column; gap:8px; max-height:280px; overflow-y:auto; }
 .sec-msg { max-width:80%; padding:8px 12px; border-radius:10px; font-size:12.8px; line-height:1.5; }
@@ -1699,7 +1704,7 @@ async function painelExecutivoDiretor (area) {
   const em30 = new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10)
   const tentar = async fn => { try { return await fn() } catch { return null } }
 
-  const [financeiro, cobranca, compras, crm, crmTecnico, marketing, juridico, dp, estoque, combustivel, manutencao, resumoHoje] =
+  const [financeiro, cobranca, compras, crm, crmTecnico, marketing, juridico, dp, estoque, combustivel, resumoHoje] =
     await Promise.all([
       tentar(async () => (await db.from('painel_financeiro').select('*').maybeSingle()).data),
       tentar(async () => {
@@ -1762,11 +1767,6 @@ async function painelExecutivoDiretor (area) {
                       (saidas || []).reduce((s, a) => s + Number(a.litros || 0), 0)
         return { saldo, hoje: hojeCount || 0 }
       }),
-      tentar(async () => {
-        const { data } = await db.from('ordem_servico').select('status,data_limite').not('status', 'in', '(CONCLUIDA,CANCELADA)')
-        const atrasadas = (data || []).filter(o => o.data_limite && o.data_limite < hoje).length
-        return { abertas: (data || []).length, atrasadas }
-      }),
       tentar(async () => (await db.from('resumo_matinal').select('html_conteudo,criado_em')
         .eq('pessoa_id', PERFIL.pessoaId).eq('data', hoje).maybeSingle()).data)
     ])
@@ -1819,8 +1819,6 @@ async function painelExecutivoDiretor (area) {
       ${combustivel ? cartao('combustivel', 'Combustível', [
           ['Saldo em estoque', fmtNum(combustivel.saldo) + ' L', combustivel.saldo < 0],
           ['Abastecimentos hoje', combustivel.hoje]]) : ''}
-      ${manutencao ? cartao('manutencao', 'Manutenção', [
-          ['OS abertas', manutencao.abertas], ['Atrasadas', manutencao.atrasadas, manutencao.atrasadas > 0]]) : ''}
     </div>`
   area.appendChild(bloco)
 
@@ -1856,11 +1854,12 @@ function modalResumoMatinal (resumo) {
 // (cria as 4 padrão na primeira vez), tarefas de cada guia = tarefa
 // filtrada por lista_id — tudo editável (check, apagar, adicionar).
 // ---------------------------------------------------------------
-const URL_CALENDARIO_DIRETOR = '' // cole aqui o link de incorporação do Google Calendar quando tiver
+const URL_CALENDARIO_DIRETOR = '' // fallback opcional: cole aqui o link de incorporação do Google Calendar direto no código, se preferir
+const CHAVE_CAL_DIRETOR = 'gefoscal-calendario-diretor-url' // link salvo pelo próprio usuário (por navegador), via botão "conectar workspace"
 
 async function blocoCalendarioPlanner (area) {
   const bloco = document.createElement('div')
-  bloco.className = 'grade-trabalho'
+  bloco.className = 'grade-cal-planner'
   bloco.innerHTML = `
     <div class="panel" style="padding:18px;" id="bloco-calendario-diretor"></div>
     <div class="panel" style="padding:18px;" id="bloco-planner-diretor"></div>`
@@ -1876,6 +1875,7 @@ async function montarCalendarioDiretor (container) {
   const ultimoDia = new Date(ano, mes + 1, 0)
   const inicioISO = primeiroDia.toISOString().slice(0, 10)
   const fimISO = ultimoDia.toISOString().slice(0, 10)
+  const urlSalva = localStorage.getItem(CHAVE_CAL_DIRETOR) || URL_CALENDARIO_DIRETOR
 
   const [{ data: tarefas }, { data: compromissosMes }, { data: proximos }] = await Promise.all([
     db.from('tarefa').select('prazo').eq('pessoa_id', PERFIL.pessoaId)
@@ -1884,7 +1884,7 @@ async function montarCalendarioDiretor (container) {
       .gte('data_hora', inicioISO).lte('data_hora', fimISO + 'T23:59:59'),
     db.from('crm_compromisso').select('id,titulo,data_hora,cliente:cliente_id(razao_social,nome_fantasia)')
       .eq('criado_por', PERFIL.pessoaId).eq('concluido', false)
-      .gte('data_hora', agora.toISOString()).order('data_hora').limit(5)
+      .gte('data_hora', agora.toISOString()).order('data_hora').limit(4)
   ])
   const diasComEvento = new Set([
     ...(tarefas || []).map(t => t.prazo),
@@ -1906,17 +1906,25 @@ async function montarCalendarioDiretor (container) {
   container.innerHTML = `
     <div class="cabeca-secao">
       <h3 style="font-family:var(--serif);font-size:17px;">Calendário</h3>
-      <span class="texto-dim2" style="font-size:12px;text-transform:capitalize;">${esc(nomeMes)}</span>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span class="texto-dim2" style="font-size:12px;text-transform:capitalize;">${esc(nomeMes)}</span>
+        <button class="btn-secundario mini" id="cal-conectar">${urlSalva ? 'trocar link' : 'conectar workspace'}</button>
+      </div>
     </div>
-    ${URL_CALENDARIO_DIRETOR
-      ? `<iframe src="${esc(URL_CALENDARIO_DIRETOR)}" style="width:100%;height:280px;border:1px solid var(--line);border-radius:8px;" frameborder="0"></iframe>`
+    <div id="cal-link-form" style="display:none;" class="linha-link-cal">
+      <input id="cal-link-input" placeholder="Cole o link de incorporação do Google Calendar" value="${esc(urlSalva)}">
+      <button class="btn mini" id="cal-link-salvar">Salvar</button>
+      ${urlSalva ? `<button class="btn-secundario mini" id="cal-link-remover">Remover</button>` : ''}
+    </div>
+    ${urlSalva
+      ? `<iframe src="${esc(urlSalva)}" style="width:100%;height:220px;border:1px solid var(--line);border-radius:8px;" frameborder="0"></iframe>`
       : `<div class="grade-mini-cal">
           <div class="dow">D</div><div class="dow">S</div><div class="dow">T</div><div class="dow">Q</div><div class="dow">Q</div><div class="dow">S</div><div class="dow">S</div>
           ${celulas}
         </div>
         <p class="texto-dim2" style="font-size:11px;margin:0 0 4px;">
           Ainda sem o Google Calendar ligado — os pontinhos são tarefas e compromissos já no sistema.
-          Passa o link de incorporação (Configurações do Google Calendar → Integrar calendário) que eu troco por um calendário de verdade.</p>`}
+          Clique em "conectar workspace" e cole o link de incorporação (Configurações do Google Calendar → Integrar calendário).</p>`}
     <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;margin:14px 0 4px;">Próximos compromissos</div>
     ${(proximos || []).length ? proximos.map(c => `
       <div class="passo">
@@ -1924,6 +1932,23 @@ async function montarCalendarioDiretor (container) {
         <span><b>${esc(c.titulo)}</b>${c.cliente ? `<br><span class="texto-dim2" style="font-size:11.5px;">${esc(c.cliente.nome_fantasia || c.cliente.razao_social)}</span>` : ''}</span>
       </div>`).join('')
       : `<p class="texto-dim2" style="font-size:13px;padding:6px 0;">Nenhum compromisso futuro registrado no CRM ainda.</p>`}`
+
+  $('#cal-conectar').onclick = () => {
+    const form = $('#cal-link-form')
+    form.style.display = form.style.display === 'none' ? 'flex' : 'none'
+    if (form.style.display === 'flex') $('#cal-link-input').focus()
+  }
+  $('#cal-link-salvar').onclick = () => {
+    const v = $('#cal-link-input').value.trim()
+    if (!v) return
+    localStorage.setItem(CHAVE_CAL_DIRETOR, v)
+    montarCalendarioDiretor(container)
+  }
+  const btnRemover = $('#cal-link-remover')
+  if (btnRemover) btnRemover.onclick = () => {
+    localStorage.removeItem(CHAVE_CAL_DIRETOR)
+    montarCalendarioDiretor(container)
+  }
 }
 
 async function montarPlannerDiretor (container) {
@@ -1935,15 +1960,20 @@ async function montarPlannerDiretor (container) {
   }
   let listaAtiva = listas[0]?.id || null
 
+  const marcacaoGuias = () =>
+    listas.map(l => `<button data-lista="${l.id}" class="${l.id === listaAtiva ? 'ativa' : ''}">${esc(l.nome)}</button>`).join('') +
+    `<button class="guia-nova" id="pl-nova-aba" title="Nova aba">+</button>`
+
   container.innerHTML = `
-    <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:17px;">Planner</h3></div>
-    <div class="guias-planner">
-      ${listas.map(l => `<button data-lista="${l.id}" class="${l.id === listaAtiva ? 'ativa' : ''}">${esc(l.nome)}</button>`).join('')}
+    <div class="cabeca-secao">
+      <h3 style="font-family:var(--serif);font-size:17px;">Planner</h3>
+      <button class="btn-secundario mini" id="pl-editar-aba" title="Renomear ou apagar a aba atual">✎ editar aba</button>
     </div>
+    <div class="guias-planner">${marcacaoGuias()}</div>
     <div id="pl-lista"></div>
     <div class="linha-add" style="margin-top:10px;">
       <input id="pl-nova" placeholder="Adicionar tarefa nesta guia...">
-      <button class="btn mini" id="pl-add">Adicionar</button>
+      <button class="btn mini" id="pl-add">+ checkbox</button>
     </div>`
 
   const carregarLista = async () => {
@@ -1967,13 +1997,53 @@ async function montarPlannerDiretor (container) {
     })
   }
 
-  container.querySelectorAll('[data-lista]').forEach(b => {
-    b.onclick = () => {
-      listaAtiva = b.dataset.lista
-      container.querySelectorAll('[data-lista]').forEach(x => x.classList.toggle('ativa', x === b))
-      carregarLista()
+  const ligarGuias = () => {
+    container.querySelectorAll('[data-lista]').forEach(b => {
+      b.onclick = () => {
+        listaAtiva = b.dataset.lista
+        container.querySelectorAll('[data-lista]').forEach(x => x.classList.toggle('ativa', x === b))
+        carregarLista()
+      }
+    })
+    $('#pl-nova-aba').onclick = criarAba
+  }
+
+  const criarAba = async () => {
+    const nome = prompt('Nome da nova aba:')
+    if (!nome || !nome.trim()) return
+    const { data: nova, error } = await db.from('lista_pessoal')
+      .insert({ pessoa_id: PERFIL.pessoaId, nome: nome.trim(), ordem: listas.length }).select().single()
+    if (error || !nova) { alert(error?.message || 'Não deu pra criar a aba.'); return }
+    listas.push(nova)
+    listaAtiva = nova.id
+    container.querySelector('.guias-planner').innerHTML = marcacaoGuias()
+    ligarGuias()
+    carregarLista()
+  }
+
+  const editarAba = async () => {
+    const atual = listas.find(l => l.id === listaAtiva)
+    if (!atual) return
+    const novoNome = prompt('Renomear aba (apague o texto e confirme pra apagar a aba):', atual.nome)
+    if (novoNome === null) return
+    if (!novoNome.trim()) {
+      if (listas.length <= 1) { alert('Precisa sobrar pelo menos uma aba.'); return }
+      if (!confirm(`Apagar a aba "${atual.nome}" e todas as tarefas nela?`)) return
+      await db.from('tarefa').delete().eq('lista_id', atual.id)
+      await db.from('lista_pessoal').delete().eq('id', atual.id)
+      listas = listas.filter(l => l.id !== atual.id)
+      listaAtiva = listas[0]?.id || null
+    } else {
+      await db.from('lista_pessoal').update({ nome: novoNome.trim() }).eq('id', atual.id)
+      atual.nome = novoNome.trim()
     }
-  })
+    container.querySelector('.guias-planner').innerHTML = marcacaoGuias()
+    ligarGuias()
+    carregarLista()
+  }
+  $('#pl-editar-aba').onclick = editarAba
+
+  ligarGuias()
 
   const adicionar = async () => {
     const titulo = $('#pl-nova').value.trim()
@@ -2334,7 +2404,7 @@ async function paginaSolicitacoes () {
   SOLIC_CACHE = { setores: setores || [], pessoas: pessoasComEmail, deptos: deptos || [], vinculos: vinculos || [] }
   SOLIC_CACHE.cargos = (cargos || []).map(c => c.nome)
 
-  const abas = [['painel', 'Painel'], ['nova', 'Nova solicitação'], ['meu-setor', 'Meu setor'], ['todas', 'Todas']]
+  const abas = [['painel', 'Painel'], ['minhas', 'Minhas'], ['nova', 'Nova solicitação'], ['meu-setor', 'Meu setor'], ['todas', 'Todas']]
   area.innerHTML = `
     <div class="subabas">
       ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
@@ -2357,6 +2427,7 @@ function abrirSolicitacoes (sub) {
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
   $('#kpis').innerHTML = ''
   if (sub === 'painel') solicPainel(alvo)
+  if (sub === 'minhas') solicLista(alvo, { minhas: true })
   if (sub === 'nova') solicNova(alvo)
   if (sub === 'meu-setor') solicLista(alvo, { meuSetor: true })
   if (sub === 'todas') solicLista(alvo, { meuSetor: false })
@@ -2499,7 +2570,7 @@ async function solicNova (alvo) {
 }
 
 // ----- Lista (meu setor ou todas) -----
-async function solicLista (alvo, { meuSetor }) {
+async function solicLista (alvo, { meuSetor, minhas } = {}) {
   if (meuSetor && !PERFIL.setorId) {
     alvo.innerHTML = `<div class="panel" style="padding:22px;"><p class="texto-dim">
       Seu cadastro ainda não tem um setor definido — fale com o administrador
@@ -2534,6 +2605,16 @@ async function solicLista (alvo, { meuSetor }) {
     `).gte('data_solicitacao', $('#sl-de').value).lte('data_solicitacao', $('#sl-ate').value + 'T23:59:59')
       .order('data_solicitacao', { ascending: false }).limit(500)
     if (meuSetor) q = q.eq('setor_destino_id', PERFIL.setorId)
+    else if (minhas) {
+      // "minhas" = eu abri, eu sou o responsável, ou fui marcado como
+      // participante — cobre os três jeitos de uma solicitação ser "minha"
+      const { data: part } = await db.from('solicitacao_participante').select('solicitacao_id').eq('pessoa_id', PERFIL.pessoaId)
+      const idsParticipante = (part || []).map(p => p.solicitacao_id)
+      const partes = [`solicitante_id.eq.${PERFIL.pessoaId}`, `responsavel_id.eq.${PERFIL.pessoaId}`]
+      if (idsParticipante.length) partes.push(`id.in.(${idsParticipante.join(',')})`)
+      q = q.or(partes.join(','))
+      if ($('#sl-setor').value) q = q.eq('setor_destino_id', $('#sl-setor').value)
+    }
     else if ($('#sl-setor').value) q = q.eq('setor_destino_id', $('#sl-setor').value)
     if ($('#sl-status').value) q = q.eq('status', $('#sl-status').value)
     // concluída/cancelada não fica acumulando na tela de quem trabalha —
