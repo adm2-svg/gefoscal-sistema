@@ -7123,7 +7123,8 @@ async function expedOrdem (alvo) {
 function abrirDetalheOrdensPedido (p) {
   const ordens = (p.carregamento || []).filter(c => c.status !== 'CANCELADO')
     .sort((a, b) => (b.data_carregamento ?? '').localeCompare(a.data_carregamento ?? ''))
-  const expedido = ordens.reduce((s, c) => s + Number(c.quantidade_t || 0), 0)
+  const faturado = ordens.filter(c => c.status === 'FATURADO').reduce((s, c) => s + Number(c.quantidade_t || 0), 0)
+  const emAndamento = ordens.filter(c => c.status !== 'FATURADO').reduce((s, c) => s + Number(c.quantidade_t || 0), 0)
 
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
@@ -7131,13 +7132,15 @@ function abrirDetalheOrdensPedido (p) {
     <h3 style="margin:0 0 4px;">Pedido ${esc(p.numero ?? '—')}</h3>
     <p class="texto-dim2" style="font-size:12.5px;margin:0 0 14px;">${esc(p.cliente?.razao_social ?? '—')} · ${esc(p.produto?.nome ?? '—')}${p.vendedor?.nome ? ' · ' + esc(p.vendedor.nome) : ''}</p>
 
-    <div class="resumo-topo" style="margin-bottom:14px;">
+    <div class="resumo-topo" style="margin-bottom:6px;">
       <div class="bloco"><div class="rot">Total do pedido</div><div class="val">${fmtNum(p.quantidade_t)} t</div></div>
-      <div class="bloco"><div class="rot">Já expedido</div><div class="val">${fmtNum(expedido)} t</div></div>
-      <div class="bloco alerta"><div class="rot">Saldo</div><div class="val">${fmtNum(p.saldo)} t</div></div>
+      <div class="bloco"><div class="rot">Faturado</div><div class="val">${fmtNum(faturado)} t</div></div>
+      <div class="bloco"><div class="rot">Em andamento</div><div class="val">${fmtNum(emAndamento)} t</div></div>
+      <div class="bloco alerta"><div class="rot">Saldo livre</div><div class="val">${fmtNum(p.saldo)} t</div></div>
     </div>
+    ${emAndamento > 0 ? `<p class="texto-dim2" style="font-size:11.5px;margin:0 0 14px;">"Em andamento" é ordem já montada (programada/carregada) que ainda não virou nota fiscal — não conta como faturado, mas já reserva o saldo pra não duplicar carregamento.</p>` : ''}
 
-    <h4 style="font-family:var(--serif);font-size:14px;margin:0 0 8px;">Ordens já lançadas (${ordens.length})</h4>
+    <h4 style="font-family:var(--serif);font-size:14px;margin:14px 0 8px;">Ordens já lançadas (${ordens.length})</h4>
     <div class="tabela-scroll" style="max-height:280px;">
       <table><thead><tr><th>Data</th><th class="num">Quantidade</th><th>Status</th><th>Motorista</th><th>NF</th></tr></thead><tbody>
         ${ordens.map(c => `<tr>
@@ -7149,7 +7152,7 @@ function abrirDetalheOrdensPedido (p) {
         </tr>`).join('') || `<tr><td colspan="5" class="vazio">Nenhuma ordem lançada ainda pra este pedido.</td></tr>`}
       </tbody></table>
     </div>
-    <p class="texto-dim2" style="font-size:11.5px;margin:10px 0 0;">Toda ordem montada por aqui já sai vinculada a este pedido — entra em Lançamentos e desconta o saldo na Conferência de Clientes automaticamente.</p>
+    <p class="texto-dim2" style="font-size:11.5px;margin:10px 0 0;">Toda ordem montada por aqui já sai vinculada a este pedido — entra em Lançamentos e desconta o saldo na Conferência de Clientes automaticamente, quando faturada.</p>
     <div class="acoes" style="margin-top:14px;">
       <button class="btn" id="do-montar">Montar nova ordem</button>
       <button class="btn-secundario" id="do-fechar">Fechar</button>
