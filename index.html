@@ -6905,6 +6905,8 @@ async function expedLancamentos (alvo, editavel) {
       <button class="btn" id="f-aplicar">Filtrar</button>
       <button class="btn-secundario" id="f-limpar">Limpar</button>
     </div>
+    <p class="texto-dim2" style="font-size:12px;margin:-8px 0 14px;">
+      Mostra só o que já foi Faturado (virou nota fiscal de verdade). Ordem montada mas ainda sem NF fica em Ordem de Carregamento até você faturar ela.</p>
     <div id="lc-conteudo"><p class="texto-dim2">carregando...</p></div>`
 
   const carregar = async () => {
@@ -6913,7 +6915,7 @@ async function expedLancamentos (alvo, editavel) {
       id, origem_linha, data_carregamento, quantidade_t, numero_nf, uf_destino, status,
       cliente:cliente_id ( razao_social ), vendedor:vendedor_id ( nome ),
       produto:produto_id ( nome ), veiculo:veiculo_id ( placa ), empresa:empresa_id ( nome )
-    `).order('data_carregamento', { ascending: false }).limit(500)
+    `).eq('status', 'FATURADO').order('data_carregamento', { ascending: false }).limit(500)
 
     if ($('#f-cliente').value) q = q.eq('cliente_id', $('#f-cliente').value)
     if ($('#f-vendedor').value) q = q.eq('vendedor_id', $('#f-vendedor').value)
@@ -7171,8 +7173,9 @@ async function expedOrdem (alvo) {
     if (error) { $('#oc-lista').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
     let lista = (data || []).map(p => {
       const expedido = (p.carregamento || []).filter(c => c.status !== 'CANCELADO').reduce((s, c) => s + Number(c.quantidade_t || 0), 0)
-      const pendentes = (p.carregamento || []).filter(c => c.status !== 'CANCELADO' && c.status !== 'FATURADO').length
-      return { ...p, saldo: Math.max(0, Number(p.quantidade_t || 0) - expedido), ordensPendentes: pendentes }
+      const carregPendentes = (p.carregamento || []).filter(c => c.status !== 'CANCELADO' && c.status !== 'FATURADO')
+      const qtdPendente = carregPendentes.reduce((s, c) => s + Number(c.quantidade_t || 0), 0)
+      return { ...p, saldo: Math.max(0, Number(p.quantidade_t || 0) - expedido), ordensPendentes: carregPendentes.length, qtdPendente }
     }).filter(p => p.saldo > 0.01 || p.ordensPendentes > 0)
     if (termo) {
       const t = termo.toLowerCase()
@@ -7188,7 +7191,7 @@ async function expedOrdem (alvo) {
             <td>${esc(p.produto?.nome ?? '—')}</td>
             <td class="num">${p.saldo > 0.01
               ? `${fmtNum(p.saldo, casasPara(p.produto?.unidade))} ${esc(p.produto?.unidade ?? 't')}`
-              : `<span class="badge-alerta" style="font-size:10px;">saldo zerado — ${p.ordensPendentes} ordem(ns) esperando faturar</span>`}</td>
+              : `<span class="badge-alerta" style="font-size:10px;">saldo zerado — ${fmtNum(p.qtdPendente, casasPara(p.produto?.unidade))} ${esc(p.produto?.unidade ?? 't')} em ${p.ordensPendentes} ordem(ns) esperando faturar</span>`}</td>
             <td class="texto-dim2">${fmtData(p.data_pedido)}</td>
             <td>${p.saldo > 0.01 ? `<button class="btn-secundario mini" data-montar="${p.id}">Montar ordem</button>` : ''}</td>
           </tr>`).join('')}
