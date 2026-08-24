@@ -7256,22 +7256,18 @@ function abrirDetalheOrdensPedido (p, aoAtualizar, permitirMontar = true) {
     <h4 style="font-family:var(--serif);font-size:14px;margin:14px 0 8px;">Ordens já lançadas (${ordens.length})</h4>
     <div class="tabela-scroll" style="max-height:320px;">
       <table><thead><tr><th>Data</th><th class="num">Quantidade</th><th>Status / etapa</th><th>Motorista</th><th>NF</th><th></th></tr></thead><tbody>
-        ${ordens.map(c => `<tr>
+        ${ordens.map(c => `<tr class="linha-ordem-clicavel" data-linha-ordem="${c.id}" style="cursor:pointer;">
           <td class="texto-dim2">${fmtData(c.data_carregamento)}</td>
           <td class="num">${fmtNum(c.quantidade_t)} t</td>
           <td><span class="${corStatusCarregamento(c.status)}" style="font-size:10px;">${esc(ROTULO_STATUS_CARREGAMENTO?.[c.status] ?? c.status)}</span>
             ${miniStepperCarregamento(c.status)}</td>
           <td class="texto-dim2">${esc(c.motorista ?? '—')}</td>
           <td class="texto-dim2">${esc(c.numero_nf ?? '—')}</td>
-          <td style="white-space:nowrap;">
-            ${editavel && c.status !== 'FATURADO'
-              ? `<button class="btn-secundario mini" data-acoes-ordem="${c.id}">⚙️ editar ordem</button>`
-              : `<a href="#" class="anexo-link" data-hist="${c.id}">histórico</a>`}
-          </td>
+          <td style="white-space:nowrap;color:var(--rust);font-size:12px;">clique p/ editar →</td>
         </tr>`).join('') || `<tr><td colspan="6" class="vazio">Nenhuma ordem lançada ainda pra este pedido.</td></tr>`}
       </tbody></table>
     </div>
-    <p class="texto-dim2" style="font-size:11.5px;margin:10px 0 0;">Toda ordem montada por aqui já sai vinculada a este pedido — entra em Lançamentos e desconta o saldo na Conferência de Clientes automaticamente, quando faturada.</p>
+    <p class="texto-dim2" style="font-size:11.5px;margin:10px 0 0;">Toda ordem montada por aqui já sai vinculada a este pedido — entra em Lançamentos e desconta o saldo na Conferência de Clientes automaticamente, quando faturada. Clique em qualquer ordem da lista acima pra faturar, adiar, excluir ou ver o histórico dela.</p>
     <div class="acoes" style="margin-top:14px;">
       ${permitirMontar ? `<button class="btn" id="do-montar">Montar nova ordem</button>` : ''}
       <button class="btn-secundario" id="do-pdf">📄 PDF de faturamento</button>
@@ -7288,11 +7284,8 @@ function abrirDetalheOrdensPedido (p, aoAtualizar, permitirMontar = true) {
   fundo.querySelector('#do-pdf').onclick = () => abrirPdfFaturamentoPedido(p)
   fundo.querySelector('#do-excel').onclick = () => exportarExcelFaturamentoPedido(p)
 
-  fundo.querySelectorAll('[data-acoes-ordem]').forEach(b => {
-    b.onclick = () => abrirAcoesOrdem(ordens.find(c => c.id === b.dataset.acoesOrdem), recarregar)
-  })
-  fundo.querySelectorAll('[data-hist]').forEach(a => {
-    a.onclick = e => { e.preventDefault(); abrirHistoricoCarregamento(ordens.find(c => c.id === a.dataset.hist)) }
+  fundo.querySelectorAll('[data-linha-ordem]').forEach(tr => {
+    tr.onclick = () => abrirAcoesOrdem(ordens.find(c => c.id === tr.dataset.linhaOrdem), recarregar)
   })
 }
 
@@ -7300,6 +7293,7 @@ function abrirDetalheOrdensPedido (p, aoAtualizar, permitirMontar = true) {
 // histórico num só lugar, aberto pelo botão "editar ordem" da tabela —
 // resolve o problema de ficar difícil de achar essas ações. -----
 function abrirAcoesOrdem (c, aoConcluir) {
+  const jaFaturada = c.status === 'FATURADO'
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
   fundo.innerHTML = `<div class="modal" style="max-width:400px;">
@@ -7308,8 +7302,8 @@ function abrirAcoesOrdem (c, aoConcluir) {
     <span class="${corStatusCarregamento(c.status)}" style="font-size:10px;">${esc(ROTULO_STATUS_CARREGAMENTO?.[c.status] ?? c.status)}</span>
     ${miniStepperCarregamento(c.status)}
     <div class="acoes" style="margin-top:16px;flex-direction:column;gap:8px;">
-      <button class="btn" id="ao-faturar" style="width:100%;">📄 Faturar — vincular a um lançamento com NF</button>
-      <button class="btn-secundario" id="ao-adiar" style="width:100%;">📅 Adiar (mudar a data)</button>
+      <button class="btn" id="ao-faturar" style="width:100%;">${jaFaturada ? '✏️ Corrigir NF / valor' : '📄 Faturar — vincular a um lançamento com NF'}</button>
+      ${!jaFaturada ? `<button class="btn-secundario" id="ao-adiar" style="width:100%;">📅 Adiar (mudar a data)</button>` : ''}
       <button class="btn-secundario" id="ao-hist" style="width:100%;">🕓 Ver histórico</button>
       <button class="btn-secundario" id="ao-excluir" style="width:100%;color:var(--warn-text);border-color:var(--warn-text);">🗑️ Cancelar esta ordem</button>
       <button class="btn-secundario" id="ao-fechar" style="width:100%;">Fechar</button>
@@ -7320,7 +7314,7 @@ function abrirAcoesOrdem (c, aoConcluir) {
   fundo.onclick = e => { if (e.target === fundo) fechar() }
   fundo.querySelector('#ao-fechar').onclick = fechar
   fundo.querySelector('#ao-faturar').onclick = () => { fechar(); faturarOrdemExistente(c, aoConcluir) }
-  fundo.querySelector('#ao-adiar').onclick = () => { fechar(); adiarCarregamento(c, aoConcluir) }
+  if (!jaFaturada) fundo.querySelector('#ao-adiar').onclick = () => { fechar(); adiarCarregamento(c, aoConcluir) }
   fundo.querySelector('#ao-excluir').onclick = () => { fechar(); excluirCarregamento(c, aoConcluir) }
   fundo.querySelector('#ao-hist').onclick = () => { fechar(); abrirHistoricoCarregamento(c) }
 }
