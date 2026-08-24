@@ -7020,6 +7020,19 @@ function expedLancar (alvo) {
     const veiculoSel = buscaVeiculo.pegarSelecionado()
     const motoristaSel = $('#el-motorista').value
     const motorista = motoristaSel === '__outro' ? $('#el-motorista-livre').value.trim() : motoristaSel
+    const numeroNf = $('#el-nf').value.trim() || null
+
+    // Trava de NF duplicada: mesma NF não pode entrar duas vezes (ignora
+    // cancelados — se cancelou, o número fica livre de novo).
+    if (numeroNf) {
+      const { data: repetida } = await db.from('carregamento')
+        .select('id, data_carregamento, cliente:cliente_id(razao_social)')
+        .eq('numero_nf', numeroNf).neq('status', 'CANCELADO').limit(1)
+      if (repetida?.length) {
+        aviso(`NF ${numeroNf} já está lançada — ${repetida[0].cliente?.razao_social ?? 'outro cliente'}, em ${fmtData(repetida[0].data_carregamento)}. Confira o número antes de salvar.`)
+        return
+      }
+    }
 
     const statusSel = $('#el-status').value
     const btn = $('#el-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
@@ -7030,7 +7043,7 @@ function expedLancar (alvo) {
       veiculo_cliente_id: veiculoSel?.origem === 'cliente' ? veiculoSel.id : null,
       motorista: motorista || null,
       quantidade_t: qtd, preco_unitario: preco || null, valor_nf: preco ? qtd * preco : null,
-      numero_nf: $('#el-nf').value.trim() || null, uf_destino: $('#el-uf').value.trim().toUpperCase() || null,
+      numero_nf: numeroNf, uf_destino: $('#el-uf').value.trim().toUpperCase() || null,
       data_carregamento: $('#el-data').value, status: statusSel,
       observacoes: $('#el-obs').value.trim() || null, registrado_por: PERFIL.pessoaId
     }).select('id').single()
@@ -12753,7 +12766,7 @@ async function formPedidoVenda (p, preset = null) {
         <div class="campo"><label>Empresa *</label>
           <select id="pv-empresa"><option value="">selecione...</option>
             ${(empresas || []).map(e => `<option value="${e.id}" ${e.id === (p?.empresa_id ?? empresas.find(x => x.nome === 'Gefoscal')?.id) ? 'selected' : ''}>${esc(e.nome)}${e.regime_tributario ? ' — ' + esc(e.regime_tributario) : ''}</option>`).join('')}</select></div>
-        <div class="campo"><label>Produto</label>
+        <div class="campo"><label>Produto *</label>
           <select id="pv-produto">${opc(produtos || [], p?.produto_id ?? preset?.produtoId, 'nome')}</select></div>
         <div class="campo"><label>Vendedor</label>
           <select id="pv-vendedor">${opc(vendedores || [], p?.vendedor_id ?? preset?.vendedorId, 'nome')}</select></div>
@@ -12902,6 +12915,8 @@ async function formPedidoVenda (p, preset = null) {
     if (!cliente_id) { aviso('Escolha o cliente.'); return }
     const empresa_id = q('#pv-empresa').value
     if (!empresa_id) { aviso('Escolha a empresa (Gefoscal ou P-TEC).'); return }
+    const produto_id = q('#pv-produto').value
+    if (!produto_id) { aviso('Escolha o produto.'); return }
     const qtd = numeroBR(q('#pv-qtd').value)
     const preco = numeroBR(q('#pv-preco').value)
     if (!qtd || !preco) { aviso('Informe quantidade e valor unitário.'); return }
@@ -12924,7 +12939,7 @@ async function formPedidoVenda (p, preset = null) {
     const btn = q('#pv-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
     const corpo = {
       cliente_id, empresa_id,
-      produto_id: q('#pv-produto').value || null,
+      produto_id,
       vendedor_id: q('#pv-vendedor').value || null,
       quantidade_t: qtd, unidade: q('#pv-unid').value,
       preco_unitario: preco, valor_total: total,
