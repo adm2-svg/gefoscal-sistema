@@ -7071,8 +7071,8 @@ async function expedOrdem (alvo) {
   const buscar = async () => {
     let q = db.from('pedido').select(`
       id, numero, quantidade_t, preco_unitario, data_pedido, local_entrega, empresa_id,
-      cliente:cliente_id ( id, razao_social ), produto:produto_id ( id, nome, unidade ),
-      carregamento ( quantidade_t, status )
+      cliente:cliente_id ( id, razao_social ), produto:produto_id ( id, nome, unidade ), vendedor:vendedor_id ( nome ),
+      carregamento ( id, quantidade_t, status, data_carregamento, motorista, numero_nf, observacoes )
     `).not('status', 'in', '(CANCELADO,CONCLUIDO)').order('data_pedido', { ascending: false }).limit(100)
     const termo = $('#oc-busca').value.trim()
     if (termo) q = q.or(`numero.ilike.%${termo}%`)
@@ -7092,7 +7092,7 @@ async function expedOrdem (alvo) {
         <table><thead><tr><th>PD</th><th>Cliente</th><th>Produto</th><th class="num">Saldo a expedir</th><th>Data</th><th></th></tr></thead><tbody>
           ${lista.map(p => `<tr>
             <td><b>${esc(p.numero ?? '—')}</b></td>
-            <td>${esc(p.cliente?.razao_social ?? '—')}</td>
+            <td><a href="#" class="anexo-link" data-ver-ordens="${p.id}">${esc(p.cliente?.razao_social ?? '—')}</a></td>
             <td>${esc(p.produto?.nome ?? '—')}</td>
             <td class="num">${fmtNum(p.saldo, casasPara(p.produto?.unidade))} ${esc(p.produto?.unidade ?? 't')}</td>
             <td class="texto-dim2">${fmtData(p.data_pedido)}</td>
@@ -7101,6 +7101,9 @@ async function expedOrdem (alvo) {
         </tbody></table>
       </div></div>` : `<p class="vazio">Nenhum pedido com saldo pra expedir.</p>`
 
+    $('#oc-lista').querySelectorAll('[data-ver-ordens]').forEach(a => {
+      a.onclick = e => { e.preventDefault(); abrirDetalheOrdensPedido(lista.find(p => p.id === a.dataset.verOrdens)) }
+    })
     $('#oc-lista').querySelectorAll('[data-montar]').forEach(b => {
       b.onclick = () => {
         const pedido = lista.find(p => p.id === b.dataset.montar)
@@ -7112,6 +7115,51 @@ async function expedOrdem (alvo) {
   $('#oc-buscar').onclick = buscar
   $('#oc-busca').addEventListener('keydown', e => { if (e.key === 'Enter') buscar() })
   buscar()
+}
+
+// ----- Detalhe das ordens (carregamentos) já vinculadas a este pedido —
+// abre ao clicar no nome do cliente, na lista de "Ordem de Carregamento".
+// Mostra o que já foi montado/lançado pra esse PD antes de montar outro. -----
+function abrirDetalheOrdensPedido (p) {
+  const ordens = (p.carregamento || []).filter(c => c.status !== 'CANCELADO')
+    .sort((a, b) => (b.data_carregamento ?? '').localeCompare(a.data_carregamento ?? ''))
+  const expedido = ordens.reduce((s, c) => s + Number(c.quantidade_t || 0), 0)
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:640px;">
+    <h3 style="margin:0 0 4px;">Pedido ${esc(p.numero ?? '—')}</h3>
+    <p class="texto-dim2" style="font-size:12.5px;margin:0 0 14px;">${esc(p.cliente?.razao_social ?? '—')} · ${esc(p.produto?.nome ?? '—')}${p.vendedor?.nome ? ' · ' + esc(p.vendedor.nome) : ''}</p>
+
+    <div class="resumo-topo" style="margin-bottom:14px;">
+      <div class="bloco"><div class="rot">Total do pedido</div><div class="val">${fmtNum(p.quantidade_t)} t</div></div>
+      <div class="bloco"><div class="rot">Já expedido</div><div class="val">${fmtNum(expedido)} t</div></div>
+      <div class="bloco alerta"><div class="rot">Saldo</div><div class="val">${fmtNum(p.saldo)} t</div></div>
+    </div>
+
+    <h4 style="font-family:var(--serif);font-size:14px;margin:0 0 8px;">Ordens já lançadas (${ordens.length})</h4>
+    <div class="tabela-scroll" style="max-height:280px;">
+      <table><thead><tr><th>Data</th><th class="num">Quantidade</th><th>Status</th><th>Motorista</th><th>NF</th></tr></thead><tbody>
+        ${ordens.map(c => `<tr>
+          <td class="texto-dim2">${fmtData(c.data_carregamento)}</td>
+          <td class="num">${fmtNum(c.quantidade_t)} t</td>
+          <td><span class="${corStatusCarregamento(c.status)}" style="font-size:10px;">${esc(ROTULO_STATUS_CARREGAMENTO?.[c.status] ?? c.status)}</span></td>
+          <td class="texto-dim2">${esc(c.motorista ?? '—')}</td>
+          <td class="texto-dim2">${esc(c.numero_nf ?? '—')}</td>
+        </tr>`).join('') || `<tr><td colspan="5" class="vazio">Nenhuma ordem lançada ainda pra este pedido.</td></tr>`}
+      </tbody></table>
+    </div>
+    <p class="texto-dim2" style="font-size:11.5px;margin:10px 0 0;">Toda ordem montada por aqui já sai vinculada a este pedido — entra em Lançamentos e desconta o saldo na Conferência de Clientes automaticamente.</p>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="do-montar">Montar nova ordem</button>
+      <button class="btn-secundario" id="do-fechar">Fechar</button>
+    </div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#do-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  fundo.querySelector('#do-montar').onclick = () => { fechar(); formOrdemCarregamento({ ...p, quantidade_t: p.saldo }) }
 }
 
 function formOrdemCarregamento (pedido) {
