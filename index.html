@@ -7097,7 +7097,7 @@ async function expedOrdem (alvo) {
     let q = db.from('pedido').select(`
       id, numero, quantidade_t, preco_unitario, data_pedido, local_entrega, empresa_id,
       cliente:cliente_id ( id, razao_social ), produto:produto_id ( id, nome, unidade ), vendedor:vendedor_id ( nome ),
-      carregamento ( id, quantidade_t, status, data_carregamento, motorista, numero_nf, observacoes )
+      carregamento ( id, quantidade_t, status, data_carregamento, motorista, numero_nf, valor_nf, preco_unitario, observacoes )
     `).not('status', 'in', '(CANCELADO,CONCLUIDO)').order('data_pedido', { ascending: false }).limit(100)
     const termo = $('#oc-busca').value.trim()
     if (termo) q = q.or(`numero.ilike.%${termo}%`)
@@ -7145,6 +7145,22 @@ async function expedOrdem (alvo) {
 // ----- Detalhe das ordens (carregamentos) já vinculadas a este pedido —
 // abre ao clicar no nome do cliente, na lista de "Ordem de Carregamento".
 // Mostra o que já foi montado/lançado pra esse PD antes de montar outro. -----
+// ----- Busca o pedido completo (cliente com CNPJ/endereço, ordens com NF e
+// valor) — usado tanto pelo detalhe em Expedição quanto pelo botão
+// "Faturamento" em Crédito e Cobrança, pra abrir o mesmo modal dos dois
+// lugares com o PDF/Excel de notas fiscais sempre disponível. -----
+async function buscarPedidoDetalhado (pedidoId) {
+  const { data, error } = await db.from('pedido').select(`
+    id, numero, quantidade_t, preco_unitario, data_pedido, local_entrega, empresa_id,
+    cliente:cliente_id ( id, razao_social, cnpj_cpf, endereco, bairro, municipio, uf ),
+    produto:produto_id ( id, nome, unidade ), vendedor:vendedor_id ( nome ),
+    carregamento ( id, quantidade_t, status, data_carregamento, motorista, numero_nf, valor_nf, preco_unitario, observacoes )
+  `).eq('id', pedidoId).single()
+  if (error || !data) return null
+  const expedido = (data.carregamento || []).filter(c => c.status !== 'CANCELADO').reduce((s, c) => s + Number(c.quantidade_t || 0), 0)
+  return { ...data, saldo: Math.max(0, Number(data.quantidade_t || 0) - expedido) }
+}
+
 const ETAPAS_CARREGAMENTO = ['PROGRAMADO', 'EM_ANDAMENTO', 'CARREGADO', 'FATURADO']
 // Descrição de cada etapa em linguagem de operação, pra quem não decora o
 // nome técnico do status lembrar o que já foi feito até ali.
@@ -7182,7 +7198,7 @@ function barraProgressoPedido (total, faturado, emAndamento) {
     </div>`
 }
 
-function abrirDetalheOrdensPedido (p, aoAtualizar) {
+function abrirDetalheOrdensPedido (p, aoAtualizar, permitirMontar = true) {
   const editavel = podeEditar('expedicao')
   const ordens = (p.carregamento || []).filter(c => c.status !== 'CANCELADO')
     .sort((a, b) => (b.data_carregamento ?? '').localeCompare(a.data_carregamento ?? ''))
@@ -7229,7 +7245,9 @@ function abrirDetalheOrdensPedido (p, aoAtualizar) {
     </div>
     <p class="texto-dim2" style="font-size:11.5px;margin:10px 0 0;">Toda ordem montada por aqui já sai vinculada a este pedido — entra em Lançamentos e desconta o saldo na Conferência de Clientes automaticamente, quando faturada.</p>
     <div class="acoes" style="margin-top:14px;">
-      <button class="btn" id="do-montar">Montar nova ordem</button>
+      ${permitirMontar ? `<button class="btn" id="do-montar">Montar nova ordem</button>` : ''}
+      <button class="btn-secundario" id="do-pdf">📄 PDF de faturamento</button>
+      <button class="btn-secundario" id="do-excel">📊 Exportar Excel</button>
       <button class="btn-secundario" id="do-fechar">Fechar</button>
     </div>
   </div>`
@@ -7238,7 +7256,9 @@ function abrirDetalheOrdensPedido (p, aoAtualizar) {
   const recarregar = () => { fechar(); aoAtualizar?.() }
   fundo.querySelector('#do-fechar').onclick = fechar
   fundo.onclick = e => { if (e.target === fundo) fechar() }
-  fundo.querySelector('#do-montar').onclick = () => { fechar(); formOrdemCarregamento({ ...p, quantidade_t: p.saldo }) }
+  if (permitirMontar) fundo.querySelector('#do-montar').onclick = () => { fechar(); formOrdemCarregamento({ ...p, quantidade_t: p.saldo }) }
+  fundo.querySelector('#do-pdf').onclick = () => abrirPdfFaturamentoPedido(p)
+  fundo.querySelector('#do-excel').onclick = () => exportarExcelFaturamentoPedido(p)
 
   fundo.querySelectorAll('[data-hist]').forEach(a => {
     a.onclick = e => { e.preventDefault(); abrirHistoricoCarregamento(ordens.find(c => c.id === a.dataset.hist)) }
@@ -7352,6 +7372,73 @@ async function abrirHistoricoCarregamento (c) {
   document.body.appendChild(fundo)
   fundo.querySelector('#hc-fechar').onclick = () => fundo.remove()
   fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+}
+
+// ----- Relatório de faturamento (NFs) de um pedido — PDF pra imprimir/
+// mandar pro cliente, e Excel com a mesma lista pra planilha. -----
+function abrirPdfFaturamentoPedido (p) {
+  const notas = (p.carregamento || []).filter(c => c.status === 'FATURADO')
+    .sort((a, b) => (a.data_carregamento ?? '').localeCompare(b.data_carregamento ?? ''))
+  const totalQtd = notas.reduce((s, c) => s + Number(c.quantidade_t || 0), 0)
+  const totalValor = notas.reduce((s, c) => s + Number(c.valor_nf || 0), 0)
+
+  const linhasTabela = notas.length ? `
+    <table style="width:100%;border-collapse:collapse;">
+      <thead><tr><th style="text-align:left;padding:6px;">Data</th><th style="text-align:left;padding:6px;">NF</th>
+        <th style="text-align:right;padding:6px;">Quantidade</th><th style="text-align:right;padding:6px;">Preço/t</th>
+        <th style="text-align:right;padding:6px;">Valor</th></tr></thead>
+      <tbody>${notas.map(c => `<tr>
+        <td style="padding:6px;">${fmtData(c.data_carregamento)}</td>
+        <td style="padding:6px;">${esc(c.numero_nf ?? '—')}</td>
+        <td style="padding:6px;text-align:right;">${fmtNum(c.quantidade_t)} t</td>
+        <td style="padding:6px;text-align:right;">${c.preco_unitario ? 'R$ ' + fmtNum(c.preco_unitario) : '—'}</td>
+        <td style="padding:6px;text-align:right;">${c.valor_nf ? 'R$ ' + fmtNum(c.valor_nf) : '—'}</td>
+      </tr>`).join('')}</tbody>
+      <tfoot><tr style="font-weight:700;"><td style="padding:6px;" colspan="2">Total</td>
+        <td style="padding:6px;text-align:right;">${fmtNum(totalQtd)} t</td><td></td>
+        <td style="padding:6px;text-align:right;">R$ ${fmtNum(totalValor)}</td></tr></tfoot>
+    </table>` : `<p style="padding:12px;color:#6d7c72;">Nenhuma nota fiscal emitida ainda pra este pedido.</p>`
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = documentoPDF({
+    titulo: 'Faturamento do Pedido',
+    subtitulo: `PD ${p.numero ?? '—'} · ${p.cliente?.razao_social ?? '—'}`,
+    corpo: `
+      ${docBloco('Cliente', docLinha('Razão social', p.cliente?.razao_social) + docLinha('CNPJ/CPF', p.cliente?.cnpj_cpf) +
+        docLinha('Endereço', [p.cliente?.endereco, p.cliente?.bairro, p.cliente?.municipio, p.cliente?.uf].filter(Boolean).join(', ')))}
+      ${docBloco('Pedido', docLinha('Produto', p.produto?.nome) + docLinha('Vendedor', p.vendedor?.nome) +
+        docLinha('Total do pedido', `${fmtNum(p.quantidade_t)} t`) + docLinha('Data', fmtData(p.data_pedido)))}
+      ${docBloco('Notas fiscais emitidas', linhasTabela)}`,
+    acoes: `<button class="btn" id="pf-imprimir">Baixar / imprimir PDF</button>
+            <button class="btn-secundario" id="pf-fechar">Fechar</button>`
+  })
+  document.body.appendChild(fundo)
+  fundo.querySelector('#pf-fechar').onclick = () => fundo.remove()
+  fundo.querySelector('#pf-imprimir').onclick = () => window.print()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+}
+
+function exportarExcelFaturamentoPedido (p) {
+  const notas = (p.carregamento || []).filter(c => c.status === 'FATURADO')
+    .sort((a, b) => (a.data_carregamento ?? '').localeCompare(b.data_carregamento ?? ''))
+  const totalQtd = notas.reduce((s, c) => s + Number(c.quantidade_t || 0), 0)
+  const totalValor = notas.reduce((s, c) => s + Number(c.valor_nf || 0), 0)
+
+  const linhas = [
+    ['Faturamento do Pedido'],
+    [`PD ${p.numero ?? '—'}`, p.cliente?.razao_social ?? '—'],
+    ['CNPJ/CPF', p.cliente?.cnpj_cpf ?? '—'],
+    ['Produto', p.produto?.nome ?? '—', 'Vendedor', p.vendedor?.nome ?? '—'],
+    [],
+    ['Data', 'NF', 'Quantidade (t)', 'Preço/t (R$)', 'Valor (R$)'],
+    ...notas.map(c => [fmtData(c.data_carregamento), c.numero_nf ?? '', Number(c.quantidade_t || 0), Number(c.preco_unitario || 0), Number(c.valor_nf || 0)]),
+    [],
+    ['Total', '', totalQtd, '', totalValor]
+  ]
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(linhas), 'Faturamento')
+  XLSX.writeFile(wb, `faturamento_pedido_${p.numero ?? p.id}.xlsx`)
 }
 
 function formOrdemCarregamento (pedido) {
@@ -12585,6 +12672,7 @@ async function cobPedidos (alvo, editavel) {
           ? '<span class="urgente">● conferir valor</span>' : ''}
         <div class="botoes">
           <button class="btn-secundario mini" data-pdf="${p.id}">PDF</button>
+          <button class="btn-secundario mini" data-faturamento="${p.id}">faturamento</button>
           <button class="btn-secundario mini" data-hist="${p.id}">histórico</button>
           ${editavel && !p.cancelado_em
             ? `<button class="btn-secundario mini" data-edit="${p.id}">editar</button>
@@ -12608,6 +12696,15 @@ async function cobPedidos (alvo, editavel) {
   alvo.querySelectorAll('[data-pdf]').forEach(b => {
     b.onclick = () => pdfPedidoVenda((pedidos || []).find(x => x.id === b.dataset.pdf),
                                      porPedido[b.dataset.pdf] || [])
+  })
+  alvo.querySelectorAll('[data-faturamento]').forEach(b => {
+    b.onclick = async () => {
+      b.disabled = true; b.textContent = 'abrindo...'
+      const pedidoDet = await buscarPedidoDetalhado(b.dataset.faturamento)
+      b.disabled = false; b.textContent = 'faturamento'
+      if (!pedidoDet) { alert('Não deu pra carregar esse pedido.'); return }
+      abrirDetalheOrdensPedido(pedidoDet, () => cobPedidos(alvo, editavel), false)
+    }
   })
   alvo.querySelectorAll('[data-hist]').forEach(b => {
     b.onclick = () => historicoPedido((pedidos || []).find(x => x.id === b.dataset.hist))
