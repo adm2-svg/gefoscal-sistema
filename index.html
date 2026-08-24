@@ -1290,6 +1290,7 @@ async function abrirApp () {
   montarWidgetAssistente()
   atualizarBadgeNotificacoes()
   ligarEscutaNotificacoes()
+  ligarChecagemPeriodicaNotificacoes()
   tocarSomNotificacao()
 }
 
@@ -1327,14 +1328,27 @@ function ligarEscutaNotificacoes () {
     .subscribe()
 }
 
-async function atualizarBadgeNotificacoes () {
+let ULTIMA_CONTAGEM_NOTIF = 0
+
+async function atualizarBadgeNotificacoes (avisarSeSubiu = false) {
   if (!PERFIL.pessoaId) return
   const { count } = await db.from('notificacao_pessoal')
     .select('id', { count: 'exact', head: true })
     .eq('destinatario_id', PERFIL.pessoaId).eq('lida', false)
+  const total = count || 0
+  if (avisarSeSubiu && total > ULTIMA_CONTAGEM_NOTIF) tocarSomNotificacao()
+  ULTIMA_CONTAGEM_NOTIF = total
   const badge = $('#notif-badge')
-  if (count > 0) { badge.textContent = count > 9 ? '9+' : String(count); badge.classList.remove('oculto') }
+  if (total > 0) { badge.textContent = total > 9 ? '9+' : String(total); badge.classList.remove('oculto') }
   else badge.classList.add('oculto')
+}
+
+// Reforço: checa de tempos em tempos mesmo sem depender do tempo real —
+// se por algum motivo a conexão em tempo real não pegar (rede, proxy,
+// firewall da empresa), o sino e o som ainda funcionam, só com um
+// atraso de até 20s em vez de instantâneo.
+function ligarChecagemPeriodicaNotificacoes () {
+  setInterval(() => atualizarBadgeNotificacoes(true), 20000)
 }
 
 async function abrirNotificacoes () {
