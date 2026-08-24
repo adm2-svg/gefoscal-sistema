@@ -6920,6 +6920,26 @@ async function verAnexosCarregamento (carregamentoId) {
   anexos.forEach(a => window.open('https://drive.google.com/open?id=' + a.drive_file_id, '_blank'))
 }
 
+// ----- Vínculo automático do lançamento ao pedido em aberto do cliente -----
+// Quando o cliente tem exatamente 1 pedido em aberto com saldo, o
+// lançamento entra automaticamente nele (mesma regra que já valia à mão
+// em Crédito e Cobrança), e a Conferência de Clientes já desconta na
+// hora. Se o cliente tiver mais de um pedido em aberto ao mesmo tempo,
+// não escolhe sozinho — fica sem vínculo, pra vincular na mão.
+async function buscarPedidoAbertoUnico (clienteId) {
+  const { data: pedidos, error } = await db.from('pedido').select(`
+    id, numero, quantidade_t, status, carregamento ( quantidade_t, status )
+  `).eq('cliente_id', clienteId).not('status', 'in', '(CANCELADO,CONCLUIDO)')
+  if (error || !pedidos) return { pedido: null, motivo: 'erro' }
+  const abertos = pedidos.map(p => {
+    const expedido = (p.carregamento || []).filter(c => c.status !== 'CANCELADO').reduce((s, c) => s + Number(c.quantidade_t || 0), 0)
+    return { ...p, saldo: Math.max(0, Number(p.quantidade_t || 0) - expedido) }
+  }).filter(p => p.saldo > 0.01)
+  if (abertos.length === 1) return { pedido: abertos[0], motivo: null }
+  if (abertos.length === 0) return { pedido: null, motivo: 'nenhum' }
+  return { pedido: null, motivo: 'ambiguo' }
+}
+
 // ----- Lançar: registra um novo carregamento/NF manualmente -----
 function expedLancar (alvo) {
   alvo.innerHTML = `
@@ -6977,8 +6997,9 @@ function expedLancar (alvo) {
     const motoristaSel = $('#el-motorista').value
     const motorista = motoristaSel === '__outro' ? $('#el-motorista-livre').value.trim() : motoristaSel
 
+    const statusSel = $('#el-status').value
     const btn = $('#el-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
-    const { error } = await db.from('carregamento').insert({
+    const { data: novoCarreg, error } = await db.from('carregamento').insert({
       empresa_id: empresaId, cliente_id: clienteId, vendedor_id: $('#el-vendedor').value || null,
       produto_id: produtoSel.value,
       veiculo_id: veiculoSel?.origem === 'frota' ? veiculoSel.id : null,
@@ -6986,12 +7007,26 @@ function expedLancar (alvo) {
       motorista: motorista || null,
       quantidade_t: qtd, preco_unitario: preco || null, valor_nf: preco ? qtd * preco : null,
       numero_nf: $('#el-nf').value.trim() || null, uf_destino: $('#el-uf').value.trim().toUpperCase() || null,
-      data_carregamento: $('#el-data').value, status: $('#el-status').value,
+      data_carregamento: $('#el-data').value, status: statusSel,
       observacoes: $('#el-obs').value.trim() || null, registrado_por: PERFIL.pessoaId
-    })
+    }).select('id').single()
     btn.disabled = false; btn.textContent = 'Salvar lançamento'
     if (error) { aviso(error.message); return }
-    el.textContent = 'Lançamento salvo.'; el.classList.remove('oculto')
+
+    // Faturado: tenta vincular automático ao pedido em aberto do cliente,
+    // pra Conferência de Clientes já descontar o saldo na hora.
+    let notaVinculo = ''
+    if (statusSel === 'FATURADO') {
+      const { pedido, motivo } = await buscarPedidoAbertoUnico(clienteId)
+      if (pedido) {
+        await db.from('carregamento').update({ pedido_id: pedido.id }).eq('id', novoCarreg.id)
+        notaVinculo = ` Vinculado ao pedido PD ${pedido.numero} — saldo já atualizado na Conferência de Clientes.`
+      } else if (motivo === 'ambiguo') {
+        notaVinculo = ' Este cliente tem mais de um pedido em aberto — vincule manualmente em Crédito e Cobrança pra descontar da Conferência de Clientes.'
+      }
+    }
+
+    el.textContent = 'Lançamento salvo.' + notaVinculo; el.classList.remove('oculto')
     el.style.borderColor = 'var(--good-text)'; el.style.color = 'var(--good-text)'
     ;['el-motorista-livre', 'el-qtd', 'el-preco', 'el-nf', 'el-uf', 'el-obs'].forEach(id => { $('#' + id).value = '' })
     buscaVeiculo.limpar()
