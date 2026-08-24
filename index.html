@@ -860,6 +860,8 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
         <h2 id="titulo-pagina">Visão geral</h2>
         <div class="texto-dim" id="subtitulo-pagina" style="font-size:13px;"></div>
       </div>
+      <button class="skin-toggle" id="notif-bell" title="Notificações" style="position:relative;">🔔
+        <span id="notif-badge" class="oculto" style="position:absolute;top:-4px;right:-4px;background:var(--warn-text);color:#1a1a1a;border-radius:20px;font-size:10px;font-weight:700;min-width:16px;height:16px;display:flex;align-items:center;justify-content:center;padding:0 3px;"></span></button>
       <button class="skin-toggle" id="skin-toggle-app" title="Trocar tema"></button>
     </div>
 
@@ -1286,7 +1288,55 @@ async function abrirApp () {
   $('#tela-app').classList.remove('oculto')
   irPara('visao_geral')
   montarWidgetAssistente()
+  atualizarBadgeNotificacoes()
 }
+
+// ----- Notificações pessoais: sino no topo. Hoje só dispara quando uma
+// solicitação que a pessoa abriu é marcada como Concluída, mas a tabela é
+// genérica — dá pra plugar outros eventos depois sem mudar a UI. -----
+async function atualizarBadgeNotificacoes () {
+  if (!PERFIL.pessoaId) return
+  const { count } = await db.from('notificacao_pessoal')
+    .select('id', { count: 'exact', head: true })
+    .eq('destinatario_id', PERFIL.pessoaId).eq('lida', false)
+  const badge = $('#notif-badge')
+  if (count > 0) { badge.textContent = count > 9 ? '9+' : String(count); badge.classList.remove('oculto') }
+  else badge.classList.add('oculto')
+}
+
+async function abrirNotificacoes () {
+  const { data: notifs } = await db.from('notificacao_pessoal')
+    .select('id, titulo, mensagem, lida, criado_em, entidade, entidade_id')
+    .eq('destinatario_id', PERFIL.pessoaId).order('criado_em', { ascending: false }).limit(30)
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:440px;">
+    <h3 style="margin:0 0 12px;">Notificações</h3>
+    ${(notifs || []).length ? `<div style="max-height:420px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;">
+      ${notifs.map(n => `<div style="border:1px solid var(--line2);border-radius:8px;padding:10px 12px;${n.lida ? 'opacity:.6;' : 'background:rgba(var(--rust-rgb),.08);'}">
+        <div style="font-weight:600;font-size:13px;">${n.lida ? '' : '🔵 '}${esc(n.titulo)}</div>
+        ${n.mensagem ? `<div class="texto-dim2" style="font-size:12.5px;margin-top:3px;">${esc(n.mensagem)}</div>` : ''}
+        <div class="texto-dim2" style="font-size:11px;margin-top:5px;">${new Date(n.criado_em).toLocaleString('pt-BR')}</div>
+      </div>`).join('')}
+    </div>` : `<p class="vazio">Sem notificações.</p>`}
+    <div class="acoes" style="margin-top:14px;">
+      ${(notifs || []).some(n => !n.lida) ? `<button class="btn-secundario" id="notif-marcar-tudo">Marcar tudo como lido</button>` : ''}
+      <button class="btn-secundario" id="notif-fechar">Fechar</button>
+    </div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#notif-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  const btnTudo = fundo.querySelector('#notif-marcar-tudo')
+  if (btnTudo) btnTudo.onclick = async () => {
+    await db.from('notificacao_pessoal').update({ lida: true, lida_em: new Date().toISOString() })
+      .eq('destinatario_id', PERFIL.pessoaId).eq('lida', false)
+    atualizarBadgeNotificacoes(); fechar()
+  }
+}
+$('#notif-bell').onclick = abrirNotificacoes
 
 const ehTotal = () => PERFIL.papeis.some(p => PAPEIS_TOTAIS.includes(p))
 
@@ -2673,7 +2723,7 @@ async function solicLista (alvo, { meuSetor, minhas } = {}) {
   const buscar = async () => {
     let q = db.from('solicitacao_interna').select(`
       id, codigo, titulo, descricao, urgencia, status, data_solicitacao, data_limite, data_conclusao, resposta,
-      progresso_pct, pontuacao_agilidade, setor_destino_id, responsavel_id, setor_envolvido_id, data_planejada, hora_planejada, tarefa_agenda_id,
+      progresso_pct, pontuacao_agilidade, setor_destino_id, responsavel_id, setor_envolvido_id, data_planejada, hora_planejada, tarefa_agenda_id, solicitante_id,
       setor:setor_destino_id ( id, nome ), solicitante:solicitante_id ( nome ), responsavel:responsavel_id ( nome ),
       setorEnvolvido:setor_envolvido_id ( nome ),
       participantes:solicitacao_participante ( pessoa_id, pessoa:pessoa_id ( nome ) )
@@ -2932,6 +2982,18 @@ function detalheSolicitacao (s, aoFechar) {
       pontuacao_agilidade: pontuacao
     }).eq('id', s.id)
     if (error) { aviso(error.message); return }
+
+    // Avisa quem abriu a solicitação, quando ela é concluída — só se
+    // não foi ela mesma quem concluiu (não precisa se avisar sozinha).
+    if (status === 'CONCLUIDA' && s.status !== 'CONCLUIDA' && s.solicitante_id && s.solicitante_id !== PERFIL.pessoaId) {
+      await db.from('notificacao_pessoal').insert({
+        destinatario_id: s.solicitante_id,
+        titulo: `Solicitação ${s.codigo} foi concluída`,
+        mensagem: `"${s.titulo}" foi marcada como concluída por ${PERFIL.nome}.${fundo.querySelector('#ds-resposta').value.trim() ? ' Resposta: ' + fundo.querySelector('#ds-resposta').value.trim() : ''}`,
+        entidade: 'solicitacao_interna', entidade_id: s.id
+      })
+    }
+
     fechar(); aoFechar()
   }
 }
@@ -3015,12 +3077,12 @@ async function painelGerencial (area) {
 
   const selDoSetor = `
     id, codigo, titulo, urgencia, status, data_solicitacao, data_limite, data_conclusao,
-    progresso_pct, pontuacao_agilidade, setor_destino_id, responsavel_id, data_planejada, hora_planejada, tarefa_agenda_id,
+    progresso_pct, pontuacao_agilidade, setor_destino_id, responsavel_id, data_planejada, hora_planejada, tarefa_agenda_id, solicitante_id,
     responsavel:responsavel_id ( nome ),
     participantes:solicitacao_participante ( pessoa_id, pessoa:pessoa_id ( nome ) )`
   const selParaMim = `
     id, codigo, titulo, urgencia, status, data_solicitacao, data_limite, data_conclusao,
-    progresso_pct, pontuacao_agilidade, setor_destino_id, responsavel_id, data_planejada, hora_planejada,
+    progresso_pct, pontuacao_agilidade, setor_destino_id, responsavel_id, data_planejada, hora_planejada, solicitante_id,
     setor:setor_destino_id ( nome ),
     participantes:solicitacao_participante ( pessoa_id, pessoa:pessoa_id ( nome ) )`
 
@@ -8453,7 +8515,7 @@ async function tiSolicitacoes (alvo, editavel) {
   if (!SETOR_TI_ID) { alvo.innerHTML = `<p class="vazio">Setor "TI" não encontrado no cadastro de setores — confira em Administração → Cargos e setores.</p>`; return }
   const { data, error } = await db.from('solicitacao_interna').select(`
     id, codigo, titulo, descricao, urgencia, status, data_solicitacao, data_limite, resposta,
-    progresso_pct, pontuacao_agilidade, setor_destino_id, responsavel_id,
+    progresso_pct, pontuacao_agilidade, setor_destino_id, responsavel_id, solicitante_id,
     setor:setor_destino_id ( id, nome ), solicitante:solicitante_id ( nome ), responsavel:responsavel_id ( nome )
   `).eq('setor_destino_id', SETOR_TI_ID).order('data_solicitacao', { ascending: false }).limit(300)
   if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
