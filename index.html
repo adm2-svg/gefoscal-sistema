@@ -7264,11 +7264,9 @@ function abrirDetalheOrdensPedido (p, aoAtualizar, permitirMontar = true) {
           <td class="texto-dim2">${esc(c.motorista ?? '—')}</td>
           <td class="texto-dim2">${esc(c.numero_nf ?? '—')}</td>
           <td style="white-space:nowrap;">
-            ${editavel && c.status !== 'FATURADO' ? `<a href="#" class="anexo-link" style="color:var(--good-text);font-weight:600;" data-faturar-ordem="${c.id}">faturar</a>` : ''}
-            <a href="#" class="anexo-link" data-hist="${c.id}">histórico</a>
-            ${editavel && c.status !== 'FATURADO' ? `
-              <a href="#" class="anexo-link" data-adiar="${c.id}">adiar</a>
-              <a href="#" class="anexo-link" style="color:var(--warn-text);" data-excluir="${c.id}">excluir</a>` : ''}
+            ${editavel && c.status !== 'FATURADO'
+              ? `<button class="btn-secundario mini" data-acoes-ordem="${c.id}">⚙️ editar ordem</button>`
+              : `<a href="#" class="anexo-link" data-hist="${c.id}">histórico</a>`}
           </td>
         </tr>`).join('') || `<tr><td colspan="6" class="vazio">Nenhuma ordem lançada ainda pra este pedido.</td></tr>`}
       </tbody></table>
@@ -7290,18 +7288,41 @@ function abrirDetalheOrdensPedido (p, aoAtualizar, permitirMontar = true) {
   fundo.querySelector('#do-pdf').onclick = () => abrirPdfFaturamentoPedido(p)
   fundo.querySelector('#do-excel').onclick = () => exportarExcelFaturamentoPedido(p)
 
-  fundo.querySelectorAll('[data-faturar-ordem]').forEach(a => {
-    a.onclick = e => { e.preventDefault(); faturarOrdemExistente(ordens.find(c => c.id === a.dataset.faturarOrdem), recarregar) }
+  fundo.querySelectorAll('[data-acoes-ordem]').forEach(b => {
+    b.onclick = () => abrirAcoesOrdem(ordens.find(c => c.id === b.dataset.acoesOrdem), recarregar)
   })
   fundo.querySelectorAll('[data-hist]').forEach(a => {
     a.onclick = e => { e.preventDefault(); abrirHistoricoCarregamento(ordens.find(c => c.id === a.dataset.hist)) }
   })
-  fundo.querySelectorAll('[data-adiar]').forEach(a => {
-    a.onclick = e => { e.preventDefault(); adiarCarregamento(ordens.find(c => c.id === a.dataset.adiar), recarregar) }
-  })
-  fundo.querySelectorAll('[data-excluir]').forEach(a => {
-    a.onclick = e => { e.preventDefault(); excluirCarregamento(ordens.find(c => c.id === a.dataset.excluir), recarregar) }
-  })
+}
+
+// ----- Menu de ações de uma ordem: reúne faturar / adiar / excluir /
+// histórico num só lugar, aberto pelo botão "editar ordem" da tabela —
+// resolve o problema de ficar difícil de achar essas ações. -----
+function abrirAcoesOrdem (c, aoConcluir) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:400px;">
+    <h3 style="margin:0 0 4px;">Editar ordem</h3>
+    <p class="texto-dim2" style="font-size:12.5px;margin:0 0 4px;">${fmtData(c.data_carregamento)} · ${fmtNum(c.quantidade_t)} t${c.motorista ? ' · ' + esc(c.motorista) : ''}</p>
+    <span class="${corStatusCarregamento(c.status)}" style="font-size:10px;">${esc(ROTULO_STATUS_CARREGAMENTO?.[c.status] ?? c.status)}</span>
+    ${miniStepperCarregamento(c.status)}
+    <div class="acoes" style="margin-top:16px;flex-direction:column;gap:8px;">
+      <button class="btn" id="ao-faturar" style="width:100%;">📄 Faturar — vincular a um lançamento com NF</button>
+      <button class="btn-secundario" id="ao-adiar" style="width:100%;">📅 Adiar (mudar a data)</button>
+      <button class="btn-secundario" id="ao-hist" style="width:100%;">🕓 Ver histórico</button>
+      <button class="btn-secundario" id="ao-excluir" style="width:100%;color:var(--warn-text);border-color:var(--warn-text);">🗑️ Cancelar esta ordem</button>
+      <button class="btn-secundario" id="ao-fechar" style="width:100%;">Fechar</button>
+    </div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  fundo.querySelector('#ao-fechar').onclick = fechar
+  fundo.querySelector('#ao-faturar').onclick = () => { fechar(); faturarOrdemExistente(c, aoConcluir) }
+  fundo.querySelector('#ao-adiar').onclick = () => { fechar(); adiarCarregamento(c, aoConcluir) }
+  fundo.querySelector('#ao-excluir').onclick = () => { fechar(); excluirCarregamento(c, aoConcluir) }
+  fundo.querySelector('#ao-hist').onclick = () => { fechar(); abrirHistoricoCarregamento(c) }
 }
 
 // ----- Adiar uma ordem: pede nova data e justificativa, registra no
