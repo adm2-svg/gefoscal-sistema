@@ -6501,8 +6501,8 @@ const ROTULO_STATUS_CARREGAMENTO = {
 function corStatusCarregamento (s) {
   if (s === 'FATURADO') return 'badge-bom'
   if (s === 'CANCELADO') return 'texto-dim2'
-  if (s === 'CARREGADO') return 'chip'
-  return 'texto-dim'
+  if (s === 'EM_ANDAMENTO') return 'badge-alerta'
+  return 'chip'
 }
 
 async function paginaExpedicao () {
@@ -7133,12 +7133,14 @@ function abrirDetalheOrdensPedido (p) {
     <p class="texto-dim2" style="font-size:12.5px;margin:0 0 14px;">${esc(p.cliente?.razao_social ?? '—')} · ${esc(p.produto?.nome ?? '—')}${p.vendedor?.nome ? ' · ' + esc(p.vendedor.nome) : ''}</p>
 
     <div class="resumo-topo" style="margin-bottom:6px;">
-      <div class="bloco"><div class="rot">Total do pedido</div><div class="val">${fmtNum(p.quantidade_t)} t</div></div>
-      <div class="bloco"><div class="rot">Faturado</div><div class="val">${fmtNum(faturado)} t</div></div>
-      <div class="bloco"><div class="rot">Em andamento</div><div class="val">${fmtNum(emAndamento)} t</div></div>
-      <div class="bloco alerta"><div class="rot">Saldo livre</div><div class="val">${fmtNum(p.saldo)} t</div></div>
+      <div class="bloco"><div class="rot">📦 Total do pedido</div><div class="val">${fmtNum(p.quantidade_t)} t</div></div>
+      <div class="bloco" style="border-color:var(--good-text);box-shadow:inset 3px 0 0 var(--good-text);">
+        <div class="rot">✅ Faturado</div><div class="val" style="color:var(--good-text);">${fmtNum(faturado)} t</div></div>
+      <div class="bloco" style="border-color:var(--rust);box-shadow:inset 3px 0 0 var(--rust);">
+        <div class="rot">🚚 Em andamento</div><div class="val" style="color:var(--rust);">${fmtNum(emAndamento)} t</div></div>
+      <div class="bloco alerta"><div class="rot">⏳ Saldo livre</div><div class="val">${fmtNum(p.saldo)} t</div></div>
     </div>
-    ${emAndamento > 0 ? `<p class="texto-dim2" style="font-size:11.5px;margin:0 0 14px;">"Em andamento" é ordem já montada (programada/carregada) que ainda não virou nota fiscal — não conta como faturado, mas já reserva o saldo pra não duplicar carregamento.</p>` : ''}
+    ${emAndamento > 0 ? `<p class="texto-dim2" style="font-size:11.5px;margin:0 0 14px;">🚚 "Em andamento" é ordem já montada (programada/carregada) que ainda não virou nota fiscal — não conta como faturado, mas já reserva o saldo pra não duplicar carregamento.</p>` : ''}
 
     <h4 style="font-family:var(--serif);font-size:14px;margin:14px 0 8px;">Ordens já lançadas (${ordens.length})</h4>
     <div class="tabela-scroll" style="max-height:280px;">
