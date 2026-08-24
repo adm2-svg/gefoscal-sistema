@@ -550,6 +550,25 @@ tbody tr:hover { background: var(--hover-bg); }
 .resumo-topo .val { font-family:var(--serif); font-size:34px; line-height:1.05;
                     margin-top:10px; letter-spacing:-.01em; }
 .resumo-topo .nota { color:var(--dim); font-size:12.5px; margin-top:7px; }
+
+/* Barra de progresso do pedido (Ordem de Carregamento): verde = faturado,
+   azul = em andamento (ordem montada mas ainda sem NF), resto = saldo livre. */
+.barra-pedido { position:relative; height:14px; border-radius:20px; background:var(--surface2);
+  border:1px solid var(--line2); overflow:hidden; }
+.barra-pedido .seg { position:absolute; top:0; bottom:0; transition:width .4s ease; }
+.barra-pedido .seg.faturado { left:0; background:var(--good-text); }
+.barra-pedido .seg.andamento { background:var(--rust); opacity:.55; }
+.barra-pedido-legenda { display:flex; gap:14px; flex-wrap:wrap; font-size:11.5px; color:var(--dim2); margin-top:6px; }
+.barra-pedido-legenda span { display:inline-flex; align-items:center; gap:5px; }
+.barra-pedido-legenda .bola { width:8px; height:8px; border-radius:50%; flex:none; }
+
+/* Mini-stepper de etapas por ordem (Programado → Em andamento → Carregado → Faturado) */
+.mini-stepper { display:flex; align-items:center; gap:0; margin-top:4px; }
+.mini-stepper .pt { width:7px; height:7px; border-radius:50%; background:var(--line2); flex:none; }
+.mini-stepper .pt.feito { background:var(--good-text); }
+.mini-stepper .pt.atual { background:var(--rust); box-shadow:0 0 0 3px rgba(var(--rust-rgb),.22); }
+.mini-stepper .ln { width:14px; height:2px; background:var(--line2); }
+.mini-stepper .ln.feito { background:var(--good-text); }
 .resumo-topo .bloco.destaque { border-color:var(--rust); box-shadow:inset 3px 0 0 var(--rust); }
 .resumo-topo .bloco.alerta  { border-color:var(--warn-text); box-shadow:inset 3px 0 0 var(--warn-text); }
 .resumo-topo .bloco.alerta .val { color:var(--warn-text); }
@@ -7032,6 +7051,12 @@ function expedLancar (alvo) {
       } catch (e) { notaAnexo = ' (lançamento salvo, mas a NF em PDF não subiu: ' + e.message + ')' }
     }
 
+    await db.from('carregamento_historico').insert({
+      carregamento_id: novoCarreg.id, acao: 'CRIACAO',
+      depois: { quantidade_t: qtd, data_carregamento: $('#el-data').value, status: statusSel },
+      pessoa_id: PERFIL.pessoaId
+    })
+
     // Faturado: tenta vincular automático ao pedido em aberto do cliente,
     // pra Conferência de Clientes já descontar o saldo na hora.
     let notaVinculo = ''
@@ -7102,7 +7127,7 @@ async function expedOrdem (alvo) {
       </div></div>` : `<p class="vazio">Nenhum pedido com saldo pra expedir.</p>`
 
     $('#oc-lista').querySelectorAll('[data-ver-ordens]').forEach(a => {
-      a.onclick = e => { e.preventDefault(); abrirDetalheOrdensPedido(lista.find(p => p.id === a.dataset.verOrdens)) }
+      a.onclick = e => { e.preventDefault(); abrirDetalheOrdensPedido(lista.find(p => p.id === a.dataset.verOrdens), buscar) }
     })
     $('#oc-lista').querySelectorAll('[data-montar]').forEach(b => {
       b.onclick = () => {
@@ -7120,7 +7145,45 @@ async function expedOrdem (alvo) {
 // ----- Detalhe das ordens (carregamentos) já vinculadas a este pedido —
 // abre ao clicar no nome do cliente, na lista de "Ordem de Carregamento".
 // Mostra o que já foi montado/lançado pra esse PD antes de montar outro. -----
-function abrirDetalheOrdensPedido (p) {
+const ETAPAS_CARREGAMENTO = ['PROGRAMADO', 'EM_ANDAMENTO', 'CARREGADO', 'FATURADO']
+// Descrição de cada etapa em linguagem de operação, pra quem não decora o
+// nome técnico do status lembrar o que já foi feito até ali.
+const DESCRICAO_ETAPA_CARREGAMENTO = {
+  PROGRAMADO: 'Ordem montada — motorista e veículo já confirmados, aguardando carregar',
+  EM_ANDAMENTO: 'Carregamento em andamento',
+  CARREGADO: 'Carregado — aguardando nota fiscal',
+  FATURADO: 'Nota fiscal emitida'
+}
+
+function miniStepperCarregamento (status) {
+  if (status === 'CANCELADO') return `<span class="texto-dim2" style="font-size:10.5px;">— cancelado —</span>`
+  const idx = ETAPAS_CARREGAMENTO.indexOf(status)
+  return `<div class="mini-stepper" title="${esc(DESCRICAO_ETAPA_CARREGAMENTO[status] ?? '')}">
+    ${ETAPAS_CARREGAMENTO.map((et, i) => `
+      ${i > 0 ? `<div class="ln ${i <= idx ? 'feito' : ''}"></div>` : ''}
+      <div class="pt ${i < idx ? 'feito' : ''} ${i === idx ? 'atual' : ''}"></div>
+    `).join('')}
+  </div>`
+}
+
+function barraProgressoPedido (total, faturado, emAndamento) {
+  const t = Math.max(Number(total) || 0, 0.0001)
+  const pctFat = Math.min(100, (faturado / t) * 100)
+  const pctAnd = Math.min(100 - pctFat, (emAndamento / t) * 100)
+  return `
+    <div class="barra-pedido">
+      <div class="seg faturado" style="width:${pctFat}%;"></div>
+      <div class="seg andamento" style="left:${pctFat}%;width:${pctAnd}%;"></div>
+    </div>
+    <div class="barra-pedido-legenda">
+      <span><span class="bola" style="background:var(--good-text);"></span>Faturado ${pctFat.toFixed(0)}%</span>
+      <span><span class="bola" style="background:var(--rust);opacity:.6;"></span>Em andamento ${pctAnd.toFixed(0)}%</span>
+      <span><span class="bola" style="background:var(--line2);"></span>Livre ${Math.max(0, 100 - pctFat - pctAnd).toFixed(0)}%</span>
+    </div>`
+}
+
+function abrirDetalheOrdensPedido (p, aoAtualizar) {
+  const editavel = podeEditar('expedicao')
   const ordens = (p.carregamento || []).filter(c => c.status !== 'CANCELADO')
     .sort((a, b) => (b.data_carregamento ?? '').localeCompare(a.data_carregamento ?? ''))
   const faturado = ordens.filter(c => c.status === 'FATURADO').reduce((s, c) => s + Number(c.quantidade_t || 0), 0)
@@ -7128,9 +7191,12 @@ function abrirDetalheOrdensPedido (p) {
 
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
-  fundo.innerHTML = `<div class="modal" style="max-width:640px;">
+  fundo.innerHTML = `<div class="modal" style="max-width:700px;">
     <h3 style="margin:0 0 4px;">Pedido ${esc(p.numero ?? '—')}</h3>
     <p class="texto-dim2" style="font-size:12.5px;margin:0 0 14px;">${esc(p.cliente?.razao_social ?? '—')} · ${esc(p.produto?.nome ?? '—')}${p.vendedor?.nome ? ' · ' + esc(p.vendedor.nome) : ''}</p>
+
+    ${barraProgressoPedido(p.quantidade_t, faturado, emAndamento)}
+    <div style="margin-top:16px;"></div>
 
     <div class="resumo-topo" style="margin-bottom:6px;">
       <div class="bloco"><div class="rot">📦 Total do pedido</div><div class="val">${fmtNum(p.quantidade_t)} t</div></div>
@@ -7143,15 +7209,22 @@ function abrirDetalheOrdensPedido (p) {
     ${emAndamento > 0 ? `<p class="texto-dim2" style="font-size:11.5px;margin:0 0 14px;">🚚 "Em andamento" é ordem já montada (programada/carregada) que ainda não virou nota fiscal — não conta como faturado, mas já reserva o saldo pra não duplicar carregamento.</p>` : ''}
 
     <h4 style="font-family:var(--serif);font-size:14px;margin:14px 0 8px;">Ordens já lançadas (${ordens.length})</h4>
-    <div class="tabela-scroll" style="max-height:280px;">
-      <table><thead><tr><th>Data</th><th class="num">Quantidade</th><th>Status</th><th>Motorista</th><th>NF</th></tr></thead><tbody>
+    <div class="tabela-scroll" style="max-height:320px;">
+      <table><thead><tr><th>Data</th><th class="num">Quantidade</th><th>Status / etapa</th><th>Motorista</th><th>NF</th><th></th></tr></thead><tbody>
         ${ordens.map(c => `<tr>
           <td class="texto-dim2">${fmtData(c.data_carregamento)}</td>
           <td class="num">${fmtNum(c.quantidade_t)} t</td>
-          <td><span class="${corStatusCarregamento(c.status)}" style="font-size:10px;">${esc(ROTULO_STATUS_CARREGAMENTO?.[c.status] ?? c.status)}</span></td>
+          <td><span class="${corStatusCarregamento(c.status)}" style="font-size:10px;">${esc(ROTULO_STATUS_CARREGAMENTO?.[c.status] ?? c.status)}</span>
+            ${miniStepperCarregamento(c.status)}</td>
           <td class="texto-dim2">${esc(c.motorista ?? '—')}</td>
           <td class="texto-dim2">${esc(c.numero_nf ?? '—')}</td>
-        </tr>`).join('') || `<tr><td colspan="5" class="vazio">Nenhuma ordem lançada ainda pra este pedido.</td></tr>`}
+          <td style="white-space:nowrap;">
+            <a href="#" class="anexo-link" data-hist="${c.id}">histórico</a>
+            ${editavel && c.status !== 'FATURADO' ? `
+              <a href="#" class="anexo-link" data-adiar="${c.id}">adiar</a>
+              <a href="#" class="anexo-link" style="color:var(--warn-text);" data-excluir="${c.id}">excluir</a>` : ''}
+          </td>
+        </tr>`).join('') || `<tr><td colspan="6" class="vazio">Nenhuma ordem lançada ainda pra este pedido.</td></tr>`}
       </tbody></table>
     </div>
     <p class="texto-dim2" style="font-size:11.5px;margin:10px 0 0;">Toda ordem montada por aqui já sai vinculada a este pedido — entra em Lançamentos e desconta o saldo na Conferência de Clientes automaticamente, quando faturada.</p>
@@ -7162,9 +7235,123 @@ function abrirDetalheOrdensPedido (p) {
   </div>`
   document.body.appendChild(fundo)
   const fechar = () => fundo.remove()
+  const recarregar = () => { fechar(); aoAtualizar?.() }
   fundo.querySelector('#do-fechar').onclick = fechar
   fundo.onclick = e => { if (e.target === fundo) fechar() }
   fundo.querySelector('#do-montar').onclick = () => { fechar(); formOrdemCarregamento({ ...p, quantidade_t: p.saldo }) }
+
+  fundo.querySelectorAll('[data-hist]').forEach(a => {
+    a.onclick = e => { e.preventDefault(); abrirHistoricoCarregamento(ordens.find(c => c.id === a.dataset.hist)) }
+  })
+  fundo.querySelectorAll('[data-adiar]').forEach(a => {
+    a.onclick = e => { e.preventDefault(); adiarCarregamento(ordens.find(c => c.id === a.dataset.adiar), recarregar) }
+  })
+  fundo.querySelectorAll('[data-excluir]').forEach(a => {
+    a.onclick = e => { e.preventDefault(); excluirCarregamento(ordens.find(c => c.id === a.dataset.excluir), recarregar) }
+  })
+}
+
+// ----- Adiar uma ordem: pede nova data e justificativa, registra no
+// histórico o antes/depois. Não mexe em quantidade nem status. -----
+function adiarCarregamento (c, aoConcluir) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:420px;">
+    <h3>Adiar carregamento</h3>
+    <p class="texto-dim2" style="font-size:12.5px;margin:-8px 0 14px;">Hoje: ${fmtData(c.data_carregamento)} · ${fmtNum(c.quantidade_t)} t</p>
+    <div class="campo"><label>Nova data *</label><input type="date" id="ad-data" value="${c.data_carregamento ?? ''}"></div>
+    <div class="campo" style="margin-top:10px;"><label>Motivo do adiamento *</label>
+      <textarea id="ad-motivo" style="min-height:70px;" placeholder="por que está adiando"></textarea></div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="ad-salvar">Confirmar adiamento</button>
+      <button class="btn-secundario" id="ad-cancelar">Voltar</button>
+    </div>
+    <div class="recado oculto" id="ad-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#ad-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  fundo.querySelector('#ad-salvar').onclick = async () => {
+    const el = fundo.querySelector('#ad-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const novaData = fundo.querySelector('#ad-data').value
+    const motivo = fundo.querySelector('#ad-motivo').value.trim()
+    if (!novaData) { aviso('Informe a nova data.'); return }
+    if (motivo.length < 5) { aviso('Escreva o motivo do adiamento.'); return }
+    const btn = fundo.querySelector('#ad-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const { error } = await db.from('carregamento').update({ data_carregamento: novaData }).eq('id', c.id)
+    if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Confirmar adiamento'; return }
+    await db.from('carregamento_historico').insert({
+      carregamento_id: c.id, acao: 'ADIAMENTO', justificativa: motivo,
+      antes: { data_carregamento: c.data_carregamento }, depois: { data_carregamento: novaData },
+      pessoa_id: PERFIL.pessoaId
+    })
+    fechar(); aoConcluir?.()
+  }
+}
+
+// ----- Excluir (cancelar) uma ordem: nunca some do banco de verdade —
+// vira status CANCELADO com justificativa, e some do saldo automaticamente
+// porque todo cálculo de saldo já ignora CANCELADO. Reversível pelo histórico. -----
+function excluirCarregamento (c, aoConcluir) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:420px;">
+    <h3>Excluir carregamento</h3>
+    <p class="texto-dim2" style="font-size:12.5px;margin:-8px 0 14px;">${fmtData(c.data_carregamento)} · ${fmtNum(c.quantidade_t)} t — vira cancelado, não some do histórico.</p>
+    <div class="campo"><label>Motivo da exclusão *</label>
+      <textarea id="ex-motivo" style="min-height:70px;" placeholder="por que está excluindo"></textarea></div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="ex-salvar" style="background:var(--warn-text);border-color:var(--warn-text);">Confirmar exclusão</button>
+      <button class="btn-secundario" id="ex-cancelar">Voltar</button>
+    </div>
+    <div class="recado oculto" id="ex-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#ex-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  fundo.querySelector('#ex-salvar').onclick = async () => {
+    const el = fundo.querySelector('#ex-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const motivo = fundo.querySelector('#ex-motivo').value.trim()
+    if (motivo.length < 5) { aviso('Escreva o motivo da exclusão.'); return }
+    const btn = fundo.querySelector('#ex-salvar'); btn.disabled = true; btn.textContent = 'Excluindo...'
+    const { error } = await db.from('carregamento').update({
+      status: 'CANCELADO', motivo_cancelamento: motivo, cancelado_em: new Date().toISOString(), cancelado_por: PERFIL.pessoaId
+    }).eq('id', c.id)
+    if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Confirmar exclusão'; return }
+    await db.from('carregamento_historico').insert({
+      carregamento_id: c.id, acao: 'CANCELAMENTO', justificativa: motivo,
+      antes: { status: c.status }, depois: { status: 'CANCELADO' },
+      pessoa_id: PERFIL.pessoaId
+    })
+    fechar(); aoConcluir?.()
+  }
+}
+
+// ----- Histórico de uma ordem: tudo que já aconteceu com ela -----
+async function abrirHistoricoCarregamento (c) {
+  const { data: hist } = await db.from('carregamento_historico')
+    .select('acao, justificativa, antes, depois, quando, pessoa:pessoa_id(nome)')
+    .eq('carregamento_id', c.id).order('quando', { ascending: false })
+  const ROTULO_ACAO = { CRIACAO: 'Criada', ADIAMENTO: 'Adiada', CANCELAMENTO: 'Cancelada', EDICAO: 'Editada' }
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:520px;">
+    <h3 style="margin:0 0 4px;">Histórico da ordem</h3>
+    <p class="texto-dim2" style="font-size:12.5px;margin:0 0 14px;">${fmtData(c.data_carregamento)} · ${fmtNum(c.quantidade_t)} t</p>
+    ${(hist || []).length ? hist.map(h => `
+      <div class="passo">
+        <span><b>${esc(ROTULO_ACAO[h.acao] ?? h.acao)}</b> — ${esc(h.pessoa?.nome ?? 'sistema')} · ${new Date(h.quando).toLocaleString('pt-BR')}</span>
+        ${h.justificativa ? `<div class="texto-dim2" style="font-size:12px;margin-top:2px;">"${esc(h.justificativa)}"</div>` : ''}
+      </div>`).join('') : `<p class="vazio">Sem alterações registradas ainda — só a criação original.</p>`}
+    <div class="acoes" style="margin-top:14px;"><button class="btn-secundario" id="hc-fechar">Fechar</button></div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.querySelector('#hc-fechar').onclick = () => fundo.remove()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
 }
 
 function formOrdemCarregamento (pedido) {
@@ -7240,6 +7427,13 @@ function formOrdemCarregamento (pedido) {
     if (error) { aviso(error.message); return }
 
     const empresa = EXPED_CACHE.empresas.find(e => e.id === empresaId)
+    if (novo?.id) {
+      await db.from('carregamento_historico').insert({
+        carregamento_id: novo.id, acao: 'CRIACAO',
+        depois: { quantidade_t: qtd, data_carregamento: dataProg.slice(0, 10), status: 'PROGRAMADO' },
+        pessoa_id: PERFIL.pessoaId
+      })
+    }
     fechar()
     abrirPdfOrdemCarregamento({
       numeroPedido: pedido.numero, empresa: empresa?.nome, cliente: pedido.cliente?.razao_social, produto: pedido.produto?.nome,
@@ -12432,10 +12626,11 @@ async function cobPedidos (alvo, editavel) {
 }
 
 async function formPedidoVenda (p, preset = null) {
-  const [{ data: clientes }, { data: produtos }, { data: vendedores }] = await Promise.all([
+  const [{ data: clientes }, { data: produtos }, { data: vendedores }, { data: empresas }] = await Promise.all([
     db.from('cliente').select('id,razao_social,cnpj_cpf,conferir_dados,inscricao_estadual,endereco,bairro,municipio,uf,telefone,email').eq('status','ATIVO').order('razao_social'),
     db.from('produto').select('id,nome').order('nome'),
-    db.from('pessoa').select('id,nome,email').eq('eh_vendedor', true).order('nome')
+    db.from('pessoa').select('id,nome,email').eq('eh_vendedor', true).order('nome'),
+    db.from('empresa').select('id,nome,regime_tributario').eq('status', 'ATIVO').order('nome')
   ])
 
   let parcelas = []
@@ -12458,6 +12653,9 @@ async function formPedidoVenda (p, preset = null) {
         <div class="campo" style="grid-column:1/-1;"><label>Cliente *</label>
           <select id="pv-cliente">${opc(clientes || [], p?.cliente_id ?? preset?.clienteId, 'razao_social')}</select>
           <span class="texto-dim2" id="pv-aviso-cli" style="font-size:11px;"></span></div>
+        <div class="campo"><label>Empresa *</label>
+          <select id="pv-empresa"><option value="">selecione...</option>
+            ${(empresas || []).map(e => `<option value="${e.id}" ${e.id === (p?.empresa_id ?? empresas.find(x => x.nome === 'Gefoscal')?.id) ? 'selected' : ''}>${esc(e.nome)}${e.regime_tributario ? ' — ' + esc(e.regime_tributario) : ''}</option>`).join('')}</select></div>
         <div class="campo"><label>Produto</label>
           <select id="pv-produto">${opc(produtos || [], p?.produto_id ?? preset?.produtoId, 'nome')}</select></div>
         <div class="campo"><label>Vendedor</label>
@@ -12605,6 +12803,8 @@ async function formPedidoVenda (p, preset = null) {
   q('#pv-salvar').onclick = async () => {
     const cliente_id = q('#pv-cliente').value
     if (!cliente_id) { aviso('Escolha o cliente.'); return }
+    const empresa_id = q('#pv-empresa').value
+    if (!empresa_id) { aviso('Escolha a empresa (Gefoscal ou P-TEC).'); return }
     const qtd = numeroBR(q('#pv-qtd').value)
     const preco = numeroBR(q('#pv-preco').value)
     if (!qtd || !preco) { aviso('Informe quantidade e valor unitário.'); return }
@@ -12626,7 +12826,7 @@ async function formPedidoVenda (p, preset = null) {
 
     const btn = q('#pv-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
     const corpo = {
-      cliente_id,
+      cliente_id, empresa_id,
       produto_id: q('#pv-produto').value || null,
       vendedor_id: q('#pv-vendedor').value || null,
       quantidade_t: qtd, unidade: q('#pv-unid').value,
@@ -12663,7 +12863,7 @@ async function formPedidoVenda (p, preset = null) {
         pessoa_id: PERFIL.pessoaId
       })
     } else {
-      const { data, error } = await db.from('pedido').insert(corpo).select('id,numero').single()
+      const { data, error } = await db.from('pedido').insert({ ...corpo, status: 'EMITIDO' }).select('id,numero').single()
       if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Emitir pedido'; return }
       pedidoId = data.id
       numeroGerado = data.numero
