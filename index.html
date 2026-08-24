@@ -11060,8 +11060,12 @@ async function crmGestaoTab (alvo, editavel) {
 
     <div class="cabeca-secao" style="margin-top:20px;">
       <h3 style="font-family:var(--serif);font-size:16px;">Banco de Informações — compartilhar listas</h3>
-      <button class="btn-secundario mini" id="cg-toggle-banco">Gerenciar acesso por vendedor</button>
+      <div style="display:flex;gap:8px;">
+        <button class="btn-secundario mini" id="cg-toggle-listas">Importar / gerenciar listas</button>
+        <button class="btn-secundario mini" id="cg-toggle-banco">Gerenciar acesso por vendedor</button>
+      </div>
     </div>
+    <div id="cg-listas-painel" class="oculto" style="margin-top:10px;"></div>
     <div id="cg-banco-painel" class="oculto" style="margin-top:10px;"></div>`
 
   renderFunilGestao($('#cg-funil'), lista, editavel, () => crmGestaoTab(alvo, editavel))
@@ -11083,6 +11087,14 @@ async function crmGestaoTab (alvo, editavel) {
       painelAgenda.classList.remove('oculto')
       crmCalendarioEquipe(painelAgenda)
     } else painelAgenda.classList.add('oculto')
+  }
+
+  const painelListas = $('#cg-listas-painel')
+  $('#cg-toggle-listas').onclick = () => {
+    if (painelListas.classList.contains('oculto')) {
+      painelListas.classList.remove('oculto')
+      crmGerenciarListasBanco(painelListas)
+    } else painelListas.classList.add('oculto')
   }
 
   const painelBanco = $('#cg-banco-painel')
@@ -11210,6 +11222,360 @@ async function crmCompartilharBanco (alvo) {
   }
   $('#cb-vendedor-banco').onchange = e => desenharChecklist(e.target.value)
   desenharChecklist('')
+}
+
+// ----- Importar / gerenciar listas do Banco de Informações -----
+// Lê a planilha reconhecendo colunas pelo NOME (não pela posição), então
+// aceita variações de cabeçalho. Qualquer coluna terminando em "(ha)" que
+// não seja Área/Agricultável vira uma entrada dentro de "culturas" (jsonb)
+// — assim regiões com culturas diferentes (café, pastagem, cana...) não
+// exigem mexer no código, só a coluna nova já entra sozinha.
+const MAPA_COLUNA_REGIAO = {
+  grupo: ['grupocliente', 'grupo', 'cliente', 'produtor', 'grupoprodutor'],
+  tipo: ['tipo'],
+  municipios: ['municipios', 'municipio', 'cidade'],
+  fazendas: ['faz', 'fazendas', 'qtdfazendas'],
+  area_total: ['areaha', 'area', 'areatotalha', 'areatotal'],
+  agricultavel: ['agricultavelha', 'agricultavel'],
+  armazens: ['armazens', 'armazem'],
+  pivos: ['pivos', 'pivo'],
+  outorgas: ['outorgas', 'outorga'],
+  cultivo_principal: ['cultivoprincipal', 'cultivo'],
+  cotitulares: ['proprietariosnomesnobloco', 'proprietarios', 'cotitulares', 'nomesnobloco'],
+  foco: ['foco'],
+  observacoes: ['observacoes', 'observações', 'obs', 'notas'],
+  posicao: ['num', 'posicao', 'ordem', 'ranking']
+}
+const CAMPOS_FIXOS_HA = new Set(['areaha', 'agricultavelha']) // essas não viram "cultura", já têm campo próprio
+
+function crmGerenciarListasBanco (alvo) {
+  let regioes = []
+  let regiaoAtual = ''
+  let leadsRegiaoAtual = []
+  let linhasParaImportar = null
+
+  const carregarRegioes = async () => {
+    const { data } = await db.from('recurso').select('id,chave,nome').eq('tipo', 'REGIAO').order('ordem')
+    regioes = data || []
+  }
+
+  const carregarLeadsRegiao = async recursoId => {
+    const { data } = await db.from('regiao_lead').select('*').eq('recurso_id', recursoId).order('agricultavel', { ascending: false, nullsFirst: false })
+    leadsRegiaoAtual = data || []
+  }
+
+  const render = () => {
+    alvo.innerHTML = `
+      <div class="filtros" style="margin-bottom:12px;align-items:flex-end;">
+        <div class="campo" style="min-width:260px;"><label>Região</label>
+          <select id="gl-regiao"><option value="">selecione…</option>
+            ${regioes.map(r => `<option value="${r.id}" ${r.id === regiaoAtual ? 'selected' : ''}>${esc(r.nome)}</option>`).join('')}
+          </select></div>
+        <button class="btn-secundario mini" id="gl-nova-regiao">+ nova região</button>
+      </div>
+      <div id="gl-conteudo-regiao"></div>`
+
+    $('#gl-regiao').onchange = async e => {
+      regiaoAtual = e.target.value
+      if (regiaoAtual) { await carregarLeadsRegiao(regiaoAtual); renderConteudoRegiao() }
+      else $('#gl-conteudo-regiao').innerHTML = ''
+    }
+    $('#gl-nova-regiao').onclick = async () => {
+      const nome = prompt('Nome da nova região (ex: "BA · Mucugê/Ibicoara"):')
+      if (!nome?.trim()) return
+      const chave = nome.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
+      const { data: nova, error } = await db.from('recurso')
+        .insert({ tipo: 'REGIAO', nome: nome.trim(), chave, status: 'ATIVO', ordem: regioes.length + 1 })
+        .select('id').single()
+      if (error) { alert('Não deu: ' + error.message); return }
+      await carregarRegioes()
+      regiaoAtual = nova.id
+      render()
+      await carregarLeadsRegiao(regiaoAtual)
+      renderConteudoRegiao()
+    }
+
+    if (regiaoAtual) renderConteudoRegiao()
+  }
+
+  const renderConteudoRegiao = () => {
+    const nomeRegiao = (regioes.find(r => r.id === regiaoAtual) || {}).nome ?? '—'
+    $('#gl-conteudo-regiao').innerHTML = `
+      <div class="panel" style="padding:16px;margin-bottom:14px;">
+        <div class="cabeca-secao" style="margin-bottom:10px;">
+          <h4 style="font-family:var(--serif);font-size:14.5px;">📂 Importar planilha pra "${esc(nomeRegiao)}"</h4>
+          <button class="btn-secundario mini" id="gl-ver-historico">🕓 Histórico dessa região</button>
+        </div>
+        <div class="filtros" style="align-items:flex-end;">
+          <div class="campo" style="flex:1;min-width:220px;"><label>Arquivo (.xlsx, .xls, .csv)</label>
+            <input type="file" id="gl-arquivo" accept=".xlsx,.xls,.csv"></div>
+          <div class="campo"><label>Categoria dessa importação</label>
+            <select id="gl-categoria">
+              <option value="MAIORES">Maiores</option>
+              <option value="INSTITUCIONAL">Institucional</option>
+              <option value="BATER_PORTEIRA">Bater porteira</option>
+              <option value="SECUNDARIO">Secundário</option>
+            </select></div>
+          <button class="btn" id="gl-ler-arquivo">Ler arquivo</button>
+        </div>
+        <p class="texto-dim2" style="font-size:11px;margin:8px 0 0;">
+          Reconhece as colunas pelo nome (Grupo/Cliente, Município(s), Área (ha), Agricultável (ha), Pivôs, etc). Qualquer coluna "(ha)" que não seja área/agricultável vira cultura automaticamente — não precisa ser sempre soja/milho.</p>
+        <div id="gl-preview" style="margin-top:10px;"></div>
+        <div class="recado oculto" id="gl-recado-import"></div>
+      </div>
+
+      <div class="cabeca-secao"><h4 style="font-family:var(--serif);font-size:14.5px;">
+        Leads cadastrados nessa região (${leadsRegiaoAtual.length})</h4></div>
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr>
+          <th>Grupo</th><th>Categoria</th><th>Município(s)</th><th class="num">Faz.</th>
+          <th class="num">Agric. (ha)</th><th>Cultivo principal</th><th></th>
+        </tr></thead><tbody>
+        ${leadsRegiaoAtual.map(l => `<tr>
+          <td><b>${esc(l.grupo)}</b>${l.cotitulares && l.cotitulares !== l.grupo ? `<div class="lead-obs">${esc(l.cotitulares)}</div>` : ''}</td>
+          <td><span class="chip">${ROTULO_CAT[l.categoria] ?? l.categoria ?? '—'}</span></td>
+          <td class="texto-dim2">${esc(l.municipios ?? '—')}</td>
+          <td class="num">${l.fazendas ?? '—'}</td>
+          <td class="num">${l.agricultavel ? fmtNum(l.agricultavel, 0) : '—'}</td>
+          <td class="texto-dim2">${esc(l.cultivo_principal ?? '—')}</td>
+          <td style="white-space:nowrap;">
+            <a href="#" class="anexo-link" data-editar-lead="${l.id}">editar</a>
+            <a href="#" class="anexo-link" style="color:var(--warn-text);" data-excluir-lead="${l.id}">excluir</a>
+          </td>
+        </tr>`).join('') || `<tr><td colspan="7" class="vazio">Nenhum lead importado ainda pra essa região.</td></tr>`}
+        </tbody></table>
+      </div></div>`
+
+    $('#gl-ver-historico').onclick = () => abrirHistoricoRegiaoLead(regiaoAtual, nomeRegiao)
+    $('#gl-ler-arquivo').onclick = lerArquivoRegiao
+    $('#gl-conteudo-regiao').querySelectorAll('[data-editar-lead]').forEach(a => {
+      a.onclick = e => { e.preventDefault(); abrirEditarLeadRegiao(leadsRegiaoAtual.find(l => l.id === a.dataset.editarLead), atualizarDepoisDeMudar) }
+    })
+    $('#gl-conteudo-regiao').querySelectorAll('[data-excluir-lead]').forEach(a => {
+      a.onclick = e => { e.preventDefault(); excluirLeadRegiao(leadsRegiaoAtual.find(l => l.id === a.dataset.excluirLead), nomeRegiao, atualizarDepoisDeMudar) }
+    })
+  }
+
+  const atualizarDepoisDeMudar = async () => { await carregarLeadsRegiao(regiaoAtual); renderConteudoRegiao() }
+
+  const normaliza = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '')
+
+  const lerArquivoRegiao = () => {
+    const recado = $('#gl-recado-import')
+    const avisoImport = (t, ok = false) => {
+      recado.textContent = t; recado.classList.remove('oculto')
+      recado.style.borderColor = ok ? 'var(--good-text)' : 'var(--warn-text)'
+      recado.style.color = ok ? 'var(--good-text)' : 'var(--warn-text)'
+    }
+    const arquivo = $('#gl-arquivo').files[0]
+    if (!arquivo) { avisoImport('Escolha um arquivo primeiro.'); return }
+    const categoria = $('#gl-categoria').value
+    const leitor = new FileReader()
+    leitor.onload = e => {
+      try {
+        const wb = XLSX.read(e.target.result, { type: 'array' })
+        // pega a primeira aba que não seja de instruções/leia-me
+        const nomeAba = wb.SheetNames.find(n => !/leia.?me|instru/i.test(n)) ?? wb.SheetNames[0]
+        const linhas = XLSX.utils.sheet_to_json(wb.Sheets[nomeAba], { defval: '' })
+        if (!linhas.length) { avisoImport('Não achei linhas de dados nessa planilha (aba "' + nomeAba + '").'); return }
+
+        const colunas = Object.keys(linhas[0])
+        const mapa = {}
+        Object.entries(MAPA_COLUNA_REGIAO).forEach(([campo, alvos]) => {
+          const achado = colunas.find(c => alvos.includes(normaliza(c)))
+          if (achado) mapa[campo] = achado
+        })
+        if (!mapa.grupo) { avisoImport('Não achei uma coluna de Grupo/Cliente na planilha.'); return }
+
+        // colunas "(ha)" não mapeadas viram cultura automaticamente
+        const colunasCultura = colunas.filter(c => {
+          const norm = normaliza(c)
+          return /ha$/.test(norm) && !CAMPOS_FIXOS_HA.has(norm) && !Object.values(mapa).includes(c)
+        })
+
+        const numero = v => { const n = Number(String(v).replace(/\./g, '').replace(',', '.').replace(/[^\d.-]/g, '')); return isNaN(n) ? null : n }
+
+        linhasParaImportar = linhas.map(linha => {
+          const culturas = {}
+          colunasCultura.forEach(c => {
+            const chave = normaliza(c).replace(/ha$/, '')
+            const v = numero(linha[c])
+            if (v) culturas[chave] = v
+          })
+          return {
+            recurso_id: regiaoAtual, categoria,
+            grupo: String(linha[mapa.grupo] ?? '').trim(),
+            tipo: mapa.tipo ? String(linha[mapa.tipo] ?? '').trim() || null : null,
+            municipios: mapa.municipios ? String(linha[mapa.municipios] ?? '').trim() || null : null,
+            fazendas: mapa.fazendas ? numero(linha[mapa.fazendas]) : null,
+            area_total: mapa.area_total ? numero(linha[mapa.area_total]) : null,
+            agricultavel: mapa.agricultavel ? numero(linha[mapa.agricultavel]) : null,
+            armazens: mapa.armazens ? numero(linha[mapa.armazens]) : null,
+            pivos: mapa.pivos ? numero(linha[mapa.pivos]) : null,
+            outorgas: mapa.outorgas ? numero(linha[mapa.outorgas]) : null,
+            cultivo_principal: mapa.cultivo_principal ? String(linha[mapa.cultivo_principal] ?? '').trim() || null : null,
+            cotitulares: mapa.cotitulares ? String(linha[mapa.cotitulares] ?? '').trim() || null : null,
+            foco: mapa.foco ? String(linha[mapa.foco] ?? '').trim() || null : null,
+            observacoes: mapa.observacoes ? String(linha[mapa.observacoes] ?? '').trim() || null : null,
+            posicao: mapa.posicao ? numero(linha[mapa.posicao]) : null,
+            culturas,
+            origem_arquivo: arquivo.name, importado_em: new Date().toISOString(), importado_por: PERFIL.pessoaId
+          }
+        }).filter(l => l.grupo)
+
+        $('#gl-preview').innerHTML = `
+          <div class="badge-alerta" style="padding:9px 12px;border-radius:6px;font-size:12.5px;">
+            ${linhasParaImportar.length} linha(s) prontas pra importar da aba "${esc(nomeAba)}"
+            (colunas reconhecidas: ${Object.keys(mapa).join(', ')}${colunasCultura.length ? ` · culturas extras: ${colunasCultura.join(', ')}` : ''}).
+          </div>
+          <div class="acoes" style="margin-top:10px;"><button class="btn" id="gl-confirmar-import">Confirmar importação</button></div>`
+        $('#gl-confirmar-import').onclick = confirmarImportacao
+      } catch (err) { avisoImport('Não consegui ler o arquivo: ' + err.message) }
+    }
+    leitor.readAsArrayBuffer(arquivo)
+  }
+
+  const confirmarImportacao = async () => {
+    if (!linhasParaImportar?.length) return
+    const recado = $('#gl-recado-import')
+    const btn = $('#gl-confirmar-import'); btn.disabled = true; btn.textContent = 'Importando...'
+    const { error } = await db.from('regiao_lead').insert(linhasParaImportar)
+    if (error) {
+      recado.textContent = error.message; recado.classList.remove('oculto')
+      recado.style.borderColor = 'var(--warn-text)'; recado.style.color = 'var(--warn-text)'
+      btn.disabled = false; btn.textContent = 'Confirmar importação'; return
+    }
+    await db.from('regiao_lead_historico').insert({
+      recurso_id: regiaoAtual, acao: 'IMPORTACAO',
+      descricao: `${linhasParaImportar.length} lead(s) importados do arquivo "${linhasParaImportar[0].origem_arquivo}", categoria ${ROTULO_CAT[linhasParaImportar[0].categoria] ?? linhasParaImportar[0].categoria}.`,
+      arquivo_nome: linhasParaImportar[0].origem_arquivo, pessoa_id: PERFIL.pessoaId
+    })
+    linhasParaImportar = null
+    $('#gl-arquivo').value = ''
+    await atualizarDepoisDeMudar()
+  }
+
+  ;(async () => { await carregarRegioes(); render() })()
+}
+
+// ----- Editar um lead de região -----
+function abrirEditarLeadRegiao (l, aoConcluir) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  const camposCultura = Object.entries(l.culturas || {})
+  fundo.innerHTML = `<div class="modal" style="max-width:560px;">
+    <h3 style="margin:0 0 14px;">✏️ Editar lead</h3>
+    <div class="form-grade">
+      <div class="campo"><label>Grupo/Cliente *</label><input id="el-grupo" value="${esc(l.grupo ?? '')}"></div>
+      <div class="campo"><label>Categoria</label><select id="el-categoria">
+        ${Object.entries(ROTULO_CAT).map(([k, v]) => `<option value="${k}" ${l.categoria === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+      <div class="campo"><label>Tipo</label><input id="el-tipo" value="${esc(l.tipo ?? '')}"></div>
+      <div class="campo"><label>Município(s)</label><input id="el-municipios" value="${esc(l.municipios ?? '')}"></div>
+      <div class="campo"><label>Fazendas</label><input id="el-fazendas" inputmode="numeric" value="${l.fazendas ?? ''}"></div>
+      <div class="campo"><label>Área total (ha)</label><input id="el-area" inputmode="decimal" value="${l.area_total ?? ''}"></div>
+      <div class="campo"><label>Agricultável (ha)</label><input id="el-agricultavel" inputmode="decimal" value="${l.agricultavel ?? ''}"></div>
+      <div class="campo"><label>Armazéns</label><input id="el-armazens" inputmode="numeric" value="${l.armazens ?? ''}"></div>
+      <div class="campo"><label>Pivôs</label><input id="el-pivos" inputmode="numeric" value="${l.pivos ?? ''}"></div>
+      <div class="campo"><label>Outorgas</label><input id="el-outorgas" inputmode="numeric" value="${l.outorgas ?? ''}"></div>
+      <div class="campo"><label>Cultivo principal</label><input id="el-cultivo" value="${esc(l.cultivo_principal ?? '')}"></div>
+    </div>
+    <div class="campo" style="margin-top:10px;"><label>Proprietários / co-titulares</label><input id="el-cotitulares" value="${esc(l.cotitulares ?? '')}"></div>
+    <div class="campo" style="margin-top:10px;"><label>Observações</label><input id="el-obs" value="${esc(l.observacoes ?? '')}"></div>
+    ${camposCultura.length ? `<div style="margin-top:12px;">
+      <label class="texto-dim2" style="font-size:11px;">Culturas (ha)</label>
+      <div class="form-grade" style="margin-top:6px;">
+        ${camposCultura.map(([chave, valor]) => `<div class="campo"><label style="text-transform:capitalize;">${esc(chave)}</label>
+          <input class="el-cultura" data-chave="${esc(chave)}" inputmode="decimal" value="${valor}"></div>`).join('')}
+      </div></div>` : ''}
+    <div class="acoes" style="margin-top:16px;">
+      <button class="btn" id="el-salvar">Salvar</button>
+      <button class="btn-secundario" id="el-cancelar">Cancelar</button>
+    </div>
+    <div class="recado oculto" id="el-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#el-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  fundo.querySelector('#el-salvar').onclick = async () => {
+    const el = fundo.querySelector('#el-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const grupo = fundo.querySelector('#el-grupo').value.trim()
+    if (!grupo) { aviso('Informe o grupo/cliente.'); return }
+    const num = id => { const v = numeroBR(fundo.querySelector(id).value); return v || v === 0 ? v : null }
+
+    const novasCulturas = {}
+    fundo.querySelectorAll('.el-cultura').forEach(inp => {
+      const v = numeroBR(inp.value)
+      if (v) novasCulturas[inp.dataset.chave] = v
+    })
+
+    const depois = {
+      grupo, categoria: fundo.querySelector('#el-categoria').value,
+      tipo: fundo.querySelector('#el-tipo').value.trim() || null,
+      municipios: fundo.querySelector('#el-municipios').value.trim() || null,
+      fazendas: num('#el-fazendas'), area_total: num('#el-area'), agricultavel: num('#el-agricultavel'),
+      armazens: num('#el-armazens'), pivos: num('#el-pivos'), outorgas: num('#el-outorgas'),
+      cultivo_principal: fundo.querySelector('#el-cultivo').value.trim() || null,
+      cotitulares: fundo.querySelector('#el-cotitulares').value.trim() || null,
+      observacoes: fundo.querySelector('#el-obs').value.trim() || null,
+      culturas: novasCulturas
+    }
+
+    const btn = fundo.querySelector('#el-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const { error } = await db.from('regiao_lead').update(depois).eq('id', l.id)
+    if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Salvar'; return }
+
+    await db.from('regiao_lead_historico').insert({
+      regiao_lead_id: l.id, recurso_id: l.recurso_id, acao: 'EDICAO',
+      descricao: `Lead "${grupo}" editado.`,
+      antes: { grupo: l.grupo, categoria: l.categoria, area_total: l.area_total, agricultavel: l.agricultavel },
+      depois: { grupo: depois.grupo, categoria: depois.categoria, area_total: depois.area_total, agricultavel: depois.agricultavel },
+      pessoa_id: PERFIL.pessoaId
+    })
+    fechar(); aoConcluir?.()
+  }
+}
+
+// ----- Excluir um lead de região (pede confirmação, guarda no histórico) -----
+function excluirLeadRegiao (l, nomeRegiao, aoConcluir) {
+  if (!confirm(`Excluir "${l.grupo}" da lista "${nomeRegiao}"? Fica registrado no histórico, mas some da lista dos vendedores.`)) return
+  ;(async () => {
+    const { error } = await db.from('regiao_lead').delete().eq('id', l.id)
+    if (error) { alert('Não deu: ' + error.message); return }
+    await db.from('regiao_lead_historico').insert({
+      regiao_lead_id: null, recurso_id: l.recurso_id, acao: 'EXCLUSAO',
+      descricao: `Lead "${l.grupo}" excluído.`,
+      antes: { grupo: l.grupo, categoria: l.categoria, municipios: l.municipios, area_total: l.area_total, agricultavel: l.agricultavel },
+      pessoa_id: PERFIL.pessoaId
+    })
+    aoConcluir?.()
+  })()
+}
+
+// ----- Histórico de uma região: importações, edições e exclusões -----
+async function abrirHistoricoRegiaoLead (recursoId, nomeRegiao) {
+  const { data: hist } = await db.from('regiao_lead_historico')
+    .select('acao, descricao, arquivo_nome, quando, pessoa:pessoa_id(nome)')
+    .eq('recurso_id', recursoId).order('quando', { ascending: false }).limit(200)
+  const ROTULO_ACAO_REGIAO = { IMPORTACAO: '📂 Importação', EDICAO: '✏️ Edição', EXCLUSAO: '🗑️ Exclusão' }
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:560px;">
+    <h3 style="margin:0 0 4px;">Histórico — ${esc(nomeRegiao)}</h3>
+    <div style="max-height:440px;overflow-y:auto;margin-top:10px;">
+      ${(hist || []).length ? hist.map(h => `
+        <div class="passo">
+          <span><b>${ROTULO_ACAO_REGIAO[h.acao] ?? h.acao}</b> — ${esc(h.pessoa?.nome ?? 'sistema')} · ${new Date(h.quando).toLocaleString('pt-BR')}</span>
+          ${h.descricao ? `<div class="texto-dim2" style="font-size:12px;margin-top:2px;">${esc(h.descricao)}</div>` : ''}
+        </div>`).join('') : `<p class="vazio">Sem histórico ainda pra essa região.</p>`}
+    </div>
+    <div class="acoes" style="margin-top:14px;"><button class="btn-secundario" id="hr-fechar">Fechar</button></div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.querySelector('#hr-fechar').onclick = () => fundo.remove()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
 }
 
 // ===================================================================
@@ -16453,6 +16819,20 @@ function calcEnxofre (alvo) {
 let BANCO = { regiao:'todas', busca:'', categoria:'', leads:[] }
 const ROTULO_CAT = { INSTITUCIONAL:'Institucional', MAIORES:'Maiores', BATER_PORTEIRA:'Bater porteira', SECUNDARIO:'Secundário' }
 
+// Junta as culturas "clássicas" (soja/milho/algodão, campos fixos antigos)
+// com o jsonb "culturas" (café, pastagem, cana... regiões sem grão) num
+// texto só, pra caber numa coluna sem precisar de uma coluna por cultura.
+function culturasResumo (l) {
+  const partes = []
+  if (l.soja) partes.push(`Soja ${fmtNum(l.soja, 0)}`)
+  if (l.milho) partes.push(`Milho ${fmtNum(l.milho, 0)}`)
+  if (l.algodao) partes.push(`Algodão ${fmtNum(l.algodao, 0)}`)
+  Object.entries(l.culturas || {}).forEach(([chave, valor]) => {
+    if (valor) partes.push(`${chave.charAt(0).toUpperCase()}${chave.slice(1)} ${fmtNum(valor, 0)}`)
+  })
+  return partes.length ? esc(partes.join(' · ')) : '—'
+}
+
 async function bancoInformacoes (alvo) {
   const regioes = meusRecursos('REGIAO')
   if (!regioes.length) {
@@ -16509,7 +16889,7 @@ function pintarBanco (alvo, regioes) {
       <table><thead><tr>
         <th>Grupo / produtor</th><th>Região</th><th>Categoria</th><th>Tipo</th>
         <th class="num">Faz.</th><th class="num">Área (ha)</th><th class="num">Agric. (ha)</th>
-        <th class="num">Soja</th><th class="num">Milho</th><th class="num">Algodão</th><th>Foco</th>
+        <th>Culturas</th><th>Cultivo principal</th><th>Foco</th>
       </tr></thead><tbody>
       ${lista.map(l => `<tr class="lead-linha">
         <td><b>${esc(l.grupo)}</b>
@@ -16521,11 +16901,10 @@ function pintarBanco (alvo, regioes) {
         <td class="num">${l.fazendas ?? '—'}</td>
         <td class="num">${l.area_total ? fmtNum(l.area_total, 0) : '—'}</td>
         <td class="num"><b>${l.agricultavel ? fmtNum(l.agricultavel, 0) : '—'}</b></td>
-        <td class="num">${l.soja ? fmtNum(l.soja, 0) : '—'}</td>
-        <td class="num">${l.milho ? fmtNum(l.milho, 0) : '—'}</td>
-        <td class="num">${l.algodao ? fmtNum(l.algodao, 0) : '—'}</td>
+        <td class="texto-dim2" style="font-size:11.5px;">${culturasResumo(l)}</td>
+        <td class="texto-dim">${esc(l.cultivo_principal ?? '—')}</td>
         <td class="texto-dim">${esc(l.foco ?? '—')}</td>
-      </tr>`).join('') || `<tr><td colspan="11" class="vazio">
+      </tr>`).join('') || `<tr><td colspan="10" class="vazio">
         ${BANCO.leads.length ? 'Nenhum lead com esse filtro.' : 'Esta região ainda não tem dados carregados. O administrador importa a planilha em Administração › Ferramentas e regiões.'}</td></tr>`}
       </tbody></table>
     </div></div>`
