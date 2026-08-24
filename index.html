@@ -832,6 +832,8 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
         <div class="nome" id="quem-sou-nome"></div>
         <div class="papeis" id="quem-sou-papeis"></div>
       </div>
+      <button id="notif-bell" title="Notificações" style="position:relative;background:none;border:none;color:inherit;font-size:18px;cursor:pointer;padding:4px;flex:none;">🔔
+        <span id="notif-badge" class="oculto" style="position:absolute;top:-2px;right:-2px;background:var(--warn-text);color:#1a1a1a;border-radius:20px;font-size:10px;font-weight:700;min-width:16px;height:16px;display:flex;align-items:center;justify-content:center;padding:0 3px;"></span></button>
     </div>
     <div id="menu"></div>
     <div class="linha-divisoria" style="margin:18px 0 12px;"></div>
@@ -860,8 +862,6 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
         <h2 id="titulo-pagina">Visão geral</h2>
         <div class="texto-dim" id="subtitulo-pagina" style="font-size:13px;"></div>
       </div>
-      <button class="skin-toggle" id="notif-bell" title="Notificações" style="position:relative;">🔔
-        <span id="notif-badge" class="oculto" style="position:absolute;top:-4px;right:-4px;background:var(--warn-text);color:#1a1a1a;border-radius:20px;font-size:10px;font-weight:700;min-width:16px;height:16px;display:flex;align-items:center;justify-content:center;padding:0 3px;"></span></button>
       <button class="skin-toggle" id="skin-toggle-app" title="Trocar tema"></button>
     </div>
 
@@ -1289,11 +1289,45 @@ async function abrirApp () {
   irPara('visao_geral')
   montarWidgetAssistente()
   atualizarBadgeNotificacoes()
+  ligarEscutaNotificacoes()
+  tocarSom(SOM_INICIO_SISTEMA)
 }
 
 // ----- Notificações pessoais: sino no topo. Hoje só dispara quando uma
 // solicitação que a pessoa abriu é marcada como Concluída, mas a tabela é
 // genérica — dá pra plugar outros eventos depois sem mudar a UI. -----
+// ----- Som das notificações: um arquivo por tema (cada skin tem o seu),
+// mais um som padrão de reserva pra quando não bate com nenhum tema. -----
+const SONS_NOTIFICACAO = {
+  sofisticado: './sons/som-sofisticado.mp3',
+  plataforma: './sons/som-plataforma.mp3',
+  daylight: './sons/som-daylight.mp3'
+}
+const SOM_PADRAO_NOTIFICACAO = './sons/som-padrao.mp3'
+const SOM_INICIO_SISTEMA = './sons/som-plataforma.mp3'
+
+function tocarSom (caminho) {
+  try { new Audio(caminho).play().catch(() => {}) } catch {}
+}
+
+function tocarSomNotificacao () {
+  const skin = document.documentElement.getAttribute('data-skin')
+  tocarSom(SONS_NOTIFICACAO[skin] || SOM_PADRAO_NOTIFICACAO)
+}
+
+// Escuta em tempo real: assim que uma notificação nova é criada pra essa
+// pessoa (em qualquer aba aberta do sistema), toca o som e atualiza o sino
+// na hora — sem precisar recarregar a página.
+function ligarEscutaNotificacoes () {
+  if (!PERFIL.pessoaId) return
+  db.channel('notificacoes-' + PERFIL.pessoaId)
+    .on('postgres_changes', {
+      event: 'INSERT', schema: 'public', table: 'notificacao_pessoal',
+      filter: `destinatario_id=eq.${PERFIL.pessoaId}`
+    }, () => { tocarSomNotificacao(); atualizarBadgeNotificacoes() })
+    .subscribe()
+}
+
 async function atualizarBadgeNotificacoes () {
   if (!PERFIL.pessoaId) return
   const { count } = await db.from('notificacao_pessoal')
