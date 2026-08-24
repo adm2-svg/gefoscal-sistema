@@ -6914,10 +6914,13 @@ async function expedLancamentos (alvo, editavel) {
 }
 
 async function verAnexosCarregamento (carregamentoId) {
-  const { data: anexos } = await db.from('anexo').select('tipo, drive_file_id')
+  const { data: anexos } = await db.from('anexo').select('tipo, drive_file_id, storage_path, nome_arquivo')
     .eq('entidade', 'CARREGAMENTO').eq('registro_id', carregamentoId)
   if (!anexos?.length) { alert('Sem anexos nesta linha.'); return }
-  anexos.forEach(a => window.open('https://drive.google.com/open?id=' + a.drive_file_id, '_blank'))
+  anexos.forEach(a => {
+    if (a.storage_path) abrirComprovante(a.storage_path)
+    else if (a.drive_file_id) window.open('https://drive.google.com/open?id=' + a.drive_file_id, '_blank')
+  })
 }
 
 // ----- Vínculo automático do lançamento ao pedido em aberto do cliente -----
@@ -6969,6 +6972,8 @@ function expedLancar (alvo) {
           ${STATUS_CARREGAMENTO.map(s => `<option value="${s}" ${s === 'FATURADO' ? 'selected' : ''}>${ROTULO_STATUS_CARREGAMENTO[s]}</option>`).join('')}</select></div>
       </div>
       <div class="campo" style="margin-top:10px;"><label>Observação</label><input id="el-obs" placeholder="opcional"></div>
+      <div class="campo" style="margin-top:10px;"><label>Nota Fiscal (PDF)</label>
+        <input type="file" id="el-nf-pdf" accept="application/pdf,.pdf"></div>
       <div class="acoes" style="margin-top:14px;"><button class="btn" id="el-salvar">Salvar lançamento</button></div>
       <div class="recado oculto" id="el-recado"></div>
     </div>`
@@ -7013,6 +7018,20 @@ function expedLancar (alvo) {
     btn.disabled = false; btn.textContent = 'Salvar lançamento'
     if (error) { aviso(error.message); return }
 
+    // Nota fiscal em PDF (opcional): mesmo bucket privado já usado pra
+    // comprovante em outros módulos — link é sempre assinado na hora de abrir.
+    let notaAnexo = ''
+    const arquivoNf = $('#el-nf-pdf').files[0]
+    if (arquivoNf) {
+      try {
+        const subido = await subirComprovante(arquivoNf, `notas-fiscais/${clienteId}`)
+        await db.from('anexo').insert({
+          entidade: 'CARREGAMENTO', registro_id: novoCarreg.id, tipo: 'nota_fiscal',
+          nome_arquivo: subido.nome, storage_path: subido.caminho
+        })
+      } catch (e) { notaAnexo = ' (lançamento salvo, mas a NF em PDF não subiu: ' + e.message + ')' }
+    }
+
     // Faturado: tenta vincular automático ao pedido em aberto do cliente,
     // pra Conferência de Clientes já descontar o saldo na hora.
     let notaVinculo = ''
@@ -7026,9 +7045,10 @@ function expedLancar (alvo) {
       }
     }
 
-    el.textContent = 'Lançamento salvo.' + notaVinculo; el.classList.remove('oculto')
+    el.textContent = 'Lançamento salvo.' + notaVinculo + notaAnexo; el.classList.remove('oculto')
     el.style.borderColor = 'var(--good-text)'; el.style.color = 'var(--good-text)'
     ;['el-motorista-livre', 'el-qtd', 'el-preco', 'el-nf', 'el-uf', 'el-obs'].forEach(id => { $('#' + id).value = '' })
+    $('#el-nf-pdf').value = ''
     buscaVeiculo.limpar()
     $('#el-empresa').value = ''; $('#el-cliente').value = ''; $('#el-produto').value = ''; $('#el-motorista').value = ''
     $('#el-motorista-livre').classList.add('oculto')
