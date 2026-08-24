@@ -6971,7 +6971,8 @@ function expedLancar (alvo) {
         <div class="campo"><label>Empresa *</label><select id="el-empresa"><option value="">selecione...</option>
           ${EXPED_CACHE.empresas.map(e => `<option value="${e.id}" ${e.nome === 'Gefoscal' ? 'selected' : ''}>${esc(e.nome)}${e.regime_tributario ? ' — ' + esc(e.regime_tributario) : ''}</option>`).join('')}</select></div>
         <div class="campo"><label>Cliente *</label><select id="el-cliente"><option value="">selecione...</option>
-          ${EXPED_CACHE.clientes.map(c => `<option value="${c.id}">${esc(c.razao_social)}</option>`).join('')}</select></div>
+          ${EXPED_CACHE.clientes.map(c => `<option value="${c.id}">${esc(c.razao_social)}</option>`).join('')}</select>
+          <div class="oculto" id="el-aviso-ordem" style="margin-top:6px;font-size:12px;padding:7px 9px;border-radius:6px;background:rgba(var(--warn-rgb),.14);color:var(--warn-text);"></div></div>
         <div class="campo"><label>Vendedor</label><select id="el-vendedor"><option value="">—</option>
           ${EXPED_CACHE.vendedores.map(v => `<option value="${v.id}">${esc(v.nome)}</option>`).join('')}</select></div>
         <div class="campo"><label>Produto *</label><select id="el-produto"><option value="">selecione...</option>
@@ -7000,6 +7001,21 @@ function expedLancar (alvo) {
   const buscaVeiculo = montarBuscaVeiculo($('#el-busca-veiculo'), v => {
     if (v.motoristaId) $('#el-motorista').value = EXPED_CACHE.motoristas.find(m => m.id === v.motoristaId)?.nome ?? ''
   })
+  $('#el-cliente').onchange = async () => {
+    const avisoEl = $('#el-aviso-ordem')
+    avisoEl.classList.add('oculto'); avisoEl.textContent = ''
+    const clienteId = $('#el-cliente').value
+    if (!clienteId) return
+    const { data: abertas } = await db.from('carregamento')
+      .select('id, quantidade_t, data_carregamento, status')
+      .eq('cliente_id', clienteId).in('status', ['PROGRAMADO', 'EM_ANDAMENTO', 'CARREGADO'])
+      .order('data_carregamento', { ascending: false }).limit(5)
+    if (abertas?.length) {
+      avisoEl.textContent = `⚠️ Esse cliente já tem ${abertas.length} ordem(ns) em aberto (${abertas.map(a => fmtNum(a.quantidade_t) + 't em ' + fmtData(a.data_carregamento)).join(', ')}) — se é o carregamento que já foi montado, use "faturar" na Ordem de Carregamento em vez de lançar um novo aqui, senão duplica.`
+      avisoEl.classList.remove('oculto')
+    }
+  }
+
   $('#el-motorista').onchange = () => {
     $('#el-motorista-livre').classList.toggle('oculto', $('#el-motorista').value !== '__outro')
   }
@@ -7248,6 +7264,7 @@ function abrirDetalheOrdensPedido (p, aoAtualizar, permitirMontar = true) {
           <td class="texto-dim2">${esc(c.motorista ?? '—')}</td>
           <td class="texto-dim2">${esc(c.numero_nf ?? '—')}</td>
           <td style="white-space:nowrap;">
+            ${editavel && c.status !== 'FATURADO' ? `<a href="#" class="anexo-link" style="color:var(--good-text);font-weight:600;" data-faturar-ordem="${c.id}">faturar</a>` : ''}
             <a href="#" class="anexo-link" data-hist="${c.id}">histórico</a>
             ${editavel && c.status !== 'FATURADO' ? `
               <a href="#" class="anexo-link" data-adiar="${c.id}">adiar</a>
@@ -7273,6 +7290,9 @@ function abrirDetalheOrdensPedido (p, aoAtualizar, permitirMontar = true) {
   fundo.querySelector('#do-pdf').onclick = () => abrirPdfFaturamentoPedido(p)
   fundo.querySelector('#do-excel').onclick = () => exportarExcelFaturamentoPedido(p)
 
+  fundo.querySelectorAll('[data-faturar-ordem]').forEach(a => {
+    a.onclick = e => { e.preventDefault(); faturarOrdemExistente(ordens.find(c => c.id === a.dataset.faturarOrdem), recarregar) }
+  })
   fundo.querySelectorAll('[data-hist]').forEach(a => {
     a.onclick = e => { e.preventDefault(); abrirHistoricoCarregamento(ordens.find(c => c.id === a.dataset.hist)) }
   })
@@ -7286,6 +7306,75 @@ function abrirDetalheOrdensPedido (p, aoAtualizar, permitirMontar = true) {
 
 // ----- Adiar uma ordem: pede nova data e justificativa, registra no
 // histórico o antes/depois. Não mexe em quantidade nem status. -----
+// ----- Faturar uma ordem que já existe (Programado/Em andamento/Carregado):
+// edita ESTE MESMO registro, adicionando NF e valor — não cria um segundo
+// carregamento. É isso que fecha o ciclo "montei a ordem → carregou → tem
+// NF" sem duplicar. -----
+function faturarOrdemExistente (c, aoConcluir) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:420px;">
+    <h3>Faturar esta ordem</h3>
+    <p class="texto-dim2" style="font-size:12.5px;margin:-8px 0 14px;">${fmtData(c.data_carregamento)} · ${fmtNum(c.quantidade_t)} t${c.motorista ? ' · ' + esc(c.motorista) : ''}</p>
+    <div class="campo"><label>Número da NF *</label><input id="fo-nf" placeholder="ex: 15230"></div>
+    <div class="campo" style="margin-top:10px;"><label>Preço por tonelada (R$)</label>
+      <input id="fo-preco" inputmode="decimal" value="${c.preco_unitario ?? ''}"></div>
+    <div class="campo" style="margin-top:10px;"><label>Valor da nota (R$)</label>
+      <input id="fo-valor" inputmode="decimal" value="${c.valor_nf ?? ''}"></div>
+    <div class="campo" style="margin-top:10px;"><label>Data do carregamento</label>
+      <input type="date" id="fo-data" value="${c.data_carregamento ?? ''}"></div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="fo-salvar">Marcar como Faturado</button>
+      <button class="btn-secundario" id="fo-cancelar">Voltar</button>
+    </div>
+    <div class="recado oculto" id="fo-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#fo-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const recalcular = () => {
+    const preco = numeroBR(fundo.querySelector('#fo-preco').value)
+    if (preco) fundo.querySelector('#fo-valor').value = (Number(c.quantidade_t) * preco).toFixed(2).replace('.', ',')
+  }
+  fundo.querySelector('#fo-preco').oninput = recalcular
+
+  fundo.querySelector('#fo-salvar').onclick = async () => {
+    const el = fundo.querySelector('#fo-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const nf = fundo.querySelector('#fo-nf').value.trim()
+    if (!nf) { aviso('Informe o número da NF.'); return }
+    const preco = numeroBR(fundo.querySelector('#fo-preco').value) || null
+    const valor = numeroBR(fundo.querySelector('#fo-valor').value) || null
+    const dataCarreg = fundo.querySelector('#fo-data').value || c.data_carregamento
+
+    const btn = fundo.querySelector('#fo-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+
+    // mesma trava de NF duplicada usada em Lançar
+    const { data: repetida } = await db.from('carregamento')
+      .select('id, data_carregamento, cliente:cliente_id(razao_social)')
+      .eq('numero_nf', nf).neq('status', 'CANCELADO').neq('id', c.id).limit(1)
+    if (repetida?.length) {
+      aviso(`NF ${nf} já está lançada — ${repetida[0].cliente?.razao_social ?? 'outro cliente'}, em ${fmtData(repetida[0].data_carregamento)}.`)
+      btn.disabled = false; btn.textContent = 'Marcar como Faturado'; return
+    }
+
+    const { error } = await db.from('carregamento').update({
+      numero_nf: nf, preco_unitario: preco, valor_nf: valor, data_carregamento: dataCarreg,
+      status: 'FATURADO', faturado_em: new Date().toISOString()
+    }).eq('id', c.id)
+    if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Marcar como Faturado'; return }
+
+    await db.from('carregamento_historico').insert({
+      carregamento_id: c.id, acao: 'EDICAO', justificativa: 'Faturamento da ordem (NF adicionada)',
+      antes: { status: c.status, numero_nf: c.numero_nf }, depois: { status: 'FATURADO', numero_nf: nf },
+      pessoa_id: PERFIL.pessoaId
+    })
+    fechar(); aoConcluir?.()
+  }
+}
+
 function adiarCarregamento (c, aoConcluir) {
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
