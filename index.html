@@ -7342,6 +7342,9 @@ async function buscarPedidoDetalhado (pedidoId) {
   return { ...data, saldo: Math.max(0, Number(data.quantidade_t || 0) - expedido) }
 }
 
+// TO e BA primeiro (são os estados que mais aparecem no dia a dia), resto em ordem alfabética
+const UFS_TOCANTINS_PRIMEIRO = ['TO', 'BA', 'AC', 'AL', 'AP', 'AM', 'CE', 'DF', 'ES', 'GO', 'MA', 'MG', 'MT', 'MS', 'PA', 'PB', 'PE', 'PI', 'PR', 'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE']
+
 const ETAPAS_CARREGAMENTO = ['PROGRAMADO', 'EM_ANDAMENTO', 'CARREGADO', 'FATURADO']
 // Descrição de cada etapa em linguagem de operação, pra quem não decora o
 // nome técnico do status lembrar o que já foi feito até ali.
@@ -7486,7 +7489,9 @@ function faturarOrdemExistente (c, aoConcluir) {
 
     <div class="form-grade">
       <div class="campo"><label>Número da NF *</label><input id="fo-nf" placeholder="ex: 15230"></div>
-      <div class="campo"><label>UF destino</label><input id="fo-uf" maxlength="2" style="text-transform:uppercase;" value="${esc(c.uf_destino ?? '')}"></div>
+      <div class="campo"><label>Quantidade carregada (t) *</label><input id="fo-qtd" inputmode="decimal" value="${fmtNum(c.quantidade_t)}"></div>
+      <div class="campo"><label>UF destino</label><select id="fo-uf"><option value="">—</option>
+        ${UFS_TOCANTINS_PRIMEIRO.map(uf => `<option value="${uf}" ${uf === (c.uf_destino ?? '').toUpperCase() ? 'selected' : ''}>${uf}</option>`).join('')}</select></div>
       <div class="campo"><label>Preço por tonelada (R$)</label><input id="fo-preco" inputmode="decimal" value="${c.preco_unitario ?? ''}"></div>
       <div class="campo"><label>Valor da nota (R$)</label><input id="fo-valor" inputmode="decimal" value="${c.valor_nf ?? ''}"></div>
       <div class="campo"><label>Data do carregamento</label><input type="date" id="fo-data" value="${c.data_carregamento ?? ''}"></div>
@@ -7508,19 +7513,23 @@ function faturarOrdemExistente (c, aoConcluir) {
 
   const recalcular = () => {
     const preco = numeroBR(fundo.querySelector('#fo-preco').value)
-    if (preco) fundo.querySelector('#fo-valor').value = (Number(c.quantidade_t) * preco).toFixed(2).replace('.', ',')
+    const qtd = numeroBR(fundo.querySelector('#fo-qtd').value)
+    if (preco && qtd) fundo.querySelector('#fo-valor').value = (qtd * preco).toFixed(2).replace('.', ',')
   }
   fundo.querySelector('#fo-preco').oninput = recalcular
+  fundo.querySelector('#fo-qtd').oninput = recalcular
 
   fundo.querySelector('#fo-salvar').onclick = async () => {
     const el = fundo.querySelector('#fo-recado')
     const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
     const nf = fundo.querySelector('#fo-nf').value.trim()
     if (!nf) { aviso('Informe o número da NF.'); return }
+    const qtd = numeroBR(fundo.querySelector('#fo-qtd').value)
+    if (!qtd || qtd <= 0) { aviso('Informe a quantidade carregada.'); return }
     const preco = numeroBR(fundo.querySelector('#fo-preco').value) || null
     const valor = numeroBR(fundo.querySelector('#fo-valor').value) || null
     const dataCarreg = fundo.querySelector('#fo-data').value || c.data_carregamento
-    const uf = fundo.querySelector('#fo-uf').value.trim().toUpperCase() || null
+    const uf = fundo.querySelector('#fo-uf').value || null
     const obs = fundo.querySelector('#fo-obs').value.trim() || null
 
     const btn = fundo.querySelector('#fo-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
@@ -7535,7 +7544,7 @@ function faturarOrdemExistente (c, aoConcluir) {
     }
 
     const { error } = await db.from('carregamento').update({
-      numero_nf: nf, preco_unitario: preco, valor_nf: valor, data_carregamento: dataCarreg,
+      numero_nf: nf, quantidade_t: qtd, preco_unitario: preco, valor_nf: valor, data_carregamento: dataCarreg,
       uf_destino: uf, observacoes: obs, status: 'FATURADO', faturado_em: new Date().toISOString()
     }).eq('id', c.id)
     if (error) { aviso(error.message); btn.disabled = false; btn.textContent = '✅ Marcar como Faturado'; return }
@@ -7555,7 +7564,8 @@ function faturarOrdemExistente (c, aoConcluir) {
 
     await db.from('carregamento_historico').insert({
       carregamento_id: c.id, acao: 'EDICAO', justificativa: 'Faturamento da ordem (NF adicionada)',
-      antes: { status: c.status, numero_nf: c.numero_nf }, depois: { status: 'FATURADO', numero_nf: nf },
+      antes: { status: c.status, numero_nf: c.numero_nf, quantidade_t: c.quantidade_t },
+      depois: { status: 'FATURADO', numero_nf: nf, quantidade_t: qtd },
       pessoa_id: PERFIL.pessoaId
     })
     if (notaAnexo) { aviso(notaAnexo); await new Promise(r => setTimeout(r, 1400)) }
