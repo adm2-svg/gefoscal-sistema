@@ -2108,7 +2108,7 @@ async function blocoSecretaria (area) {
   bloco.innerHTML = `
     <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:17px;">Minha Secretária</h3></div>
     <p class="texto-dim2" style="font-size:12px;margin:-6px 0 14px;">
-      Por enquanto ela orienta e explica o sistema — gravar dados direto é o próximo passo.</p>
+      Roda com a API do Claude e leitura livre do banco. Pra criar, mudar ou apagar algo, ela sempre mostra antes e só executa depois que você confirmar.</p>
     <div id="sec-chat" class="sec-chat"></div>
     <div class="linha-add">
       <input id="sec-pergunta" placeholder="Pergunte algo pra secretária...">
@@ -2124,8 +2124,41 @@ async function blocoSecretaria (area) {
     div.textContent = texto
     chat.appendChild(div)
     chat.scrollTop = chat.scrollHeight
+    return div
   }
-  renderMsg('assistant', 'Oi! Posso te ajudar a achar algo no sistema ou explicar como fazer uma tarefa.')
+  const renderConfirmacao = ({ acao_id, descricao, sql }) => {
+    const div = document.createElement('div')
+    div.className = 'sec-msg sec-ia'
+    div.style.maxWidth = '94%'
+    div.innerHTML = `
+      <b>Confirma essa ação?</b>
+      <p style="margin:6px 0;">${esc(descricao)}</p>
+      <pre style="background:var(--panel);border:1px solid var(--line2);border-radius:6px;padding:8px;font-size:11px;overflow-x:auto;white-space:pre-wrap;margin:0 0 8px;">${esc(sql)}</pre>
+      <div style="display:flex;gap:8px;">
+        <button class="btn mini" data-confirmar="${acao_id}">Confirmar</button>
+        <button class="btn-secundario mini" data-cancelar="1">Cancelar</button>
+      </div>`
+    chat.appendChild(div)
+    chat.scrollTop = chat.scrollHeight
+
+    div.querySelector('[data-confirmar]').onclick = async () => {
+      div.querySelectorAll('button').forEach(b => { b.disabled = true })
+      const { data, error } = await db.functions.invoke('secretaria-claude', { body: { confirmar_acao_id: acao_id } })
+      if (error || data?.erro) {
+        let detalhe = data?.erro || error?.message || 'Não consegui executar agora.'
+        if (error?.context?.json) { try { const c = await error.context.json(); detalhe = c?.erro || detalhe } catch {} }
+        renderMsg('assistant', detalhe)
+        return
+      }
+      renderMsg('assistant', data.texto)
+      historico.push({ role: 'assistant', content: data.texto })
+    }
+    div.querySelector('[data-cancelar]').onclick = () => {
+      div.remove()
+      renderMsg('assistant', 'Ok, não fiz nada.')
+    }
+  }
+  renderMsg('assistant', 'Oi! Pode perguntar qualquer coisa sobre os dados do sistema, ou pedir pra eu lançar/alterar algo.')
 
   const enviar = async () => {
     const texto = $('#sec-pergunta').value.trim()
@@ -2133,7 +2166,7 @@ async function blocoSecretaria (area) {
     renderMsg('user', texto)
     $('#sec-pergunta').value = ''
     historico.push({ role: 'user', content: texto })
-    const { data, error } = await db.functions.invoke('assistente-sistema', { body: { mensagens: historico } })
+    const { data, error } = await db.functions.invoke('secretaria-claude', { body: { mensagens: historico } })
     if (error || data?.erro) {
       let detalhe = data?.erro || error?.message || 'Não consegui responder agora.'
       if (error?.context?.json) { try { const c = await error.context.json(); detalhe = c?.erro || detalhe } catch {} }
@@ -2141,8 +2174,12 @@ async function blocoSecretaria (area) {
       historico.pop()
       return
     }
-    historico.push({ role: 'assistant', content: data.resposta })
-    renderMsg('assistant', data.resposta)
+    if (data.tipo === 'confirmacao') {
+      renderConfirmacao(data)
+      return
+    }
+    historico = data.mensagens || historico
+    renderMsg('assistant', data.texto)
   }
   $('#sec-enviar').onclick = enviar
   $('#sec-pergunta').onkeydown = e => { if (e.key === 'Enter') enviar() }
