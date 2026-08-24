@@ -7274,7 +7274,7 @@ async function expedOrdem (alvo) {
     let q = db.from('pedido').select(`
       id, numero, quantidade_t, preco_unitario, data_pedido, local_entrega, empresa_id,
       cliente:cliente_id ( id, razao_social ), produto:produto_id ( id, nome, unidade ), vendedor:vendedor_id ( nome ),
-      carregamento ( id, quantidade_t, status, data_carregamento, motorista, numero_nf, valor_nf, preco_unitario, observacoes )
+      carregamento ( id, quantidade_t, status, data_carregamento, motorista, numero_nf, valor_nf, preco_unitario, observacoes, uf_destino, cliente_id )
     `).not('status', 'in', '(CANCELADO,CONCLUIDO)').order('data_pedido', { ascending: false }).limit(100)
     const termo = $('#oc-busca').value.trim()
     if (termo) q = q.or(`numero.ilike.%${termo}%`)
@@ -7335,7 +7335,7 @@ async function buscarPedidoDetalhado (pedidoId) {
     id, numero, quantidade_t, preco_unitario, data_pedido, local_entrega, empresa_id,
     cliente:cliente_id ( id, razao_social, cnpj_cpf, endereco, bairro, municipio, uf ),
     produto:produto_id ( id, nome, unidade ), vendedor:vendedor_id ( nome ),
-    carregamento ( id, quantidade_t, status, data_carregamento, motorista, numero_nf, valor_nf, preco_unitario, observacoes )
+    carregamento ( id, quantidade_t, status, data_carregamento, motorista, numero_nf, valor_nf, preco_unitario, observacoes, uf_destino, cliente_id )
   `).eq('id', pedidoId).single()
   if (error || !data) return null
   const expedido = (data.carregamento || []).filter(c => c.status !== 'CANCELADO').reduce((s, c) => s + Number(c.quantidade_t || 0), 0)
@@ -7480,18 +7480,23 @@ function abrirAcoesOrdem (c, aoConcluir) {
 function faturarOrdemExistente (c, aoConcluir) {
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
-  fundo.innerHTML = `<div class="modal" style="max-width:420px;">
-    <h3>Faturar esta ordem</h3>
-    <p class="texto-dim2" style="font-size:12.5px;margin:-8px 0 14px;">${fmtData(c.data_carregamento)} · ${fmtNum(c.quantidade_t)} t${c.motorista ? ' · ' + esc(c.motorista) : ''}</p>
-    <div class="campo"><label>Número da NF *</label><input id="fo-nf" placeholder="ex: 15230"></div>
-    <div class="campo" style="margin-top:10px;"><label>Preço por tonelada (R$)</label>
-      <input id="fo-preco" inputmode="decimal" value="${c.preco_unitario ?? ''}"></div>
-    <div class="campo" style="margin-top:10px;"><label>Valor da nota (R$)</label>
-      <input id="fo-valor" inputmode="decimal" value="${c.valor_nf ?? ''}"></div>
-    <div class="campo" style="margin-top:10px;"><label>Data do carregamento</label>
-      <input type="date" id="fo-data" value="${c.data_carregamento ?? ''}"></div>
-    <div class="acoes" style="margin-top:14px;">
-      <button class="btn" id="fo-salvar">Marcar como Faturado</button>
+  fundo.innerHTML = `<div class="modal" style="max-width:560px;">
+    <h3 style="margin:0 0 4px;">📄 Faturar esta ordem</h3>
+    <p class="texto-dim2" style="font-size:12.5px;margin:0 0 16px;">${fmtData(c.data_carregamento)} · ${fmtNum(c.quantidade_t)} t${c.motorista ? ' · ' + esc(c.motorista) : ''}</p>
+
+    <div class="form-grade">
+      <div class="campo"><label>Número da NF *</label><input id="fo-nf" placeholder="ex: 15230"></div>
+      <div class="campo"><label>UF destino</label><input id="fo-uf" maxlength="2" style="text-transform:uppercase;" value="${esc(c.uf_destino ?? '')}"></div>
+      <div class="campo"><label>Preço por tonelada (R$)</label><input id="fo-preco" inputmode="decimal" value="${c.preco_unitario ?? ''}"></div>
+      <div class="campo"><label>Valor da nota (R$)</label><input id="fo-valor" inputmode="decimal" value="${c.valor_nf ?? ''}"></div>
+      <div class="campo"><label>Data do carregamento</label><input type="date" id="fo-data" value="${c.data_carregamento ?? ''}"></div>
+    </div>
+    <div class="campo" style="margin-top:12px;"><label>Observação</label><input id="fo-obs" placeholder="opcional" value="${esc(c.observacoes ?? '')}"></div>
+    <div class="campo" style="margin-top:12px;"><label>📎 Nota Fiscal (PDF)</label>
+      <input type="file" id="fo-nf-pdf" accept="application/pdf,.pdf"></div>
+
+    <div class="acoes" style="margin-top:18px;">
+      <button class="btn" id="fo-salvar">✅ Marcar como Faturado</button>
       <button class="btn-secundario" id="fo-cancelar">Voltar</button>
     </div>
     <div class="recado oculto" id="fo-recado"></div>
@@ -7515,6 +7520,8 @@ function faturarOrdemExistente (c, aoConcluir) {
     const preco = numeroBR(fundo.querySelector('#fo-preco').value) || null
     const valor = numeroBR(fundo.querySelector('#fo-valor').value) || null
     const dataCarreg = fundo.querySelector('#fo-data').value || c.data_carregamento
+    const uf = fundo.querySelector('#fo-uf').value.trim().toUpperCase() || null
+    const obs = fundo.querySelector('#fo-obs').value.trim() || null
 
     const btn = fundo.querySelector('#fo-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
 
@@ -7524,20 +7531,34 @@ function faturarOrdemExistente (c, aoConcluir) {
       .eq('numero_nf', nf).neq('status', 'CANCELADO').neq('id', c.id).limit(1)
     if (repetida?.length) {
       aviso(`NF ${nf} já está lançada — ${repetida[0].cliente?.razao_social ?? 'outro cliente'}, em ${fmtData(repetida[0].data_carregamento)}.`)
-      btn.disabled = false; btn.textContent = 'Marcar como Faturado'; return
+      btn.disabled = false; btn.textContent = '✅ Marcar como Faturado'; return
     }
 
     const { error } = await db.from('carregamento').update({
       numero_nf: nf, preco_unitario: preco, valor_nf: valor, data_carregamento: dataCarreg,
-      status: 'FATURADO', faturado_em: new Date().toISOString()
+      uf_destino: uf, observacoes: obs, status: 'FATURADO', faturado_em: new Date().toISOString()
     }).eq('id', c.id)
-    if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Marcar como Faturado'; return }
+    if (error) { aviso(error.message); btn.disabled = false; btn.textContent = '✅ Marcar como Faturado'; return }
+
+    // Nota fiscal em PDF (opcional) — mesmo bucket privado usado em Lançar.
+    const arquivoNf = fundo.querySelector('#fo-nf-pdf').files[0]
+    let notaAnexo = ''
+    if (arquivoNf) {
+      try {
+        const subido = await subirComprovante(arquivoNf, `notas-fiscais/${c.cliente_id ?? c.id}`)
+        await db.from('anexo').insert({
+          entidade: 'CARREGAMENTO', registro_id: c.id, tipo: 'nota_fiscal',
+          nome_arquivo: subido.nome, storage_path: subido.caminho
+        })
+      } catch (e) { notaAnexo = ' (NF em PDF não subiu: ' + e.message + ')' }
+    }
 
     await db.from('carregamento_historico').insert({
       carregamento_id: c.id, acao: 'EDICAO', justificativa: 'Faturamento da ordem (NF adicionada)',
       antes: { status: c.status, numero_nf: c.numero_nf }, depois: { status: 'FATURADO', numero_nf: nf },
       pessoa_id: PERFIL.pessoaId
     })
+    if (notaAnexo) { aviso(notaAnexo); await new Promise(r => setTimeout(r, 1400)) }
     fechar(); aoConcluir?.()
   }
 }
