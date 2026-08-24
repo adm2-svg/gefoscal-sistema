@@ -7156,7 +7156,7 @@ async function expedOrdem (alvo) {
       <button class="btn" id="oc-buscar">Buscar</button>
     </div>
     <p class="texto-dim2" style="font-size:12px;margin:-8px 0 14px;">
-      Só pedidos com saldo pra expedir aparecem aqui — os já concluídos não entram. Mostra o que ainda falta, não o total do pedido.</p>
+      Só pedidos com saldo pra expedir OU com alguma ordem ainda não faturada aparecem aqui — os já concluídos (tudo faturado) não entram.</p>
     <div id="oc-lista"><p class="texto-dim2">carregando...</p></div>`
 
   const buscar = async () => {
@@ -7171,8 +7171,9 @@ async function expedOrdem (alvo) {
     if (error) { $('#oc-lista').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
     let lista = (data || []).map(p => {
       const expedido = (p.carregamento || []).filter(c => c.status !== 'CANCELADO').reduce((s, c) => s + Number(c.quantidade_t || 0), 0)
-      return { ...p, saldo: Math.max(0, Number(p.quantidade_t || 0) - expedido) }
-    }).filter(p => p.saldo > 0.01)
+      const pendentes = (p.carregamento || []).filter(c => c.status !== 'CANCELADO' && c.status !== 'FATURADO').length
+      return { ...p, saldo: Math.max(0, Number(p.quantidade_t || 0) - expedido), ordensPendentes: pendentes }
+    }).filter(p => p.saldo > 0.01 || p.ordensPendentes > 0)
     if (termo) {
       const t = termo.toLowerCase()
       lista = lista.filter(p => (p.numero ?? '').toLowerCase().includes(t) || (p.cliente?.razao_social ?? '').toLowerCase().includes(t))
@@ -7185,9 +7186,11 @@ async function expedOrdem (alvo) {
             <td><b>${esc(p.numero ?? '—')}</b></td>
             <td><a href="#" class="anexo-link" data-ver-ordens="${p.id}">${esc(p.cliente?.razao_social ?? '—')}</a></td>
             <td>${esc(p.produto?.nome ?? '—')}</td>
-            <td class="num">${fmtNum(p.saldo, casasPara(p.produto?.unidade))} ${esc(p.produto?.unidade ?? 't')}</td>
+            <td class="num">${p.saldo > 0.01
+              ? `${fmtNum(p.saldo, casasPara(p.produto?.unidade))} ${esc(p.produto?.unidade ?? 't')}`
+              : `<span class="badge-alerta" style="font-size:10px;">saldo zerado — ${p.ordensPendentes} ordem(ns) esperando faturar</span>`}</td>
             <td class="texto-dim2">${fmtData(p.data_pedido)}</td>
-            <td><button class="btn-secundario mini" data-montar="${p.id}">Montar ordem</button></td>
+            <td>${p.saldo > 0.01 ? `<button class="btn-secundario mini" data-montar="${p.id}">Montar ordem</button>` : ''}</td>
           </tr>`).join('')}
         </tbody></table>
       </div></div>` : `<p class="vazio">Nenhum pedido com saldo pra expedir.</p>`
