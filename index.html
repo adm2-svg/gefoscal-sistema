@@ -467,6 +467,29 @@ tbody tr:hover { background: var(--hover-bg); }
 .etapa-funil-dir .rot { font-size:11.5px; margin-top:3px; opacity:.9; }
 @media (max-width:700px){ .grade-funil-dir { flex-direction:column; } }
 
+/* ---- Painel Executivo — cards com régua (substituem o antigo Dashboard Diretor) ---- */
+.pe-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(290px,1fr)); gap:13px; margin-top:12px; }
+.pe-card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px 18px 15px; display:flex; flex-direction:column; }
+.pe-eyebrow { font-size:10px; letter-spacing:.09em; text-transform:uppercase; color:var(--dim2); margin-bottom:4px; }
+.pe-titulo { font-family:var(--serif); font-size:14.5px; margin:0 0 10px; line-height:1.3; }
+.pe-valor-linha { display:flex; align-items:baseline; gap:9px; flex-wrap:wrap; }
+.pe-valor { font-family:var(--serif); font-size:23px; }
+.pe-delta { font-size:10.5px; padding:2px 8px; border-radius:20px; white-space:nowrap; }
+.pe-delta.ok { background:rgba(var(--good-rgb),.16); color:var(--good-text); }
+.pe-delta.alerta { background:rgba(var(--gold-rgb),.18); color:var(--gold); }
+.pe-delta.critico { background:rgba(var(--critico-rgb),.16); color:var(--critico-text); }
+.pe-nota { color:var(--dim2); font-size:11.5px; margin-top:3px; }
+.pe-explicacao { color:var(--dim); font-size:12px; line-height:1.55; margin:9px 0 2px; }
+.pe-regua { margin-top:auto; padding-top:16px; }
+.pe-regua-trilho { position:relative; height:2px; background:var(--line2); margin:22px 3px 7px; }
+.pe-regua-trilho .marco { position:absolute; top:-5px; width:2px; height:12px; background:var(--dim2); transform:translateX(-50%); }
+.pe-regua-trilho .marco .rot-marco { position:absolute; top:-17px; left:50%; transform:translateX(-50%); font-size:9.5px; color:var(--dim2); white-space:nowrap; }
+.pe-regua-trilho .ponteiro { position:absolute; top:-14px; transform:translateX(-50%); font-size:13px; line-height:1; }
+.pe-regua-legendas { display:flex; justify-content:space-between; font-size:10.5px; color:var(--dim2); gap:6px; }
+.pe-nav-secoes { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:20px; }
+.pe-nav-secoes a { font-size:12.5px; color:var(--dim); text-decoration:none; border:1px solid var(--line2); padding:6px 13px; border-radius:20px; }
+.pe-nav-secoes a:hover { color:var(--txt); border-color:var(--rust); }
+
 .segmentado { display:flex; gap:0; border:1px solid var(--line2); border-radius:8px; overflow:hidden; width:fit-content; }
 .segmentado button { font-size:12.5px; padding:8px 16px; cursor:pointer; border:none; background:none;
                       color:var(--dim); border-right:1px solid var(--line2); transition:.12s; }
@@ -795,6 +818,7 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
 .sec-msg { max-width:80%; padding:8px 12px; border-radius:10px; font-size:12.8px; line-height:1.5; }
 .sec-msg.sec-user { align-self:flex-end; background:var(--rust); color:#fff; border-bottom-right-radius:2px; }
 .sec-msg.sec-ia { align-self:flex-start; background:var(--panel); border:1px solid var(--line2); border-bottom-left-radius:2px; }
+.sec-msg.sec-outro { align-self:flex-start; background:var(--panel); border:1px solid var(--line2); border-bottom-left-radius:2px; }
 .sec-msg.sec-carregando { color:var(--dim2); font-style:italic; animation:sec-pulsar 1.2s ease-in-out infinite; }
 @keyframes sec-pulsar { 0%,100% { opacity:.5; } 50% { opacity:1; } }
 .gravando-voz { background:rgba(var(--critico-rgb),.18) !important; color:var(--critico-text) !important;
@@ -1355,8 +1379,10 @@ async function abrirApp () {
   $('#tela-app').classList.remove('oculto')
   irPara('visao_geral')
   montarWidgetAssistente()
+  montarWidgetChatInterno()
   atualizarBadgeNotificacoes()
   ligarEscutaNotificacoes()
+  ligarEscutaChatInterno()
   ligarChecagemPeriodicaNotificacoes()
   tocarSomNotificacao()
 }
@@ -1492,7 +1518,7 @@ function podeEditar (chave) {
 const PAGINAS = {
   visao_geral: { nome: 'Visão geral', render: paginaVisaoGeral, sempre: true },
   solicitacoes: { nome: 'Solicitações', render: paginaSolicitacoes, sempre: true },
-  dashboard_diretor: { nome: 'Dashboard Diretor', render: paginaDashboardDiretor },
+  dashboard_diretor: { nome: 'Painel Executivo', render: paginaDashboardDiretor },
   cadastro:    { nome: 'Cadastro', render: paginaCadastro },
   expedicao:   { nome: 'Faturamento', render: paginaExpedicao },
   compras:     { nome: 'Compras', render: paginaCompras, sempre: true },
@@ -1525,7 +1551,7 @@ const PAGINAS = {
 const ICONES_MODULO = {
   onfly: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-1 .1-1.3.5l-.7.9c-.4.4-.2 1.1.3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 6.4c.2.5.9.7 1.3.3l.9-.7c.4-.3.6-.8.5-1.3Z"/></svg>',
   dp: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/><path d="M9 12l2 2 4-4"/></svg>',
-  dashboard_diretor: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>',
+  dashboard_diretor: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1" fill="currentColor"/></svg>',
   marketing: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>',
   visao_geral: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5L12 4l9 7.5"/><path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9"/></svg>',
   solicitacoes: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h10M7 13h10M7 17h6"/></svg>',
@@ -4352,6 +4378,231 @@ function montarWidgetAssistente () {
   }
   $('#as-enviar').onclick = enviar
   $('#as-pergunta').onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); enviar() } }
+}
+
+// ---------------------------------------------------------------
+// Chat Interno — bolha flutuante empilhada acima do Assistente do
+// Sistema (mesmo canto). Conversa 1:1 com quem tem login ativo no
+// sistema (usuario_perfil.ativo), com várias conversas abertas em
+// abas dentro do mesmo painel — igual um Messenger. Usa a tabela
+// mensagem_interna que já existia no banco (RLS só deixa ver o que é
+// seu) e tempo real via Supabase Realtime, igual ao sino de
+// notificações — mas com contador e som próprios, sem mexer no sino.
+//
+// A lista de "quem tem login" vem da view pessoa_com_login (criada
+// junto com este código): ela existe porque um usuário comum não
+// pode ler a tabela usuario_perfil de outra pessoa (RLS restrita a
+// ADMIN/DIRETORIA) — a view devolve só nome/cargo/setor, que já é
+// público pra qualquer autenticado hoje (pessoa_select_autenticado).
+// ---------------------------------------------------------------
+let CHAT_CONTATOS = null
+let CHAT_ABAS = []      // pessoa_id de cada conversa aberta em aba
+let CHAT_ATIVA = null   // pessoa_id da aba em foco (null = lista de contatos)
+let CHAT_MENSAGENS = {} // pessoa_id -> mensagens já carregadas dessa conversa
+let CHAT_ABERTO = false
+let CHAT_CANAL = null
+
+async function carregarContatosChat () {
+  if (CHAT_CONTATOS) return CHAT_CONTATOS
+  const { data } = await db.from('pessoa_com_login').select('pessoa_id,nome,cargo')
+  CHAT_CONTATOS = (data || [])
+    .filter(c => c.pessoa_id !== PERFIL.pessoaId)
+    .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'))
+  return CHAT_CONTATOS
+}
+
+function montarWidgetChatInterno () {
+  if ($('#chat-bolha')) return // já montado, não duplica
+
+  const bolha = document.createElement('button')
+  bolha.id = 'chat-bolha'
+  bolha.type = 'button'
+  bolha.innerHTML = '💬 Chat<span id="chat-badge" class="oculto" style="margin-left:6px;background:#fff;color:var(--rust);border-radius:20px;padding:1px 7px;font-size:11px;font-weight:800;"></span>'
+  bolha.style.cssText = `
+    position:fixed; right:22px; bottom:78px; z-index:8999;
+    background:var(--rust); color:#fff; border:none; border-radius:24px;
+    padding:12px 20px; font-weight:700; font-size:13.5px; cursor:pointer;
+    box-shadow:0 6px 20px rgba(0,0,0,.35); display:flex; align-items:center;`
+  document.body.appendChild(bolha)
+
+  const painel = document.createElement('div')
+  painel.id = 'chat-painel'
+  painel.style.cssText = `
+    position:fixed; right:22px; bottom:134px; z-index:8999; width:360px; max-width:calc(100vw - 32px);
+    height:min(520px, calc(100vh - 176px)); background:var(--panel); border:1px solid var(--line);
+    border-radius:14px; box-shadow:0 12px 40px rgba(0,0,0,.45); display:none; flex-direction:column; overflow:hidden;`
+  painel.innerHTML = `
+    <div style="background:var(--rust); color:#fff; padding:12px 16px; display:flex; justify-content:space-between; align-items:center;">
+      <div><b style="font-size:14px;">💬 Chat interno</b>
+        <div style="font-size:10.5px;opacity:.85;">converse com quem tem acesso ao sistema</div></div>
+      <button id="chat-fechar" style="background:none;border:none;font-size:20px;cursor:pointer;color:#fff;line-height:1;">−</button>
+    </div>
+    <div id="chat-abas" style="display:flex;gap:4px;padding:8px 8px 0;overflow-x:auto;flex:none;"></div>
+    <div id="chat-corpo" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;"></div>
+    <div id="chat-rodape" style="padding:10px 12px;border-top:1px solid var(--line);display:none;gap:6px;align-items:flex-end;">
+      <textarea id="chat-texto" placeholder="Escreva uma mensagem..." style="flex:1;min-height:36px;max-height:80px;font-size:13px;"></textarea>
+      <button id="chat-enviar" class="btn mini" style="flex:none;">Enviar</button>
+    </div>`
+  document.body.appendChild(painel)
+
+  const abrirFechar = () => {
+    CHAT_ABERTO = !CHAT_ABERTO
+    painel.style.display = CHAT_ABERTO ? 'flex' : 'none'
+    if (CHAT_ABERTO) renderPainelChat()
+  }
+  bolha.onclick = abrirFechar
+  $('#chat-fechar').onclick = abrirFechar
+  $('#chat-enviar').onclick = enviarMensagemChat
+  $('#chat-texto').onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); enviarMensagemChat() } }
+
+  atualizarBadgeChat()
+}
+
+function tabChat (contato, ativa, naoLidas) {
+  return `<button data-aba-chat="${contato.id}" style="flex:none;font-size:12px;padding:6px 11px;border-radius:20px;cursor:pointer;
+    border:1px solid ${ativa ? 'var(--rust)' : 'var(--line2)'}; background:${ativa ? 'rgba(var(--rust-rgb),.12)' : 'var(--surface2)'};
+    color:${ativa ? 'var(--rust)' : 'var(--dim)'}; white-space:nowrap; display:flex; align-items:center; gap:5px;">
+    ${naoLidas ? '<span style="width:7px;height:7px;border-radius:50%;background:var(--rust);flex:none;"></span>' : ''}
+    ${esc(contato.nome.split(' ')[0])}
+    <span data-fechar-aba="${contato.id}" style="opacity:.6;margin-left:2px;">×</span>
+  </button>`
+}
+
+async function renderPainelChat () {
+  const contatos = await carregarContatosChat()
+  const corpo = $('#chat-corpo')
+  const rodape = $('#chat-rodape')
+
+  $('#chat-abas').innerHTML = CHAT_ABAS.map(id => {
+    const c = contatos.find(x => x.id === id) || { id, nome: '...' }
+    const temNaoLida = (CHAT_MENSAGENS[id] || []).some(m => m.destinatario_id === PERFIL.pessoaId && !m.lida_em)
+    return tabChat({ id, nome: c.nome }, id === CHAT_ATIVA, temNaoLida)
+  }).join('') + `<button id="chat-nova-aba" style="flex:none;font-size:15px;padding:5px 11px;border-radius:20px;cursor:pointer;
+    border:1px dashed var(--line2); background:none; color:var(--dim);">+</button>`
+
+  $('#chat-abas').querySelectorAll('[data-fechar-aba]').forEach(el => {
+    el.onclick = e => {
+      e.stopPropagation()
+      const id = el.dataset.fecharAba
+      CHAT_ABAS = CHAT_ABAS.filter(x => x !== id)
+      if (CHAT_ATIVA === id) CHAT_ATIVA = CHAT_ABAS[0] || null
+      renderPainelChat()
+    }
+  })
+  $('#chat-abas').querySelectorAll('[data-aba-chat]').forEach(btn => {
+    btn.onclick = () => abrirConversaChat(btn.dataset.abaChat)
+  })
+  $('#chat-nova-aba').onclick = () => { CHAT_ATIVA = null; renderCorpoChat() }
+
+  renderCorpoChat()
+
+  function renderCorpoChat () {
+    if (!CHAT_ATIVA) {
+      rodape.style.display = 'none'
+      corpo.style.padding = '10px 14px'
+      corpo.innerHTML = `
+        <p class="texto-dim2" style="font-size:11.5px;margin:2px 0 10px;">Quem tem login no sistema:</p>
+        ${contatos.length ? contatos.map(c => `
+          <div data-abrir-contato="${c.pessoa_id}" style="display:flex;align-items:center;gap:10px;padding:8px 4px;cursor:pointer;border-bottom:1px solid var(--line);">
+            <div style="width:32px;height:32px;border-radius:50%;background:var(--surface2);display:flex;align-items:center;justify-content:center;font-size:11.5px;font-weight:700;flex:none;">${esc(iniciais(c.nome))}</div>
+            <div style="min-width:0;">
+              <div style="font-size:13px;">${esc(c.nome)}</div>
+              ${c.cargo ? `<div class="texto-dim2" style="font-size:11px;">${esc(c.cargo)}</div>` : ''}
+            </div>
+          </div>`).join('') : '<p class="vazio">Ninguém mais com login ativo por enquanto.</p>'}`
+      corpo.querySelectorAll('[data-abrir-contato]').forEach(el => { el.onclick = () => abrirConversaChat(el.dataset.abrirContato) })
+      return
+    }
+    rodape.style.display = 'flex'
+    corpo.style.padding = '14px'
+    corpo.style.gap = '10px'
+    const msgs = CHAT_MENSAGENS[CHAT_ATIVA] || []
+    corpo.innerHTML = msgs.length ? msgs.map(m => `
+      <div class="sec-msg ${m.remetente_id === PERFIL.pessoaId ? 'sec-user' : 'sec-outro'}">
+        ${esc(m.texto)}
+        <div style="font-size:10px;opacity:.65;margin-top:3px;">${new Date(m.criado_em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</div>
+      </div>`).join('') : '<p class="texto-dim2" style="font-size:12px;">Nenhuma mensagem ainda — diga oi.</p>'
+    corpo.scrollTop = corpo.scrollHeight
+  }
+}
+
+async function abrirConversaChat (pessoaId) {
+  if (!CHAT_ABAS.includes(pessoaId)) CHAT_ABAS.push(pessoaId)
+  CHAT_ATIVA = pessoaId
+
+  if (!CHAT_MENSAGENS[pessoaId]) {
+    const me = PERFIL.pessoaId
+    const { data } = await db.from('mensagem_interna')
+      .select('*')
+      .or(`and(remetente_id.eq.${me},destinatario_id.eq.${pessoaId}),and(remetente_id.eq.${pessoaId},destinatario_id.eq.${me})`)
+      .order('criado_em', { ascending: true })
+    CHAT_MENSAGENS[pessoaId] = data || []
+  }
+
+  const naoLidas = CHAT_MENSAGENS[pessoaId].filter(m => m.destinatario_id === PERFIL.pessoaId && !m.lida_em)
+  if (naoLidas.length) {
+    const agora = new Date().toISOString()
+    naoLidas.forEach(m => { m.lida_em = agora })
+    await db.from('mensagem_interna').update({ lida_em: agora })
+      .eq('destinatario_id', PERFIL.pessoaId).eq('remetente_id', pessoaId).is('lida_em', null)
+    atualizarBadgeChat()
+  }
+
+  renderPainelChat()
+}
+
+async function enviarMensagemChat () {
+  const campo = $('#chat-texto')
+  const texto = campo.value.trim()
+  if (!texto || !CHAT_ATIVA) return
+  campo.value = ''
+  const otimista = { id: 'temp-' + Date.now(), remetente_id: PERFIL.pessoaId, destinatario_id: CHAT_ATIVA, texto, criado_em: new Date().toISOString(), lida_em: null }
+  CHAT_MENSAGENS[CHAT_ATIVA] = [...(CHAT_MENSAGENS[CHAT_ATIVA] || []), otimista]
+  renderPainelChat()
+
+  const { data, error } = await db.from('mensagem_interna')
+    .insert({ remetente_id: PERFIL.pessoaId, destinatario_id: CHAT_ATIVA, texto }).select().single()
+  if (!error && data) {
+    CHAT_MENSAGENS[CHAT_ATIVA] = CHAT_MENSAGENS[CHAT_ATIVA].map(m => m.id === otimista.id ? data : m)
+    renderPainelChat()
+  }
+}
+
+// tempo real: mensagem chegando pra mim, em qualquer aba aberta do
+// sistema — badge e som só do chat, não mexe no sino de notificações
+// (é o mesmo padrão de ligarEscutaNotificacoes, canal separado)
+function ligarEscutaChatInterno () {
+  if (!PERFIL.pessoaId || CHAT_CANAL) return
+  CHAT_CANAL = db.channel('chat-interno-' + PERFIL.pessoaId)
+    .on('postgres_changes', {
+      event: 'INSERT', schema: 'public', table: 'mensagem_interna',
+      filter: `destinatario_id=eq.${PERFIL.pessoaId}`
+    }, payload => {
+      const msg = payload.new
+      const dela = msg.remetente_id
+      CHAT_MENSAGENS[dela] = [...(CHAT_MENSAGENS[dela] || []), msg]
+      if (CHAT_ABERTO && CHAT_ATIVA === dela) {
+        db.from('mensagem_interna').update({ lida_em: new Date().toISOString() }).eq('id', msg.id)
+      } else if (!CHAT_ABAS.includes(dela)) {
+        CHAT_ABAS.push(dela)
+      }
+      tocarSomNotificacao()
+      if (CHAT_ABERTO) renderPainelChat()
+      atualizarBadgeChat()
+    })
+    .subscribe()
+}
+
+async function atualizarBadgeChat () {
+  if (!PERFIL.pessoaId) return
+  const { count } = await db.from('mensagem_interna')
+    .select('id', { count: 'exact', head: true })
+    .eq('destinatario_id', PERFIL.pessoaId).is('lida_em', null)
+  const badge = $('#chat-badge')
+  if (!badge) return
+  const total = count || 0
+  if (total > 0) { badge.textContent = total > 9 ? '9+' : String(total); badge.classList.remove('oculto') }
+  else badge.classList.add('oculto')
 }
 
 async function areaDeTrabalho (area) {
@@ -25796,6 +26047,70 @@ function semDadosAinda (motivo) {
   return `<div class="aviso-bloqueio">Ainda sem dado suficiente pra calcular isso. ${esc(motivo)}</div>`
 }
 
+// ---------------------------------------------------------------
+// Painel Executivo — card de indicador com "régua" (linha com um
+// tracinho no meio marcando a referência saudável e uma seta colorida
+// mostrando onde estamos hoje). Usa sempre statusCor() por baixo, pra
+// ficar consistente com o resto do sistema (verde=ok, dourado=alerta,
+// vermelho=crítico).
+//
+// Cada indicador é um objeto:
+//   { eyebrow, titulo, explain,
+//     valorTxt, valorNum, deltaTxt, deltaTom, notaTxt, cor,
+//     regua: { min, max, alvo, alvoTxt, limiteBom, limiteRuim, invertido, esq, dir },
+//     pendente: true, motivoPendente: '...' }
+// Sem "regua" → card simples (valor + nota), igual ao kpiCor de sempre.
+// Com "pendente: true" → mostra o mesmo semDadosAinda() de sempre, mas
+// já com a referência saudável escrita, pra deixar claro que o cálculo
+// só está esperando o dado, não que falta implementar.
+// ---------------------------------------------------------------
+function corIndicador (cor) { return cor === 'ok' ? 'good-text' : cor === 'critico' ? 'critico-text' : 'gold' }
+
+function regua (r, valorNum) {
+  const cor = statusCor(valorNum, r.limiteBom, r.limiteRuim, r.invertido)
+  const cv = corIndicador(cor)
+  const posAlvo = Math.min(96, Math.max(4, ((r.alvo - r.min) / (r.max - r.min)) * 100))
+  const posValor = Math.min(98, Math.max(2, ((valorNum - r.min) / (r.max - r.min)) * 100))
+  return `<div class="pe-regua">
+    <div class="pe-regua-trilho">
+      <div class="marco" style="left:${posAlvo}%;"><span class="rot-marco">saudável ≈ ${esc(r.alvoTxt)}</span></div>
+      <div class="ponteiro" style="left:${posValor}%;color:var(--${cv});">▼</div>
+    </div>
+    <div class="pe-regua-legendas"><span>${esc(r.esq)}</span><span>${esc(r.dir)}</span></div>
+  </div>`
+}
+
+function renderIndicador (ind) {
+  const abre = `<div class="pe-card"><div class="pe-eyebrow">${esc(ind.eyebrow)}</div><h4 class="pe-titulo">${esc(ind.titulo)}</h4>`
+  const explica = ind.explain ? `<p class="pe-explicacao">${esc(ind.explain)}</p>` : ''
+
+  if (ind.pendente || ind.valorNum == null) {
+    return `${abre}
+      <div class="pe-valor-linha"><span class="pe-valor" style="color:var(--dim2);">— sem dado ainda</span></div>
+      ${explica}
+      ${ind.regua && ind.regua.alvoTxt ? `<div class="pe-nota">Referência saudável, assim que der pra calcular: <b style="color:var(--txt);">${esc(ind.regua.alvoTxt)}</b></div>` : ''}
+      ${semDadosAinda(ind.motivoPendente || '')}
+    </div>`
+  }
+
+  const deltaHtml = ind.deltaTxt ? `<span class="pe-delta ${ind.deltaTom || 'ok'}">${esc(ind.deltaTxt)}</span>` : ''
+
+  if (!ind.regua) {
+    const cv = corIndicador(ind.cor || 'ok')
+    return `${abre}
+      <div class="pe-valor-linha"><span class="pe-valor" style="color:var(--${cv});">${esc(ind.valorTxt)}</span>${deltaHtml}</div>
+      ${ind.notaTxt ? `<div class="pe-nota">${esc(ind.notaTxt)}</div>` : ''}
+      ${explica}
+    </div>`
+  }
+
+  return `${abre}
+    <div class="pe-valor-linha"><span class="pe-valor">${esc(ind.valorTxt)}</span>${deltaHtml}</div>
+    ${explica}
+    ${regua(ind.regua, ind.valorNum)}
+  </div>`
+}
+
 async function paginaDashboardDiretor () {
   if (!ehTotal()) { areaLivre().innerHTML =
     `<div class="panel" style="padding:22px;"><p class="texto-dim">Painel restrito à diretoria.</p></div>`; return }
@@ -25826,18 +26141,25 @@ function abrirDashboardDiretor (sub) {
 
 async function dashDiretorGefoscal (alvo) {
   const hoje = new Date()
+  const hojeStr = hoje.toISOString().slice(0, 10)
   const inicioAno = `${hoje.getFullYear()}-01-01`
   const seiseMesesAtras = new Date(hoje.getFullYear(), hoje.getMonth() - 5, 1).toISOString().slice(0, 10)
+  const mesAtualStr = hoje.toISOString().slice(0, 7)
+  const mesAnteriorStr = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1).toISOString().slice(0, 7)
 
   const [
     { data: contasGef }, { data: lancamentos }, { data: pedidos },
     { data: metaProducao }, { data: metaCapacidade }, { data: producao },
     { data: leads }, { data: estoques }, { data: osList }, { data: carregamentos },
-    { data: abastecimentos }
+    { data: abastecimentos },
+    { count: totalFuncionarios }, { count: docsVencidos }, { count: examesVencidos },
+    { data: processosAtivos }
   ] = await Promise.all([
     db.from('conta_financeira').select('id').eq('empresa_id', (await db.from('empresa').select('id').eq('nome', 'Gefoscal').single()).data?.id),
     db.from('lancamento_financeiro').select('tipo,valor,data_lancamento').eq('situacao', 'EFETIVADO').gte('data_lancamento', seiseMesesAtras),
-    db.from('pedido').select('quantidade_t,valor_total,valor_recebido,situacao_pagamento,vencimento,data_pedido'),
+    // cliente_id e baixado_em a mais (de antes) — usados pra ticket médio,
+    // concentração de carteira, taxa de recompra e prazo médio de recebimento
+    db.from('pedido').select('cliente_id,quantidade_t,valor_total,valor_recebido,situacao_pagamento,vencimento,data_pedido,baixado_em'),
     db.from('plano_meta').select('valor_alvo').eq('tipo', 'PRODUCAO_ANUAL').maybeSingle(),
     db.from('plano_meta').select('valor_alvo').eq('tipo', 'CAPACIDADE_NOMINAL').maybeSingle(),
     db.from('producao_diaria').select('day,qtd'),
@@ -25845,14 +26167,18 @@ async function dashDiretorGefoscal (alvo) {
     db.from('produto').select('nome,unidade,estoque_minimo').not('estoque_minimo', 'is', null),
     db.from('ordem_servico').select('status,data_limite'),
     db.from('carregamento').select('status'),
-    db.from('abastecimento').select('litros,data_abastecimento')
+    db.from('abastecimento').select('litros,data_abastecimento'),
+    db.from('pessoa').select('id', { count: 'exact', head: true }).eq('status', 'ATIVO'),
+    db.from('dp_documento').select('id', { count: 'exact', head: true }).lt('data_validade', hojeStr),
+    db.from('dp_exame').select('id', { count: 'exact', head: true }).lt('data_validade', hojeStr),
+    db.from('juridico_processo').select('id,valor_causa').eq('status', 'ATIVO')
   ])
 
   const { data: saldoConta } = await db.from('saldo_conta').select('saldo, conta_id')
   const idsContasGef = new Set((contasGef || []).map(c => c.id))
   const caixaGefoscal = (saldoConta || []).filter(s => idsContasGef.has(s.conta_id)).reduce((s, c) => s + Number(c.saldo || 0), 0)
 
-  // entradas/saídas por mês (6 meses)
+  // entradas/saídas por mês (6 meses) — igual já era
   const porMes = {}
   ;(lancamentos || []).forEach(l => {
     const m = l.data_lancamento.slice(0, 7)
@@ -25860,65 +26186,226 @@ async function dashDiretorGefoscal (alvo) {
     porMes[m][l.tipo === 'ENTRADA' ? 'entrada' : 'saida'] += Number(l.valor)
   })
   const mesesOrdenados = Object.keys(porMes).sort()
-  const entradasMesAtual = porMes[hoje.toISOString().slice(0, 7)]?.entrada || 0
-  const saidasMesAtual = porMes[hoje.toISOString().slice(0, 7)]?.saida || 0
+  const entradasMesAtual = porMes[mesAtualStr]?.entrada || 0
+  const saidasMesAtual = porMes[mesAtualStr]?.saida || 0
 
   // projeção simples: fluxo líquido médio dos últimos 30 dias, projetado
   const ultimos30 = (lancamentos || []).filter(l => new Date(l.data_lancamento) >= new Date(Date.now() - 30 * 86400000))
   const fluxoLiquido30 = ultimos30.reduce((s, l) => s + (l.tipo === 'ENTRADA' ? Number(l.valor) : -Number(l.valor)), 0)
   const fluxoDiario = fluxoLiquido30 / 30
+  const projecao30 = caixaGefoscal + fluxoDiario * 30
 
-  // recebíveis
+  // quantos dias de operação o caixa de hoje cobre, no ritmo de saída atual
+  const saidaMediaDiaria = saidasMesAtual / 30
+  const diasCoberturaCaixa = saidaMediaDiaria ? caixaGefoscal / saidaMediaDiaria : null
+
+  // recebíveis — igual já era
   const abertos = (pedidos || []).filter(p => p.situacao_pagamento !== 'QUITADO')
   const saldoAberto = p => Math.max(0, Number(p.valor_total || 0) - Number(p.valor_recebido || 0))
   const totalCarteira = abertos.reduce((s, p) => s + saldoAberto(p), 0)
-  const vencido = abertos.filter(p => p.vencimento && p.vencimento < hoje.toISOString().slice(0, 10))
+  const vencido = abertos.filter(p => p.vencimento && p.vencimento < hojeStr)
   const totalVencido = vencido.reduce((s, p) => s + saldoAberto(p), 0)
   const pctInadimplencia = totalCarteira ? (totalVencido / totalCarteira * 100) : 0
 
-  // volume vendido vs meta
+  // aging da carteira, por faixa de atraso (sobre o saldo em aberto)
+  const faixasAging = [
+    { rotulo: 'Em dia', min: -99999, max: -1 }, { rotulo: '1–30 dias', min: 0, max: 30 },
+    { rotulo: '31–60 dias', min: 31, max: 60 }, { rotulo: '61–90 dias', min: 61, max: 90 },
+    { rotulo: '90+ dias', min: 91, max: 99999 }
+  ].map(f => ({ ...f, valor: 0 }))
+  abertos.forEach(p => {
+    if (!p.vencimento) return
+    const dias = Math.round((hoje - new Date(p.vencimento + 'T00:00:00')) / 86400000)
+    const faixa = faixasAging.find(f => dias >= f.min && dias <= f.max)
+    if (faixa) faixa.valor += saldoAberto(p)
+  })
+
+  // volume vendido vs meta — igual já era
   const volumeAno = (pedidos || []).filter(p => p.data_pedido >= inicioAno).reduce((s, p) => s + Number(p.quantidade_t || 0), 0)
   const metaVolume = Number(metaProducao?.valor_alvo || 50000)
   const pctMeta = metaVolume ? (volumeAno / metaVolume * 100) : 0
   const pctAnoDecorrido = (hoje - new Date(hoje.getFullYear(), 0, 1)) / (365 * 86400000) * 100
+  const metaVolumeProRata = metaVolume * (pctAnoDecorrido / 100)
 
-  // capacidade industrial (produção do ano vs capacidade pro-rata)
+  // capacidade industrial — igual já era
   const producaoAno = (producao || []).filter(p => p.day >= inicioAno).reduce((s, p) => s + Number(p.qtd || 0), 0)
   const capacidadeNominal = Number(metaCapacidade?.valor_alvo || 600000)
   const capacidadeProRata = capacidadeNominal * (pctAnoDecorrido / 100)
   const pctCapacidade = capacidadeProRata ? (producaoAno / capacidadeProRata * 100) : 0
 
-  // funil comercial
+  // funil comercial — igual já era, mais a taxa de conversão derivada dele
   const contarEtapa = etapas => (leads || []).filter(l => etapas.includes(l.etapa)).length
+  const totalLeads = (leads || []).length
+  const fechamentos = contarEtapa(['GANHO'])
   const funilDados = [
-    { rot: 'Leads gerados', n: (leads || []).length, cor: '#0B4F3A' },
+    { rot: 'Leads gerados', n: totalLeads, cor: '#0B4F3A' },
     { rot: 'Em contato/reunião', n: contarEtapa(['CONTATO', 'QUALIFICADO']), cor: '#4C7A62' },
     { rot: 'Propostas', n: contarEtapa(['PROPOSTA', 'NEGOCIACAO']), cor: 'var(--gold)' },
-    { rot: 'Fechamentos', n: contarEtapa(['GANHO']), cor: 'var(--good-text)' }
+    { rot: 'Fechamentos', n: fechamentos, cor: 'var(--good-text)' }
   ]
+  const conversaoLeads = totalLeads ? (fechamentos / totalLeads * 100) : null
 
-  // OS manutenção
+  // pedidos válidos (fora cancelamento) — base pra receita, ticket médio,
+  // concentração de carteira e taxa de recompra
+  const pedidosValidos = (pedidos || []).filter(p => p.situacao_pagamento !== 'CANCELADO')
+  const porMesReceita = {}
+  pedidosValidos.forEach(p => {
+    if (!p.data_pedido) return
+    const m = p.data_pedido.slice(0, 7)
+    porMesReceita[m] = (porMesReceita[m] || 0) + Number(p.valor_total || 0)
+  })
+  const receitaMesAtual = porMesReceita[mesAtualStr] || 0
+  const receitaMesAnterior = porMesReceita[mesAnteriorStr] || 0
+  const deltaReceita = receitaMesAnterior ? ((receitaMesAtual - receitaMesAnterior) / receitaMesAnterior * 100) : null
+
+  const porCliente = {}
+  pedidosValidos.forEach(p => {
+    if (!p.cliente_id) return
+    porCliente[p.cliente_id] = (porCliente[p.cliente_id] || 0) + Number(p.valor_total || 0)
+  })
+  const clientesOrdenados = Object.values(porCliente).sort((a, b) => b - a)
+  const receitaTotalClientes = clientesOrdenados.reduce((s, v) => s + v, 0)
+  const ticketMedio = clientesOrdenados.length ? receitaTotalClientes / clientesOrdenados.length : null
+  const concentracaoTop5 = receitaTotalClientes
+    ? (clientesOrdenados.slice(0, 5).reduce((s, v) => s + v, 0) / receitaTotalClientes * 100) : null
+
+  const pedidosPorCliente = {}
+  pedidosValidos.forEach(p => { if (p.cliente_id) pedidosPorCliente[p.cliente_id] = (pedidosPorCliente[p.cliente_id] || 0) + 1 })
+  const totalClientesAtivos = Object.keys(pedidosPorCliente).length
+  const clientesRecompra = Object.values(pedidosPorCliente).filter(n => n > 1).length
+  const taxaRecompra = totalClientesAtivos ? (clientesRecompra / totalClientesAtivos * 100) : null
+
+  // prazo médio de recebimento — só entra se já existir pedido quitado e
+  // baixado com data (senão a média não quer dizer nada)
+  const pedidosComBaixa = pedidosValidos.filter(p => p.baixado_em && p.data_pedido)
+  const pmrDias = pedidosComBaixa.length
+    ? pedidosComBaixa.reduce((s, p) => s + (new Date(p.baixado_em) - new Date(p.data_pedido)) / 86400000, 0) / pedidosComBaixa.length
+    : null
+
+  // OS manutenção / expedição — igual já era
   const osAbertas = (osList || []).filter(o => !['CONCLUIDA', 'CANCELADA'].includes(o.status))
-  const osAtrasadas = osAbertas.filter(o => o.data_limite && o.data_limite < hoje.toISOString().slice(0, 10))
+  const osAtrasadas = osAbertas.filter(o => o.data_limite && o.data_limite < hojeStr)
   const osConcluidas = (osList || []).filter(o => o.status === 'CONCLUIDA')
-
-  // expedição
   const contarCarga = st => (carregamentos || []).filter(c => c.status === st).length
 
-  // combustível por tonelada (mês atual)
-  const litrosMes = (abastecimentos || []).filter(a => a.data_abastecimento.slice(0, 7) === hoje.toISOString().slice(0, 7))
+  // combustível por tonelada (mês atual) — igual já era
+  const litrosMes = (abastecimentos || []).filter(a => a.data_abastecimento.slice(0, 7) === mesAtualStr)
     .reduce((s, a) => s + Number(a.litros || 0), 0)
-  const producaoMes = (producao || []).filter(p => p.day.slice(0, 7) === hoje.toISOString().slice(0, 7)).reduce((s, p) => s + Number(p.qtd || 0), 0)
+  const producaoMes = (producao || []).filter(p => p.day.slice(0, 7) === mesAtualStr).reduce((s, p) => s + Number(p.qtd || 0), 0)
   const combustivelPorTon = producaoMes ? litrosMes / producaoMes : null
 
+  // jurídico
+  const exposicaoJuridica = (processosAtivos || []).reduce((s, p) => s + Number(p.valor_causa || 0), 0)
+
   alvo.innerHTML = `
+    <p class="texto-dim2" style="font-size:12.5px;margin:-4px 0 18px;line-height:1.6;">
+      Indicadores marcados <b>"sem dado ainda"</b> já estão com o cálculo e a referência saudável prontos no código —
+      só faltam as colunas de origem (custo por componente, margem por produto, data de desligamento etc.) ficarem
+      completas no banco pra passarem a mostrar o número sozinhos.
+    </p>
+
     <div class="secao">
-      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Caixa e resultado</h3></div>
+      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Resumo do mês</h3></div>
       <div class="kpis">
-        ${kpiCor('Posição de caixa hoje', 'R$ ' + fmtNum(caixaGefoscal), '', statusCor(caixaGefoscal, 1, -1))}
+        ${kpiCor('Caixa disponível hoje', 'R$ ' + fmtNum(caixaGefoscal), '', statusCor(caixaGefoscal, 1, -1))}
         ${kpiCor('Entradas — mês atual', 'R$ ' + fmtNum(entradasMesAtual), '', 'ok')}
-        ${kpiCor('Saídas — mês atual', 'R$ ' + fmtNum(saidasMesAtual), '', entradasMesAtual >= saidasMesAtual ? 'ok' : 'critico')}
-        ${kpiCor('Projeção 30 dias', 'R$ ' + fmtNum(caixaGefoscal + fluxoDiario * 30), 'linear, baseado nos últimos 30 dias', statusCor(fluxoDiario, 0, -1000))}
+        ${kpiCor('Inadimplência', fmtNum(pctInadimplencia, 1) + '%', 'do total em carteira', statusCor(pctInadimplencia, 10, 25, true))}
+        ${kpiCor('Volume vendido (ano)', fmtNum(volumeAno, 0) + ' t', fmtNum(pctMeta, 0) + '% da meta', statusCor(pctMeta - pctAnoDecorrido, -5, -20, true))}
+        ${kpiCor('Capacidade industrial', fmtNum(pctCapacidade, 0) + '%', 'utilizada no ano', statusCor(pctCapacidade, 70, 30))}
+        ${kpiCor('Funcionários ativos', String(totalFuncionarios ?? 0), '', 'ok')}
+      </div>
+    </div>
+
+    <div class="secao">
+      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Econômico</h3><span class="texto-dim2" style="font-size:11px;text-transform:uppercase;letter-spacing:.1em;">resultado / DRE</span></div>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 4px;">De onde vem o resultado — receita e o que ainda falta abrir de custo pra chegar na margem de verdade.</p>
+      <div class="pe-grid">
+        ${renderIndicador({
+          eyebrow: 'Econômico', titulo: 'Receita do mês (pedidos)', valorTxt: 'R$ ' + fmtNum(receitaMesAtual),
+          deltaTxt: deltaReceita != null ? (deltaReceita >= 0 ? '+' : '') + fmtNum(deltaReceita, 1) + '% vs mês anterior' : null,
+          deltaTom: deltaReceita == null ? 'ok' : deltaReceita >= 0 ? 'ok' : 'alerta',
+          explain: 'Soma do valor_total dos pedidos do mês (não cancelados) pela data do pedido — visão de receita "por venda", diferente das entradas em caixa acima.',
+          cor: 'ok', notaTxt: mesesOrdenados.length < 2 ? 'histórico ainda curto no sistema novo' : ''
+        })}
+        ${renderIndicador({
+          eyebrow: 'Econômico', titulo: 'CPV — Custo dos Produtos Vendidos', pendente: true,
+          explain: 'Quanto custou produzir/comprar tudo que foi vendido no mês — matéria-prima, embalagem e mão de obra direta.',
+          motivoPendente: 'Não existe custo por componente ligado ao produto ou ao pedido no banco ainda — só o preço de venda (preco_ref/preco_unitario).',
+          regua: { alvoTxt: 'referência a definir com o primeiro fechamento de custo' }
+        })}
+        ${renderIndicador({
+          eyebrow: 'Econômico', titulo: 'Margem bruta média', pendente: true,
+          explain: 'Diferença entre o preço de indústria e o preço de venda — o "pool comercial" do simulador de estrutura.',
+          motivoPendente: 'Depende do CPV acima; sem custo cadastrado não dá pra calcular margem de verdade, só preço de venda.',
+          regua: { alvoTxt: '9% – 14%, mesma faixa do simulador de estrutura comercial' }
+        })}
+        ${renderIndicador({
+          eyebrow: 'Econômico', titulo: 'Despesas administrativas e comerciais', pendente: true,
+          explain: 'Estrutura fixa (equipe, escritório, comercial) como fatia da receita.',
+          motivoPendente: 'Falta marcar, categoria a categoria, quais lançamentos são administrativo/comercial x operacional/industrial — hoje categoria_financeira não distingue isso.',
+          regua: { alvoTxt: 'até 6% da receita' }
+        })}
+        ${renderIndicador({
+          eyebrow: 'Econômico', titulo: 'EBITDA e margem EBITDA', pendente: true,
+          explain: 'Lucro operacional antes de juros, impostos e depreciação.',
+          motivoPendente: 'Depende do CPV e da separação de despesas acima ficarem prontos primeiro.',
+          regua: { alvoTxt: '6% – 10% de margem' }
+        })}
+        ${renderIndicador({
+          eyebrow: 'Econômico', titulo: 'Lucro líquido e margem líquida', pendente: true,
+          explain: 'O que sobra depois de tudo — juros, impostos, financiamento.',
+          motivoPendente: 'Mesma dependência do EBITDA, mais os lançamentos financeiros e de impostos separados por natureza.',
+          regua: { alvoTxt: '3% – 5% de margem' }
+        })}
+      </div>
+    </div>
+
+    <div class="secao">
+      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Financeiro</h3><span class="texto-dim2" style="font-size:11px;text-transform:uppercase;letter-spacing:.1em;">caixa / balanço</span></div>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 4px;">Se o resultado está de fato virando dinheiro em caixa, e com que folga.</p>
+      <div class="pe-grid">
+        ${renderIndicador({
+          eyebrow: 'Financeiro', titulo: 'Caixa disponível hoje', valorTxt: 'R$ ' + fmtNum(caixaGefoscal), valorNum: diasCoberturaCaixa,
+          notaTxt: diasCoberturaCaixa != null ? 'cobre ~' + fmtNum(diasCoberturaCaixa, 0) + ' dias de operação' : 'sem saída no mês pra comparar',
+          explain: 'Saldo somado de todas as contas da Gefoscal, hoje — a régua abaixo mede em dias de operação, não em R$.',
+          regua: diasCoberturaCaixa != null ? { min: 0, max: 60, alvo: 20, alvoTxt: '≥ 20 dias', limiteBom: 20, limiteRuim: 10, invertido: false, esq: '◀ caixa apertado', dir: 'colchão confortável ▶' } : null
+        })}
+        ${renderIndicador({
+          eyebrow: 'Financeiro', titulo: 'Projeção de caixa em 30 dias', valorTxt: 'R$ ' + fmtNum(projecao30),
+          explain: 'Se o ritmo de entradas e saídas dos últimos 30 dias continuar, é pra onde o caixa vai.',
+          cor: statusCor(fluxoDiario, 0, -1000)
+        })}
+        ${pmrDias != null
+          ? renderIndicador({
+              eyebrow: 'Financeiro', titulo: 'Prazo médio de recebimento', valorTxt: fmtNum(pmrDias, 0) + ' dias', valorNum: pmrDias,
+              notaTxt: pedidosComBaixa.length < 10 ? 'amostra ainda pequena (' + pedidosComBaixa.length + ' pedidos quitados)' : '',
+              explain: 'Tempo médio entre a data do pedido e a baixa de pagamento.',
+              regua: { min: 15, max: 90, alvo: 45, alvoTxt: '45 dias', limiteBom: 55, limiteRuim: 75, invertido: true, esq: '◀ recebendo rápido', dir: 'recebendo devagar ▶' }
+            })
+          : renderIndicador({
+              eyebrow: 'Financeiro', titulo: 'Prazo médio de recebimento', pendente: true,
+              explain: 'Tempo médio entre a venda e o dinheiro cair na conta.',
+              motivoPendente: 'Ainda não tem pedido com baixa de pagamento registrada (baixado_em) suficiente pra calcular a média.',
+              regua: { alvoTxt: '45 dias' }
+            })}
+        ${renderIndicador({
+          eyebrow: 'Financeiro', titulo: 'Ciclo de caixa', pendente: true,
+          explain: 'Dias entre pagar o fornecedor e receber do cliente.',
+          motivoPendente: 'Precisa do prazo médio de pagamento a fornecedor e da valorização de estoque, nenhum dos dois modelado ainda.',
+          regua: { alvoTxt: '20 – 45 dias' }
+        })}
+        ${renderIndicador({
+          eyebrow: 'Financeiro', titulo: 'Liquidez corrente', pendente: true,
+          explain: 'Ativo circulante ÷ passivo circulante.',
+          motivoPendente: 'O sistema ainda não tem um balanço patrimonial estruturado (ativo/passivo circulante) — só caixa e carteira.',
+          regua: { alvoTxt: '1,2 – 1,8' }
+        })}
+        ${renderIndicador({
+          eyebrow: 'Financeiro', titulo: 'Alavancagem (dívida líquida / EBITDA)', pendente: true,
+          explain: 'Quantos anos de EBITDA seriam necessários pra quitar a dívida líquida hoje.',
+          motivoPendente: 'Não existe cadastro de empréstimos/financiamentos no banco ainda, nem o EBITDA acima.',
+          regua: { alvoTxt: 'abaixo de 2,0x' }
+        })}
       </div>
       <div class="panel" style="padding:16px 18px;margin-top:14px;">
         <h4 style="font-family:var(--serif);font-size:14px;margin:0 0 10px;">Entradas × Saídas — por mês</h4>
@@ -25928,66 +26415,197 @@ async function dashDiretorGefoscal (alvo) {
     </div>
 
     <div class="secao">
-      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Carteira de recebíveis</h3></div>
-      <div class="kpis">
-        ${kpiCor('Total em carteira', 'R$ ' + fmtNum(totalCarteira), abertos.length + ' pedidos em aberto', 'alerta')}
-        ${kpiCor('Valor vencido', 'R$ ' + fmtNum(totalVencido), '', statusCor(totalVencido, 0, totalCarteira * 0.3, true))}
-        ${kpiCor('Inadimplência', fmtNum(pctInadimplencia, 1) + '%', 'do total em carteira', statusCor(pctInadimplencia, 10, 25, true))}
+      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Comercial</h3></div>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 4px;">Se está vendendo o volume certo, pros clientes certos, com a estrutura pagando a si mesma.</p>
+      <div class="pe-grid">
+        ${renderIndicador({
+          eyebrow: 'Comercial', titulo: 'Volume vendido (ano)', valorTxt: fmtNum(volumeAno, 0) + ' t', valorNum: volumeAno,
+          notaTxt: fmtNum(pctMeta, 0) + '% da meta de ' + fmtNum(metaVolume, 0) + ' t',
+          explain: 'Toneladas vendidas no ano, comparado ao ritmo esperado da meta anual até hoje.',
+          regua: { min: 0, max: metaVolume * 1.15, alvo: metaVolumeProRata, alvoTxt: fmtNum(metaVolumeProRata, 0) + ' t (ritmo da meta)', limiteBom: metaVolumeProRata * 0.95, limiteRuim: metaVolumeProRata * 0.8, invertido: false, esq: '◀ abaixo do ritmo', dir: 'acima do ritmo ▶' }
+        })}
+        ${renderIndicador({
+          eyebrow: 'Comercial', titulo: 'Ticket médio por cliente', valorTxt: ticketMedio != null ? 'R$ ' + fmtNum(ticketMedio) : '—', valorNum: null,
+          notaTxt: ticketMedio != null ? 'sobre ' + clientesOrdenados.length + ' clientes com pedido' : '',
+          explain: 'Receita total de pedidos dividida pelo número de clientes que compraram — mostra se o crescimento vem de mais clientes ou de vender mais pra cada um.',
+          cor: 'ok'
+        })}
+        ${taxaRecompra != null
+          ? renderIndicador({
+              eyebrow: 'Comercial', titulo: 'Taxa de recompra', valorTxt: fmtNum(taxaRecompra, 0) + '%', valorNum: taxaRecompra,
+              notaTxt: 'amostra pequena — ' + totalClientesAtivos + ' clientes no total',
+              explain: 'Percentual dos clientes que fizeram mais de um pedido — termômetro simplificado de retenção (o ideal é medir por safra, ainda vale como primeira leitura).',
+              regua: { min: 0, max: 100, alvo: 60, alvoTxt: '60%', limiteBom: 55, limiteRuim: 35, invertido: false, esq: '◀ perdendo carteira', dir: 'fidelizando ▶' }
+            })
+          : renderIndicador({ eyebrow: 'Comercial', titulo: 'Taxa de recompra', pendente: true, explain: 'Percentual dos clientes que compraram mais de uma vez.', motivoPendente: 'Ainda não há pedidos suficientes pra calcular.', regua: { alvoTxt: 'acima de 60%' } })}
+        ${conversaoLeads != null
+          ? renderIndicador({
+              eyebrow: 'Comercial', titulo: 'Conversão de leads em clientes', valorTxt: fmtNum(conversaoLeads, 1) + '%', valorNum: conversaoLeads,
+              explain: 'Fechamentos ÷ leads gerados (não arquivados) — mesmos números do funil comercial abaixo.',
+              regua: { min: 0, max: 30, alvo: 12, alvoTxt: '10% – 15%', limiteBom: 10, limiteRuim: 5, invertido: false, esq: '◀ prospecção fraca', dir: 'prospecção eficiente ▶' }
+            })
+          : renderIndicador({ eyebrow: 'Comercial', titulo: 'Conversão de leads em clientes', pendente: true, explain: 'Fechamentos ÷ leads gerados.', motivoPendente: 'Ainda não há leads cadastrados suficientes.', regua: { alvoTxt: '10% – 15%' } })}
+        ${renderIndicador({
+          eyebrow: 'Comercial', titulo: 'Margem por produto/cliente', pendente: true,
+          explain: 'Qual produto e qual cliente realmente dá lucro — não só qual vende mais volume.',
+          motivoPendente: 'Mesma dependência do CPV lá em Econômico.',
+          regua: { alvoTxt: 'sem produto/cliente abaixo de 5% de margem' }
+        })}
+        ${renderIndicador({
+          eyebrow: 'Comercial', titulo: 'Pool comercial do mês vs. comprometido', pendente: true,
+          explain: 'Quanto do pool comercial já está tomado por fixo, comissão, rebate, diretoria e PLR — mesmo cálculo do simulador de estrutura.',
+          motivoPendente: 'Precisa da margem bruta real (acima) pra existir um pool de verdade em cima do faturamento do mês.',
+          regua: { alvoTxt: 'até 90% comprometido' }
+        })}
       </div>
-    </div>
-
-    <div class="secao">
-      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Produção e vendas</h3></div>
-      <div class="kpis">
-        ${kpiCor('Volume vendido (ano)', fmtNum(volumeAno, 0) + ' t', fmtNum(pctMeta, 0) + '% da meta de ' + fmtNum(metaVolume, 0) + ' t', statusCor(pctMeta - pctAnoDecorrido, -5, -20, true))}
-        ${kpiCor('Capacidade industrial utilizada', fmtNum(pctCapacidade, 0) + '%', 'de ' + fmtNum(capacidadeNominal, 0) + ' t/ano nominal', statusCor(pctCapacidade, 70, 30))}
-      </div>
-    </div>
-
-    <div class="secao">
-      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Funil comercial</h3></div>
-      <div class="panel" style="padding:18px;"><div class="grade-funil-dir">
+      <div class="panel" style="padding:18px;margin-top:14px;"><div class="grade-funil-dir">
         ${funilDados.map(f => `<div class="etapa-funil-dir" style="background:${f.cor};">
           <div class="n">${f.n}</div><div class="rot">${esc(f.rot)}</div></div>`).join('')}
       </div></div>
     </div>
 
     <div class="secao">
-      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Custo e margem</h3></div>
-      ${semDadosAinda('Falta ligar centro de custo em cada lançamento (matéria-prima, energia, mão de obra, manutenção, depreciação) pra separar isso automaticamente. Dá pra fazer, mas precisa desse cadastro andar primeiro.')}
+      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Operacional &amp; Logística</h3></div>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 4px;">Se o produto sai da fábrica e chega no cliente no prazo, sem gordura de custo pelo caminho.</p>
+      <div class="pe-grid">
+        ${renderIndicador({
+          eyebrow: 'Operacional', titulo: 'Capacidade industrial utilizada', valorTxt: fmtNum(pctCapacidade, 0) + '%', valorNum: pctCapacidade,
+          notaTxt: 'de ' + fmtNum(capacidadeNominal, 0) + ' t/ano nominal',
+          explain: 'Produção do ano comparada à capacidade nominal, no ritmo esperado até hoje.',
+          regua: { min: 0, max: 130, alvo: 80, alvoTxt: '70% – 90%', limiteBom: 70, limiteRuim: 30, invertido: false, esq: '◀ capacidade ociosa', dir: 'no limite ▶' }
+        })}
+        ${renderIndicador({
+          eyebrow: 'Operacional', titulo: 'Combustível por tonelada produzida', valorTxt: combustivelPorTon != null ? fmtNum(combustivelPorTon, 2) + ' L/t' : '—',
+          notaTxt: producaoMes ? '' : 'sem produção no mês pra dividir', explain: 'Litros abastecidos no mês dividido pela produção do mês.', cor: 'alerta'
+        })}
+        ${renderIndicador({
+          eyebrow: 'Operacional', titulo: 'OS em atraso', valorTxt: String(osAtrasadas.length), notaTxt: 'de ' + osAbertas.length + ' abertas',
+          explain: 'Ordens de serviço de manutenção com prazo estourado.', cor: statusCor(osAtrasadas.length, 0, 5, true)
+        })}
+        ${renderIndicador({
+          eyebrow: 'Operacional', titulo: 'Pendentes de carregar', valorTxt: String(contarCarga('PROGRAMADO') + contarCarga('EM_ANDAMENTO')),
+          notaTxt: contarCarga('CARREGADO') + contarCarga('FATURADO') + ' já carregados', explain: 'Carregamentos programados ou em andamento, ainda não faturados.',
+          cor: statusCor(contarCarga('PROGRAMADO') + contarCarga('EM_ANDAMENTO'), 0, 10, true)
+        })}
+        <div class="pe-card" id="pe-giro-estoque"><div class="pe-eyebrow">Operacional</div><h4 class="pe-titulo">Giro de estoque</h4>
+          <p class="texto-dim2" style="font-size:12px;">carregando...</p></div>
+        ${renderIndicador({
+          eyebrow: 'Operacional', titulo: 'Custo logístico por tonelada', pendente: true,
+          explain: 'Frete e movimentação dividido pelo volume entregue.',
+          motivoPendente: 'Não achei um campo de custo de frete por carregamento/pedido no banco — só quem paga o frete (frete_por_conta), não o valor.',
+          regua: { alvoTxt: '4% – 7% da receita' }
+        })}
+        ${renderIndicador({
+          eyebrow: 'Operacional', titulo: 'OTIF — entregas no prazo e completas', pendente: true,
+          explain: 'Percentual de pedidos entregues na data combinada e na quantidade certa.',
+          motivoPendente: 'Só 4 carregamentos têm data programada e data real preenchidas ao mesmo tempo — amostra pequena demais pra confiar.',
+          regua: { alvoTxt: 'acima de 90%' }
+        })}
+        ${renderIndicador({
+          eyebrow: 'Operacional', titulo: 'Custo de produção por tonelada', pendente: true,
+          explain: 'Matéria-prima, energia e mão de obra direta da fábrica, por tonelada produzida.',
+          motivoPendente: 'Falta apuração de custo industrial por tonelada estruturada no banco.',
+          regua: { alvoTxt: 'a definir com o primeiro fechamento completo' }
+        })}
+        ${renderIndicador({
+          eyebrow: 'Operacional', titulo: 'Energia por tonelada produzida', pendente: true,
+          explain: 'Consumo de energia elétrica dividido pela produção.',
+          motivoPendente: 'Não achei tabela de consumo de energia elétrica no banco ainda.',
+          regua: { alvoTxt: 'a definir com o histórico dos primeiros meses' }
+        })}
+      </div>
+      <div class="secao" style="margin-top:22px;margin-bottom:0;">
+        <div class="cabeca-secao"><h4 style="font-family:var(--serif);font-size:14.5px;margin:0;">Estoque — comparado ao mínimo</h4></div>
+        <div class="panel" style="padding:16px 18px;margin-top:10px;">
+          ${(estoques || []).length ? estoques.map(p => `<div class="linha-estoque-dir" data-produto="${esc(p.nome)}"></div>`).join('')
+            : semDadosAinda('Nenhum produto com mínimo definido ainda.')}
+        </div>
+        <p class="texto-dim2" style="font-size:11px;margin-top:6px;">Mínimos cadastrados como ponto de partida — ajuste se não bater com o real.</p>
+      </div>
     </div>
 
     <div class="secao">
-      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Estoque — comparado ao mínimo</h3></div>
-      <div class="panel" style="padding:16px 18px;">
-        ${(estoques || []).length ? estoques.map(p => {
-          // já busco o saldo real abaixo, via segunda consulta
-          return `<div class="linha-estoque-dir" data-produto="${esc(p.nome)}"></div>`
-        }).join('') : semDadosAinda('Nenhum produto com mínimo definido ainda.')}
+      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Crédito &amp; Risco</h3></div>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 4px;">Se o que foi vendido vai de fato virar dinheiro — e o quanto a carteira depende de poucos clientes.</p>
+      <div class="pe-grid">
+        ${renderIndicador({
+          eyebrow: 'Crédito', titulo: 'Inadimplência da carteira', valorTxt: fmtNum(pctInadimplencia, 1) + '%', valorNum: pctInadimplencia,
+          notaTxt: 'do total em carteira', explain: 'Percentual da carteira em aberto que já passou do vencimento.',
+          regua: { min: 0, max: 40, alvo: 8, alvoTxt: 'abaixo de 10%', limiteBom: 10, limiteRuim: 25, invertido: true, esq: '◀ carteira saudável', dir: 'carteira suja ▶' }
+        })}
+        ${renderIndicador({
+          eyebrow: 'Crédito', titulo: 'Total em carteira', valorTxt: 'R$ ' + fmtNum(totalCarteira), notaTxt: abertos.length + ' pedidos em aberto',
+          explain: 'Soma de tudo que já foi vendido e ainda não foi recebido — inclusive o que está dentro do prazo.', cor: 'alerta'
+        })}
+        ${renderIndicador({
+          eyebrow: 'Crédito', titulo: 'Valor vencido', valorTxt: 'R$ ' + fmtNum(totalVencido),
+          explain: 'Só a parte da carteira que já passou do vencimento.', cor: statusCor(totalVencido, 0, totalCarteira * 0.3, true)
+        })}
+        ${concentracaoTop5 != null
+          ? renderIndicador({
+              eyebrow: 'Crédito', titulo: 'Concentração de carteira (top 5 clientes)', valorTxt: fmtNum(concentracaoTop5, 0) + '%', valorNum: concentracaoTop5,
+              explain: 'Quanto os 5 maiores clientes representam do faturamento em pedidos. Concentração alta significa que perder 1 cliente grande dói muito mais.',
+              regua: { min: 0, max: 100, alvo: 32, alvoTxt: 'até 30% – 35%', limiteBom: 35, limiteRuim: 55, invertido: true, esq: '◀ carteira pulverizada', dir: 'carteira concentrada ▶' }
+            })
+          : renderIndicador({ eyebrow: 'Crédito', titulo: 'Concentração de carteira (top 5 clientes)', pendente: true, explain: 'Quanto os 5 maiores clientes representam do faturamento.', motivoPendente: 'Ainda não há pedidos suficientes.', regua: { alvoTxt: 'até 30% – 35%' } })}
       </div>
-      <p class="texto-dim2" style="font-size:11px;margin-top:6px;">Mínimos cadastrados como ponto de partida — ajuste se não bater com o real.</p>
+      <div class="panel" style="padding:16px 18px;margin-top:14px;">
+        <h4 style="font-family:var(--serif);font-size:14px;margin:0 0 10px;">Aging da carteira</h4>
+        ${totalCarteira ? barrasHorizontais(faixasAging.map(f => ({ rotulo: f.rotulo, valor: f.valor })), { unidade: 'R$', casas: 0 })
+          : semDadosAinda('Carteira em aberto vazia no momento.')}
+      </div>
     </div>
 
     <div class="secao">
-      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Manutenção e expedição</h3></div>
-      <div class="kpis">
-        ${kpiCor('OS em atraso', String(osAtrasadas.length), 'de ' + osAbertas.length + ' abertas', statusCor(osAtrasadas.length, 0, 5, true))}
-        ${kpiCor('OS concluídas', String(osConcluidas.length), '', 'ok')}
-        ${kpiCor('Carregados', String(contarCarga('CARREGADO') + contarCarga('FATURADO')), '', 'ok')}
-        ${kpiCor('Pendentes de carregar', String(contarCarga('PROGRAMADO') + contarCarga('EM_ANDAMENTO')), '', statusCor(contarCarga('PROGRAMADO') + contarCarga('EM_ANDAMENTO'), 0, 10, true))}
+      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Administrativo</h3></div>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 4px;">Pessoas, jurídico e a engrenagem interna que sustenta o resto.</p>
+      <div class="pe-grid">
+        ${renderIndicador({
+          eyebrow: 'Administrativo', titulo: 'Total de funcionários ativos', valorTxt: String(totalFuncionarios ?? 0),
+          explain: 'Quadro ativo total, direto do cadastro de pessoas.', cor: 'ok'
+        })}
+        ${renderIndicador({
+          eyebrow: 'Administrativo', titulo: 'Documentos de DP vencidos', valorTxt: String(docsVencidos ?? 0),
+          explain: 'Contratos, ASOs e outros documentos obrigatórios já vencidos.', cor: statusCor(docsVencidos ?? 0, 0, 5, true)
+        })}
+        ${renderIndicador({
+          eyebrow: 'Administrativo', titulo: 'Exames ocupacionais vencidos', valorTxt: String(examesVencidos ?? 0),
+          explain: 'Exames periódicos/admissionais fora do prazo.', cor: statusCor(examesVencidos ?? 0, 0, 3, true)
+        })}
+        ${renderIndicador({
+          eyebrow: 'Administrativo', titulo: 'Processos jurídicos ativos', valorTxt: String((processosAtivos || []).length),
+          notaTxt: 'exposição estimada R$ ' + fmtNum(exposicaoJuridica), explain: 'Trabalhista, tributário e ambiental somados.',
+          cor: statusCor((processosAtivos || []).length, 0, 5, true)
+        })}
+        ${renderIndicador({
+          eyebrow: 'Administrativo', titulo: 'Turnover (rotatividade)', pendente: true,
+          explain: 'Percentual do quadro que saiu no mês, sobre o total de funcionários.',
+          motivoPendente: 'O cadastro de pessoa tem data de admissão, mas não tem data de desligamento ainda.',
+          regua: { alvoTxt: 'até 2% ao mês' }
+        })}
+        ${renderIndicador({
+          eyebrow: 'Administrativo', titulo: 'Custo administrativo / receita', pendente: true,
+          explain: 'Estrutura administrativa pura (fora comercial) como fatia da receita.',
+          motivoPendente: 'Mesma dependência do card de Despesas administrativas em Econômico.',
+          regua: { alvoTxt: 'até 4,5% da receita' }
+        })}
+        ${renderIndicador({
+          eyebrow: 'Administrativo', titulo: 'Ciclo de compras (cotação → pagamento)', pendente: true,
+          explain: 'Tempo médio do fluxo de Compras, da cotação até o pagamento sair.',
+          motivoPendente: 'As datas de cotação/pagamento migradas de planilha estão inconsistentes no histórico importado — assim que os fluxos novos acumularem casos reais, o cálculo passa a fazer sentido.',
+          regua: { alvoTxt: '8 – 10 dias' }
+        })}
       </div>
-      <div class="kpis" style="margin-top:12px;">
-        ${kpiCor('Combustível por tonelada', combustivelPorTon != null ? fmtNum(combustivelPorTon, 2) + ' L/t' : '—', producaoMes ? '' : 'sem produção no mês pra dividir', 'alerta')}
-      </div>
-      ${semDadosAinda('Energia por tonelada — não achei tabela de consumo de energia elétrica no banco ainda. Tempo médio de carregamento também não dá: falta registrar hora de início/fim, só tem a data.')}
     </div>`
 
   // estoque real, produto a produto (segunda leva, porque precisa do saldo por local)
   const { data: saldos } = await db.from('saldo_estoque_por_local').select('produto_id,saldo, produto:produto_id(nome,unidade,estoque_minimo)')
   const porProduto = {}
+  let saldoTotalConvertido = 0
   ;(saldos || []).forEach(s => {
     if (!s.produto?.estoque_minimo) return
     porProduto[s.produto.nome] = (porProduto[s.produto.nome] || 0) + Number(s.saldo || 0)
+    saldoTotalConvertido += s.produto.unidade === 'kg' ? Number(s.saldo || 0) / 1000 : Number(s.saldo || 0)
   })
   alvo.querySelectorAll('.linha-estoque-dir').forEach(div => {
     const nome = div.dataset.produto
@@ -26006,6 +26624,22 @@ async function dashDiretorGefoscal (alvo) {
       <div class="trilho"><div class="preenchido" style="width:${pct}%;background:var(--${cor === 'ok' ? 'good-text' : cor === 'critico' ? 'warn-text' : 'gold'});"></div>
       <div class="marca-min" style="left:50%;"></div></div>`
   })
+
+  // giro de estoque — só dá pra terminar de calcular depois do saldo acima
+  // chegar (é aproximado: usa o estoque de HOJE como "estoque médio", não
+  // uma série histórica — vale como primeira leitura, não como número fino)
+  const cardGiro = $('#pe-giro-estoque')
+  if (cardGiro) {
+    const giroEstoque = saldoTotalConvertido ? (volumeAno / saldoTotalConvertido) : null
+    cardGiro.outerHTML = giroEstoque != null
+      ? renderIndicador({
+          eyebrow: 'Operacional', titulo: 'Giro de estoque', valorTxt: fmtNum(giroEstoque, 1) + 'x / ano', valorNum: giroEstoque,
+          notaTxt: 'aproximado — usa o estoque de hoje como referência, não uma série histórica',
+          explain: 'Volume vendido no ano dividido pelo estoque atual dos produtos com mínimo cadastrado.',
+          regua: { min: 0, max: 15, alvo: 6, alvoTxt: '5x – 8x ao ano', limiteBom: 5, limiteRuim: 3, invertido: false, esq: '◀ estoque parado', dir: 'giro saudável ▶' }
+        })
+      : renderIndicador({ eyebrow: 'Operacional', titulo: 'Giro de estoque', pendente: true, explain: 'Volume vendido dividido pelo estoque médio.', motivoPendente: 'Nenhum produto com estoque e mínimo cadastrados ao mesmo tempo ainda.', regua: { alvoTxt: '5x – 8x ao ano' } })
+  }
 }
 
 async function dashDiretorFazenda (alvo) {
