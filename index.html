@@ -795,6 +795,16 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
 .sec-msg { max-width:80%; padding:8px 12px; border-radius:10px; font-size:12.8px; line-height:1.5; }
 .sec-msg.sec-user { align-self:flex-end; background:var(--rust); color:#fff; border-bottom-right-radius:2px; }
 .sec-msg.sec-ia { align-self:flex-start; background:var(--panel); border:1px solid var(--line2); border-bottom-left-radius:2px; }
+
+/* ---- Banco de Informações: botões de API por lead/cliente ---- */
+.lead-api-btn { width:26px; height:26px; border-radius:6px; border:1px solid var(--line2); background:var(--panel);
+  cursor:pointer; font-size:13px; display:inline-flex; align-items:center; justify-content:center; padding:0; }
+.lead-api-btn:hover { border-color:var(--rust); }
+.lead-api-btn:disabled { opacity:.5; cursor:default; }
+.matriz-acesso { border-collapse:collapse; width:100%; font-size:12.5px; }
+.matriz-acesso th, .matriz-acesso td { padding:6px 10px; border:1px solid var(--line2); text-align:center; }
+.matriz-acesso th:first-child, .matriz-acesso td:first-child { text-align:left; position:sticky; left:0; background:var(--panel); }
+.matriz-acesso td input[type=checkbox] { width:16px; height:16px; cursor:pointer; }
 </style>
 </head>
 <body>
@@ -11178,7 +11188,13 @@ async function crmHistoricoEquipe (alvo) {
 // Reaproveita recurso/recurso_permissao (o mesmo sistema que já libera
 // calculadora por pessoa em Ferramentas) — aqui só pros recursos do
 // tipo REGIAO, que são as listas comerciais.
+// Matriz vendedor × região em vez de um vendedor por vez: dá pra ver
+// e auditar tudo de uma olhada. Cada célula salva na hora, mas agora
+// MOSTRA erro de verdade se falhar e DESFAZ o check visualmente —
+// antes falhava calado e o checkbox ficava mentindo sobre o que
+// estava salvo (era o "fica marcando, desmarcando, dá pau").
 async function crmCompartilharBanco (alvo) {
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
   const [{ data: regioes }, { data: permissoes }] = await Promise.all([
     db.from('recurso').select('id,chave,nome').eq('tipo', 'REGIAO').eq('status', 'ATIVO').order('ordem'),
     db.from('recurso_permissao').select('id,recurso_id,pessoa_id').not('pessoa_id', 'is', null)
@@ -11186,42 +11202,63 @@ async function crmCompartilharBanco (alvo) {
   const listaRegioes = regioes || []
   let permissoesAtuais = permissoes || []
 
-  alvo.innerHTML = `
-    <div class="campo" style="max-width:320px;margin-bottom:12px;">
-      <label>Vendedor</label>
-      <select id="cb-vendedor-banco"><option value="">selecione…</option>
-        ${CRM_CACHE.vendedores.map(v => `<option value="${v.id}">${esc(v.nome)}</option>`).join('')}
-      </select>
-    </div>
-    <div id="cb-checklist" class="check-pessoas"></div>
-    <p class="texto-dim2" style="font-size:11.5px;margin-top:8px;">
-      Marcar/desmarcar já salva na hora — não precisa de botão de confirmar.</p>`
-
-  const desenharChecklist = vendedorId => {
-    const alvoLista = $('#cb-checklist')
-    if (!vendedorId) { alvoLista.innerHTML = '<p class="texto-dim2" style="font-size:12.5px;">selecione um vendedor pra ver as listas dele.</p>'; return }
-    alvoLista.innerHTML = listaRegioes.map(r => {
-      const marcado = permissoesAtuais.some(p => p.recurso_id === r.id && p.pessoa_id === vendedorId)
-      return `<label><input type="checkbox" data-regiao="${r.id}" ${marcado ? 'checked' : ''}>${esc(r.nome)}</label>`
-    }).join('') || '<p class="texto-dim2" style="font-size:12.5px;">nenhuma lista cadastrada ainda.</p>'
-
-    alvoLista.querySelectorAll('[data-regiao]').forEach(cb => {
-      cb.onchange = async () => {
-        cb.disabled = true
-        if (cb.checked) {
-          const { data: nova, error } = await db.from('recurso_permissao')
-            .insert({ recurso_id: cb.dataset.regiao, pessoa_id: vendedorId }).select('id').single()
-          if (!error && nova) permissoesAtuais.push({ id: nova.id, recurso_id: cb.dataset.regiao, pessoa_id: vendedorId })
-        } else {
-          await db.from('recurso_permissao').delete().eq('recurso_id', cb.dataset.regiao).eq('pessoa_id', vendedorId)
-          permissoesAtuais = permissoesAtuais.filter(p => !(p.recurso_id === cb.dataset.regiao && p.pessoa_id === vendedorId))
-        }
-        cb.disabled = false
-      }
-    })
+  if (!listaRegioes.length) {
+    alvo.innerHTML = `<p class="texto-dim2" style="font-size:12.5px;">Nenhuma lista cadastrada ainda — importe uma região em "Importar / gerenciar listas" primeiro.</p>`
+    return
   }
-  $('#cb-vendedor-banco').onchange = e => desenharChecklist(e.target.value)
-  desenharChecklist('')
+  if (!CRM_CACHE.vendedores?.length) {
+    alvo.innerHTML = `<p class="texto-dim2" style="font-size:12.5px;">Nenhum vendedor cadastrado.</p>`
+    return
+  }
+
+  const temAcesso = (vendedorId, recursoId) => permissoesAtuais.some(p => p.recurso_id === recursoId && p.pessoa_id === vendedorId)
+
+  alvo.innerHTML = `
+    <p class="texto-dim2" style="font-size:11.5px;margin-bottom:10px;">
+      Marcar/desmarcar já salva na hora. Se der erro, o quadradinho volta pro estado de antes e mostra o motivo.</p>
+    <div class="tabela-scroll">
+      <table class="matriz-acesso">
+        <thead><tr><th>Vendedor</th>${listaRegioes.map(r => `<th>${esc(r.nome)}</th>`).join('')}</tr></thead>
+        <tbody>
+          ${CRM_CACHE.vendedores.map(v => `<tr>
+            <td>${esc(v.nome)}</td>
+            ${listaRegioes.map(r => `<td>
+              <input type="checkbox" data-vendedor="${v.id}" data-regiao="${r.id}" ${temAcesso(v.id, r.id) ? 'checked' : ''}>
+            </td>`).join('')}
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+    <p class="texto-dim2" id="cb-erro" style="font-size:12px;margin-top:10px;color:var(--warn-text);"></p>`
+
+  alvo.querySelectorAll('[data-vendedor]').forEach(cb => {
+    cb.onchange = async () => {
+      const vendedorId = cb.dataset.vendedor, recursoId = cb.dataset.regiao
+      const marcarComo = cb.checked
+      cb.disabled = true
+      $('#cb-erro').textContent = ''
+
+      if (marcarComo) {
+        const { data: nova, error } = await db.from('recurso_permissao')
+          .insert({ recurso_id: recursoId, pessoa_id: vendedorId }).select('id').single()
+        if (error) {
+          cb.checked = false
+          $('#cb-erro').textContent = `Não salvou: ${error.message}`
+        } else {
+          permissoesAtuais.push({ id: nova.id, recurso_id: recursoId, pessoa_id: vendedorId })
+        }
+      } else {
+        const { error } = await db.from('recurso_permissao').delete().eq('recurso_id', recursoId).eq('pessoa_id', vendedorId)
+        if (error) {
+          cb.checked = true
+          $('#cb-erro').textContent = `Não removeu: ${error.message}`
+        } else {
+          permissoesAtuais = permissoesAtuais.filter(p => !(p.recurso_id === recursoId && p.pessoa_id === vendedorId))
+        }
+      }
+      cb.disabled = false
+    }
+  })
 }
 
 // ----- Importar / gerenciar listas do Banco de Informações -----
@@ -16816,7 +16853,7 @@ function calcEnxofre (alvo) {
 // ===============================================================
 // Banco de informações — leads por região
 // ===============================================================
-let BANCO = { regiao:'todas', busca:'', categoria:'', leads:[] }
+let BANCO = { regiao:'todas', busca:'', categoria:'', leads:[], soPivo:false, areaMin:'', cultura:'' }
 const ROTULO_CAT = { INSTITUCIONAL:'Institucional', MAIORES:'Maiores', BATER_PORTEIRA:'Bater porteira', SECUNDARIO:'Secundário' }
 
 // Junta as culturas "clássicas" (soja/milho/algodão, campos fixos antigos)
@@ -16842,7 +16879,8 @@ async function bancoInformacoes (alvo) {
   }
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
-  let q = db.from('regiao_lead').select('*').order('agricultavel', { ascending: false, nullsFirst: false })
+  let q = db.from('regiao_lead').select('*, cliente:cliente_id(id,razao_social,nome_fantasia,telefone,email)')
+    .order('agricultavel', { ascending: false, nullsFirst: false })
   if (BANCO.regiao !== 'todas') {
     const r = regioes.find(x => x.chave === BANCO.regiao)
     if (r) q = q.eq('recurso_id', r.id)
@@ -16856,9 +16894,21 @@ async function bancoInformacoes (alvo) {
 function pintarBanco (alvo, regioes) {
   const nomeRegiao = id => (regioes.find(r => r.id === id) || {}).nome || '—'
   const txt = BANCO.busca.trim().toLowerCase()
+  const culturasDisponiveis = new Set()
+  BANCO.leads.forEach(l => {
+    if (l.soja) culturasDisponiveis.add('soja')
+    if (l.milho) culturasDisponiveis.add('milho')
+    if (l.algodao) culturasDisponiveis.add('algodao')
+    Object.entries(l.culturas || {}).forEach(([k, v]) => { if (v) culturasDisponiveis.add(k) })
+  })
+  const valorCultura = (l, chave) => Number(l[chave] ?? l.culturas?.[chave] ?? 0)
+
   const lista = BANCO.leads.filter(l =>
     (!BANCO.categoria || l.categoria === BANCO.categoria) &&
-    (!txt || `${l.grupo} ${l.cotitulares ?? ''} ${l.foco ?? ''}`.toLowerCase().includes(txt)))
+    (!txt || `${l.grupo} ${l.cotitulares ?? ''} ${l.foco ?? ''}`.toLowerCase().includes(txt)) &&
+    (!BANCO.soPivo || Number(l.pivos || 0) > 0) &&
+    (!BANCO.areaMin || Number(l.area_total || 0) >= Number(BANCO.areaMin)) &&
+    (!BANCO.cultura || valorCultura(l, BANCO.cultura) > 0))
 
   const area = lista.reduce((s, l) => s + Number(l.area_total || 0), 0)
   const agric = lista.reduce((s, l) => s + Number(l.agricultavel || 0), 0)
@@ -16875,8 +16925,8 @@ function pintarBanco (alvo, regioes) {
       ${regioes.map(r => `<label style="${BANCO.regiao === r.chave ? 'border-color:var(--rust);color:var(--txt);' : ''}"
         data-reg="${r.chave}">${esc(r.nome)}</label>`).join('')}
     </div>
-    <div class="filtros" style="margin:12px 0 14px;">
-      <div class="campo" style="flex:1;min-width:240px;">
+    <div class="filtros" style="margin:12px 0 14px;align-items:flex-end;">
+      <div class="campo" style="flex:1;min-width:220px;">
         <label>Buscar</label>
         <input id="bc-busca" value="${esc(BANCO.busca)}" placeholder="produtor, grupo, co-titular ou foco"></div>
       <div class="campo"><label>Categoria</label>
@@ -16884,12 +16934,22 @@ function pintarBanco (alvo, regioes) {
           ${Object.entries(ROTULO_CAT).map(([k, v]) =>
             `<option value="${k}" ${BANCO.categoria === k ? 'selected' : ''}>${v}</option>`).join('')}
         </select></div>
+      <div class="campo"><label>Cultura</label>
+        <select id="bc-cultura"><option value="">todas</option>
+          ${[...culturasDisponiveis].map(c =>
+            `<option value="${c}" ${BANCO.cultura === c ? 'selected' : ''}>${c.charAt(0).toUpperCase() + c.slice(1)}</option>`).join('')}
+        </select></div>
+      <div class="campo"><label>Área mínima (ha)</label>
+        <input id="bc-area-min" type="number" min="0" value="${esc(BANCO.areaMin)}" placeholder="ex: 500" style="width:110px;"></div>
+      <div class="campo">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap;">
+          <input type="checkbox" id="bc-pivo" ${BANCO.soPivo ? 'checked' : ''}> só com pivô</label></div>
     </div>
     <div class="panel" style="padding:0;"><div class="tabela-scroll">
       <table><thead><tr>
         <th>Grupo / produtor</th><th>Região</th><th>Categoria</th><th>Tipo</th>
         <th class="num">Faz.</th><th class="num">Área (ha)</th><th class="num">Agric. (ha)</th>
-        <th>Culturas</th><th>Cultivo principal</th><th>Foco</th>
+        <th class="num">Pivôs</th><th>Culturas</th><th>Cultivo principal</th><th>Foco</th><th>Cliente</th>
       </tr></thead><tbody>
       ${lista.map(l => `<tr class="lead-linha">
         <td><b>${esc(l.grupo)}</b>
@@ -16901,20 +16961,119 @@ function pintarBanco (alvo, regioes) {
         <td class="num">${l.fazendas ?? '—'}</td>
         <td class="num">${l.area_total ? fmtNum(l.area_total, 0) : '—'}</td>
         <td class="num"><b>${l.agricultavel ? fmtNum(l.agricultavel, 0) : '—'}</b></td>
+        <td class="num">${l.pivos ?? '—'}</td>
         <td class="texto-dim2" style="font-size:11.5px;">${culturasResumo(l)}</td>
         <td class="texto-dim">${esc(l.cultivo_principal ?? '—')}</td>
         <td class="texto-dim">${esc(l.foco ?? '—')}</td>
-      </tr>`).join('') || `<tr><td colspan="10" class="vazio">
+        <td style="white-space:nowrap;">
+          ${l.cliente
+            ? `<div><b style="font-size:12px;">${esc(l.cliente.nome_fantasia || l.cliente.razao_social)}</b></div>
+               <div style="display:flex;gap:4px;margin-top:4px;">
+                 <button class="lead-api-btn" data-api="SEEDZ_BASICO" data-cliente="${l.cliente.id}" title="Dados básicos (Seedz): telefone, email, endereço">📇</button>
+                 <button class="lead-api-btn" data-api="DESKDATA_AVANCADO" data-cliente="${l.cliente.id}" title="Busca avançada (Deskdata): pessoas próximas, processos, risco de crédito">🕵️</button>
+                 <button class="lead-api-btn" data-api="SEEDZ_SERASA" data-cliente="${l.cliente.id}" title="Consulta Serasa (via Seedz)">🏦</button>
+               </div>`
+            : `<button class="btn-secundario mini" data-selecionar-lead="${l.id}">Selecionar</button>`}
+        </td>
+      </tr>`).join('') || `<tr><td colspan="11" class="vazio">
         ${BANCO.leads.length ? 'Nenhum lead com esse filtro.' : 'Esta região ainda não tem dados carregados. O administrador importa a planilha em Administração › Ferramentas e regiões.'}</td></tr>`}
       </tbody></table>
-    </div></div>`
+    </div></div>
+    <p class="texto-dim2" style="font-size:11px;margin-top:8px;">
+      "Selecionar" cria (ou vincula) o cadastro do cliente — só depois disso as consultas de API e o CRM ficam disponíveis pra esse lead.
+      As 3 consultas ainda não têm contrato/credencial ativa (Seedz e Deskdata) — o botão já funciona e mostra isso quando você clicar.</p>`
 
   alvo.querySelectorAll('[data-reg]').forEach(l => {
     l.onclick = () => { BANCO.regiao = l.dataset.reg; bancoInformacoes(alvo, regioes) }
   })
   $('#bc-busca').oninput = e => { BANCO.busca = e.target.value; pintarBanco(alvo, regioes) }
   $('#bc-cat').onchange = e => { BANCO.categoria = e.target.value; pintarBanco(alvo, regioes) }
+  $('#bc-cultura').onchange = e => { BANCO.cultura = e.target.value; pintarBanco(alvo, regioes) }
+  $('#bc-area-min').onchange = e => { BANCO.areaMin = e.target.value; pintarBanco(alvo, regioes) }
+  $('#bc-pivo').onchange = e => { BANCO.soPivo = e.target.checked; pintarBanco(alvo, regioes) }
+
+  alvo.querySelectorAll('[data-selecionar-lead]').forEach(b => {
+    b.onclick = () => promoverLeadParaCliente(BANCO.leads.find(l => l.id === b.dataset.selecionarLead), alvo, regioes)
+  })
+  alvo.querySelectorAll('[data-api]').forEach(b => {
+    b.onclick = () => consultarEnriquecimento(b.dataset.cliente, b.dataset.api, b)
+  })
 }
+
+// ----- Promove um lead do Banco de Informações a cliente de verdade -----
+// Sem CNPJ na planilha pra casar automaticamente, então checa por nome
+// parecido primeiro e deixa escolher vincular a um cliente existente em
+// vez de duplicar. A partir daqui (cliente_id preenchido) é que o CRM e
+// as consultas de API passam a valer pra esse lead.
+async function promoverLeadParaCliente (lead, alvo, regioes) {
+  if (!lead) return
+  const nomeBusca = (lead.grupo || '').trim()
+  if (!nomeBusca) { alert('Esse lead não tem nome de grupo/produtor pra virar cliente.'); return }
+
+  const { data: parecidos } = await db.from('cliente').select('id,razao_social,nome_fantasia').ilike('razao_social', `%${nomeBusca}%`).limit(5)
+  let clienteId = null
+  if (parecidos?.length) {
+    const listaTexto = parecidos.map((c, i) => `${i + 1}. ${c.razao_social}`).join('\n')
+    const escolha = prompt(`Já existe(m) cliente(s) parecido(s) com "${nomeBusca}":\n${listaTexto}\n\nDigite o número pra vincular a um deles, ou deixe em branco pra criar um cliente novo:`)
+    const idx = Number(escolha)
+    if (escolha && idx >= 1 && idx <= parecidos.length) clienteId = parecidos[idx - 1].id
+  }
+
+  if (!clienteId) {
+    const notas = [lead.foco ? `Foco: ${lead.foco}.` : '', lead.cotitulares ? `Co-titulares: ${lead.cotitulares}.` : '']
+      .filter(Boolean).join(' ')
+    const { data: novo, error } = await db.from('cliente').insert({
+      razao_social: nomeBusca,
+      municipio: lead.municipios || null,
+      vendedor_id: PERFIL.pessoaId || null,
+      observacoes: `Promovido do Banco de Informações.${notas ? ' ' + notas : ''}`
+    }).select('id').single()
+    if (error) { alert('Não deu pra criar o cliente: ' + error.message); return }
+    clienteId = novo.id
+  }
+
+  const { error: errLigar } = await db.from('regiao_lead').update({ cliente_id: clienteId }).eq('id', lead.id)
+  if (errLigar) { alert('O cliente foi criado/encontrado, mas não consegui vincular ao lead: ' + errLigar.message); return }
+  await bancoInformacoes(alvo)
+}
+
+const ROTULO_FONTE_ENRIQUECIMENTO = { SEEDZ_BASICO: 'Dados básicos (Seedz)', DESKDATA_AVANCADO: 'Busca avançada (Deskdata)', SEEDZ_SERASA: 'Serasa (Seedz)' }
+
+async function consultarEnriquecimento (clienteId, fonte, botao) {
+  botao.disabled = true
+  const original = botao.textContent
+  botao.textContent = '…'
+  const { data, error } = await db.functions.invoke('cliente-enriquecer', { body: { cliente_id: clienteId, fonte } })
+  botao.disabled = false
+  botao.textContent = original
+
+  const titulo = ROTULO_FONTE_ENRIQUECIMENTO[fonte] || fonte
+  if (error || data?.erro) {
+    let detalhe = data?.erro || error?.message || 'Não consegui consultar agora.'
+    if (error?.context?.json) { try { const c = await error.context.json(); detalhe = c?.erro || detalhe } catch {} }
+    modalTexto(titulo, detalhe)
+    return
+  }
+  if (data.tipo === 'nao_disponivel') {
+    modalTexto(titulo, data.erro || 'Essa fonte ainda não está configurada (falta contrato/credencial da API).')
+    return
+  }
+  modalTexto(titulo, JSON.stringify(data.dados, null, 2))
+}
+
+function modalTexto (titulo, texto) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:560px;">
+    <h3>${esc(titulo)}</h3>
+    <pre style="white-space:pre-wrap;font-size:12.5px;background:var(--surface2);border:1px solid var(--line2);border-radius:6px;padding:10px;max-height:50vh;overflow:auto;">${esc(texto)}</pre>
+    <div class="acoes" style="justify-content:flex-end;"><button class="btn-secundario" id="mt-fechar">Fechar</button></div>
+  </div>`
+  document.body.appendChild(fundo)
+  $('#mt-fechar').onclick = () => fundo.remove()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+}
+
 
 // ---------------------------------------------------------------
 // Página: Estoque
