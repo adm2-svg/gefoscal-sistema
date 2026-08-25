@@ -797,6 +797,8 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
 .sec-msg.sec-ia { align-self:flex-start; background:var(--panel); border:1px solid var(--line2); border-bottom-left-radius:2px; }
 .sec-msg.sec-carregando { color:var(--dim2); font-style:italic; animation:sec-pulsar 1.2s ease-in-out infinite; }
 @keyframes sec-pulsar { 0%,100% { opacity:.5; } 50% { opacity:1; } }
+.gravando-voz { background:rgba(var(--critico-rgb),.18) !important; color:var(--critico-text) !important;
+  border-color:var(--critico-text) !important; animation:sec-pulsar 1s ease-in-out infinite; }
 
 /* ---- Banco de Informações: botões de API por lead/cliente ---- */
 .lead-api-btn { width:26px; height:26px; border-radius:6px; border:1px solid var(--line2); background:var(--panel);
@@ -11106,6 +11108,51 @@ async function carregarPropostaLead (fundo, l, editavel) {
   alvo.querySelector('#pp-gerar-pdf').onclick = () => abrirPdfProposta(estado, l)
 }
 
+const UFS_BRASIL = ['AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI', 'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO']
+
+// lista fixa (evita "Bahia farm show", "bahia Farm Show", "Feira" etc.
+// virarem valores diferentes no banco) — se o lead já tiver um valor
+// fora dessa lista (histórico), ele entra como opção extra, pra não
+// sumir/mudar sozinho ao editar
+const ORIGENS_LEAD_PADRAO = ['Banco de Informações', 'Formulário Comercial', 'Indicação', 'Bahia Farm Show', 'Feira/Evento', 'Carteira do Vendedor', 'Reativação de Cliente', 'Outro']
+function origensLead (atual) {
+  if (atual && !ORIGENS_LEAD_PADRAO.includes(atual)) return [atual, ...ORIGENS_LEAD_PADRAO]
+  return ORIGENS_LEAD_PADRAO
+}
+
+// municípios vêm da API pública do IBGE (sempre atualizada, sem
+// precisar manter uma lista de 5.570 nomes dentro do sistema) —
+// cacheia por UF pra não rebuscar toda vez na mesma sessão
+const CACHE_MUNICIPIOS_UF = {}
+async function buscarMunicipiosIBGE (uf) {
+  if (!uf) return []
+  if (CACHE_MUNICIPIOS_UF[uf]) return CACHE_MUNICIPIOS_UF[uf]
+  try {
+    const resp = await fetch(`https://servicodados.ibge.gov.br/api/v1/localidades/estados/${uf}/municipios`)
+    const dados = await resp.json()
+    const nomes = (dados || []).map(m => m.nome).sort((a, b) => a.localeCompare(b, 'pt-BR'))
+    CACHE_MUNICIPIOS_UF[uf] = nomes
+    return nomes
+  } catch { return [] }
+}
+async function popularMunicipios (selectEl, uf, atual) {
+  if (!uf) { selectEl.innerHTML = `<option value="">selecione o UF primeiro</option>`; selectEl.disabled = true; return }
+  selectEl.innerHTML = `<option value="">carregando...</option>`
+  selectEl.disabled = true
+  const nomes = await buscarMunicipiosIBGE(uf)
+  if (!nomes.length) {
+    selectEl.innerHTML = `<option value="${esc(atual || '')}">${esc(atual || 'não consegui carregar — tenta de novo')}</option>`
+    selectEl.disabled = false
+    return
+  }
+  selectEl.innerHTML = `<option value="">selecione...</option>` +
+    nomes.map(n => `<option value="${esc(n)}" ${n === atual ? 'selected' : ''}>${esc(n)}</option>`).join('')
+  if (atual && !nomes.includes(atual)) {
+    selectEl.insertAdjacentHTML('afterbegin', `<option value="${esc(atual)}" selected>${esc(atual)} (valor salvo)</option>`)
+  }
+  selectEl.disabled = false
+}
+
 function formLead (l, editavel, gerencia, aoFechar) {
   const podeReatribuir = editavel && gerencia // trocar o vendedor é ação de quem gerencia
   const podeExcluir = editavel && gerencia && l
@@ -11125,13 +11172,20 @@ function formLead (l, editavel, gerencia, aoFechar) {
         <select id="ld-vendedor" ${podeReatribuir ? '' : 'disabled'}><option value="">—</option>
           ${CRM_CACHE.vendedores.map(p => `<option value="${p.id}" ${p.id === (l?.vendedor_id ?? (!podeReatribuir ? PERFIL.pessoaId : null)) ? 'selected' : ''}>${esc(p.nome)}</option>`).join('')}</select></div>
       <div class="campo"><label>Origem</label>
-        <input id="ld-origem" placeholder="indicação, site, feira..." value="${esc(l?.origem ?? '')}" ${editavel ? '' : 'disabled'}></div>
+        <select id="ld-origem" ${editavel ? '' : 'disabled'}>
+          ${origensLead(l?.origem).map(o => `<option value="${esc(o)}" ${o === (l?.origem ?? '') ? 'selected' : ''}>${esc(o)}</option>`).join('')}
+        </select></div>
       <div class="campo"><label>Etapa</label>
         <select id="ld-etapa" ${editavel ? '' : 'disabled'}>${ETAPAS_LEAD.map(e => `<option value="${e}" ${e === (l?.etapa ?? 'NOVO') ? 'selected' : ''}>${ROTULO_ETAPA_LEAD[e]}</option>`).join('')}</select></div>
-      <div class="campo"><label>Município</label>
-        <input id="ld-municipio" value="${esc(l?.municipio ?? '')}" ${editavel ? '' : 'disabled'}></div>
       <div class="campo"><label>UF</label>
-        <input id="ld-uf" maxlength="2" style="text-transform:uppercase;" value="${esc(l?.uf ?? '')}" ${editavel ? '' : 'disabled'}></div>
+        <select id="ld-uf" ${editavel ? '' : 'disabled'}>
+          <option value="">—</option>
+          ${UFS_BRASIL.map(uf => `<option value="${uf}" ${uf === (l?.uf ?? '') ? 'selected' : ''}>${uf}</option>`).join('')}
+        </select></div>
+      <div class="campo"><label>Município</label>
+        <select id="ld-municipio" ${editavel ? '' : 'disabled'}>
+          <option value="${esc(l?.municipio ?? '')}" selected>${esc(l?.municipio || (l?.uf ? 'carregando...' : 'selecione o UF primeiro'))}</option>
+        </select></div>
       <div class="campo"><label>Telefone</label>
         <input id="ld-telefone" value="${esc(l?.telefone ?? '')}" ${editavel ? '' : 'disabled'}></div>
       <div class="campo"><label>E-mail</label>
@@ -11139,7 +11193,12 @@ function formLead (l, editavel, gerencia, aoFechar) {
       <div class="campo"><label>Valor estimado (R$)</label>
         <input id="ld-valor" type="number" step="0.01" value="${l?.valor_estimado ?? ''}" ${editavel ? '' : 'disabled'}></div>
     </div>
-    <div class="campo" style="margin-top:10px;"><label>Observações</label>
+    <div class="campo" style="margin-top:10px;">
+      <label>Observações</label>
+      ${editavel ? `<div style="display:flex;gap:6px;margin-bottom:6px;">
+        <button type="button" class="btn-secundario mini" id="ld-obs-ditar">🎙️ Ditar</button>
+        <button type="button" class="btn-secundario mini" id="ld-obs-padronizar">✨ Padronizar com IA</button>
+      </div>` : ''}
       <textarea id="ld-obs" style="min-height:80px;" ${editavel ? '' : 'disabled'}>${esc(l?.observacoes ?? '')}</textarea></div>
     ${l ? `<div class="cabeca-secao" style="margin-top:16px;margin-bottom:4px;">
         <h3 style="font-family:var(--serif);font-size:14px;">Agenda</h3></div>
@@ -11177,6 +11236,62 @@ function formLead (l, editavel, gerencia, aoFechar) {
   const fechar = () => fundo.remove()
   fundo.querySelector('#ld-fechar').onclick = fechar
   fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  if (editavel) {
+    const selUf = fundo.querySelector('#ld-uf')
+    const selMun = fundo.querySelector('#ld-municipio')
+    popularMunicipios(selMun, l?.uf ?? '', l?.municipio ?? '')
+    selUf.addEventListener('change', () => popularMunicipios(selMun, selUf.value, ''))
+
+    const obsTextarea = fundo.querySelector('#ld-obs')
+    const btnDitar = fundo.querySelector('#ld-obs-ditar')
+    const btnPad = fundo.querySelector('#ld-obs-padronizar')
+
+    // ditado por voz — Web Speech API, roda no navegador (Chrome/Edge);
+    // some sozinho (botão desabilitado) se o navegador não suportar
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition
+    if (!SR) {
+      btnDitar.disabled = true
+      btnDitar.title = 'Seu navegador não suporta ditado por voz — funciona no Chrome ou Edge.'
+    } else {
+      let gravando = false, reconhecedor = null
+      btnDitar.onclick = () => {
+        if (gravando) { reconhecedor?.stop(); return }
+        reconhecedor = new SR()
+        reconhecedor.lang = 'pt-BR'
+        reconhecedor.interimResults = false
+        reconhecedor.continuous = true
+        reconhecedor.onresult = e => {
+          let novo = ''
+          for (let i = e.resultIndex; i < e.results.length; i++) novo += e.results[i][0].transcript
+          if (novo.trim()) obsTextarea.value = obsTextarea.value.trim() ? obsTextarea.value.trim() + ' ' + novo.trim() : novo.trim()
+        }
+        const parar = () => { gravando = false; btnDitar.textContent = '🎙️ Ditar'; btnDitar.classList.remove('gravando-voz') }
+        reconhecedor.onend = parar
+        reconhecedor.onerror = parar
+        reconhecedor.start()
+        gravando = true
+        btnDitar.textContent = '⏹ Parar'
+        btnDitar.classList.add('gravando-voz')
+      }
+    }
+
+    btnPad.onclick = async () => {
+      const textoAtual = obsTextarea.value.trim()
+      if (!textoAtual) { alert('Escreva ou dite alguma observação primeiro.'); return }
+      btnPad.disabled = true; btnPad.textContent = 'Padronizando...'
+      const instrucao = 'Reescreva esta observação de CRM de forma objetiva e padronizada: o que foi feito ou conversado, o resultado, e o próximo passo (se houver). Só as informações relevantes, sem redundância, português direto, sem saudação nem assinatura.'
+      const { data, error } = await db.functions.invoke('ia-melhorar-texto', { body: { texto: textoAtual, instrucao } })
+      btnPad.disabled = false; btnPad.textContent = '✨ Padronizar com IA'
+      if (error || data?.erro) {
+        let msg = data?.erro || error?.message || 'Não consegui padronizar agora.'
+        if (error?.context?.json) { try { const c = await error.context.json(); msg = c?.erro || msg } catch {} }
+        alert(msg)
+        return
+      }
+      obsTextarea.value = data.texto
+    }
+  }
 
   if (l) carregarAgendaLead(fundo, l, editavel)
   let propostaCarregada = l && l.etapa === 'PROPOSTA'
