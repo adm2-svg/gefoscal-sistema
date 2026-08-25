@@ -5052,6 +5052,10 @@ const podeAprovar   = () => PERFIL.papeis.includes('DIRETORIA') || ehAdminSistem
 const podePagar     = () => podeEditar('financeiro') || ehAdminSistema()
 // coordenação depende do setor: só aparece para quem gerencia algum
 const podeCoordenar = () => COMPRAS_CACHE.meusSetores.length > 0 || ehAdminSistema()
+// cadastro de fornecedor: além de quem já edita o módulo Compras,
+// coordenador de setor, quem cota e quem aprova também podem corrigir
+// (o RLS aplica a mesma regra do lado do banco — ver pode_gerenciar_fornecedor())
+const podeGerenciarFornecedores = () => podeEditar('compras') || podeCoordenar() || podeCotar() || podeAprovar()
 
 // Quem pode mexer numa solicitação específica. O banco aplica a mesma
 // regra na RLS — aqui é só para não mostrar botão que vai falhar.
@@ -5101,7 +5105,7 @@ async function paginaCompras () {
     { chave: 'coordenar',    nome: 'Coordenação',  mostrar: podeCoordenar() },
     { chave: 'cotar',        nome: 'Cotação',      mostrar: podeCotar() },
     { chave: 'aprovar',      nome: 'Aprovação',    mostrar: podeAprovar() },
-    { chave: 'fornecedores', nome: 'Fornecedores', mostrar: editavel },
+    { chave: 'fornecedores', nome: 'Fornecedores', mostrar: podeGerenciarFornecedores() },
     { chave: 'relatorio',    nome: 'Relatório',    mostrar: editavel }
   ].filter(a => a.mostrar)
 
@@ -5128,7 +5132,7 @@ function abrirCompras (sub, editavel, apenasProprio) {
   if (sub === 'coordenar') comprasDecidir(alvo, 'coordenacao')
   if (sub === 'cotar') comprasCotar(alvo)
   if (sub === 'aprovar') comprasDecidir(alvo, 'aprovacao')
-  if (sub === 'fornecedores') comprasFornecedores(alvo, editavel)
+  if (sub === 'fornecedores') comprasFornecedores(alvo, podeGerenciarFornecedores())
   if (sub === 'relatorio') comprasRelatorio(alvo)
 }
 
@@ -6242,7 +6246,7 @@ async function telaCotacao (s) {
 
   const recarregar = async () => {
     const { data: orcs } = await db.from('orcamento')
-      .select('id,valor,prazo_entrega,forma_pagamento,condicao_pagamento,link_proposta,observacoes,escolhido,fornecedor_avulso,fornecedor:fornecedor_id(nome)')
+      .select('id,valor,prazo_entrega,forma_pagamento,condicao_pagamento,link_proposta,observacoes,escolhido,fornecedor_avulso,fornecedor:fornecedor_id(nome),anexo_url,nome_anexo')
       .eq('solicitacao_id', s.id).order('valor')
     desenhar(orcs || [])
   }
@@ -6268,7 +6272,8 @@ async function telaCotacao (s) {
             ${orcs.map(o => `<tr>
               <td><input type="radio" name="escolha" data-escolher="${o.id}" ${o.escolhido ? 'checked' : ''}></td>
               <td>${esc(o.fornecedor?.nome || o.fornecedor_avulso || '—')}
-                ${o.link_proposta ? `<br><a class="anexo-link" href="${esc(o.link_proposta)}" target="_blank" rel="noopener">proposta</a>` : ''}</td>
+                ${o.link_proposta ? `<br><a class="anexo-link" href="${esc(o.link_proposta)}" target="_blank" rel="noopener">proposta</a>` : ''}
+                ${o.anexo_url ? `<br><a class="anexo-link" href="#" data-abrir-anexo="${esc(o.anexo_url)}">${esc(o.nome_anexo || 'arquivo da cotação')}</a>` : ''}</td>
               <td class="num ${Number(o.valor) === menor ? 'badge-bom' : ''}">R$ ${fmtNum(o.valor)}</td>
               <td>${esc(o.prazo_entrega ?? '—')}</td>
               <td>${esc([o.forma_pagamento, o.condicao_pagamento].filter(Boolean).join(' · ') || '—')}</td>
@@ -6281,7 +6286,14 @@ async function telaCotacao (s) {
 
         <div class="secao">
           <h3 style="font-size:15px;">Novo orçamento</h3>
-          <div class="form-grade">
+          <div class="campo"><label>Arquivo da cotação (PDF, foto ou print)</label>
+            <input type="file" id="o-arquivo" accept=".pdf,.jpg,.jpeg,.png,.webp">
+            <div class="acoes" style="margin-top:6px;">
+              <button class="btn-secundario mini" id="o-extrair" type="button">extrair dados do arquivo</button>
+              <span class="texto-dim2" style="font-size:11.5px;" id="o-extrair-status"></span>
+            </div>
+          </div>
+          <div class="form-grade" style="margin-top:10px;">
             <div class="campo"><label>Fornecedor</label>
               <select id="o-forn"><option value="">— digitar abaixo —</option>
                 ${COMPRAS_CACHE.fornecedores.map(f =>
@@ -6350,11 +6362,73 @@ async function telaCotacao (s) {
       }
     })
 
+    fundo.querySelectorAll('[data-abrir-anexo]').forEach(a => {
+      a.onclick = e => { e.preventDefault(); abrirArquivo(a.dataset.abrirAnexo) }
+    })
+
+    // arquivo -> base64, sem o prefixo "data:...;base64,"
+    const arquivoParaBase64 = arq => new Promise((resolve, reject) => {
+      const leitor = new FileReader()
+      leitor.onload = () => resolve(String(leitor.result).split(',')[1] || '')
+      leitor.onerror = () => reject(new Error('Não deu para ler o arquivo.'))
+      leitor.readAsDataURL(arq)
+    })
+
+    q('#o-extrair').onclick = async () => {
+      const arquivo = q('#o-arquivo').files[0]
+      const status = q('#o-extrair-status')
+      if (!arquivo) { status.textContent = 'Escolha um arquivo primeiro.'; return }
+      const btn = q('#o-extrair'); btn.disabled = true
+      status.textContent = 'Lendo o documento...'
+      try {
+        const dadosB64 = await arquivoParaBase64(arquivo)
+        const { data, error } = await db.functions.invoke('compras-cotacao-extrair', {
+          body: { arquivo: { data: dadosB64, media_type: arquivo.type || 'application/pdf' } }
+        })
+        if (error || !data?.ok) {
+          status.textContent = data?.erro || error?.message || 'Não consegui ler o arquivo.'
+          return
+        }
+        const ex = data.extraido || {}
+        if (ex.fornecedor) {
+          const achado = COMPRAS_CACHE.fornecedores.find(f => f.nome.toLowerCase().trim() === String(ex.fornecedor).toLowerCase().trim())
+          if (achado) { q('#o-forn').value = achado.id; q('#o-avulso').value = '' }
+          else { q('#o-forn').value = ''; q('#o-avulso').value = ex.fornecedor }
+        }
+        if (ex.valor != null) q('#o-valor').value = String(ex.valor).replace('.', ',')
+        if (ex.prazo_entrega) q('#o-prazo').value = ex.prazo_entrega
+        if (ex.forma_pagamento) q('#o-forma').value = ex.forma_pagamento
+        if (ex.condicao_pagamento) q('#o-cond').value = ex.condicao_pagamento
+        status.textContent = ex.confianca === 'baixa'
+          ? 'Preenchido — confira com atenção, o documento estava difícil de ler.'
+          : 'Preenchido a partir do arquivo — confira antes de adicionar.'
+      } catch (e) {
+        status.textContent = e.message
+      } finally {
+        btn.disabled = false
+      }
+    }
+
     q('#o-add').onclick = async () => {
       const valor = numeroBR(q('#o-valor').value)
       if (valor === null) { aviso('Informe o valor do orçamento.'); return }
       if (!q('#o-forn').value && !q('#o-avulso').value.trim()) {
         aviso('Escolha um fornecedor cadastrado ou digite o nome.'); return }
+
+      const btnAdd = q('#o-add'); btnAdd.disabled = true; btnAdd.textContent = 'Salvando...'
+
+      let anexoUrl = null, nomeAnexo = null
+      const arquivoAnexo = q('#o-arquivo').files[0]
+      if (arquivoAnexo) {
+        try {
+          const enviado = await enviarArquivo(arquivoAnexo, 'compras-cotacoes')
+          anexoUrl = enviado.caminho; nomeAnexo = enviado.nome
+        } catch (e) {
+          aviso('Não deu pra enviar o arquivo: ' + e.message)
+          btnAdd.disabled = false; btnAdd.textContent = 'Adicionar orçamento'
+          return
+        }
+      }
 
       const { error } = await db.from('orcamento').insert({
         solicitacao_id: s.id,
@@ -6365,8 +6439,11 @@ async function telaCotacao (s) {
         forma_pagamento: q('#o-forma').value.trim() || null,
         condicao_pagamento: q('#o-cond').value.trim() || null,
         link_proposta: q('#o-link').value.trim() || null,
+        anexo_url: anexoUrl,
+        nome_anexo: nomeAnexo,
         criado_por_id: PERFIL.pessoaId
       })
+      btnAdd.disabled = false; btnAdd.textContent = 'Adicionar orçamento'
       if (error) { aviso(error.message); return }
       recarregar()
     }
@@ -6641,7 +6718,7 @@ async function comprasFornecedores (alvo, editavel) {
 
     <div class="panel" style="padding:0;"><div class="tabela-scroll">
       <table><thead><tr><th>Nome</th><th>CNPJ / CPF</th><th>Contato</th>
-        <th>Cadastrado por</th><th>Situação</th></tr></thead>
+        <th>Cadastrado por</th><th>Situação</th>${editavel ? '<th></th>' : ''}</tr></thead>
       <tbody>${(data || []).map(f => `<tr>
         <td>${esc(f.nome)}</td>
         <td class="texto-dim">${esc(f.cnpj_cpf ?? '—')}</td>
@@ -6649,7 +6726,8 @@ async function comprasFornecedores (alvo, editavel) {
         <td class="texto-dim2">${esc(f.criado?.nome ?? '—')}
           ${f.criado_em ? '<br>' + fmtQuando(f.criado_em) : ''}</td>
         <td><span class="chip">${esc(f.status)}</span></td>
-      </tr>`).join('') || `<tr><td colspan="5" class="vazio">Nenhum fornecedor cadastrado.</td></tr>`}
+        ${editavel ? `<td style="text-align:right;"><button class="btn-secundario mini" data-editar-forn="${f.id}">editar</button></td>` : ''}
+      </tr>`).join('') || `<tr><td colspan="${editavel ? 6 : 5}" class="vazio">Nenhum fornecedor cadastrado.</td></tr>`}
       </tbody></table>
     </div></div>`
 
@@ -6674,6 +6752,73 @@ async function comprasFornecedores (alvo, editavel) {
       el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
       return
     }
+    abrirCompras('fornecedores', true)
+  }
+
+  alvo.querySelectorAll('[data-editar-forn]').forEach(b => {
+    b.onclick = () => formEditarFornecedor(data.find(f => f.id === b.dataset.editarForn))
+  })
+}
+
+// ----- Editar fornecedor (nome, CNPJ/CPF, contato, situação) -----
+// Aberto a quem edita Compras, coordenador de setor, quem cota e quem
+// aprova (podeGerenciarFornecedores) — o banco confere a mesma regra
+// via RLS (pode_gerenciar_fornecedor()), então mesmo que o botão
+// apareça indevidamente em algum lugar, a gravação é barrada lá.
+function formEditarFornecedor (f) {
+  if (!f) return
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal" style="max-width:480px;">
+      <h3>Editar fornecedor</h3>
+      <div class="form-grade">
+        <div class="campo" style="grid-column:1/-1;"><label>Nome *</label>
+          <input id="ef-nome" value="${esc(f.nome)}"></div>
+        <div class="campo"><label>CNPJ ou CPF</label>
+          <input id="ef-doc" value="${esc(f.cnpj_cpf ?? '')}"></div>
+        <div class="campo"><label>Contato</label>
+          <input id="ef-contato" value="${esc(f.contato ?? '')}" placeholder="telefone ou e-mail"></div>
+        <div class="campo" style="grid-column:1/-1;"><label>Situação</label>
+          <select id="ef-status">
+            <option value="ATIVO" ${f.status !== 'INATIVO' ? 'selected' : ''}>Ativo</option>
+            <option value="INATIVO" ${f.status === 'INATIVO' ? 'selected' : ''}>Inativo</option>
+          </select></div>
+      </div>
+      <div class="acoes">
+        <button class="btn" id="ef-salvar">Salvar</button>
+        <button class="btn-secundario" id="ef-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="ef-recado"></div>
+    </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#ef-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const q = id => fundo.querySelector(id)
+  const aviso = t => {
+    const el = q('#ef-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  q('#ef-salvar').onclick = async () => {
+    const nome = q('#ef-nome').value.trim()
+    if (!nome) { aviso('Escreva o nome do fornecedor.'); return }
+    const btn = q('#ef-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const { error } = await db.from('fornecedor').update({
+      nome,
+      cnpj_cpf: q('#ef-doc').value.trim() || null,
+      contato: q('#ef-contato').value.trim() || null,
+      status: q('#ef-status').value
+    }).eq('id', f.id)
+    if (error) {
+      aviso(error.message.includes('policy') || error.message.includes('permission')
+        ? 'Você não tem permissão para editar fornecedores.' : error.message)
+      btn.disabled = false; btn.textContent = 'Salvar'
+      return
+    }
+    fechar()
     abrirCompras('fornecedores', true)
   }
 }
