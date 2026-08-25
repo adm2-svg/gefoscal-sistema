@@ -10341,22 +10341,11 @@ function mdTecla12c (fundo, k) {
 }
 
 // mercado — reaproveita a mesma function 'mercado-agro' já usada no
-// Marketing (dólar + clima real; commodities se a chave estiver configurada)
-// Seções escolhidas do relatório matinal (resumo_matinal) que entram
-// no botão Mercado: câmbio, termômetro do mercado, LEM/praças, grãos
-// secundários, clima e notícias. Cada uma é um <h2 id="..."> seguido
-// dos elementos-irmãos até o próximo <h2> — extrai isso como HTML puro
-// (não texto), porque o valor está no formato/tabelas originais.
-const SECOES_MERCADO_MEUDIA = ['cambio', 'termometro', 'lem', 'secundarios', 'clima', 'news']
-function extrairSecaoRelatorio (doc, id) {
-  const h2 = doc.getElementById(id)
-  if (!h2) return ''
-  let html = h2.outerHTML
-  let el = h2.nextElementSibling
-  while (el && el.tagName !== 'H2') { html += el.outerHTML; el = el.nextElementSibling }
-  return html
-}
-
+// Marketing (dólar + clima real; commodities se a chave estiver configurada).
+// O recorte de mercado (câmbio/termômetro/LEM/secundários/clima/notícias)
+// vem pronto de resumo_mercado_publico — a extração das seções do
+// relatório acontece do lado do servidor, na edge function
+// resumo-matinal-publicar, não aqui.
 async function abrirMercadoMeuDia () {
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
@@ -10367,20 +10356,17 @@ async function abrirMercadoMeuDia () {
   const hojeStr = hojeISO()
   const [{ data }, { data: resumo }] = await Promise.all([
     db.functions.invoke('mercado-agro', { body: {} }),
-    db.from('resumo_matinal').select('html_conteudo,criado_em').eq('data', hojeStr).maybeSingle()
+    db.from('resumo_mercado_publico').select('html_conteudo,criado_em').eq('data', hojeStr).maybeSingle()
   ])
   const m = data || {}
 
   let blocoRelatorio = ''
   let docIframe = ''
   if (resumo?.html_conteudo) {
-    const doc = new DOMParser().parseFromString(resumo.html_conteudo, 'text/html')
-    const estilo = doc.querySelector('style')?.outerHTML || ''
-    const secoesHtml = SECOES_MERCADO_MEUDIA.map(id => extrairSecaoRelatorio(doc, id)).join('\n')
-    docIframe = `<!doctype html><html><head><meta charset="utf-8">${estilo}</head><body style="padding:14px;margin:0;">${secoesHtml}</body></html>`
+    docIframe = resumo.html_conteudo
     blocoRelatorio = `
       <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;margin:16px 0 4px;">
-        Do seu resumo matinal de hoje (${fmtQuando(resumo.criado_em) || ''})</div>
+        Câmbio, termômetro, LEM, secundários, clima e notícias — de hoje (${fmtQuando(resumo.criado_em) || ''})</div>
       <iframe id="mm-iframe-relatorio" sandbox style="width:100%;height:60vh;border:1px solid var(--line2);border-radius:8px;background:#071020;"></iframe>`
   }
 
