@@ -7315,7 +7315,7 @@ async function verAnexosCarregamento (carregamentoId) {
 // não escolhe sozinho — fica sem vínculo, pra vincular na mão.
 async function buscarPedidoAbertoUnico (clienteId) {
   const { data: pedidos, error } = await db.from('pedido').select(`
-    id, numero, quantidade_t, status, carregamento ( quantidade_t, status )
+    id, numero, quantidade_t, status, vendedor_id, carregamento ( quantidade_t, status )
   `).eq('cliente_id', clienteId).not('status', 'in', '(CANCELADO,CONCLUIDO)')
   if (error || !pedidos) return { pedido: null, motivo: 'erro' }
   const abertos = pedidos.map(p => {
@@ -7457,7 +7457,10 @@ function expedLancar (alvo) {
     if (statusSel === 'FATURADO') {
       const { pedido, motivo } = await buscarPedidoAbertoUnico(clienteId)
       if (pedido) {
-        await db.from('carregamento').update({ pedido_id: pedido.id }).eq('id', novoCarreg.id)
+        const vinculo = { pedido_id: pedido.id }
+        // se não escolheu vendedor na mão, puxa o que já está no pedido
+        if (!$('#el-vendedor').value && pedido.vendedor_id) vinculo.vendedor_id = pedido.vendedor_id
+        await db.from('carregamento').update(vinculo).eq('id', novoCarreg.id)
         notaVinculo = ` Vinculado ao pedido PD ${pedido.numero} — saldo já atualizado na Conferência de Clientes.`
       } else if (motivo === 'ambiguo') {
         notaVinculo = ' Este cliente tem mais de um pedido em aberto — vincule manualmente em Crédito e Cobrança pra descontar da Conferência de Clientes.'
@@ -7489,7 +7492,7 @@ async function expedOrdem (alvo) {
 
   const buscar = async () => {
     let q = db.from('pedido').select(`
-      id, numero, quantidade_t, preco_unitario, data_pedido, local_entrega, empresa_id,
+      id, numero, quantidade_t, preco_unitario, data_pedido, local_entrega, empresa_id, vendedor_id,
       cliente:cliente_id ( id, razao_social ), produto:produto_id ( id, nome, unidade ), vendedor:vendedor_id ( nome ),
       carregamento ( id, quantidade_t, status, data_carregamento, motorista, numero_nf, valor_nf, preco_unitario, observacoes, uf_destino, cliente_id )
     `).not('status', 'in', '(CANCELADO,CONCLUIDO)').order('data_pedido', { ascending: false }).limit(100)
@@ -8018,6 +8021,7 @@ function formOrdemCarregamento (pedido) {
     const btn = fundo.querySelector('#oc-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
     const { data: novo, error } = await db.from('carregamento').insert({
       pedido_id: pedido.id, empresa_id: empresaId, cliente_id: pedido.cliente?.id, produto_id: pedido.produto?.id,
+      vendedor_id: pedido.vendedor_id || null,
       veiculo_id: veiculoSel.origem === 'frota' ? veiculoSel.id : null,
       veiculo_cliente_id: veiculoSel.origem === 'cliente' ? veiculoSel.id : null,
       motorista, quantidade_t: qtd,
