@@ -9877,12 +9877,13 @@ async function crmMeuDia (alvo, editavel, gerencia) {
   const inicioMes = new Date(MD_ANO, MD_MES, 1).toISOString().slice(0, 10)
   const fimMes = new Date(MD_ANO, MD_MES + 1, 0).toISOString().slice(0, 10)
 
-  const [{ data: compromissos }, regioesVisiveis] = await Promise.all([
+  const [{ data: compromissos }, regioesVisiveis, contaGoogle] = await Promise.all([
     PERFIL.pessoaId
       ? db.from('lead_compromisso').select('id,data_hora,titulo,lead:lead_id!inner(nome,vendedor_id)')
           .eq('lead.vendedor_id', PERFIL.pessoaId).gte('data_hora', inicioMes).lte('data_hora', fimMes + 'T23:59:59').order('data_hora')
       : Promise.resolve({ data: [] }),
-    buscarMinhasRegioesComContagem()
+    buscarMinhasRegioesComContagem(),
+    PERFIL.pessoaId ? db.from('vendedor_google_conta').select('email').eq('pessoa_id', PERFIL.pessoaId).maybeSingle().then(r => r.data) : null
   ])
 
   MD_EVENTOS = {}
@@ -9899,7 +9900,11 @@ async function crmMeuDia (alvo, editavel, gerencia) {
           <span class="md-mini-cal-mes" id="md-titulo-mes"></span>
           <button id="md-mes-prox" title="próximo mês" style="width:28px;height:28px;border-radius:6px;border:1px solid var(--line2);background:var(--surface2);color:var(--dim);cursor:pointer;">›</button>
         </div>
-        <div class="md-mini-cal-status"><span class="ponto off"></span> Google Calendar ainda não conectado</div>
+        <div class="md-mini-cal-status">
+          ${contaGoogle
+            ? `<span class="ponto"></span> Google conectado (${esc(contaGoogle.email || '')})`
+            : `<span class="ponto off"></span> Google ainda não conectado <button class="anexo-link" id="md-conectar-google" style="border:none;background:none;cursor:pointer;font-size:10.5px;">conectar</button>`}
+        </div>
         <div class="md-mini-cal-grade" id="md-grade"></div>
         <div class="md-mini-cal-legenda">
           <span><i style="background:var(--gold,#c9a227);"></i>Google Agenda</span>
@@ -9933,6 +9938,20 @@ async function crmMeuDia (alvo, editavel, gerencia) {
   $('#md-mes-ant').onclick = () => { MD_MES--; if (MD_MES < 0) { MD_MES = 11; MD_ANO-- } MD_DIA_SEL = null; crmMeuDia(alvo, editavel, gerencia) }
   $('#md-mes-prox').onclick = () => { MD_MES++; if (MD_MES > 11) { MD_MES = 0; MD_ANO++ } MD_DIA_SEL = null; crmMeuDia(alvo, editavel, gerencia) }
   $('#md-abrir-completa').onclick = () => { CRM_CAL_ANO = MD_ANO; CRM_CAL_MES_ABERTO = MD_MES; crmCalendario(alvo, editavel, gerencia) }
+  const btnConectarGoogle = $('#md-conectar-google')
+  if (btnConectarGoogle) btnConectarGoogle.onclick = async () => {
+    btnConectarGoogle.disabled = true; btnConectarGoogle.textContent = 'abrindo...'
+    const { data, error } = await db.functions.invoke('google-oauth-iniciar', { body: {} })
+    btnConectarGoogle.disabled = false; btnConectarGoogle.textContent = 'conectar'
+    if (error || data?.erro) {
+      let msg = data?.erro || error?.message || 'Não consegui iniciar a conexão.'
+      if (error?.context?.json) { try { const c = await error.context.json(); msg = c?.erro || msg } catch {} }
+      alert(msg)
+      return
+    }
+    window.open(data.url, '_blank', 'noopener')
+    alert('Uma aba nova abriu pra você autorizar no Google. Depois de autorizar, volte aqui e atualize a página pra ver o status "conectado".')
+  }
 
   const LANCADORES_MD = [
     { chave: 'meet', nome: 'Meet', icone: ICONES_MEU_DIA.meet, url: 'https://meet.google.com' },
@@ -11383,6 +11402,12 @@ function formLead (l, editavel, gerencia, aoFechar) {
       await db.from('lead_historico').insert({
         lead_id: leadId, etapa_de: l?.etapa ?? null, etapa_para: novaEtapa, pessoa_id: PERFIL.pessoaId
       })
+    }
+    // sincroniza com os Contatos do Google do vendedor, se tiver
+    // telefone/e-mail — silencioso: se o Google ainda não estiver
+    // conectado ou der erro, não trava nem incomoda quem tá salvando
+    if (leadId && (corpo.telefone || corpo.email)) {
+      db.functions.invoke('google-contatos-sincronizar', { body: { lead_id: leadId } }).catch(() => {})
     }
     fechar(); aoFechar()
   }
