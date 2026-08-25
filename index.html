@@ -1906,7 +1906,7 @@ async function painelExecutivoDiretor (area) {
         }
       }),
       tentar(async () => {
-        const { data } = await db.from('crm_negociacao').select('id').eq('tipo_funil', 'AQUISICAO').eq('status', 'ATIVA')
+        const { data } = await db.from('lead').select('id').eq('arquivado', false).not('etapa', 'in', '(GANHO,PERDIDO)')
         return { abertas: (data || []).length }
       }),
       tentar(async () => {
@@ -9799,9 +9799,14 @@ async function crmPainelIndividual (alvo, editavel, gerencia) {
 
 // ----- Funil (individual) — kanban só dos MEUS leads, com drag-and-drop
 // e seletor de etapa dentro do card (mesmo motor usado em Gestão, só que
-// aqui a lista já vem filtrada pra "só o meu"). -----
+// aqui a lista já vem filtrada pra "só o meu"). Quem gerencia (ehTotal
+// ou gestor comercial) sempre viu "todos" aqui sem opção de filtrar pra
+// só a própria carteira — CRM_FUNIL_SO_MEU dá esse botão. -----
+let CRM_FUNIL_SO_MEU = false
+
 async function crmFunilIndividual (alvo, editavel, gerencia) {
-  const { data, error } = await filtrarPorDono(db.from('lead').select(selLead), gerencia)
+  const gerenciaEfetiva = gerencia && !CRM_FUNIL_SO_MEU
+  const { data, error } = await filtrarPorDono(db.from('lead').select(selLead), gerenciaEfetiva)
     .order('atualizado_em', { ascending: false }).limit(500)
   if (faltaMigracao(error) || error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
 
@@ -9810,12 +9815,16 @@ async function crmFunilIndividual (alvo, editavel, gerencia) {
 
   const podeNovo = editavel // criar lead do zero — liberado pra qualquer vendedor com acesso de edição, não só gestão
   alvo.innerHTML =
-    (podeNovo ? `<div class="acoes" style="margin:0 0 16px;"><button class="btn" id="crm-novo">Novo lead</button></div>` : '') +
-    (!gerencia && !lista.length ? `<p class="vazio">Nenhum lead atribuído a você ainda. Assim que a gerência mandar um cliente pra você, ele aparece aqui.</p>` : '') +
+    (podeNovo || gerencia ? `<div class="acoes" style="margin:0 0 16px;justify-content:space-between;">
+      <div>${podeNovo ? `<button class="btn" id="crm-novo">Novo lead</button>` : ''}</div>
+      ${gerencia ? `<button class="btn-secundario mini" id="crm-toggle-visao">${CRM_FUNIL_SO_MEU ? '👥 Ver visão geral (gestor)' : '👤 Ver só a minha carteira'}</button>` : ''}
+    </div>` : '') +
+    (!gerenciaEfetiva && !lista.length ? `<p class="vazio">Nenhum lead atribuído a você ainda. Assim que a gerência mandar um cliente pra você, ele aparece aqui.</p>` : '') +
     `<div id="crm-funil-individual"></div>`
 
-  renderFunilGestao($('#crm-funil-individual'), lista, editavel, () => crmFunilIndividual(alvo, editavel, gerencia), gerencia)
-  if (podeNovo) $('#crm-novo').onclick = () => formLead(null, editavel, gerencia, () => crmFunilIndividual(alvo, editavel, gerencia))
+  renderFunilGestao($('#crm-funil-individual'), lista, editavel, () => crmFunilIndividual(alvo, editavel, gerencia), gerenciaEfetiva)
+  if (podeNovo) $('#crm-novo').onclick = () => formLead(null, editavel, gerenciaEfetiva, () => crmFunilIndividual(alvo, editavel, gerencia))
+  if (gerencia) $('#crm-toggle-visao').onclick = () => { CRM_FUNIL_SO_MEU = !CRM_FUNIL_SO_MEU; crmFunilIndividual(alvo, editavel, gerencia) }
 }
 
 // ----- Progresso (individual) — tabela/busca -----
@@ -17640,22 +17649,24 @@ async function promoverLeadParaCliente (lead, alvo, regioes) {
 
   // Sobe pro CRM Comercial do vendedor que selecionou — sem isso o
   // cliente fica cadastrado mas "órfão" de negociação, e o vendedor não
-  // vê ele no funil dele. Não duplica se já existir uma negociação
-  // ativa desse mesmo vendedor com esse cliente.
+  // vê ele no funil dele. O Funil real lê da tabela lead (não
+  // crm_negociacao, que é outra tabela do banco sem uso na tela hoje).
+  // Não duplica se já existir um lead ativo desse mesmo vendedor com
+  // esse cliente.
   let avisoCrm = ''
   if (PERFIL.pessoaId) {
-    const { data: negExistente } = await db.from('crm_negociacao').select('id')
-      .eq('cliente_id', clienteId).eq('consultor_id', PERFIL.pessoaId).eq('status', 'ATIVA').maybeSingle()
-    if (negExistente) {
-      avisoCrm = '\n\nVocê já tinha uma negociação ativa com esse cliente no CRM Comercial — não duplicou.'
+    const { data: leadExistente } = await db.from('lead').select('id')
+      .eq('cliente_id', clienteId).eq('vendedor_id', PERFIL.pessoaId).eq('arquivado', false).maybeSingle()
+    if (leadExistente) {
+      avisoCrm = '\n\nVocê já tinha um lead ativo com esse cliente no CRM Comercial — não duplicou.'
     } else {
-      const { error: errNeg } = await db.from('crm_negociacao').insert({
-        cliente_id: clienteId, consultor_id: PERFIL.pessoaId, criado_por: PERFIL.pessoaId,
-        tipo_funil: 'AQUISICAO', etapa: 'LEAD', origem: 'Banco de Informações'
+      const { error: errNeg } = await db.from('lead').insert({
+        nome: nomeBusca, cliente_id: clienteId, vendedor_id: PERFIL.pessoaId,
+        municipio: lead.municipios || null, etapa: 'NOVO', origem: 'Banco de Informações'
       })
       avisoCrm = errNeg
-        ? `\n\nO cliente foi criado, mas não consegui abrir a negociação no CRM Comercial: ${errNeg.message}`
-        : '\n\nJá entrou no seu funil do CRM Comercial, etapa Lead.'
+        ? `\n\nO cliente foi criado, mas não consegui abrir o lead no CRM Comercial: ${errNeg.message}`
+        : '\n\nJá entrou no seu Funil do CRM Comercial, etapa Novo.'
     }
   }
   alert('Cliente vinculado.' + avisoCrm)
