@@ -17034,6 +17034,28 @@ async function promoverLeadParaCliente (lead, alvo, regioes) {
 
   const { error: errLigar } = await db.from('regiao_lead').update({ cliente_id: clienteId }).eq('id', lead.id)
   if (errLigar) { alert('O cliente foi criado/encontrado, mas não consegui vincular ao lead: ' + errLigar.message); return }
+
+  // Sobe pro CRM Comercial do vendedor que selecionou — sem isso o
+  // cliente fica cadastrado mas "órfão" de negociação, e o vendedor não
+  // vê ele no funil dele. Não duplica se já existir uma negociação
+  // ativa desse mesmo vendedor com esse cliente.
+  let avisoCrm = ''
+  if (PERFIL.pessoaId) {
+    const { data: negExistente } = await db.from('crm_negociacao').select('id')
+      .eq('cliente_id', clienteId).eq('consultor_id', PERFIL.pessoaId).eq('status', 'ATIVA').maybeSingle()
+    if (negExistente) {
+      avisoCrm = '\n\nVocê já tinha uma negociação ativa com esse cliente no CRM Comercial — não duplicou.'
+    } else {
+      const { error: errNeg } = await db.from('crm_negociacao').insert({
+        cliente_id: clienteId, consultor_id: PERFIL.pessoaId, criado_por: PERFIL.pessoaId,
+        tipo_funil: 'AQUISICAO', etapa: 'LEAD', origem: 'Banco de Informações'
+      })
+      avisoCrm = errNeg
+        ? `\n\nO cliente foi criado, mas não consegui abrir a negociação no CRM Comercial: ${errNeg.message}`
+        : '\n\nJá entrou no seu funil do CRM Comercial, etapa Lead.'
+    }
+  }
+  alert('Cliente vinculado.' + avisoCrm)
   await bancoInformacoes(alvo)
 }
 
