@@ -821,10 +821,10 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
 .linha-link-cal input { flex:1; font-size:12px; }
 .sec-chat { background:var(--surface2); border:1px solid var(--line2); border-radius:9px; padding:12px;
   margin-bottom:10px; display:flex; flex-direction:column; gap:8px; max-height:280px; overflow-y:auto; }
-.sec-msg { max-width:80%; padding:8px 12px; border-radius:10px; font-size:12.8px; line-height:1.5; }
-.sec-msg.sec-user { align-self:flex-end; background:var(--rust); color:#fff; border-bottom-right-radius:2px; }
-.sec-msg.sec-ia { align-self:flex-start; background:var(--panel); border:1px solid var(--line2); border-bottom-left-radius:2px; }
-.sec-msg.sec-outro { align-self:flex-start; background:var(--panel); border:1px solid var(--line2); border-bottom-left-radius:2px; }
+.sec-msg { max-width:80%; padding:8px 12px; border-radius:16px; font-size:12.8px; line-height:1.5; }
+.sec-msg.sec-user { align-self:flex-end; background:var(--rust); color:#fff; border-bottom-right-radius:4px; }
+.sec-msg.sec-ia { align-self:flex-start; background:var(--panel); border:1px solid var(--line2); border-bottom-left-radius:4px; }
+.sec-msg.sec-outro { align-self:flex-start; background:var(--panel); border:1px solid var(--line2); border-bottom-left-radius:4px; }
 .sec-msg.sec-carregando { color:var(--dim2); font-style:italic; animation:sec-pulsar 1.2s ease-in-out infinite; }
 @keyframes sec-pulsar { 0%,100% { opacity:.5; } 50% { opacity:1; } }
 .gravando-voz { background:rgba(var(--critico-rgb),.18) !important; color:var(--critico-text) !important;
@@ -4744,10 +4744,26 @@ function montarWidgetChatInterno () {
     </div>
     <div id="chat-abas" style="display:flex;gap:5px;padding:10px 10px 0;overflow-x:auto;flex:none;background:var(--panel);"></div>
     <div id="chat-corpo" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;background:var(--bg);"></div>
-    <div id="chat-rodape" style="padding:12px;border-top:1px solid var(--line);display:none;gap:8px;align-items:flex-end;flex:none;background:var(--panel);">
-      <textarea id="chat-texto" placeholder="Escreva uma mensagem..." style="flex:1;min-height:38px;max-height:80px;font-size:13px;border-radius:20px;padding:9px 16px;"></textarea>
-      <button id="chat-enviar" class="widget-enviar" style="flex:none;width:38px;height:38px;border-radius:50%;border:none;
-        background:var(--rust);color:#fff;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;">➤</button>
+    <div id="chat-rodape" style="padding:10px 12px;border-top:1px solid var(--line);display:none;flex-direction:column;flex:none;background:var(--panel);">
+      <div id="chat-linha-normal" style="display:flex;gap:6px;align-items:flex-end;">
+        <button id="chat-anexo" type="button" title="Anexar arquivo" style="flex:none;border:none;background:none;color:var(--dim);font-size:19px;cursor:pointer;width:34px;height:38px;">📎</button>
+        <button id="chat-foto" type="button" title="Enviar foto" style="flex:none;border:none;background:none;color:var(--dim);font-size:19px;cursor:pointer;width:34px;height:38px;">📷</button>
+        <input type="file" id="chat-arquivo-input" class="oculto" accept="*/*">
+        <input type="file" id="chat-foto-input" class="oculto" accept="image/*" capture="environment">
+        <textarea id="chat-texto" placeholder="Escreva uma mensagem..." style="flex:1;min-height:38px;max-height:80px;font-size:13px;border-radius:20px;padding:9px 16px;"></textarea>
+        <button id="chat-mic" type="button" title="Gravar áudio" class="widget-enviar" style="flex:none;width:38px;height:38px;border-radius:50%;border:none;
+          background:var(--rust);color:#fff;font-size:15px;cursor:pointer;display:flex;align-items:center;justify-content:center;">🎤</button>
+        <button id="chat-enviar" class="widget-enviar oculto" style="flex:none;width:38px;height:38px;border-radius:50%;border:none;
+          background:var(--rust);color:#fff;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;">➤</button>
+      </div>
+      <div id="chat-linha-gravando" class="oculto" style="display:flex;align-items:center;gap:10px;height:38px;">
+        <button id="chat-audio-cancelar" type="button" title="Cancelar" style="flex:none;border:none;background:none;color:var(--dim);font-size:19px;cursor:pointer;">🗑️</button>
+        <div style="flex:1;text-align:center;color:var(--warn-text);font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;gap:6px;">
+          <span style="width:9px;height:9px;border-radius:50%;background:var(--warn-text);animation:widget-piscar 1s ease-in-out infinite;"></span>
+          Gravando <span id="chat-audio-timer">0:00</span></div>
+        <button id="chat-audio-enviar" type="button" title="Enviar áudio" style="flex:none;width:38px;height:38px;border-radius:50%;border:none;
+          background:var(--rust);color:#fff;font-size:16px;cursor:pointer;">➤</button>
+      </div>
     </div>`
   document.body.appendChild(painel)
 
@@ -4766,6 +4782,27 @@ function montarWidgetChatInterno () {
   $('#chat-fechar').onclick = abrirFechar
   $('#chat-enviar').onclick = enviarMensagemChat
   $('#chat-texto').onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); enviarMensagemChat() } }
+  $('#chat-texto').oninput = () => {
+    const temTexto = $('#chat-texto').value.trim().length > 0
+    $('#chat-enviar').classList.toggle('oculto', !temTexto)
+    $('#chat-mic').classList.toggle('oculto', temTexto)
+  }
+
+  $('#chat-anexo').onclick = () => $('#chat-arquivo-input').click()
+  $('#chat-foto').onclick = () => $('#chat-foto-input').click()
+  $('#chat-arquivo-input').onchange = () => {
+    const f = $('#chat-arquivo-input').files[0]
+    if (f) enviarAnexoChat(f, f.name, 'arquivo')
+    $('#chat-arquivo-input').value = ''
+  }
+  $('#chat-foto-input').onchange = () => {
+    const f = $('#chat-foto-input').files[0]
+    if (f) enviarAnexoChat(f, f.name, 'imagem')
+    $('#chat-foto-input').value = ''
+  }
+  $('#chat-mic').onclick = iniciarGravacaoAudioChat
+  $('#chat-audio-cancelar').onclick = () => cancelarGravacaoAudioChat()
+  $('#chat-audio-enviar').onclick = () => finalizarGravacaoAudioChat()
 
   atualizarBadgeChat()
 }
@@ -4825,11 +4862,13 @@ async function renderPainelChat () {
       corpo.style.gap = '10px'
       const msgs = CHAT_MENSAGENS[CHAT_ATIVA] || []
       corpo.innerHTML = msgs.length ? msgs.map(m => `
-        <div class="sec-msg ${m.remetente_id === PERFIL.pessoaId ? 'sec-user' : 'sec-outro'}">
-          ${esc(m.texto)}
-          <div style="font-size:10px;opacity:.65;margin-top:3px;">${new Date(m.criado_em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</div>
+        <div style="display:flex;flex-direction:column;align-items:${m.remetente_id === PERFIL.pessoaId ? 'flex-end' : 'flex-start'};">
+          ${bolhaConteudoChat(m)}
+          <div style="font-size:10px;opacity:.55;margin-top:3px;">${new Date(m.criado_em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</div>
         </div>`).join('') : '<p class="texto-dim2" style="font-size:12px;">Nenhuma mensagem ainda — diga oi.</p>'
       corpo.scrollTop = corpo.scrollHeight
+      carregarMidiasChat(corpo)
+      wireArquivoClicksChat(corpo)
       return
     }
 
@@ -4916,17 +4955,153 @@ async function enviarMensagemChat () {
   const texto = campo.value.trim()
   if (!texto || !CHAT_ATIVA) return
   campo.value = ''
-  const otimista = { id: 'temp-' + Date.now(), remetente_id: PERFIL.pessoaId, destinatario_id: CHAT_ATIVA, texto, criado_em: new Date().toISOString(), lida_em: null }
+  $('#chat-enviar')?.classList.add('oculto'); $('#chat-mic')?.classList.remove('oculto')
+  const otimista = { id: 'temp-' + Date.now(), remetente_id: PERFIL.pessoaId, destinatario_id: CHAT_ATIVA, texto, tipo: 'texto', criado_em: new Date().toISOString(), lida_em: null }
   CHAT_MENSAGENS[CHAT_ATIVA] = [...(CHAT_MENSAGENS[CHAT_ATIVA] || []), otimista]
   renderPainelChat()
 
   const { data, error } = await db.from('mensagem_interna')
-    .insert({ remetente_id: PERFIL.pessoaId, destinatario_id: CHAT_ATIVA, texto }).select().single()
+    .insert({ remetente_id: PERFIL.pessoaId, destinatario_id: CHAT_ATIVA, texto, tipo: 'texto' }).select().single()
   if (!error && data) {
     CHAT_MENSAGENS[CHAT_ATIVA] = CHAT_MENSAGENS[CHAT_ATIVA].map(m => m.id === otimista.id ? data : m)
     renderPainelChat()
   }
 }
+
+// ----- Bolha de mensagem por tipo: texto, imagem, áudio ou arquivo -----
+function bolhaConteudoChat (m) {
+  const minha = m.remetente_id === PERFIL.pessoaId
+  const classe = `sec-msg ${minha ? 'sec-user' : 'sec-outro'}`
+
+  if (m._enviando) {
+    const rotulo = m.tipo === 'audio' ? '🎤 enviando áudio…' : m.tipo === 'imagem' ? '📷 enviando foto…' : '📎 enviando arquivo…'
+    return `<div class="${classe}" style="opacity:.6;">${rotulo}</div>`
+  }
+  if (m.tipo === 'imagem') {
+    return `<div class="${classe}" style="padding:4px;">
+      <img data-carregar-img="${esc(m.arquivo_url)}" alt="foto"
+        style="max-width:220px;max-height:220px;min-height:70px;border-radius:10px;display:block;cursor:pointer;background:var(--surface2);object-fit:cover;" /></div>`
+  }
+  if (m.tipo === 'audio') {
+    return `<div class="${classe}" style="padding:8px 10px;min-width:210px;">
+      <audio data-carregar-audio="${esc(m.arquivo_url)}" controls style="width:210px;height:34px;display:block;"></audio>
+      ${m.duracao_seg ? `<div style="font-size:10px;opacity:.7;margin-top:3px;">🎤 ${Math.floor(m.duracao_seg / 60)}:${String(m.duracao_seg % 60).padStart(2, '0')}</div>` : ''}
+    </div>`
+  }
+  if (m.tipo === 'arquivo') {
+    return `<div class="${classe}" data-abrir-anexo-chat="${esc(m.arquivo_url)}" style="cursor:pointer;display:flex;align-items:center;gap:8px;">
+      <span style="font-size:20px;">📄</span><span style="font-size:12px;word-break:break-word;">${esc(m.arquivo_nome || 'arquivo')}</span></div>`
+  }
+  return `<div class="${classe}">${esc(m.texto)}</div>`
+}
+
+// imagens e áudios ficam num bucket privado — carrega a URL assinada
+// depois que a bolha já apareceu na tela (não trava a renderização)
+async function carregarMidiasChat (escopo) {
+  const alvos = [...escopo.querySelectorAll('[data-carregar-img], [data-carregar-audio]')]
+  await Promise.all(alvos.map(async el => {
+    const caminho = el.dataset.carregarImg || el.dataset.carregarAudio
+    if (!caminho) return
+    const { data, error } = await db.storage.from('comprovantes').createSignedUrl(caminho, 600)
+    if (error || !data) return
+    el.src = data.signedUrl
+    if (el.tagName === 'IMG') el.onclick = () => window.open(data.signedUrl, '_blank', 'noopener')
+  }))
+}
+
+function wireArquivoClicksChat (escopo) {
+  escopo.querySelectorAll('[data-abrir-anexo-chat]').forEach(el => {
+    el.onclick = () => abrirComprovante(el.dataset.abrirAnexoChat)
+  })
+}
+
+// ----- Enviar foto ou arquivo qualquer -----
+async function enviarAnexoChat (arquivoOuBlob, nomeArquivo, tipo, duracaoSeg) {
+  if (!CHAT_ATIVA) return
+  const idTemp = 'temp-' + Date.now()
+  const otimista = {
+    id: idTemp, remetente_id: PERFIL.pessoaId, destinatario_id: CHAT_ATIVA, texto: null,
+    tipo, arquivo_nome: nomeArquivo, duracao_seg: duracaoSeg || null,
+    criado_em: new Date().toISOString(), lida_em: null, _enviando: true
+  }
+  CHAT_MENSAGENS[CHAT_ATIVA] = [...(CHAT_MENSAGENS[CHAT_ATIVA] || []), otimista]
+  renderPainelChat()
+
+  try {
+    const nomeLimpo = String(nomeArquivo).replace(/[^\w.\-]/g, '_').slice(-80)
+    const par = [PERFIL.pessoaId, CHAT_ATIVA].sort().join('_')
+    const caminho = `chat/${par}/${Date.now()}_${nomeLimpo}`
+    const { error: erroUpload } = await db.storage.from('comprovantes').upload(caminho, arquivoOuBlob, { upsert: false })
+    if (erroUpload) throw erroUpload
+
+    const { data, error } = await db.from('mensagem_interna').insert({
+      remetente_id: PERFIL.pessoaId, destinatario_id: CHAT_ATIVA, texto: null,
+      tipo, arquivo_url: caminho, arquivo_nome: nomeArquivo, duracao_seg: duracaoSeg || null
+    }).select().single()
+    if (error) throw error
+    CHAT_MENSAGENS[CHAT_ATIVA] = CHAT_MENSAGENS[CHAT_ATIVA].map(m => m.id === idTemp ? data : m)
+  } catch (e) {
+    CHAT_MENSAGENS[CHAT_ATIVA] = CHAT_MENSAGENS[CHAT_ATIVA].filter(m => m.id !== idTemp)
+    alert('Não deu pra enviar: ' + (e.message || e))
+  }
+  renderPainelChat()
+}
+
+// ----- Gravar e enviar áudio -----
+let CHAT_GRAVADOR = null
+let CHAT_AUDIO_PARTES = []
+let CHAT_AUDIO_INICIO = null
+let CHAT_AUDIO_TIMER = null
+let CHAT_AUDIO_CANCELADO = false
+
+async function iniciarGravacaoAudioChat () {
+  if (!CHAT_ATIVA) return
+  if (!navigator.mediaDevices?.getUserMedia) { alert('Seu navegador não suporta gravação de áudio.'); return }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    CHAT_AUDIO_PARTES = []
+    CHAT_AUDIO_CANCELADO = false
+    CHAT_GRAVADOR = new MediaRecorder(stream)
+    CHAT_GRAVADOR.ondataavailable = e => { if (e.data.size) CHAT_AUDIO_PARTES.push(e.data) }
+    CHAT_GRAVADOR.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop())
+      const duracao = Math.max(1, Math.round((Date.now() - CHAT_AUDIO_INICIO) / 1000))
+      if (!CHAT_AUDIO_CANCELADO && CHAT_AUDIO_PARTES.length) {
+        const blob = new Blob(CHAT_AUDIO_PARTES, { type: 'audio/webm' })
+        await enviarAnexoChat(blob, `audio-${Date.now()}.webm`, 'audio', duracao)
+      }
+    }
+    CHAT_GRAVADOR.start()
+    CHAT_AUDIO_INICIO = Date.now()
+    $('#chat-linha-normal').classList.add('oculto')
+    $('#chat-linha-gravando').classList.remove('oculto')
+    CHAT_AUDIO_TIMER = setInterval(() => {
+      const seg = Math.floor((Date.now() - CHAT_AUDIO_INICIO) / 1000)
+      const el = $('#chat-audio-timer')
+      if (el) el.textContent = `${Math.floor(seg / 60)}:${String(seg % 60).padStart(2, '0')}`
+    }, 250)
+  } catch (e) {
+    alert('Não consegui acessar o microfone: ' + (e.message || e))
+  }
+}
+
+function pararUiGravacaoChat () {
+  clearInterval(CHAT_AUDIO_TIMER)
+  $('#chat-linha-gravando')?.classList.add('oculto')
+  $('#chat-linha-normal')?.classList.remove('oculto')
+}
+
+function cancelarGravacaoAudioChat () {
+  CHAT_AUDIO_CANCELADO = true
+  if (CHAT_GRAVADOR && CHAT_GRAVADOR.state !== 'inactive') CHAT_GRAVADOR.stop()
+  pararUiGravacaoChat()
+}
+
+function finalizarGravacaoAudioChat () {
+  if (CHAT_GRAVADOR && CHAT_GRAVADOR.state !== 'inactive') CHAT_GRAVADOR.stop()
+  pararUiGravacaoChat()
+}
+
 
 // tempo real: mensagem chegando pra mim, em qualquer aba aberta do
 // sistema — badge e som só do chat, não mexe no sino de notificações
