@@ -1393,11 +1393,13 @@ async function abrirApp () {
   tocarSomNotificacao()
 }
 
-// ----- Notificações pessoais: sino no topo. Hoje só dispara quando uma
-// solicitação que a pessoa abriu é marcada como Concluída, mas a tabela é
-// genérica — dá pra plugar outros eventos depois sem mudar a UI. -----
-// ----- Som das notificações: um arquivo por tema (cada skin tem o seu),
-// mais um som padrão de reserva pra quando não bate com nenhum tema. -----
+// ----- Notificações pessoais: sino no topo. Dispara quando: uma solicitação
+// interna é aberta pra alguém, quando ela é concluída (avisa quem abriu),
+// quando uma compra é aprovada e quando é paga. Tabela genérica — dá pra
+// plugar outros eventos depois sem mudar a UI. -----
+// ----- Som: sempre o mais curto dos 4 (som-padrao, 0,6s) — os outros 3
+// (um por tema visual) ficaram guardados aqui só de reserva, se um dia
+// você quiser voltar a variar o som por skin. -----
 const SONS_NOTIFICACAO = {
   sofisticado: './som-sofisticado.mp3',
   plataforma: './som-plataforma.mp3',
@@ -1410,8 +1412,7 @@ function tocarSom (caminho) {
 }
 
 function tocarSomNotificacao () {
-  const skin = document.documentElement.getAttribute('data-skin')
-  tocarSom(SONS_NOTIFICACAO[skin] || SOM_PADRAO_NOTIFICACAO)
+  tocarSom(SOM_PADRAO_NOTIFICACAO)   // sempre o curtinho, não importa o tema
 }
 
 // Escuta em tempo real: assim que uma notificação nova é criada pra essa
@@ -2979,6 +2980,17 @@ async function solicNova (alvo) {
 
     if (error) { btn.disabled = false; btn.textContent = 'Enviar solicitação'; aviso(error.message); return }
 
+    // avisa o responsável que tem uma solicitação nova esperando ele —
+    // mesmo sino usado em Compras, clique já leva direto pro detalhe
+    if ($('#sn-responsavel').value && $('#sn-responsavel').value !== PERFIL.pessoaId) {
+      await db.from('notificacao_pessoal').insert({
+        destinatario_id: $('#sn-responsavel').value,
+        titulo: 'Nova solicitação pra você',
+        mensagem: `"${titulo}" — aberta por ${PERFIL.nome}.`,
+        entidade: 'solicitacao_interna', entidade_id: nova.id
+      })
+    }
+
     const arquivos = [...$('#sn-arquivos').files]
     if (arquivos.length) {
       try {
@@ -3265,6 +3277,18 @@ function detalheSolicitacao (s, aoFechar) {
     })
     btn.disabled = false; btn.textContent = 'Chamar setor'
     if (e1 || e2) { aviso((e1 || e2).message); return }
+
+    // avisa o gestor do setor chamado, se tiver — mesmo sino de sempre
+    const { data: setorInfo } = await db.from('setor').select('gestor_id').eq('id', setorId).maybeSingle()
+    if (setorInfo?.gestor_id && setorInfo.gestor_id !== PERFIL.pessoaId) {
+      await db.from('notificacao_pessoal').insert({
+        destinatario_id: setorInfo.gestor_id,
+        titulo: 'Nova solicitação pro seu setor',
+        mensagem: `"${s.titulo}" — ${setorNome} foi chamado por ${PERFIL.nome}.`,
+        entidade: 'solicitacao_interna', entidade_id: s.id
+      })
+    }
+
     aviso(`Solicitação vinculada criada para ${setorNome}.`, true)
     fundo.querySelector('#ds-setor-envolvido').value = ''
   }
