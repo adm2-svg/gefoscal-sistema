@@ -14655,39 +14655,44 @@ function tecDesenharRoteiro () {
 // ---------------------------------------------------------------
 // Página: SDR WhatsApp  (módulo 'sdr_whatsapp')
 // Painel de acompanhamento do bot de pré-vendas no WhatsApp.
-// Fica sobre as tabelas `leads` e `mensagens` (projeto Supabase do
-// bot, mesma instância do restante do sistema) e se conecta ao CRM
-// oficial (tabela `lead`) só no momento do envio pro consultor —
-// nunca antes disso, pra não duplicar registro.
 //
-// Duas sub-abas:
+// Três sub-abas:
 //  - Leads: lista tipo WhatsApp (contato à esquerda, conversa à
-//    direita) com os dados que a IA já levantou e o botão "Enviar
-//    pra consultor".
-//  - Regiões: cadastro de qual vendedor atende qual UF, usado pelo
-//    roteamento automático do botão de envio.
+//    direita), com menu de 3 pontinhos que abre um "relatório"
+//    com tudo que a IA já achou relevante — incluindo o DISC
+//    inferido (uso interno, some junto no relatório enviado ao
+//    consultor).
+//  - Funil: kanban por status do lead (novo → qualificando →
+//    quente/morno/frio → reunião solicitada → agendado). A IA é
+//    quem atualiza o status automaticamente a cada mensagem,
+//    mas dá pra arrastar entre colunas manualmente também.
+//  - Regiões: cadastro vendedor × UF, usado pelo roteamento
+//    automático do botão "Enviar pra consultor".
 // ---------------------------------------------------------------
+const STATUS_LEAD_SDR = ['novo', 'qualificando', 'morno', 'quente', 'reuniao_solicitada', 'agendado', 'frio']
 const ROTULO_STATUS_LEAD_SDR = {
-  novo: 'Novo', qualificando: 'Qualificando', quente: 'Quente',
-  morno: 'Morno', frio: 'Frio', reuniao_solicitada: 'Reunião solicitada', agendado: 'Agendado'
+  novo: 'Novo', qualificando: 'Qualificando', morno: 'Morno', quente: 'Quente',
+  reuniao_solicitada: 'Reunião solicitada', agendado: 'Agendado', frio: 'Frio'
 }
 function corStatusLeadSdr (s) {
   if (s === 'quente' || s === 'agendado' || s === 'reuniao_solicitada') return 'badge-bom'
   if (s === 'frio') return 'texto-dim2'
   return 'chip'
 }
+const ROTULO_DISC = { D: 'Dominância', I: 'Influência', S: 'Estabilidade', C: 'Conformidade' }
 
 let SDR_CACHE = { leads: [], selecionado: null, mensagens: [], regioes: [], vendedores: [] }
+let SDR_ARRASTANDO = null
 
 async function paginaSdrWhatsapp () {
   if (!podeVer('sdr_whatsapp')) { areaLivre().innerHTML =
     `<div class="panel" style="padding:22px;"><p class="texto-dim">Você não tem acesso ao SDR WhatsApp.</p></div>`; return }
 
-  $('#subtitulo-pagina').textContent = 'Leads do bot de WhatsApp — acompanhe e envie pro consultor certo'
+  $('#subtitulo-pagina').textContent = 'Leads do bot de WhatsApp — acompanhe, mova no funil e envie pro consultor'
   const area = areaLivre()
   area.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
-  const abas = [['leads', 'Leads'], ['regioes', 'Regiões']]
+  const abas = [['leads', 'Leads'], ['funil', 'Funil'], ['regioes', 'Regiões']]
   area.innerHTML = `
     <div class="subabas">
       ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
@@ -14707,20 +14712,30 @@ function abrirSubAbaSdr (sub) {
   const alvo = $('#sub-sdr')
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
   if (sub === 'leads') sdrAbaLeads(alvo)
+  if (sub === 'funil') sdrAbaFunil(alvo)
   if (sub === 'regioes') sdrAbaRegioes(alvo)
+}
+
+async function sdrCarregarLeads () {
+  const { data, error } = await db.from('leads').select('*').order('updated_at', { ascending: false }).limit(500)
+  if (error) throw error
+  SDR_CACHE.leads = data || []
+  return SDR_CACHE.leads
 }
 
 // ----- Aba Leads: lista tipo WhatsApp + conversa + ficha do lead -----
 async function sdrAbaLeads (alvo) {
-  const { data, error } = await db.from('leads').select('*').order('updated_at', { ascending: false }).limit(300)
-  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-  SDR_CACHE.leads = data || []
+  try { await sdrCarregarLeads() }
+  catch (erro) { alvo.innerHTML = `<p class="vazio">${esc(erro.message)}</p>`; return }
 
   alvo.innerHTML = `
-    <div class="sdr-layout" style="display:flex;gap:0;border:1px solid var(--line2);border-radius:10px;overflow:hidden;height:70vh;min-height:520px;">
-      <div id="sdr-lista" style="width:320px;flex:none;border-right:1px solid var(--line2);overflow-y:auto;background:var(--surface2);"></div>
-      <div id="sdr-detalhe" style="flex:1;display:flex;flex-direction:column;min-width:0;">
-        <div style="margin:auto;color:var(--dim2);font-size:13px;">Selecione um lead pra ver a conversa</div>
+    <div style="display:flex;gap:0;border:1px solid var(--line2);border-radius:12px;overflow:hidden;height:72vh;min-height:540px;background:var(--surface2);">
+      <div id="sdr-lista" style="width:340px;flex:none;border-right:1px solid var(--line2);overflow-y:auto;background:var(--surface2);"></div>
+      <div id="sdr-detalhe" style="flex:1;display:flex;flex-direction:column;min-width:0;background:var(--panel);">
+        <div style="margin:auto;color:var(--dim2);font-size:13px;padding:20px;text-align:center;">
+          <div style="font-size:56px;opacity:.25;margin-bottom:8px;">💬</div>
+          Selecione um lead pra ver a conversa
+        </div>
       </div>
     </div>`
 
@@ -14732,24 +14747,44 @@ function renderListaSdr () {
   if (!lista) return
   if (!SDR_CACHE.leads.length) { lista.innerHTML = `<p class="texto-dim2" style="padding:14px;">Nenhum lead ainda.</p>`; return }
 
-  lista.innerHTML = SDR_CACHE.leads.map(l => `
+  lista.innerHTML = `
+    <div style="padding:12px 14px;border-bottom:1px solid var(--line2);background:var(--panel);">
+      <input id="sdr-busca-lead" placeholder="Buscar por nome ou telefone..." style="width:100%;font-size:13px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface2);color:var(--txt);">
+    </div>
+    <div id="sdr-lista-itens"></div>`
+  renderItensListaSdr('')
+  const busca = $('#sdr-busca-lead')
+  busca.oninput = () => renderItensListaSdr(busca.value.trim().toLowerCase())
+}
+
+function renderItensListaSdr (filtro) {
+  const alvo = $('#sdr-lista-itens')
+  if (!alvo) return
+  const filtrados = filtro
+    ? SDR_CACHE.leads.filter(l => (l.nome || '').toLowerCase().includes(filtro) || (l.telefone || '').includes(filtro))
+    : SDR_CACHE.leads
+
+  if (!filtrados.length) { alvo.innerHTML = `<p class="texto-dim2" style="padding:14px;">Nada encontrado.</p>`; return }
+
+  alvo.innerHTML = filtrados.map(l => `
     <div class="sdr-item-lead" data-id="${l.id}" style="padding:12px 14px;border-bottom:1px solid var(--line2);cursor:pointer;
-      display:flex;gap:10px;align-items:flex-start;${SDR_CACHE.selecionado?.id === l.id ? 'background:var(--hover-bg);' : ''}">
-      ${avatarHtml(null, l.nome || l.telefone, 36)}
+      display:flex;gap:11px;align-items:flex-start;${SDR_CACHE.selecionado?.id === l.id ? 'background:var(--hover-bg);' : ''}">
+      ${avatarHtml(null, l.nome || l.telefone, 42)}
       <div style="flex:1;min-width:0;">
-        <div style="display:flex;justify-content:space-between;gap:6px;">
-          <span style="font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(l.nome || l.telefone)}</span>
+        <div style="display:flex;justify-content:space-between;gap:6px;align-items:baseline;">
+          <span style="font-weight:600;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(l.nome || l.telefone)}</span>
           <span style="font-size:10.5px;color:var(--dim2);flex:none;">${formatarHoraRelativa(l.updated_at)}</span>
         </div>
         <div style="font-size:11.5px;color:var(--dim2);margin-top:2px;">${esc(l.telefone)}</div>
-        <div style="margin-top:5px;display:flex;gap:5px;flex-wrap:wrap;align-items:center;">
+        <div style="margin-top:6px;display:flex;gap:5px;flex-wrap:wrap;align-items:center;">
           <span class="${corStatusLeadSdr(l.status)}" style="font-size:10px;">${esc(ROTULO_STATUS_LEAD_SDR[l.status] || l.status)}</span>
+          ${l.perfil_disc ? `<span class="chip" style="font-size:10px;background:rgba(var(--rust-rgb),.14);color:var(--rust);border:none;">${esc(l.perfil_disc)}</span>` : ''}
           ${l.enviado_para_consultor ? '<span class="badge-bom" style="font-size:10px;">✓ enviado</span>' : ''}
         </div>
       </div>
     </div>`).join('')
 
-  lista.querySelectorAll('.sdr-item-lead').forEach(el => {
+  alvo.querySelectorAll('.sdr-item-lead').forEach(el => {
     el.onclick = () => selecionarLeadSdr(el.dataset.id)
   })
 }
@@ -14758,7 +14793,8 @@ async function selecionarLeadSdr (id) {
   const lead = SDR_CACHE.leads.find(l => String(l.id) === String(id))
   if (!lead) return
   SDR_CACHE.selecionado = lead
-  renderListaSdr()
+  const busca = $('#sdr-busca-lead')?.value.trim().toLowerCase() || ''
+  renderItensListaSdr(busca)
 
   const painel = $('#sdr-detalhe')
   painel.innerHTML = `<p class="texto-dim2" style="margin:auto;">carregando conversa...</p>`
@@ -14776,49 +14812,60 @@ function renderDetalheSdr (lead) {
   const jaExisteNoCrm = dupl && dupl.existe
   const nomeVendedorCrm = dupl?.vendedor_nome || null
 
-  const bolhas = SDR_CACHE.mensagens.map(m => `
-    <div class="sec-msg ${m.papel === 'assistant' ? 'sec-user' : 'sec-outro'}">${esc(m.conteudo)}</div>`).join('')
+  const bolhas = SDR_CACHE.mensagens.map(m => {
+    const minha = m.papel === 'assistant'
+    return `<div style="display:flex;justify-content:${minha ? 'flex-end' : 'flex-start'};">
+      <div style="max-width:70%;padding:8px 12px;border-radius:12px;font-size:13px;line-height:1.45;
+        ${minha ? 'background:var(--rust);color:#fff;border-bottom-right-radius:4px;' : 'background:var(--surface2);border:1px solid var(--line2);border-bottom-left-radius:4px;'}">
+        ${esc(m.conteudo).replace(/\n/g, '<br>')}
+        <div style="font-size:9.5px;opacity:.65;margin-top:4px;text-align:right;">${formatarHoraRelativa(m.created_at)}</div>
+      </div>
+    </div>`
+  }).join('')
 
   let blocoEnvio = ''
   if (lead.enviado_para_consultor) {
-    blocoEnvio = `<div class="chip" style="display:inline-block;">✓ Já enviado${nomeVendedorCrm ? ' — vendedor: ' + esc(nomeVendedorCrm) : ''}</div>`
+    blocoEnvio = `<div class="badge-bom" style="display:inline-block;padding:5px 10px;">✓ Enviado ao consultor${nomeVendedorCrm ? ' — ' + esc(nomeVendedorCrm) : ''}</div>`
   } else if (jaExisteNoCrm) {
     blocoEnvio = `
       <p class="texto-dim2" style="font-size:12px;margin-bottom:8px;">
-        Esse contato já existe no CRM, atribuído a <b>${esc(nomeVendedorCrm || 'um vendedor')}</b>. O sistema já mandou uma notificação pra ele quando o lead sinalizou interesse.
+        Já existe no CRM, atribuído a <b>${esc(nomeVendedorCrm || 'um vendedor')}</b>. O vendedor foi notificado automaticamente.
       </p>
       <button class="btn-secundario mini" id="sdr-btn-notificar">🔔 Notificar de novo</button>`
   } else {
     blocoEnvio = `
-      <div class="campo" style="max-width:220px;margin-bottom:10px;">
-        <label>UF do lead</label>
-        <select id="sdr-uf-lead">
-          <option value="">selecione...</option>
-          ${UFS_BRASIL.map(uf => `<option value="${uf}" ${lead.uf === uf ? 'selected' : ''}>${uf}</option>`).join('')}
-        </select>
-      </div>
-      <button class="btn" id="sdr-btn-enviar">Enviar pra consultor</button>`
+      <div style="display:flex;gap:10px;align-items:flex-end;">
+        <div class="campo" style="width:120px;margin:0;">
+          <label style="font-size:11px;">UF do lead</label>
+          <select id="sdr-uf-lead">
+            <option value="">selecione...</option>
+            ${UFS_BRASIL.map(uf => `<option value="${uf}" ${lead.uf === uf ? 'selected' : ''}>${uf}</option>`).join('')}
+          </select>
+        </div>
+        <button class="btn" id="sdr-btn-enviar">Enviar pra consultor</button>
+      </div>`
   }
 
   painel.innerHTML = `
-    <div style="padding:14px 18px;border-bottom:1px solid var(--line2);display:flex;justify-content:space-between;align-items:center;flex:none;">
-      <div>
-        <div style="font-weight:700;">${esc(lead.nome || lead.telefone)}</div>
-        <div style="font-size:11.5px;color:var(--dim2);">${esc(lead.telefone)}</div>
+    <div style="padding:12px 16px;border-bottom:1px solid var(--line2);display:flex;justify-content:space-between;align-items:center;flex:none;background:var(--surface2);">
+      <div style="display:flex;gap:11px;align-items:center;min-width:0;">
+        ${avatarHtml(null, lead.nome || lead.telefone, 38)}
+        <div style="min-width:0;">
+          <div style="font-weight:700;font-size:14px;">${esc(lead.nome || lead.telefone)}</div>
+          <div style="font-size:11.5px;color:var(--dim2);">${esc(lead.telefone)}</div>
+        </div>
       </div>
-      <span class="${corStatusLeadSdr(lead.status)}">${esc(ROTULO_STATUS_LEAD_SDR[lead.status] || lead.status)}</span>
+      <div style="display:flex;gap:8px;align-items:center;flex:none;">
+        <span class="${corStatusLeadSdr(lead.status)}">${esc(ROTULO_STATUS_LEAD_SDR[lead.status] || lead.status)}</span>
+        <button class="btn-secundario mini" id="sdr-btn-relatorio" title="Ver relatório completo da IA">⋮</button>
+      </div>
     </div>
 
-    <div class="sec-chat" style="flex:1;margin:14px 18px;">${bolhas || '<p class="texto-dim2">sem mensagens ainda.</p>'}</div>
+    <div style="flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:8px;background:var(--panel);">
+      ${bolhas || '<p class="texto-dim2" style="margin:auto;">Sem mensagens ainda.</p>'}
+    </div>
 
     <div style="padding:14px 18px;border-top:1px solid var(--line2);flex:none;background:var(--surface2);">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;font-size:12px;margin-bottom:12px;">
-        <div><span class="texto-dim2">Cultura:</span> ${esc(lead.cultura || '—')}</div>
-        <div><span class="texto-dim2">Volume:</span> ${esc(lead.volume_producao || '—')}</div>
-        <div><span class="texto-dim2">Fornecedor atual:</span> ${esc(lead.fornecedor_atual || '—')}</div>
-        <div><span class="texto-dim2">Decisor:</span> ${lead.eh_decisor === true ? 'sim' : lead.eh_decisor === false ? 'não' : '—'}</div>
-        <div style="grid-column:1/-1;"><span class="texto-dim2">Momento de compra:</span> ${esc(lead.momento_compra || '—')}</div>
-      </div>
       ${blocoEnvio}
     </div>`
 
@@ -14827,8 +14874,62 @@ function renderDetalheSdr (lead) {
 
   const btnNotificar = $('#sdr-btn-notificar')
   if (btnNotificar) btnNotificar.onclick = () => renotificarVendedorSdr(lead)
+
+  const btnRelatorio = $('#sdr-btn-relatorio')
+  if (btnRelatorio) btnRelatorio.onclick = () => abrirRelatorioLeadSdr(lead)
 }
 
+// ---- Relatório da IA (menu 3 pontinhos): o que ela levantou até agora, incluindo DISC ----
+function abrirRelatorioLeadSdr (lead) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:560px;">
+    <div class="cabeca-secao">
+      <h3>Relatório do lead</h3>
+      <span class="${corStatusLeadSdr(lead.status)}">${esc(ROTULO_STATUS_LEAD_SDR[lead.status] || lead.status)}</span>
+    </div>
+    <p class="texto-dim2" style="font-size:12px;margin:-8px 0 14px;">
+      ${esc(lead.nome || lead.telefone)} · ${esc(lead.telefone)} · última atualização ${formatarHoraRelativa(lead.updated_at)}
+    </p>
+
+    <div class="caixa-texto" style="margin-bottom:12px;">
+      <div class="rot">O que a IA levantou na conversa</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;font-size:13px;margin-top:8px;">
+        <div><span class="texto-dim2">Cultura:</span> ${esc(lead.cultura || '—')}</div>
+        <div><span class="texto-dim2">Volume:</span> ${esc(lead.volume_producao || '—')}</div>
+        <div><span class="texto-dim2">Fornecedor atual:</span> ${esc(lead.fornecedor_atual || '—')}</div>
+        <div><span class="texto-dim2">Decisor:</span> ${lead.eh_decisor === true ? 'sim' : lead.eh_decisor === false ? 'não' : '—'}</div>
+        <div style="grid-column:1/-1;"><span class="texto-dim2">Momento de compra:</span> ${esc(lead.momento_compra || '—')}</div>
+        ${lead.uf ? `<div><span class="texto-dim2">UF:</span> ${esc(lead.uf)}</div>` : ''}
+      </div>
+    </div>
+
+    <div class="caixa-texto" style="margin-bottom:12px;">
+      <div class="rot">Perfil DISC (inferido, uso interno)</div>
+      ${lead.perfil_disc ? `
+        <div style="display:flex;gap:12px;align-items:center;margin-top:8px;">
+          <div style="width:52px;height:52px;border-radius:12px;background:linear-gradient(135deg,var(--rust),var(--gold));color:#fff;
+            display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:800;flex:none;">${esc(lead.perfil_disc)}</div>
+          <div>
+            <div style="font-weight:600;font-size:13.5px;">${esc(ROTULO_DISC[lead.perfil_disc] || lead.perfil_disc)}</div>
+            <p style="font-size:12.5px;color:var(--dim);margin:3px 0 0;">${esc(lead.perfil_disc_analise || 'sem análise ainda')}</p>
+          </div>
+        </div>` : '<p class="texto-dim2" style="font-size:12.5px;margin-top:8px;">A IA ainda não tem mensagens suficientes pra inferir o perfil comportamental.</p>'}
+    </div>
+
+    ${lead.observacoes ? `<div class="caixa-texto" style="margin-bottom:12px;">
+      <div class="rot">Observações</div>
+      <p style="font-size:13px;margin-top:6px;">${esc(lead.observacoes)}</p>
+    </div>` : ''}
+
+    <div class="acoes" style="margin-top:16px;text-align:right;">
+      <button class="btn-secundario" id="rel-fechar">Fechar</button>
+    </div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.querySelector('#rel-fechar').onclick = () => fundo.remove()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+}
 
 async function enviarLeadParaConsultor (lead) {
   const ufSel = $('#sdr-uf-lead')?.value
@@ -14851,6 +14952,7 @@ async function enviarLeadParaConsultor (lead) {
     lead.volume_producao ? `Volume: ${lead.volume_producao}` : null,
     lead.fornecedor_atual ? `Fornecedor atual: ${lead.fornecedor_atual}` : null,
     lead.momento_compra ? `Momento de compra: ${lead.momento_compra}` : null,
+    lead.perfil_disc ? `Perfil DISC: ${lead.perfil_disc} (${ROTULO_DISC[lead.perfil_disc] || ''}) — ${lead.perfil_disc_analise || ''}` : null,
     lead.observacoes || null,
     '(lead originado do SDR de WhatsApp)'
   ].filter(Boolean).join(' · ')
@@ -14906,6 +15008,72 @@ async function renotificarVendedorSdr (lead) {
   if (btn) { btn.disabled = false; btn.textContent = '🔔 Notificado!' }
 }
 
+// ----- Aba Funil: kanban por status do lead -----
+async function sdrAbaFunil (alvo) {
+  try { await sdrCarregarLeads() }
+  catch (erro) { alvo.innerHTML = `<p class="vazio">${esc(erro.message)}</p>`; return }
+
+  const lista = SDR_CACHE.leads.filter(l => !l.enviado_para_consultor)
+
+  const cartao = l => `<div class="crm-card" data-lead-sdr="${l.id}" draggable="true" style="cursor:grab;">
+    <div class="nome">${esc(l.nome || l.telefone)}</div>
+    <div class="sub">${esc(l.telefone)}${l.perfil_disc ? ' · <b>' + esc(l.perfil_disc) + '</b>' : ''}${l.uf ? ' · ' + esc(l.uf) : ''}</div>
+    <div class="linhas">
+      ${l.cultura ? `<div><span class="ic">🌱</span>${esc(l.cultura)}</div>` : ''}
+      ${l.volume_producao ? `<div><span class="ic">📦</span>${esc(l.volume_producao)}</div>` : ''}
+      ${l.momento_compra ? `<div><span class="ic">⏱</span>${esc(l.momento_compra)}</div>` : ''}
+    </div>
+    <div class="rodape">
+      <span class="data">${formatarHoraRelativa(l.updated_at)}</span>
+    </div>
+  </div>`
+
+  alvo.innerHTML = `
+    <p class="texto-dim2" style="margin-bottom:12px;font-size:12.5px;">
+      A IA atualiza o status automaticamente conforme a conversa. Você também pode arrastar entre colunas.
+    </p>
+    <div class="crm-board" style="grid-template-columns:repeat(${STATUS_LEAD_SDR.length},minmax(210px,1fr));">
+      ${STATUS_LEAD_SDR.map(st => {
+        const desta = lista.filter(l => (l.status || 'novo') === st)
+        return `<div class="crm-col" data-coluna-sdr="${st}">
+          <div class="crm-col-head"><span>${ROTULO_STATUS_LEAD_SDR[st]}</span>
+          <span class="contagem">${desta.length}</span></div>
+          <div class="crm-col-corpo" data-drop-sdr="${st}">
+            ${desta.map(cartao).join('') || '<p class="vazio" style="padding:10px;font-size:12px;">vazio</p>'}
+          </div></div>`
+      }).join('')}
+    </div>`
+
+  alvo.querySelectorAll('[data-lead-sdr]').forEach(el => {
+    el.onclick = () => {
+      const lead = SDR_CACHE.leads.find(l => String(l.id) === el.dataset.leadSdr)
+      if (lead) { SDR_CACHE.selecionado = lead; abrirRelatorioLeadSdr(lead) }
+    }
+    el.ondragstart = e => {
+      SDR_ARRASTANDO = el.dataset.leadSdr
+      e.dataTransfer.effectAllowed = 'move'
+      el.style.opacity = '.4'
+    }
+    el.ondragend = () => { el.style.opacity = '1'; SDR_ARRASTANDO = null }
+  })
+
+  alvo.querySelectorAll('[data-drop-sdr]').forEach(zona => {
+    zona.ondragover = e => { e.preventDefault(); zona.style.background = 'var(--hover-bg)' }
+    zona.ondragleave = () => { zona.style.background = '' }
+    zona.ondrop = async e => {
+      e.preventDefault(); zona.style.background = ''
+      if (!SDR_ARRASTANDO) return
+      const novoStatus = zona.dataset.dropSdr
+      const lead = SDR_CACHE.leads.find(l => String(l.id) === SDR_ARRASTANDO)
+      if (!lead || lead.status === novoStatus) return
+      const { error } = await db.from('leads').update({ status: novoStatus }).eq('id', lead.id)
+      if (error) { alert('Não consegui mover: ' + error.message); return }
+      lead.status = novoStatus
+      sdrAbaFunil(alvo)
+    }
+  })
+}
+
 // ----- Aba Regiões: vendedor x UF -----
 async function sdrAbaRegioes (alvo) {
   const [{ data: regioes }, { data: pessoas }] = await Promise.all([
@@ -14923,7 +15091,7 @@ async function sdrAbaRegioes (alvo) {
         <label>UF</label>
         <select id="sdr-nova-uf">${UFS_BRASIL.map(uf => `<option value="${uf}">${uf}</option>`).join('')}</select>
       </div>
-      <div class="campo" style="width:240px;">
+      <div class="campo" style="width:260px;">
         <label>Vendedor</label>
         <select id="sdr-novo-vendedor">${SDR_CACHE.vendedores.map(v => `<option value="${v.id}">${esc(v.nome)}</option>`).join('')}</select>
       </div>
