@@ -1450,6 +1450,31 @@ function ligarChecagemPeriodicaNotificacoes () {
   setInterval(() => atualizarBadgeNotificacoes(true), 20000)
 }
 
+// Clicou numa notificação → leva direto pro registro que ela avisa.
+// Cada linha aqui é um tipo de "entidade" que uma notificação pode
+// apontar; hoje só existe 'solicitacao_interna', mas é só acrescentar
+// uma linha nova quando outro módulo passar a gerar notificação.
+const ABRIR_ENTIDADE_NOTIFICACAO = {
+  solicitacao_interna: async (id) => {
+    await irPara('solicitacoes')
+    const { data: s } = await db.from('solicitacao_interna').select(`
+      id, codigo, titulo, descricao, urgencia, status, data_solicitacao, data_limite, data_conclusao, resposta,
+      progresso_pct, pontuacao_agilidade, setor_destino_id, responsavel_id, setor_envolvido_id, data_planejada, hora_planejada, tarefa_agenda_id, solicitante_id,
+      setor:setor_destino_id ( id, nome ), solicitante:solicitante_id ( nome ), responsavel:responsavel_id ( nome ),
+      setorEnvolvido:setor_envolvido_id ( nome ),
+      participantes:solicitacao_participante ( pessoa_id, pessoa:pessoa_id ( nome ) )
+    `).eq('id', id).maybeSingle()
+    if (!s) { alert('Essa solicitação não existe mais.'); return }
+    detalheSolicitacao(s, () => abrirSolicitacoes(PERFIL.setorId ? 'meu-setor' : 'painel'))
+  }
+}
+
+async function abrirEntidadeNotificacao (entidade, entidadeId) {
+  const abrir = ABRIR_ENTIDADE_NOTIFICACAO[entidade]
+  if (!abrir || !entidadeId) return
+  try { await abrir(entidadeId) } catch (e) { console.error('abrir notificação:', e) }
+}
+
 async function abrirNotificacoes () {
   const { data: notifs } = await db.from('notificacao_pessoal')
     .select('id, titulo, mensagem, lida, criado_em, entidade, entidade_id')
@@ -1460,11 +1485,15 @@ async function abrirNotificacoes () {
   fundo.innerHTML = `<div class="modal" style="max-width:440px;">
     <h3 style="margin:0 0 12px;">Notificações</h3>
     ${(notifs || []).length ? `<div style="max-height:420px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;">
-      ${notifs.map(n => `<div style="border:1px solid var(--line2);border-radius:8px;padding:10px 12px;${n.lida ? 'opacity:.6;' : 'background:rgba(var(--rust-rgb),.08);'}">
+      ${notifs.map(n => {
+        const clicavel = !!(n.entidade && ABRIR_ENTIDADE_NOTIFICACAO[n.entidade] && n.entidade_id)
+        return `<div ${clicavel ? `data-abrir-notif="${n.id}" data-entidade="${esc(n.entidade)}" data-entidade-id="${esc(n.entidade_id)}" style="cursor:pointer;"` : ''}
+          class="notif-item" style="border:1px solid var(--line2);border-radius:8px;padding:10px 12px;${n.lida ? 'opacity:.6;' : 'background:rgba(var(--rust-rgb),.08);'}">
         <div style="font-weight:600;font-size:13px;">${n.lida ? '' : '🔵 '}${esc(n.titulo)}</div>
         ${n.mensagem ? `<div class="texto-dim2" style="font-size:12.5px;margin-top:3px;">${esc(n.mensagem)}</div>` : ''}
-        <div class="texto-dim2" style="font-size:11px;margin-top:5px;">${new Date(n.criado_em).toLocaleString('pt-BR')}</div>
-      </div>`).join('')}
+        <div class="texto-dim2" style="font-size:11px;margin-top:5px;">${new Date(n.criado_em).toLocaleString('pt-BR')}${clicavel ? ' · toque para abrir' : ''}</div>
+      </div>`
+      }).join('')}
     </div>` : `<p class="vazio">Sem notificações.</p>`}
     <div class="acoes" style="margin-top:14px;">
       ${(notifs || []).some(n => !n.lida) ? `<button class="btn-secundario" id="notif-marcar-tudo">Marcar tudo como lido</button>` : ''}
@@ -1475,6 +1504,18 @@ async function abrirNotificacoes () {
   const fechar = () => fundo.remove()
   fundo.querySelector('#notif-fechar').onclick = fechar
   fundo.onclick = e => { if (e.target === fundo) fechar() }
+  fundo.querySelectorAll('[data-abrir-notif]').forEach(el => {
+    el.onclick = async () => {
+      const n = notifs.find(x => x.id === el.dataset.abrirNotif)
+      if (!n) return
+      if (!n.lida) {
+        await db.from('notificacao_pessoal').update({ lida: true, lida_em: new Date().toISOString() }).eq('id', n.id)
+        atualizarBadgeNotificacoes()
+      }
+      fechar()
+      abrirEntidadeNotificacao(n.entidade, n.entidade_id)
+    }
+  })
   const btnTudo = fundo.querySelector('#notif-marcar-tudo')
   if (btnTudo) btnTudo.onclick = async () => {
     await db.from('notificacao_pessoal').update({ lida: true, lida_em: new Date().toISOString() })
@@ -1641,7 +1682,7 @@ function irPara (chave) {
   $('#rodape').textContent = ''
   window.scrollTo(0, 0)
   document.querySelector('.conteudo')?.scrollTo(0, 0)
-  p.render()
+  return p.render()   // devolve a promise: quem chamar pode esperar a página carregar antes de abrir algo em cima
 }
 
 // telas que não usam a tabela padrão
