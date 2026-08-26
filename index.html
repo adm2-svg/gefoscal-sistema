@@ -1481,53 +1481,148 @@ async function abrirEntidadeNotificacao (entidade, entidadeId) {
   try { await abrir(entidadeId) } catch (e) { console.error('abrir notificação:', e) }
 }
 
+function estilosNotificacoesUmaVez () {
+  if ($('#notif-estilos')) return
+  const s = document.createElement('style')
+  s.id = 'notif-estilos'
+  s.textContent = `
+    .notif-item[data-abrir-notif]:hover { background:var(--hover-bg) !important; border-color:var(--rust) !important; transform:translateX(-3px); }
+    .notif-item { transition:background .15s ease, border-color .15s ease, transform .15s ease; }
+    #notif-lista::-webkit-scrollbar { width:6px; }
+    #notif-lista::-webkit-scrollbar-thumb { background:var(--line2); border-radius:10px; }
+    #notif-fechar:hover { background:rgba(255,255,255,.18) !important; }
+    #notif-marcar-tudo:hover { color:var(--rust); }
+  `
+  document.head.appendChild(s)
+}
+
 async function abrirNotificacoes () {
-  const { data: notifs } = await db.from('notificacao_pessoal')
+  if ($('#notif-fundo')) return // já aberto, não duplica
+  estilosNotificacoesUmaVez()
+
+  const { data: notifsIniciais } = await db.from('notificacao_pessoal')
     .select('id, titulo, mensagem, lida, criado_em, entidade, entidade_id')
-    .eq('destinatario_id', PERFIL.pessoaId).order('criado_em', { ascending: false }).limit(30)
+    .eq('destinatario_id', PERFIL.pessoaId).eq('lida', false)
+    .order('criado_em', { ascending: false }).limit(30)
+  const notifs = notifsIniciais || []
 
   const fundo = document.createElement('div')
-  fundo.className = 'modal-fundo'
-  fundo.innerHTML = `<div class="modal" style="max-width:440px;">
-    <h3 style="margin:0 0 12px;">Notificações</h3>
-    ${(notifs || []).length ? `<div style="max-height:420px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;">
-      ${notifs.map(n => {
-        const clicavel = !!(n.entidade && ABRIR_ENTIDADE_NOTIFICACAO[n.entidade] && n.entidade_id)
-        return `<div ${clicavel ? `data-abrir-notif="${n.id}" data-entidade="${esc(n.entidade)}" data-entidade-id="${esc(n.entidade_id)}" style="cursor:pointer;"` : ''}
-          class="notif-item" style="border:1px solid var(--line2);border-radius:8px;padding:10px 12px;${n.lida ? 'opacity:.6;' : 'background:rgba(var(--rust-rgb),.08);'}">
-        <div style="font-weight:600;font-size:13px;">${n.lida ? '' : '🔵 '}${esc(n.titulo)}</div>
-        ${n.mensagem ? `<div class="texto-dim2" style="font-size:12.5px;margin-top:3px;">${esc(n.mensagem)}</div>` : ''}
-        <div class="texto-dim2" style="font-size:11px;margin-top:5px;">${new Date(n.criado_em).toLocaleString('pt-BR')}${clicavel ? ' · toque para abrir' : ''}</div>
-      </div>`
-      }).join('')}
-    </div>` : `<p class="vazio">Sem notificações.</p>`}
-    <div class="acoes" style="margin-top:14px;">
-      ${(notifs || []).some(n => !n.lida) ? `<button class="btn-secundario" id="notif-marcar-tudo">Marcar tudo como lido</button>` : ''}
-      <button class="btn-secundario" id="notif-fechar">Fechar</button>
+  fundo.id = 'notif-fundo'
+  fundo.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.4);backdrop-filter:blur(1px);z-index:9200;opacity:0;transition:opacity .22s ease;'
+
+  const painel = document.createElement('div')
+  painel.id = 'notif-painel'
+  painel.style.cssText = `
+    position:fixed;top:0;right:0;height:100vh;width:400px;max-width:92vw;
+    background:var(--panel);border-left:1px solid var(--line);box-shadow:-12px 0 36px rgba(0,0,0,.45);
+    z-index:9201;display:flex;flex-direction:column;transform:translateX(100%);transition:transform .25s cubic-bezier(.2,.8,.2,1);`
+  painel.innerHTML = `
+    <div style="background:linear-gradient(135deg,var(--rust),var(--gold));color:#fff;padding:20px 20px 18px;flex:none;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+        <div>
+          <b style="font-size:17px;font-family:var(--serif);">🔔 Notificações</b>
+          <div style="font-size:12px;opacity:.9;margin-top:3px;">
+            ${notifs.length ? `${notifs.length} ${notifs.length === 1 ? 'nova' : 'novas'}` : 'Tudo em dia'}
+          </div>
+        </div>
+        <button id="notif-fechar" style="background:rgba(255,255,255,.12);border:none;width:30px;height:30px;border-radius:50%;font-size:18px;cursor:pointer;color:#fff;line-height:1;">×</button>
+      </div>
     </div>
-  </div>`
+    <div id="notif-lista" style="flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px;">
+      ${notifs.length ? notifs.map(n => itemNotifHtml(n)).join('') : `
+        <div style="text-align:center;padding:60px 20px;">
+          <div style="font-size:36px;margin-bottom:10px;opacity:.5;">🔕</div>
+          <p class="texto-dim2" style="font-size:13px;">Sem notificações novas.</p>
+        </div>`}
+    </div>
+    ${notifs.length ? `<div style="padding:12px 14px;border-top:1px solid var(--line);flex:none;">
+      <button id="notif-marcar-tudo" style="width:100%;background:none;border:none;color:var(--dim);font-size:12.5px;font-weight:600;cursor:pointer;padding:6px;">✓ Marcar tudo como lido</button>
+    </div>` : ''}`
   document.body.appendChild(fundo)
-  const fechar = () => fundo.remove()
-  fundo.querySelector('#notif-fechar').onclick = fechar
-  fundo.onclick = e => { if (e.target === fundo) fechar() }
-  fundo.querySelectorAll('[data-abrir-notif]').forEach(el => {
-    el.onclick = async () => {
-      const n = notifs.find(x => x.id === el.dataset.abrirNotif)
-      if (!n) return
-      if (!n.lida) {
+  document.body.appendChild(painel)
+  requestAnimationFrame(() => { fundo.style.opacity = '1'; painel.style.transform = 'translateX(0)' })
+
+  const fechar = () => {
+    painel.style.transform = 'translateX(100%)'
+    fundo.style.opacity = '0'
+    setTimeout(() => { fundo.remove(); painel.remove() }, 240)
+  }
+  painel.querySelector('#notif-fechar').onclick = fechar
+  fundo.onclick = fechar
+
+  // some da lista assim que é vista/lida — clicou, marca como lida e o
+  // item desaparece com uma leve transição (não fica acumulando notificação antiga)
+  const removerItem = id => {
+    const el = painel.querySelector(`[data-item-notif="${id}"]`)
+    if (!el) return
+    el.style.transition = 'opacity .2s ease, max-height .2s ease, margin .2s ease, padding .2s ease'
+    el.style.maxHeight = el.offsetHeight + 'px'
+    requestAnimationFrame(() => {
+      el.style.opacity = '0'; el.style.maxHeight = '0px'
+      el.style.marginTop = '0'; el.style.marginBottom = '0'
+      el.style.paddingTop = '0'; el.style.paddingBottom = '0'; el.style.overflow = 'hidden'
+    })
+    setTimeout(() => {
+      el.remove()
+      const lista = painel.querySelector('#notif-lista')
+      if (lista && !lista.querySelector('[data-item-notif]')) {
+        lista.innerHTML = `
+          <div style="text-align:center;padding:60px 20px;">
+            <div style="font-size:36px;margin-bottom:10px;opacity:.5;">🔕</div>
+            <p class="texto-dim2" style="font-size:13px;">Sem notificações novas.</p>
+          </div>`
+        painel.querySelector('#notif-marcar-tudo')?.closest('div').remove()
+      }
+    }, 220)
+  }
+
+  const ligarClique = () => {
+    painel.querySelectorAll('[data-abrir-notif]').forEach(el => {
+      el.onclick = async () => {
+        const id = el.dataset.abrirNotif
+        const n = notifs.find(x => x.id === id)
+        if (!n) return
         await db.from('notificacao_pessoal').update({ lida: true, lida_em: new Date().toISOString() }).eq('id', n.id)
         atualizarBadgeNotificacoes()
+        removerItem(id)
+        fechar()
+        abrirEntidadeNotificacao(n.entidade, n.entidade_id)
       }
-      fechar()
-      abrirEntidadeNotificacao(n.entidade, n.entidade_id)
-    }
-  })
-  const btnTudo = fundo.querySelector('#notif-marcar-tudo')
+    })
+  }
+  ligarClique()
+
+  const btnTudo = painel.querySelector('#notif-marcar-tudo')
   if (btnTudo) btnTudo.onclick = async () => {
     await db.from('notificacao_pessoal').update({ lida: true, lida_em: new Date().toISOString() })
       .eq('destinatario_id', PERFIL.pessoaId).eq('lida', false)
-    atualizarBadgeNotificacoes(); fechar()
+    atualizarBadgeNotificacoes()
+    notifs.forEach(n => removerItem(n.id))
   }
+}
+
+const ICONE_NOTIF = { solicitacao_interna: '📋', solicitacao_compra: '🛒' }
+
+function itemNotifHtml (n) {
+  const clicavel = !!(n.entidade && ABRIR_ENTIDADE_NOTIFICACAO[n.entidade] && n.entidade_id)
+  const icone = ICONE_NOTIF[n.entidade] || '🔔'
+  return `<div data-item-notif="${n.id}" ${clicavel ? `data-abrir-notif="${n.id}"` : ''}
+      class="notif-item" style="display:flex;gap:12px;align-items:flex-start;border:1px solid var(--line2);
+      border-radius:12px;padding:12px 14px;background:var(--card);box-shadow:0 1px 3px rgba(0,0,0,.15);${clicavel ? 'cursor:pointer;' : ''}">
+    <div style="flex:none;width:36px;height:36px;border-radius:10px;background:rgba(var(--rust-rgb),.15);
+      display:flex;align-items:center;justify-content:center;font-size:17px;">${icone}</div>
+    <div style="flex:1;min-width:0;">
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">
+        <span style="font-weight:700;font-size:13px;color:var(--txt);line-height:1.35;">${esc(n.titulo)}</span>
+        <span style="flex:none;width:8px;height:8px;border-radius:50%;background:var(--gold);margin-top:5px;"></span>
+      </div>
+      ${n.mensagem ? `<div class="texto-dim2" style="font-size:12.5px;margin-top:4px;line-height:1.4;">${esc(n.mensagem)}</div>` : ''}
+      <div class="texto-dim2" style="font-size:11px;margin-top:7px;display:flex;align-items:center;gap:6px;">
+        <span>${formatarHoraRelativa(n.criado_em)}</span>
+        ${clicavel ? `<span style="color:var(--rust);font-weight:700;">· abrir →</span>` : ''}
+      </div>
+    </div>
+  </div>`
 }
 $('#notif-bell').onclick = abrirNotificacoes
 
