@@ -16484,14 +16484,26 @@ function telaBaixa (s, contas, categorias, centros) {
       const { data: p } = await db.from('pessoa').select('id')
         .eq('nome', s.solicitante.nome).maybeSingle()
       if (p) {
+        const tituloAviso = 'Sua compra foi aprovada e paga'
+        const textoAviso = `${s.produto_servico} — pago em ${fmtData(q('#b-data').value)} `
+             + `no valor de R$ ${fmtNum(valor)}.`
         await db.from('aviso').insert({
           pessoa_id: p.id,
-          titulo: 'Sua compra foi aprovada e paga',
-          texto: `${s.produto_servico} — pago em ${fmtData(q('#b-data').value)} `
-               + `no valor de R$ ${fmtNum(valor)}.`,
+          titulo: tituloAviso,
+          texto: textoAviso,
           origem: 'compras',
           registro_id: s.id
         })
+        // mesmo sino de notificações usado no resto do sistema — antes só
+        // avisava pelo card "aviso" da Visão Geral, agora acende o sino também
+        if (p.id !== PERFIL.pessoaId) {
+          await db.from('notificacao_pessoal').insert({
+            destinatario_id: p.id,
+            titulo: tituloAviso,
+            mensagem: textoAviso,
+            entidade: 'solicitacao_compra', entidade_id: s.id
+          })
+        }
         await db.from('solicitacao_compra')
           .update({ avisado_em: new Date().toISOString() }).eq('id', s.id)
       }
