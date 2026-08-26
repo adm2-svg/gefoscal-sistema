@@ -6952,6 +6952,20 @@ async function telaCotacao (s) {
       }).eq('id', s.id)
 
       if (error) { aviso(error.message); return }
+
+      // avisa todo mundo que pode aprovar (papel DIRETORIA/ADMIN) — mesmo
+      // sino de notificações, clique já leva direto pra ficha da solicitação
+      const { data: aprovadores } = await db.rpc('pessoas_aprovadoras_compras')
+      const destinatarios = (aprovadores || []).map(a => a.pessoa_id).filter(id => id !== PERFIL.pessoaId)
+      if (destinatarios.length) {
+        await db.from('notificacao_pessoal').insert(destinatarios.map(pessoaId => ({
+          destinatario_id: pessoaId,
+          titulo: 'Solicitação aguardando sua aprovação',
+          mensagem: `"${s.produto_servico}" — cotada por ${PERFIL.nome} — está esperando sua aprovação.`,
+          entidade: 'solicitacao_compra', entidade_id: s.id
+        })))
+      }
+
       fechar()
       abrirCompras('cotar', true)
     }
