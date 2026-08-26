@@ -1407,8 +1407,39 @@ const SONS_NOTIFICACAO = {
 }
 const SOM_PADRAO_NOTIFICACAO = './som-padrao.mp3'
 
+// Navegador bloqueia áudio automático se não houve interação recente da
+// pessoa na página — o que É o caso de uma notificação chegando sozinha
+// em tempo real. Truque: assim que a pessoa clica em qualquer lugar (ou
+// aperta uma tecla) pela primeira vez na sessão, "destravamos" um <audio>
+// tocando mudo por uma fração de segundo; depois disso o navegador deixa
+// esse mesmo elemento tocar sozinho quantas vezes precisar.
+let AUDIO_NOTIF = null
+let AUDIO_NOTIF_DESTRAVADO = false
+
+function prepararAudioNotificacao () {
+  if (!AUDIO_NOTIF) { AUDIO_NOTIF = new Audio(SOM_PADRAO_NOTIFICACAO); AUDIO_NOTIF.preload = 'auto' }
+  return AUDIO_NOTIF
+}
+
+function destravarAudioNotificacao () {
+  if (AUDIO_NOTIF_DESTRAVADO) return
+  const a = prepararAudioNotificacao()
+  a.volume = 0
+  a.play().then(() => {
+    a.pause(); a.currentTime = 0; a.volume = 1
+    AUDIO_NOTIF_DESTRAVADO = true
+  }).catch(() => {})
+}
+document.addEventListener('click', destravarAudioNotificacao, { once: true, capture: true })
+document.addEventListener('keydown', destravarAudioNotificacao, { once: true, capture: true })
+document.addEventListener('touchstart', destravarAudioNotificacao, { once: true, capture: true })
+
 function tocarSom (caminho) {
-  try { new Audio(caminho).play().catch(() => {}) } catch {}
+  try {
+    const a = prepararAudioNotificacao()
+    a.currentTime = 0
+    a.play().catch(() => {})
+  } catch {}
 }
 
 function tocarSomNotificacao () {
@@ -4428,38 +4459,69 @@ let ASSIST_HISTORICO = []
 let ASSIST_ABERTO = false
 let ASSIST_RECONHECIMENTO = null
 
+function estilosWidgetsUmaVez () {
+  if ($('#widgets-estilos')) return
+  const s = document.createElement('style')
+  s.id = 'widgets-estilos'
+  s.textContent = `
+    .widget-bolha { transition:transform .18s ease, box-shadow .18s ease; }
+    .widget-bolha:hover { transform:translateY(-3px) scale(1.03); }
+    .widget-bolha:active { transform:translateY(-1px) scale(.98); }
+    .widget-fechar:hover { background:rgba(255,255,255,.28) !important; }
+    .widget-contato:hover { background:var(--hover-bg); }
+    .widget-enviar:hover { filter:brightness(1.08); transform:translateY(-1px); }
+    .widget-enviar { transition:transform .12s ease, filter .12s ease; }
+    .widget-digitando span { width:6px;height:6px;border-radius:50%;background:var(--dim2);display:inline-block;margin-right:3px;animation:widget-piscar 1.1s ease-in-out infinite; }
+    .widget-digitando span:nth-child(2) { animation-delay:.15s; }
+    .widget-digitando span:nth-child(3) { animation-delay:.3s; margin-right:0; }
+    @keyframes widget-piscar { 0%,60%,100% { opacity:.3; transform:translateY(0); } 30% { opacity:1; transform:translateY(-2px); } }
+    #assist-painel::-webkit-scrollbar, #chat-painel *::-webkit-scrollbar { width:6px; }
+    #assist-painel ::-webkit-scrollbar-thumb, #chat-painel ::-webkit-scrollbar-thumb { background:var(--line2); border-radius:10px; }
+  `
+  document.head.appendChild(s)
+}
+
 function montarWidgetAssistente () {
   if ($('#assist-bolha')) return // já montado, não duplica
+  estilosWidgetsUmaVez()
 
   const bolha = document.createElement('button')
   bolha.id = 'assist-bolha'
   bolha.type = 'button'
-  bolha.innerHTML = '✨ Assistente'
+  bolha.className = 'widget-bolha'
+  bolha.innerHTML = '<span style="font-size:16px;">✨</span> Assistente'
   bolha.style.cssText = `
     position:fixed; right:22px; bottom:22px; z-index:9000;
-    background:var(--gold,#c8a11a); color:#3a2e08; border:none; border-radius:24px;
-    padding:12px 20px; font-weight:700; font-size:13.5px; cursor:pointer;
-    box-shadow:0 6px 20px rgba(0,0,0,.35);`
+    background:linear-gradient(135deg,var(--gold),rgba(var(--gold-rgb),.65));
+    color:#3a2e08; border:none; border-radius:30px;
+    padding:13px 22px; font-weight:700; font-size:13.5px; cursor:pointer;
+    display:flex; align-items:center; gap:8px;
+    box-shadow:0 8px 26px rgba(0,0,0,.35), 0 2px 8px rgba(0,0,0,.2);`
   document.body.appendChild(bolha)
 
   const painel = document.createElement('div')
   painel.id = 'assist-painel'
   painel.style.cssText = `
-    position:fixed; right:22px; bottom:78px; z-index:9000; width:360px; max-width:calc(100vw - 32px);
-    height:min(520px, calc(100vh - 120px)); background:var(--panel); border:1px solid var(--line);
-    border-radius:14px; box-shadow:0 12px 40px rgba(0,0,0,.45); display:none; flex-direction:column; overflow:hidden;`
+    position:fixed; right:22px; bottom:78px; z-index:9000; width:370px; max-width:calc(100vw - 32px);
+    height:min(540px, calc(100vh - 120px)); background:var(--panel); border:1px solid var(--line);
+    border-radius:18px; box-shadow:0 20px 50px rgba(0,0,0,.5); display:none; flex-direction:column; overflow:hidden;
+    opacity:0; transform:translateY(14px) scale(.97); transition:opacity .18s ease, transform .18s ease;`
   painel.innerHTML = `
-    <div style="background:var(--gold,#c8a11a); color:#3a2e08; padding:12px 16px; display:flex; justify-content:space-between; align-items:center;">
-      <div><b style="font-size:14px;">✨ Assistente do Sistema</b>
-        <div style="font-size:10.5px;opacity:.8;">tira dúvida de como usar o Gefoscal</div></div>
-      <button id="assist-fechar" style="background:none;border:none;font-size:20px;cursor:pointer;color:#3a2e08;line-height:1;">−</button>
+    <div style="background:linear-gradient(135deg,var(--gold),rgba(var(--gold-rgb),.65)); color:#3a2e08; padding:16px 18px; display:flex; justify-content:space-between; align-items:center; flex:none;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div style="width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.35);display:flex;align-items:center;justify-content:center;font-size:17px;">✨</div>
+        <div><b style="font-size:14.5px;font-family:var(--serif);">Assistente do Sistema</b>
+          <div style="font-size:11px;opacity:.8;">tira dúvida de como usar o Gefoscal</div></div>
+      </div>
+      <button id="assist-fechar" class="widget-fechar" style="background:rgba(255,255,255,.2);border:none;width:28px;height:28px;border-radius:50%;font-size:17px;cursor:pointer;color:#3a2e08;line-height:1;flex:none;">−</button>
     </div>
-    <div id="as-chat" style="flex:1;padding:14px;display:flex;flex-direction:column;gap:10px;overflow-y:auto;"></div>
-    <div style="padding:10px 12px;border-top:1px solid var(--line);display:flex;gap:6px;align-items:flex-end;">
+    <div id="as-chat" style="flex:1;padding:16px;display:flex;flex-direction:column;gap:12px;overflow-y:auto;background:var(--bg);"></div>
+    <div style="padding:12px;border-top:1px solid var(--line);display:flex;gap:8px;align-items:flex-end;flex:none;background:var(--panel);">
       <button id="as-mic" type="button" title="Falar" style="flex:none;border:1px solid var(--line2);background:var(--surface2);
-        border-radius:50%;width:36px;height:36px;cursor:pointer;font-size:15px;">🎤</button>
-      <textarea id="as-pergunta" placeholder="Escreve ou fala sua dúvida..." style="flex:1;min-height:36px;max-height:80px;font-size:13px;"></textarea>
-      <button id="as-enviar" class="btn mini" style="flex:none;">Enviar</button>
+        border-radius:50%;width:38px;height:38px;cursor:pointer;font-size:15px;">🎤</button>
+      <textarea id="as-pergunta" placeholder="Escreve ou fala sua dúvida..." style="flex:1;min-height:38px;max-height:80px;font-size:13px;border-radius:20px;padding:9px 16px;"></textarea>
+      <button id="as-enviar" class="widget-enviar" style="flex:none;width:38px;height:38px;border-radius:50%;border:none;
+        background:var(--gold,#d8a857);color:#3a2e08;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;">➤</button>
     </div>`
   document.body.appendChild(painel)
 
@@ -4467,12 +4529,15 @@ function montarWidgetAssistente () {
   const renderMensagem = (autor, texto, chaveIr, subIr) => {
     const minha = autor === 'user'
     const bolhaMsg = document.createElement('div')
-    bolhaMsg.style.cssText = `align-self:${minha ? 'flex-end' : 'flex-start'};max-width:88%;`
+    bolhaMsg.style.cssText = `align-self:${minha ? 'flex-end' : 'flex-start'};max-width:88%;display:flex;gap:8px;flex-direction:${minha ? 'row-reverse' : 'row'};`
     const nomePagina = chaveIr ? (PAGINAS[chaveIr]?.nome ?? chaveIr) : null
     bolhaMsg.innerHTML = `
-      <div style="background:${minha ? 'var(--rust)' : 'var(--surface2)'};color:${minha ? '#fff' : 'inherit'};
-                  padding:8px 12px;border-radius:10px;font-size:12.5px;line-height:1.5;white-space:pre-wrap;">${esc(texto)}</div>
-      ${nomePagina ? `<button data-ir-para-assist="${esc(chaveIr)}" data-sub-assist="${esc(subIr || '')}" class="btn mini" style="margin-top:6px;width:100%;">📍 Ir para ${esc(nomePagina)}</button>` : ''}`
+      ${!minha ? `<div style="flex:none;width:26px;height:26px;border-radius:50%;background:linear-gradient(135deg,var(--gold),var(--rust));
+        display:flex;align-items:center;justify-content:center;font-size:12px;margin-top:2px;">✨</div>` : ''}
+      <div>
+        <div class="sec-msg ${minha ? 'sec-user' : 'sec-ia'}" style="white-space:pre-wrap;">${esc(texto)}</div>
+        ${nomePagina ? `<button data-ir-para-assist="${esc(chaveIr)}" data-sub-assist="${esc(subIr || '')}" class="btn mini" style="margin-top:6px;width:100%;">📍 Ir para ${esc(nomePagina)}</button>` : ''}
+      </div>`
     chat().appendChild(bolhaMsg)
     chat().scrollTop = chat().scrollHeight
     const btnIr = bolhaMsg.querySelector('[data-ir-para-assist]')
@@ -4496,12 +4561,31 @@ function montarWidgetAssistente () {
     return bolhaMsg
   }
 
+  const renderDigitando = () => {
+    const bolhaMsg = document.createElement('div')
+    bolhaMsg.id = 'as-digitando'
+    bolhaMsg.style.cssText = 'align-self:flex-start;max-width:88%;display:flex;gap:8px;'
+    bolhaMsg.innerHTML = `
+      <div style="flex:none;width:26px;height:26px;border-radius:50%;background:linear-gradient(135deg,var(--gold),var(--rust));
+        display:flex;align-items:center;justify-content:center;font-size:12px;margin-top:2px;">✨</div>
+      <div class="sec-msg sec-ia widget-digitando"><span></span><span></span><span></span></div>`
+    chat().appendChild(bolhaMsg)
+    chat().scrollTop = chat().scrollHeight
+    return bolhaMsg
+  }
+
   const abrirFechar = () => {
     ASSIST_ABERTO = !ASSIST_ABERTO
-    painel.style.display = ASSIST_ABERTO ? 'flex' : 'none'
-    if (ASSIST_ABERTO && !chat().childElementCount) {
-      renderMensagem('assistant', 'Oi! Posso te ajudar a achar qualquer coisa no sistema ou explicar como fazer uma tarefa. O que você precisa?')
-      ASSIST_HISTORICO.forEach(m => renderMensagem(m.role === 'user' ? 'user' : 'assistant', m.content))
+    if (ASSIST_ABERTO) {
+      painel.style.display = 'flex'
+      requestAnimationFrame(() => { painel.style.opacity = '1'; painel.style.transform = 'translateY(0) scale(1)' })
+      if (!chat().childElementCount) {
+        renderMensagem('assistant', 'Oi! Posso te ajudar a achar qualquer coisa no sistema ou explicar como fazer uma tarefa. O que você precisa?')
+        ASSIST_HISTORICO.forEach(m => renderMensagem(m.role === 'user' ? 'user' : 'assistant', m.content))
+      }
+    } else {
+      painel.style.opacity = '0'; painel.style.transform = 'translateY(14px) scale(.97)'
+      setTimeout(() => { painel.style.display = 'none' }, 180)
     }
   }
   bolha.onclick = abrirFechar
@@ -4537,12 +4621,12 @@ function montarWidgetAssistente () {
     if (!texto) return
     renderMensagem('user', texto)
     $('#as-pergunta').value = ''
-    const btn = $('#as-enviar'); btn.disabled = true; btn.textContent = '...'
-    const carregando = renderMensagem('assistant', 'Pensando...')
+    const btn = $('#as-enviar'); btn.disabled = true
+    const carregando = renderDigitando()
 
     ASSIST_HISTORICO.push({ role: 'user', content: texto })
     const { data, error } = await db.functions.invoke('assistente-sistema', { body: { mensagens: ASSIST_HISTORICO } })
-    btn.disabled = false; btn.textContent = 'Enviar'
+    btn.disabled = false
     carregando.remove()
 
     if (error || data?.erro) {
@@ -4627,42 +4711,56 @@ function formatarHoraRelativa (iso) {
 
 function montarWidgetChatInterno () {
   if ($('#chat-bolha')) return // já montado, não duplica
+  estilosWidgetsUmaVez()
 
   const bolha = document.createElement('button')
   bolha.id = 'chat-bolha'
   bolha.type = 'button'
-  bolha.innerHTML = '💬 Chat<span id="chat-badge" class="oculto" style="margin-left:6px;background:#fff;color:var(--rust);border-radius:20px;padding:1px 7px;font-size:11px;font-weight:800;"></span>'
+  bolha.className = 'widget-bolha'
+  bolha.innerHTML = '<span style="font-size:16px;">💬</span> Chat<span id="chat-badge" class="oculto" style="margin-left:2px;background:#fff;color:var(--rust);border-radius:20px;padding:1px 7px;font-size:11px;font-weight:800;"></span>'
   bolha.style.cssText = `
     position:fixed; right:22px; bottom:78px; z-index:8999;
-    background:var(--rust); color:#fff; border:none; border-radius:24px;
-    padding:12px 20px; font-weight:700; font-size:13.5px; cursor:pointer;
-    box-shadow:0 6px 20px rgba(0,0,0,.35); display:flex; align-items:center;`
+    background:linear-gradient(135deg,var(--rust),rgba(var(--rust-rgb),.65));
+    color:#fff; border:none; border-radius:30px;
+    padding:13px 22px; font-weight:700; font-size:13.5px; cursor:pointer;
+    box-shadow:0 8px 26px rgba(0,0,0,.35), 0 2px 8px rgba(0,0,0,.2); display:flex; align-items:center; gap:8px;`
   document.body.appendChild(bolha)
 
   const painel = document.createElement('div')
   painel.id = 'chat-painel'
   painel.style.cssText = `
-    position:fixed; right:22px; bottom:134px; z-index:8999; width:360px; max-width:calc(100vw - 32px);
-    height:min(520px, calc(100vh - 176px)); background:var(--panel); border:1px solid var(--line);
-    border-radius:14px; box-shadow:0 12px 40px rgba(0,0,0,.45); display:none; flex-direction:column; overflow:hidden;`
+    position:fixed; right:22px; bottom:138px; z-index:8999; width:370px; max-width:calc(100vw - 32px);
+    height:min(540px, calc(100vh - 176px)); background:var(--panel); border:1px solid var(--line);
+    border-radius:18px; box-shadow:0 20px 50px rgba(0,0,0,.5); display:none; flex-direction:column; overflow:hidden;
+    opacity:0; transform:translateY(14px) scale(.97); transition:opacity .18s ease, transform .18s ease;`
   painel.innerHTML = `
-    <div style="background:var(--rust); color:#fff; padding:12px 16px; display:flex; justify-content:space-between; align-items:center;">
-      <div><b style="font-size:14px;">💬 Chat interno</b>
-        <div style="font-size:10.5px;opacity:.85;">converse com quem tem acesso ao sistema</div></div>
-      <button id="chat-fechar" style="background:none;border:none;font-size:20px;cursor:pointer;color:#fff;line-height:1;">−</button>
+    <div style="background:linear-gradient(135deg,var(--rust),rgba(var(--rust-rgb),.65)); color:#fff; padding:16px 18px; display:flex; justify-content:space-between; align-items:center; flex:none;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div style="width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.25);display:flex;align-items:center;justify-content:center;font-size:16px;">💬</div>
+        <div><b style="font-size:14.5px;font-family:var(--serif);">Chat interno</b>
+          <div style="font-size:11px;opacity:.85;">converse com quem tem acesso ao sistema</div></div>
+      </div>
+      <button id="chat-fechar" class="widget-fechar" style="background:rgba(255,255,255,.18);border:none;width:28px;height:28px;border-radius:50%;font-size:17px;cursor:pointer;color:#fff;line-height:1;flex:none;">−</button>
     </div>
-    <div id="chat-abas" style="display:flex;gap:4px;padding:8px 8px 0;overflow-x:auto;flex:none;"></div>
-    <div id="chat-corpo" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;"></div>
-    <div id="chat-rodape" style="padding:10px 12px;border-top:1px solid var(--line);display:none;gap:6px;align-items:flex-end;">
-      <textarea id="chat-texto" placeholder="Escreva uma mensagem..." style="flex:1;min-height:36px;max-height:80px;font-size:13px;"></textarea>
-      <button id="chat-enviar" class="btn mini" style="flex:none;">Enviar</button>
+    <div id="chat-abas" style="display:flex;gap:5px;padding:10px 10px 0;overflow-x:auto;flex:none;background:var(--panel);"></div>
+    <div id="chat-corpo" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;background:var(--bg);"></div>
+    <div id="chat-rodape" style="padding:12px;border-top:1px solid var(--line);display:none;gap:8px;align-items:flex-end;flex:none;background:var(--panel);">
+      <textarea id="chat-texto" placeholder="Escreva uma mensagem..." style="flex:1;min-height:38px;max-height:80px;font-size:13px;border-radius:20px;padding:9px 16px;"></textarea>
+      <button id="chat-enviar" class="widget-enviar" style="flex:none;width:38px;height:38px;border-radius:50%;border:none;
+        background:var(--rust);color:#fff;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;">➤</button>
     </div>`
   document.body.appendChild(painel)
 
   const abrirFechar = () => {
     CHAT_ABERTO = !CHAT_ABERTO
-    painel.style.display = CHAT_ABERTO ? 'flex' : 'none'
-    if (CHAT_ABERTO) renderPainelChat()
+    if (CHAT_ABERTO) {
+      painel.style.display = 'flex'
+      requestAnimationFrame(() => { painel.style.opacity = '1'; painel.style.transform = 'translateY(0) scale(1)' })
+      renderPainelChat()
+    } else {
+      painel.style.opacity = '0'; painel.style.transform = 'translateY(14px) scale(.97)'
+      setTimeout(() => { painel.style.display = 'none' }, 180)
+    }
   }
   bolha.onclick = abrirFechar
   $('#chat-fechar').onclick = abrirFechar
@@ -4683,8 +4781,8 @@ function tabChat (contato, ativa, naoLidas) {
 }
 
 function linhaContatoChat (id, nome, cargo) {
-  return `<div data-abrir-contato="${id}" style="display:flex;align-items:center;gap:10px;padding:9px 4px;cursor:pointer;border-bottom:1px solid var(--line);">
-    <div style="width:34px;height:34px;border-radius:50%;background:var(--surface2);display:flex;align-items:center;justify-content:center;font-size:11.5px;font-weight:700;flex:none;">${esc(iniciais(nome))}</div>
+  return `<div data-abrir-contato="${id}" class="widget-contato" style="display:flex;align-items:center;gap:10px;padding:10px 6px;cursor:pointer;border-bottom:1px solid var(--line);border-radius:8px;">
+    <div style="width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,var(--rust),var(--gold));color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex:none;">${esc(iniciais(nome))}</div>
     <div style="min-width:0;">
       <div style="font-size:13px;">${esc(nome)}</div>
       ${cargo ? `<div class="texto-dim2" style="font-size:11px;">${esc(cargo)}</div>` : ''}
@@ -4768,8 +4866,8 @@ async function renderPainelChat () {
       </div>
       <div style="padding:0 14px;">
         ${recentes.length ? recentes.map(r => `
-          <div data-abrir-contato="${r.id}" style="display:flex;align-items:center;gap:10px;padding:9px 0;cursor:pointer;border-bottom:1px solid var(--line);">
-            <div style="width:34px;height:34px;border-radius:50%;background:var(--surface2);display:flex;align-items:center;justify-content:center;font-size:11.5px;font-weight:700;flex:none;">${esc(iniciais(r.nome))}</div>
+          <div data-abrir-contato="${r.id}" class="widget-contato" style="display:flex;align-items:center;gap:10px;padding:10px 6px;cursor:pointer;border-bottom:1px solid var(--line);border-radius:8px;">
+            <div style="width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,var(--rust),var(--gold));color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex:none;">${esc(iniciais(r.nome))}</div>
             <div style="min-width:0;flex:1;">
               <div style="display:flex;justify-content:space-between;gap:8px;">
                 <span style="font-size:13px;font-weight:${r.naoLida ? '700' : '400'};">${esc(r.nome)}</span>
