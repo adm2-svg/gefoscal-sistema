@@ -4670,9 +4670,24 @@ let CHAT_CANAL = null
 let CHAT_TELA = 'recentes' // 'recentes' (lista tipo WhatsApp) ou 'nova' (buscar contato)
 let CHAT_BUSCA = ''
 
+// Avatar com foto (vem do cadastro em DP/RH) quando tem, senão iniciais
+// coloridas — usado no chat interno (lista de contatos, conversas recentes
+// e cabeçalho de quem você tá conversando).
+function avatarHtml (fotoUrl, nome, tamanho = 34) {
+  if (fotoUrl) {
+    return `<img src="${esc(fotoUrl)}" alt="${esc(nome || '')}" loading="lazy"
+      style="width:${tamanho}px;height:${tamanho}px;border-radius:50%;object-fit:cover;flex:none;background:var(--surface2);"
+      onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
+      <div style="display:none;width:${tamanho}px;height:${tamanho}px;border-radius:50%;background:linear-gradient(135deg,var(--rust),var(--gold));
+        color:#fff;align-items:center;justify-content:center;font-size:${Math.round(tamanho * 0.38)}px;font-weight:700;flex:none;">${esc(iniciais(nome))}</div>`
+  }
+  return `<div style="width:${tamanho}px;height:${tamanho}px;border-radius:50%;background:linear-gradient(135deg,var(--rust),var(--gold));
+    color:#fff;display:flex;align-items:center;justify-content:center;font-size:${Math.round(tamanho * 0.38)}px;font-weight:700;flex:none;">${esc(iniciais(nome))}</div>`
+}
+
 async function carregarContatosChat () {
   if (CHAT_CONTATOS) return CHAT_CONTATOS
-  const { data } = await db.from('pessoa_com_login').select('pessoa_id,nome,cargo')
+  const { data } = await db.from('pessoa_com_login').select('pessoa_id,nome,cargo,foto_url')
   CHAT_CONTATOS = (data || [])
     .filter(c => c.pessoa_id !== PERFIL.pessoaId)
     .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'))
@@ -4695,7 +4710,8 @@ async function carregarConversasRecentes () {
     if (!porContato[outro]) porContato[outro] = m // já vem ordenado do mais novo pro mais velho
   })
   return Object.entries(porContato).map(([id, ultima]) => ({
-    id, nome: contatos.find(c => c.pessoa_id === id)?.nome || 'Ex-colega', ultima,
+    id, nome: contatos.find(c => c.pessoa_id === id)?.nome || 'Ex-colega',
+    foto_url: contatos.find(c => c.pessoa_id === id)?.foto_url ?? null, ultima,
     naoLida: ultima.destinatario_id === me && !ultima.lida_em
   })).sort((a, b) => new Date(b.ultima.criado_em) - new Date(a.ultima.criado_em))
 }
@@ -4734,10 +4750,10 @@ function montarWidgetChatInterno () {
     border-radius:18px; box-shadow:0 20px 50px rgba(0,0,0,.5); display:none; flex-direction:column; overflow:hidden;
     opacity:0; transform:translateY(14px) scale(.97); transition:opacity .18s ease, transform .18s ease;`
   painel.innerHTML = `
-    <div style="background:linear-gradient(135deg,var(--rust),rgba(var(--rust-rgb),.65)); color:#fff; padding:16px 18px; display:flex; justify-content:space-between; align-items:center; flex:none;">
-      <div style="display:flex;align-items:center;gap:10px;">
-        <div style="width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.25);display:flex;align-items:center;justify-content:center;font-size:16px;">💬</div>
-        <div><b style="font-size:14.5px;font-family:var(--serif);">Chat interno</b>
+    <div style="background:linear-gradient(135deg,var(--rust),rgba(var(--rust-rgb),.65)); color:#fff; padding:14px 18px; display:flex; justify-content:space-between; align-items:center; flex:none;">
+      <div id="chat-cab-info" style="display:flex;align-items:center;gap:10px;min-width:0;">
+        <div style="width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.25);display:flex;align-items:center;justify-content:center;font-size:16px;flex:none;">💬</div>
+        <div style="min-width:0;"><b style="font-size:14.5px;font-family:var(--serif);">Chat interno</b>
           <div style="font-size:11px;opacity:.85;">converse com quem tem acesso ao sistema</div></div>
       </div>
       <button id="chat-fechar" class="widget-fechar" style="background:rgba(255,255,255,.18);border:none;width:28px;height:28px;border-radius:50%;font-size:17px;cursor:pointer;color:#fff;line-height:1;flex:none;">−</button>
@@ -4817,9 +4833,9 @@ function tabChat (contato, ativa, naoLidas) {
   </button>`
 }
 
-function linhaContatoChat (id, nome, cargo) {
+function linhaContatoChat (id, nome, cargo, fotoUrl) {
   return `<div data-abrir-contato="${id}" class="widget-contato" style="display:flex;align-items:center;gap:10px;padding:10px 6px;cursor:pointer;border-bottom:1px solid var(--line);border-radius:8px;">
-    <div style="width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,var(--rust),var(--gold));color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex:none;">${esc(iniciais(nome))}</div>
+    ${avatarHtml(fotoUrl, nome, 36)}
     <div style="min-width:0;">
       <div style="font-size:13px;">${esc(nome)}</div>
       ${cargo ? `<div class="texto-dim2" style="font-size:11px;">${esc(cargo)}</div>` : ''}
@@ -4831,6 +4847,19 @@ async function renderPainelChat () {
   const contatos = await carregarContatosChat()
   const corpo = $('#chat-corpo')
   const rodape = $('#chat-rodape')
+
+  // cabeçalho: mostra nome + foto de quem você tá conversando; sem
+  // conversa aberta, volta a mostrar o título genérico do widget
+  const contatoAtivo = CHAT_ATIVA ? contatos.find(c => c.pessoa_id === CHAT_ATIVA) : null
+  $('#chat-cab-info').innerHTML = contatoAtivo ? `
+    ${avatarHtml(contatoAtivo.foto_url, contatoAtivo.nome, 36)}
+    <div style="min-width:0;"><b style="font-size:14.5px;font-family:var(--serif);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(contatoAtivo.nome)}</b>
+      ${contatoAtivo.cargo ? `<div style="font-size:11px;opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(contatoAtivo.cargo)}</div>` : ''}</div>
+  ` : `
+    <div style="width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.25);display:flex;align-items:center;justify-content:center;font-size:16px;flex:none;">💬</div>
+    <div style="min-width:0;"><b style="font-size:14.5px;font-family:var(--serif);">Chat interno</b>
+      <div style="font-size:11px;opacity:.85;">converse com quem tem acesso ao sistema</div></div>
+  `
 
   $('#chat-abas').innerHTML = CHAT_ABAS.map(id => {
     const c = contatos.find(x => x.id === id) || { id, nome: '...' }
@@ -4886,7 +4915,7 @@ async function renderPainelChat () {
           <input id="chat-busca" placeholder="Buscar pessoa..." style="flex:1;" value="${esc(CHAT_BUSCA)}">
         </div>
         <div style="padding:4px 14px;">
-          ${filtrados.length ? filtrados.map(c => linhaContatoChat(c.pessoa_id, c.nome, c.cargo)).join('')
+          ${filtrados.length ? filtrados.map(c => linhaContatoChat(c.pessoa_id, c.nome, c.cargo, c.foto_url)).join('')
             : '<p class="vazio">Ninguém encontrado.</p>'}
         </div>`
       $('#chat-voltar').onclick = () => { CHAT_TELA = 'recentes'; CHAT_BUSCA = ''; renderCorpoChat() }
@@ -4906,7 +4935,7 @@ async function renderPainelChat () {
       <div style="padding:0 14px;">
         ${recentes.length ? recentes.map(r => `
           <div data-abrir-contato="${r.id}" class="widget-contato" style="display:flex;align-items:center;gap:10px;padding:10px 6px;cursor:pointer;border-bottom:1px solid var(--line);border-radius:8px;">
-            <div style="width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,var(--rust),var(--gold));color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex:none;">${esc(iniciais(r.nome))}</div>
+            ${avatarHtml(r.foto_url, r.nome, 36)}
             <div style="min-width:0;flex:1;">
               <div style="display:flex;justify-content:space-between;gap:8px;">
                 <span style="font-size:13px;font-weight:${r.naoLida ? '700' : '400'};">${esc(r.nome)}</span>
