@@ -1510,16 +1510,19 @@ async function abrirNotificacoes () {
   fundo.id = 'notif-fundo'
   fundo.style.cssText = 'position:fixed;inset:0;z-index:9200;'
 
-  // ancora o card embaixo do sino, não no meio da tela nem ocupando a altura toda
+  // ancora o card perto do sino, seja ele onde for na tela (barra lateral
+  // ou topo) — sempre travado dentro da área visível, nunca cortando fora
   const sino = $('#notif-bell').getBoundingClientRect()
-  const largura = 360
-  const direita = Math.max(12, window.innerWidth - sino.right)
-  const topo = sino.bottom + 8
+  const largura = 340
+  const espaco = 12
+  let esquerda = sino.left
+  esquerda = Math.max(espaco, Math.min(esquerda, window.innerWidth - largura - espaco))
+  const topo = Math.min(sino.bottom + 8, window.innerHeight - 120)
 
   const painel = document.createElement('div')
   painel.id = 'notif-painel'
   painel.style.cssText = `
-    position:fixed;top:${topo}px;right:${direita}px;width:${largura}px;max-width:92vw;
+    position:fixed;top:${topo}px;left:${esquerda}px;width:${largura}px;max-width:calc(100vw - ${espaco * 2}px);
     max-height:min(480px, calc(100vh - ${topo + 16}px));
     background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:0 16px 40px rgba(0,0,0,.45);
     z-index:9201;display:flex;flex-direction:column;overflow:hidden;
