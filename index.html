@@ -1466,6 +1466,12 @@ const ABRIR_ENTIDADE_NOTIFICACAO = {
     `).eq('id', id).maybeSingle()
     if (!s) { alert('Essa solicitação não existe mais.'); return }
     detalheSolicitacao(s, () => abrirSolicitacoes(PERFIL.setorId ? 'meu-setor' : 'painel'))
+  },
+  solicitacao_compra: async (id) => {
+    await irPara('compras')
+    const { data: s } = await db.from('solicitacao_compra').select(selSolicitacao).eq('id', id).maybeSingle()
+    if (!s) { alert('Essa solicitação de compra não existe mais.'); return }
+    abrirFicha(s, podeEditarSolicitacao(s)).catch(e => console.error(e))
   }
 }
 
@@ -5522,6 +5528,7 @@ const selSolicitacao = `
   parecer_coordenacao, coordenado_em, parecer_aprovacao, decidido_em,
   parecer_cotacao, cotado_em, forma_pagamento, condicao_pagamento,
   parcelas, vencimento, dados_pagamento, orcamento_escolhido_id,
+  retorno_texto, retorno_anexo_url, retorno_anexo_nome, retorno_dado_em,
   solicitante:solicitante_id ( nome ),
   gestor:gestor_id ( nome ),
   analista:analista_id ( nome ),
@@ -5615,6 +5622,8 @@ async function comprasSolicitacoes (alvo, editavel, apenasProprio) {
         ${selo(s.status)}
         <div class="botoes">
           <button class="btn-secundario mini" data-ficha="${s.id}">ficha</button>
+          ${['PAGA', 'RECEBIDA'].includes(s.status) && s.solicitante_id === PERFIL.pessoaId
+            ? `<button class="${s.retorno_dado_em ? 'btn-secundario' : 'btn'} mini" data-retorno="${s.id}">${s.retorno_dado_em ? '✓ retorno dado' : 'retorno'}</button>` : ''}
           ${podeEditarSolicitacao(s)
             ? `<button class="btn-secundario mini" data-editar="${s.id}">editar</button>` : ''}
           ${ehAdminSistema()
@@ -5637,6 +5646,9 @@ async function comprasSolicitacoes (alvo, editavel, apenasProprio) {
     escopo.querySelectorAll('[data-ficha]').forEach(b => {
       b.onclick = () => { abrirFicha(todas.find(x => x.id === b.dataset.ficha), editavel)
         .catch(e => console.error(e)) }
+    })
+    escopo.querySelectorAll('[data-retorno]').forEach(b => {
+      b.onclick = () => formRetornoCompra(todas.find(x => x.id === b.dataset.retorno), () => abrirCompras('solicitacoes', editavel, apenasProprio))
     })
   }
 
@@ -5776,6 +5788,93 @@ function excluirSolicitacao (s) {
       btn.disabled = false; btn.textContent = 'Excluir'; return
     }
     fechar(); abrirCompras('solicitacoes', true)
+  }
+}
+
+// ----- Compras › Retorno da compra (dado por quem solicitou) -----
+// Opcional — não bloqueia nada — mas gera pontos de bônus visíveis no
+// RH (tabela pontuacao_bonus) quando a pessoa conta como usou o que
+// comprou. Só aparece pra quem solicitou, com a compra já paga/recebida.
+const PONTOS_RETORNO_COMPRA = 10
+
+function formRetornoCompra (s, aoFechar) {
+  if (!s) return
+  const jaDeu = !!s.retorno_dado_em
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal">
+      <h3>Retorno da compra</h3>
+      <p class="texto-dim2" style="font-size:12.5px;margin:-8px 0 14px;">${esc(s.produto_servico)}</p>
+
+      ${jaDeu ? `<div class="caixa-texto" style="margin-bottom:14px;">
+        <div class="rot">Dado em ${fmtQuando(s.retorno_dado_em)}</div>
+        <p>${esc(s.retorno_texto ?? '(sem texto, só anexo)')}</p>
+        ${s.retorno_anexo_url ? `<button class="btn-secundario mini" id="rt-abrir-anexo" style="margin-top:6px;">📎 ${esc(s.retorno_anexo_nome || 'ver anexo')}</button>` : ''}
+      </div>` : ''}
+
+      <div class="campo"><label>${jaDeu ? 'Atualizar retorno' : 'Como foi usado / o que resolveu'}</label>
+        <textarea id="rt-texto" style="min-height:90px;" placeholder="${jaDeu ? 'deixe em branco para manter o texto acima' : 'Conte rapidamente como foi usado o que você pediu'}"></textarea></div>
+      <div class="campo" style="margin-top:10px;"><label>Anexar documento (opcional)</label>
+        <input type="file" id="rt-arquivo" accept=".pdf,.jpg,.jpeg,.png,.xlsx,.doc,.docx"></div>
+
+      <div class="acoes">
+        <button class="btn" id="rt-salvar">${jaDeu ? 'Atualizar retorno' : 'Enviar retorno'}</button>
+        <button class="btn-secundario" id="rt-cancelar">Cancelar</button>
+      </div>
+      ${!jaDeu ? `<p class="aviso">Dar o retorno é opcional, mas soma ${PONTOS_RETORNO_COMPRA} pontos no seu RH.</p>` : ''}
+      <div class="recado oculto" id="rt-recado"></div>
+    </div>`
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#rt-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  if (jaDeu && s.retorno_anexo_url) q('#rt-abrir-anexo').onclick = () => abrirComprovante(s.retorno_anexo_url)
+
+  const aviso = t => {
+    const el = q('#rt-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  q('#rt-salvar').onclick = async () => {
+    const texto = q('#rt-texto').value.trim()
+    const arquivo = q('#rt-arquivo').files[0]
+    if (!texto && !arquivo && !s.retorno_anexo_url) { aviso('Escreva um retorno ou anexe um documento.'); return }
+
+    const btn = q('#rt-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+
+    let anexoUrl = s.retorno_anexo_url ?? null, nomeAnexo = s.retorno_anexo_nome ?? null
+    if (arquivo) {
+      try {
+        const enviado = await subirComprovante(arquivo, `solicitacao/${s.id}`)
+        anexoUrl = enviado.caminho; nomeAnexo = enviado.nome
+      } catch (e) { aviso('Não deu pra enviar o anexo: ' + e.message); btn.disabled = false; btn.textContent = jaDeu ? 'Atualizar retorno' : 'Enviar retorno'; return }
+    }
+
+    const { error } = await db.from('solicitacao_compra').update({
+      retorno_texto: texto || s.retorno_texto || null,
+      retorno_anexo_url: anexoUrl,
+      retorno_anexo_nome: nomeAnexo,
+      retorno_dado_em: s.retorno_dado_em ?? new Date().toISOString()
+    }).eq('id', s.id)
+
+    if (error) { aviso(error.message); btn.disabled = false; btn.textContent = jaDeu ? 'Atualizar retorno' : 'Enviar retorno'; return }
+
+    // pontos só na primeira vez que o retorno é dado — atualizar depois não pontua de novo
+    if (!jaDeu) {
+      await db.from('pontuacao_bonus').insert({
+        pessoa_id: PERFIL.pessoaId,
+        pontos: PONTOS_RETORNO_COMPRA,
+        motivo: `Deu retorno da compra: ${s.produto_servico}`,
+        origem: 'compras_retorno',
+        origem_id: s.id
+      })
+    }
+
+    fechar()
+    if (aoFechar) aoFechar()
   }
 }
 
@@ -7021,6 +7120,17 @@ function telaDecisao (s, nomeEtapa) {
 
     const { error } = await db.from('solicitacao_compra').update(corpo).eq('id', s.id)
     if (error) { aviso(error.message); return }
+
+    // avisa o solicitante — o mesmo sino de notificações usado no resto do sistema
+    if (nomeEtapa === 'aprovacao' && novoStatus === 'APROVADA' && s.solicitante_id && s.solicitante_id !== PERFIL.pessoaId) {
+      await db.from('notificacao_pessoal').insert({
+        destinatario_id: s.solicitante_id,
+        titulo: 'Sua compra foi aprovada!',
+        mensagem: `Olha, sua compra foi aprovada, vamos acompanhar agora? "${s.produto_servico}"`,
+        entidade: 'solicitacao_compra', entidade_id: s.id
+      })
+    }
+
     fechar()
     abrirCompras(nomeEtapa === 'coordenacao' ? 'coordenar' : 'aprovar', true)
   }
@@ -24010,10 +24120,11 @@ function abrirDesempenho (sub, editavel) {
 // ----- Painel de conduta -----
 async function desempPainel (alvo, editavel) {
   const inicioMes = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10)
-  const [{ data: avaliacoes, error }, { data: cicloAtivo }] = await Promise.all([
+  const [{ data: avaliacoes, error }, { data: cicloAtivo }, { data: bonusTodos }] = await Promise.all([
     db.from('avaliacao_conduta').select('pessoa_id,nota_prazos,nota_demandas,nota_postura,data_avaliacao,pessoa:pessoa_id(nome)')
       .order('data_avaliacao', { ascending: false }).limit(500),
-    db.from('avaliacao_360_ciclo').select('id,nome,status,data_fim').eq('status', 'ABERTO').maybeSingle()
+    db.from('avaliacao_360_ciclo').select('id,nome,status,data_fim').eq('status', 'ABERTO').maybeSingle(),
+    editavel ? db.from('pontuacao_bonus').select('pontos,pessoa:pessoa_id(nome)').limit(2000) : Promise.resolve({ data: [] })
   ])
   if (faltaMigracao(error)) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
   const lista = avaliacoes || []
@@ -24034,6 +24145,15 @@ async function desempPainel (alvo, editavel) {
   })
   const mediasPorPessoa = Object.entries(porPessoa).map(([nome, notas]) => ({ rotulo: nome, valor: media(notas) }))
     .sort((a, b) => a.valor - b.valor)
+
+  // ranking de pontos bônus por pessoa (RH → dar retorno de compras hoje, outros módulos depois)
+  const porPessoaBonus = {}
+  ;(bonusTodos || []).forEach(b => {
+    const nome = b.pessoa?.nome ?? '—'
+    porPessoaBonus[nome] = (porPessoaBonus[nome] || 0) + Number(b.pontos || 0)
+  })
+  const rankingBonus = Object.entries(porPessoaBonus).map(([rotulo, valor]) => ({ rotulo, valor }))
+    .sort((a, b) => b.valor - a.valor)
 
   let cicloHtml = ''
   if (cicloAtivo) {
@@ -24064,6 +24184,12 @@ async function desempPainel (alvo, editavel) {
         <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Média de conduta por pessoa (histórico)</h3>
         ${barrasHorizontais(mediasPorPessoa, { unidade: '', casas: 1 })}
         <p class="texto-dim2" style="font-size:11px;margin-top:10px;">Visível só pra quem tem edição do módulo — não é um ranking público.</p>
+      </div>` : ''}
+    ${editavel && rankingBonus.length ? `
+      <div class="panel" style="padding:18px;margin-top:16px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Pontos bônus por pessoa</h3>
+        ${barrasHorizontais(rankingBonus, { unidade: 'pts', casas: 0 })}
+        <p class="texto-dim2" style="font-size:11px;margin-top:10px;">Soma pontos de qualquer origem — hoje só "dar retorno de compra" gera ponto, mas o placar já está pronto pra outros módulos.</p>
       </div>` : ''}`
 }
 
@@ -24637,17 +24763,20 @@ function formPdi (item, aoFechar) {
 async function desempMeu (alvo) {
   if (!PERFIL.pessoaId) { alvo.innerHTML = `<p class="vazio">Seu login não está ligado a uma pessoa do cadastro.</p>`; return }
 
-  const [{ data: conduta }, { data: resp360 }, { data: pdi }] = await Promise.all([
+  const [{ data: conduta }, { data: resp360 }, { data: pdi }, { data: bonus }] = await Promise.all([
     db.from('avaliacao_conduta').select('data_avaliacao,nota_prazos,nota_demandas,nota_postura,observacoes')
       .eq('pessoa_id', PERFIL.pessoaId).order('data_avaliacao', { ascending: false }).limit(20),
     db.from('avaliacao_360_resposta').select('tipo,status,nota_competencia_tecnica,nota_trabalho_equipe,nota_comunicacao,nota_lideranca,nota_proatividade,pontos_fortes,pontos_melhoria,ciclo:ciclo_id(nome,status)')
       .eq('avaliado_id', PERFIL.pessoaId).eq('status', 'RESPONDIDO'),
     db.from('plano_desenvolvimento').select('objetivo,acoes,prazo,status')
-      .eq('pessoa_id', PERFIL.pessoaId).order('prazo', { ascending: true, nullsFirst: false })
+      .eq('pessoa_id', PERFIL.pessoaId).order('prazo', { ascending: true, nullsFirst: false }),
+    db.from('pontuacao_bonus').select('pontos,motivo,origem,criado_em')
+      .eq('pessoa_id', PERFIL.pessoaId).order('criado_em', { ascending: false }).limit(50)
   ])
 
   const media = arr => arr.length ? (arr.reduce((s, n) => s + n, 0) / arr.length).toFixed(1) : '—'
   const notasConduta = (conduta || []).flatMap(c => [c.nota_prazos, c.nota_demandas, c.nota_postura].filter(n => n != null))
+  const totalBonus = (bonus || []).reduce((s, b) => s + Number(b.pontos || 0), 0)
 
   alvo.innerHTML = `
     <div class="resumo-topo" style="margin-bottom:16px;">
@@ -24655,6 +24784,7 @@ async function desempMeu (alvo) {
       ${kpi('Avaliações recebidas', (conduta || []).length)}
       ${kpi('Avaliações 360 respondidas sobre mim', (resp360 || []).length)}
       ${kpi('Planos de desenvolvimento', (pdi || []).length)}
+      ${kpi('Pontos bônus', totalBonus)}
     </div>
 
     <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Minhas avaliações de conduta</h3></div>
@@ -24682,13 +24812,24 @@ async function desempMeu (alvo) {
     </div>
 
     <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Meus planos de desenvolvimento</h3></div>
-    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+    <div class="panel" style="padding:0;margin-bottom:16px;"><div class="tabela-scroll">
       <table><thead><tr><th>Objetivo</th><th>Ações</th><th>Prazo</th><th>Status</th></tr></thead><tbody>
         ${(pdi || []).map(p => `<tr>
           <td>${esc(p.objetivo)}</td><td class="texto-dim2">${esc(p.acoes ?? '—')}</td>
           <td class="texto-dim">${p.prazo ? fmtData(p.prazo) : '—'}</td>
           <td><span class="${p.status === 'CONCLUIDO' ? 'badge-bom' : p.status === 'ATRASADO' ? 'badge-alerta' : 'chip'}">${ROTULO_STATUS_PDI[p.status]}</span></td>
         </tr>`).join('') || `<tr><td colspan="4" class="vazio">Nenhum plano de desenvolvimento ainda.</td></tr>`}
+      </tbody></table>
+    </div></div>
+
+    <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Pontos bônus <span class="texto-dim2" style="font-size:12px;font-weight:400;">— total ${totalBonus}</span></h3></div>
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr><th>Quando</th><th>Motivo</th><th class="num">Pontos</th></tr></thead><tbody>
+        ${(bonus || []).map(b => `<tr>
+          <td class="texto-dim">${fmtQuando(b.criado_em) ?? '—'}</td>
+          <td>${esc(b.motivo ?? '—')}</td>
+          <td class="num">+${b.pontos}</td>
+        </tr>`).join('') || `<tr><td colspan="3" class="vazio">Nenhum ponto bônus ainda — dar retorno de compras é uma forma de ganhar.</td></tr>`}
       </tbody></table>
     </div></div>`
 }
