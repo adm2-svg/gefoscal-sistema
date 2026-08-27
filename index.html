@@ -824,6 +824,7 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
                display:flex; align-items:flex-start; justify-content:center; padding:28px 16px; overflow:auto; }
 .modal { background:var(--panel); border:1px solid var(--line2); border-radius:10px;
          width:100%; max-width:720px; padding:22px 24px; }
+.modal.modal-largo { max-width:900px; }
 .modal h3 { font-family:var(--serif); margin:0 0 14px; font-size:19px; }
 .modal textarea { min-height:110px; }
 
@@ -12317,7 +12318,7 @@ function formLead (l, editavel, gerencia, aoFechar) {
   const podeExcluir = editavel && gerencia && l
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
-  fundo.innerHTML = `<div class="modal">
+  fundo.innerHTML = `<div class="modal modal-largo">
     <div class="cabeca-secao">
       <h3>${l ? esc(l.nome) : 'Novo lead'}</h3>
       ${l ? `<span class="${corEtapaLead(l.etapa)}">${esc(ROTULO_ETAPA_LEAD[l.etapa] ?? l.etapa)}</span>` : ''}
@@ -12358,7 +12359,7 @@ function formLead (l, editavel, gerencia, aoFechar) {
         <button type="button" class="btn-secundario mini" id="ld-obs-ditar">🎙️ Ditar</button>
         <button type="button" class="btn-secundario mini" id="ld-obs-padronizar">✨ Padronizar com IA</button>
       </div>` : ''}
-      <textarea id="ld-obs" style="min-height:80px;" ${editavel ? '' : 'disabled'}>${esc(l?.observacoes ?? '')}</textarea></div>
+      <textarea id="ld-obs" style="min-height:260px;font-size:14.5px;line-height:1.5;" ${editavel ? '' : 'disabled'}>${esc(l?.observacoes ?? '')}</textarea></div>
     ${l ? `<div class="cabeca-secao" style="margin-top:16px;margin-bottom:4px;">
         <h3 style="font-family:var(--serif);font-size:14px;">Agenda</h3></div>
       <div id="ld-agenda-lista" style="margin-bottom:8px;"><p class="texto-dim2" style="font-size:12px;">carregando agenda...</p></div>
@@ -26067,12 +26068,16 @@ setInterval(async () => {
 // hoje, numa planilha) -- quando as contas Instagram/Google/LinkedIn
 // tiverem API liberada, dá pra trocar o "realizado" de digitado por puxado
 // automático sem mudar o desenho da tela.
+// GOOGLE já está ligado (Business Profile Performance API) -- ver
+// marketing-google-oauth-iniciar/callback/sincronizar e a tabela
+// marketing_conta_conectada. Instagram (Meta) e LinkedIn seguem manuais
+// por enquanto.
 // ---------------------------------------------------------------
 const REDES_MARKETING = { INSTAGRAM: 'Instagram', GOOGLE: 'Google Meu Negócio', LINKEDIN: 'LinkedIn' }
 const CORES_REDE_MARKETING = { INSTAGRAM: '#E1306C', GOOGLE: '#4285F4', LINKEDIN: '#0A66C2' }
 const METRICAS_PADRAO_REDE = {
   INSTAGRAM: ['Views Reels e Posts', 'Taxa de views não seguidores (%)', 'Novos seguidores', 'Visitas ao perfil', 'Toques no link da bio'],
-  GOOGLE: ['Visualizações do perfil', 'Buscas diretas', 'Buscas por descoberta', 'Ligações', 'Solicitações de rota'],
+  GOOGLE: ['Visualizações do perfil', 'Ligações', 'Solicitações de rota', 'Cliques no site', 'Conversas iniciadas'],
   LINKEDIN: ['Impressões', 'Novos seguidores', 'Cliques no site', 'Interações']
 }
 const MESES_MKT = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
@@ -26204,10 +26209,13 @@ async function mktRedesSociais (alvo, editavel) {
         ${[MKT_ANO_ATUAL - 1, MKT_ANO_ATUAL, MKT_ANO_ATUAL + 1].map(a => `<option value="${a}" ${a === MKT_ANO_ATUAL ? 'selected' : ''}>${a}</option>`).join('')}
       </select>
     </div>
+    <div id="mk-status-api" style="margin-bottom:14px;"></div>
     <div id="mk-grade-metas"></div>`
 
   alvo.querySelectorAll('[data-rede]').forEach(b => { b.onclick = () => { MKT_REDE_ATUAL = b.dataset.rede; mktRedesSociais(alvo, editavel) } })
   $('#mk-ano').onchange = e => { MKT_ANO_ATUAL = Number(e.target.value); mktRedesSociais(alvo, editavel) }
+
+  await mktStatusApiRede($('#mk-status-api'), MKT_REDE_ATUAL, editavel)
 
   const { data, error } = await db.from('marketing_meta_mensal').select('id,mes,metrica,meta,realizado')
     .eq('rede', MKT_REDE_ATUAL).eq('ano', MKT_ANO_ATUAL)
@@ -26255,6 +26263,66 @@ async function mktRedesSociais (alvo, editavel) {
       }
     }
   })
+}
+
+// Status da conexão de API por rede (hoje só GOOGLE está ligado --
+// Instagram/LinkedIn seguem em entrada manual até termos as credenciais).
+const EDGE_FUNCTIONS_API_REDE = {
+  GOOGLE: { iniciar: 'marketing-google-oauth-iniciar', sincronizar: 'marketing-google-sincronizar' }
+}
+async function mktStatusApiRede (alvo, rede, editavel) {
+  const cfg = EDGE_FUNCTIONS_API_REDE[rede]
+  if (!cfg) { alvo.innerHTML = `<p class="texto-dim2" style="font-size:11.5px;">"Realizado" é preenchido à mão pra essa rede por enquanto.</p>`; return }
+
+  const { data: status } = await db.from('marketing_conta_conectada_status').select('*').eq('rede', rede).maybeSingle()
+
+  const linhaStatus = status?.conectada
+    ? `<span class="ponto"></span> ${esc(REDES_MARKETING[rede])} conectado${status.conta_nome ? ` — ${esc(status.conta_nome)}` : ''}${status.email ? ` (${esc(status.email)})` : ''}`
+    : `<span class="ponto off"></span> ${esc(REDES_MARKETING[rede])} ainda não conectado`
+  const ultimaSinc = status?.ultima_sincronizacao_em ? `última sincronização ${fmtData(status.ultima_sincronizacao_em.slice(0, 10))} ${status.ultima_sincronizacao_em.slice(11, 16)}` : 'nunca sincronizado'
+
+  alvo.innerHTML = `
+    <div class="panel" style="padding:12px 14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <div class="md-mini-cal-status" style="margin:0;">${linhaStatus}</div>
+      ${status?.conectada ? `<span class="texto-dim2" style="font-size:11px;">${esc(ultimaSinc)}</span>` : ''}
+      ${status?.ultimo_erro ? `<span class="texto-dim2" style="font-size:11px;color:var(--warn-text);">último erro: ${esc(status.ultimo_erro)}</span>` : ''}
+      ${editavel ? `<div style="margin-left:auto;display:flex;gap:8px;">
+        ${status?.conectada
+          ? `<button class="btn-secundario mini" id="mk-api-sincronizar">Sincronizar agora</button>`
+          : `<button class="btn-secundario mini" id="mk-api-conectar">Conectar ${esc(REDES_MARKETING[rede])}</button>`}
+      </div>` : ''}
+    </div>`
+
+  if (!editavel) return
+
+  const btnConectar = $('#mk-api-conectar')
+  if (btnConectar) btnConectar.onclick = async () => {
+    btnConectar.disabled = true; btnConectar.textContent = 'abrindo...'
+    const { data, error } = await db.functions.invoke(cfg.iniciar, { body: {} })
+    btnConectar.disabled = false; btnConectar.textContent = `Conectar ${REDES_MARKETING[rede]}`
+    if (error || data?.erro) {
+      let msg = data?.erro || error?.message || 'Não consegui iniciar a conexão.'
+      if (error?.context?.json) { try { const c = await error.context.json(); msg = c?.erro || msg } catch {} }
+      alert(msg)
+      return
+    }
+    window.open(data.url, '_blank', 'noopener')
+    alert(`Uma aba nova abriu pra você autorizar no ${REDES_MARKETING[rede]}. Depois de autorizar, volte aqui e atualize a página pra ver o status "conectado".`)
+  }
+
+  const btnSincronizar = $('#mk-api-sincronizar')
+  if (btnSincronizar) btnSincronizar.onclick = async () => {
+    btnSincronizar.disabled = true; btnSincronizar.textContent = 'sincronizando...'
+    const { data, error } = await db.functions.invoke(cfg.sincronizar, { body: { ano: MKT_ANO_ATUAL } })
+    btnSincronizar.disabled = false; btnSincronizar.textContent = 'Sincronizar agora'
+    if (error || data?.erro) {
+      let msg = data?.erro || error?.message || 'Não consegui sincronizar agora.'
+      if (error?.context?.json) { try { const c = await error.context.json(); msg = c?.erro || msg } catch {} }
+      alert(msg)
+      return
+    }
+    mktRedesSociais($('#sub-marketing'), editavel)
+  }
 }
 
 // ----- Mercado -----
