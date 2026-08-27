@@ -88,7 +88,13 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
                           box-shadow:0 0 0 3px rgba(var(--good-rgb),.2); }
 .status-conexao.offline .ponto { background:var(--warn-text); box-shadow:0 0 0 3px rgba(var(--warn-rgb),.2); }
 .status-conexao.offline .texto { color:var(--warn-text); }
-.conteudo { padding: 22px 26px; max-width: 1400px; }
+.conteudo { padding: 22px 26px; max-width: 1400px; transition:max-width .2s; }
+:root[data-largura="amplo"] .conteudo { max-width: 1800px; }
+:root[data-largura="cheio"] .conteudo { max-width: none; }
+.largura-toggle { background:none; border:1px solid var(--line2); color:var(--dim); cursor:pointer;
+  padding:6px 10px; border-radius:8px; font-size:12px; line-height:1;
+  display:flex; align-items:center; gap:6px; transition:all .15s; }
+.largura-toggle:hover { border-color:var(--rust); color:var(--txt); }
 .topo { display:flex; justify-content:space-between; align-items:flex-start;
         gap:16px; flex-wrap:wrap; margin-bottom:20px; }
 .topo h2 { font-family: var(--serif); margin:0 0 4px; font-size:24px; }
@@ -959,7 +965,12 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
         <h2 id="titulo-pagina">Visão geral</h2>
         <div class="texto-dim" id="subtitulo-pagina" style="font-size:13px;"></div>
       </div>
-      <button class="skin-toggle" id="skin-toggle-app" title="Trocar tema"></button>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <button class="largura-toggle" id="largura-toggle-app" title="Alternar largura do conteúdo">
+          <span id="largura-icone">⇔</span><span id="largura-rotulo">Compacto</span>
+        </button>
+        <button class="skin-toggle" id="skin-toggle-app" title="Trocar tema"></button>
+      </div>
     </div>
 
     <div class="kpis" id="kpis"></div>
@@ -25768,6 +25779,21 @@ async function desempMeu (alvo) {
 // ---------------------------------------------------------------
 // Menu recolhido — lembra a escolha entre sessões
 // ---------------------------------------------------------------
+const LARGURAS = ['compacto', 'amplo', 'cheio']
+const ROTULO_LARGURA = { compacto: 'Compacto', amplo: 'Amplo', cheio: 'Tela cheia' }
+function aplicarLargura (l) {
+  document.documentElement.setAttribute('data-largura', l)
+  localStorage.setItem('gefoscal-largura', l)
+  const rot = document.getElementById('largura-rotulo')
+  if (rot) rot.textContent = ROTULO_LARGURA[l] || 'Compacto'
+}
+aplicarLargura(localStorage.getItem('gefoscal-largura') || 'compacto')
+const btnLargura = document.getElementById('largura-toggle-app')
+if (btnLargura) btnLargura.onclick = () => {
+  const atual = document.documentElement.getAttribute('data-largura') || 'compacto'
+  aplicarLargura(LARGURAS[(LARGURAS.indexOf(atual) + 1) % LARGURAS.length])
+}
+
 if (localStorage.getItem('gefoscal-nav-colapsada') === '1') $('#tela-app').classList.add('nav-colapsada')
 $('#btn-colapsar').onclick = () => {
   const colapsada = $('#tela-app').classList.toggle('nav-colapsada')
