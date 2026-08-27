@@ -754,6 +754,14 @@ tr.detalhe .conteudo { padding:16px 18px; }
                   transition:background .15s ease, border-color .15s ease, color .15s ease; }
 .subabas button:hover { color:var(--txt); border-color:var(--rust); }
 .subabas button.ativo { color:var(--rust); border-color:var(--rust); background:rgba(var(--rust-rgb),.1); }
+.subabas-rh { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:20px; }
+.subabas-rh button { display:flex; align-items:center; gap:7px; background:var(--panel); border:1px solid var(--line2);
+                  color:var(--dim); cursor:pointer; font-size:13px; font-weight:500; padding:9px 16px 9px 12px; border-radius:10px;
+                  transition:transform .12s ease, box-shadow .12s ease, border-color .15s ease, color .15s ease, background .15s ease; }
+.subabas-rh button .icone-sub { font-size:15px; }
+.subabas-rh button:hover { color:var(--txt); border-color:var(--rust); transform:translateY(-1px); box-shadow:0 4px 10px rgba(0,0,0,.08); }
+.subabas-rh button.ativo { color:#fff; border-color:var(--rust); background:linear-gradient(135deg,var(--rust),#b5652f);
+                  box-shadow:0 4px 12px rgba(var(--rust-rgb),.35); }
 .form-grade { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:12px; }
 .grade-modulos { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:8px; margin-top:6px; }
 .linha-modulo { display:flex; align-items:center; gap:12px; padding:8px 10px;
@@ -1782,7 +1790,7 @@ const PAGINAS = {
   manutencao:  { nome: 'Manutenção', render: paginaManutencao },
   frota:       { nome: 'Frota', render: paginaFrota },
   juridico:    { nome: 'Jurídico', render: paginaJuridico },
-  desempenho:  { nome: 'RH', render: paginaDesempenho },
+  desempenho:  { nome: 'RH', render: paginaDesempenho, sempre: true },
   onfly:       { nome: 'Viagens (Onfly)', render: paginaOnfly },
   dp:          { nome: 'DP e Segurança', render: paginaDpSeguranca },
   laboratorio: { nome: 'Laboratório', render: paginaLaboratorio },
@@ -25325,18 +25333,20 @@ async function paginaDesempenho () {
   ])
   DESEMP_CACHE = { pessoas: pessoas || [], setores: setores || [] }
 
-  const abas = [['painel', 'Painel'], ['agilidade', 'Agilidade e prazos'], ['individual', 'Acompanhamento Individual'],
-                ['recrutamento', 'Recrutamento e Seleção'], ['360', 'Avaliação 360'], ['pdi', 'Planos de desenvolvimento'],
-                ['especialista', '🎯 Especialista RH'], ['meu', 'Meu RH']]
+  const abas = [
+    ['painel', '📊', 'Painel'], ['agilidade', '⚡', 'Agilidade e prazos'], ['individual', '👤', 'Acompanhamento Individual'],
+    ['recrutamento', '🗂️', 'Recrutamento e Seleção'], ['360', '🔄', 'Avaliação 360'], ['pdi', '🌱', 'Planos de desenvolvimento'],
+    ['trilhas', '🎓', 'Trilhas'], ['especialista', '🎯', 'Especialista RH'], ['meu', '🙋', 'Meu RH']
+  ]
   area.innerHTML = `
-    <div class="subabas">
-      ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
+    <div class="subabas-rh">
+      ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}"><span class="icone-sub">${a[1]}</span>${esc(a[2])}</button>`).join('')}
     </div>
     <div id="sub-desempenho"></div>`
 
-  area.querySelectorAll('.subabas button').forEach(b => {
+  area.querySelectorAll('.subabas-rh button').forEach(b => {
     b.onclick = () => {
-      area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
+      area.querySelectorAll('.subabas-rh button').forEach(x => x.classList.toggle('ativo', x === b))
       abrirDesempenho(b.dataset.sub, editavel)
     }
   })
@@ -25355,6 +25365,7 @@ function abrirDesempenho (sub, editavel) {
   if (sub === 'conduta') desempConduta(alvo, editavel)
   if (sub === '360') desemp360(alvo, editavel)
   if (sub === 'pdi') desempPdi(alvo, editavel)
+  if (sub === 'trilhas') desempTrilhas(alvo, editavel)
   if (sub === 'especialista') desempEspecialistaRH(alvo)
   if (sub === 'meu') desempMeu(alvo)
 }
@@ -25475,6 +25486,323 @@ async function desempEspecialistaRH (alvo) {
   $('#erh-pergunta').addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#erh-enviar').click() }
   })
+}
+
+
+// ----- Trilhas de Treinamento: plataforma de educação corporativa interna,
+// tipo LinkedIn Learning. RH cria trilhas com módulos (texto/vídeo/PDF),
+// atribui a pessoas (com ou sem vínculo a um PDI), e cada pessoa acompanha
+// e conclui em "Meu RH" -- ao completar 100%, ganha um certificado com botão
+// de exportar pro LinkedIn (link oficial "Add to Profile", sem precisar de
+// integração/API do LinkedIn). -----
+const ROTULO_CATEGORIA_TRILHA = { CULTURA: 'Cultura da empresa', CARGO: 'Competência do cargo', OUTRO: 'Outro' }
+const ROTULO_TIPO_CONTEUDO = { TEXTO: '📄 Texto', VIDEO: '🎬 Vídeo', PDF: '📑 PDF' }
+
+async function desempTrilhas (alvo, editavel) {
+  if (!editavel) { alvo.innerHTML = `<div class="panel" style="padding:22px;">
+    <p class="texto-dim">A gestão de trilhas é feita pelo RH. Veja as suas em "Meu RH".</p></div>`; return }
+
+  const { data: trilhas, error } = await db.from('trilha').select('*').order('criado_em', { ascending: false })
+  if (faltaMigracao(error)) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  const lista = trilhas || []
+
+  const { data: atribs } = lista.length ? await db.from('trilha_atribuicao').select('trilha_id') : { data: [] }
+  const { data: certs } = lista.length ? await db.from('trilha_certificado').select('trilha_id') : { data: [] }
+  const contaAtrib = {}, contaCert = {}
+  ;(atribs || []).forEach(a => { contaAtrib[a.trilha_id] = (contaAtrib[a.trilha_id] || 0) + 1 })
+  ;(certs || []).forEach(c => { contaCert[c.trilha_id] = (contaCert[c.trilha_id] || 0) + 1 })
+
+  alvo.innerHTML = `
+    <div class="resumo-topo" style="margin-bottom:16px;">
+      ${kpi('Trilhas criadas', lista.length)}
+      ${kpi('Ativas', lista.filter(t => t.ativa).length)}
+      ${kpi('Pessoas com trilha atribuída', (atribs || []).length)}
+      ${kpi('Certificados emitidos', (certs || []).length)}
+    </div>
+    <div class="acoes" style="margin-bottom:16px;"><button class="btn" id="tr-nova">+ Nova trilha</button></div>
+
+    ${lista.length ? `
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;">
+        ${lista.map(t => `
+          <div class="panel" style="padding:16px;cursor:pointer;${t.ativa ? '' : 'opacity:.55;'}" data-abrir-trilha="${t.id}">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
+              <div style="font-weight:600;font-size:14px;">🎓 ${esc(t.nome)}</div>
+              <span class="chip" style="font-size:10px;">${esc(ROTULO_CATEGORIA_TRILHA[t.categoria] || t.categoria)}</span>
+            </div>
+            <p class="texto-dim2" style="font-size:12px;margin:0 0 10px;min-height:32px;">${esc((t.descricao || '').slice(0, 90))}</p>
+            <div style="display:flex;gap:14px;font-size:11.5px;" class="texto-dim2">
+              <span>👥 ${contaAtrib[t.id] || 0} atribuída(s)</span>
+              <span>🏆 ${contaCert[t.id] || 0} concluída(s)</span>
+            </div>
+          </div>`).join('')}
+      </div>` : `
+      <div class="panel" style="padding:40px 24px;text-align:center;">
+        <div style="font-size:32px;margin-bottom:8px;opacity:.5;">🎓</div>
+        <p class="texto-dim" style="margin:0 0 4px;font-weight:600;">Nenhuma trilha criada ainda</p>
+        <p class="texto-dim2" style="font-size:12.5px;margin:0;">Clica em "+ Nova trilha" pra montar a primeira.</p>
+      </div>`}`
+
+  $('#tr-nova').onclick = () => formTrilha(null, () => desempTrilhas(alvo, editavel))
+  alvo.querySelectorAll('[data-abrir-trilha]').forEach(card => {
+    card.onclick = () => abrirDetalheTrilha(lista.find(t => t.id === card.dataset.abrirTrilha), () => desempTrilhas(alvo, editavel))
+  })
+}
+
+function formTrilha (trilha, aoFechar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>${trilha ? 'Editar trilha' : 'Nova trilha'}</h3>
+    <div class="campo"><label>Nome</label><input id="tr-nome" value="${esc(trilha?.nome || '')}"></div>
+    <div class="campo"><label>Categoria</label>
+      <select id="tr-categoria">
+        ${Object.entries(ROTULO_CATEGORIA_TRILHA).map(([k, v]) => `<option value="${k}" ${trilha?.categoria === k ? 'selected' : ''}>${v}</option>`).join('')}
+      </select></div>
+    <div class="campo"><label>Descrição</label><textarea id="tr-descricao" style="min-height:70px;">${esc(trilha?.descricao || '')}</textarea></div>
+    ${trilha ? `<div class="campo"><label class="linha-modulo"><input type="checkbox" id="tr-ativa" ${trilha.ativa ? 'checked' : ''}><span class="nome">Trilha ativa (aparece pras pessoas)</span></label></div>` : ''}
+    <div class="acoes" style="margin-top:14px;text-align:right;">
+      <button class="btn-secundario" id="tr-cancelar">Cancelar</button>
+      <button class="btn" id="tr-salvar">Salvar</button>
+    </div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+  fundo.querySelector('#tr-cancelar').onclick = () => fundo.remove()
+
+  fundo.querySelector('#tr-salvar').onclick = async () => {
+    const nome = $('#tr-nome').value.trim()
+    if (!nome) { alert('Dá um nome pra trilha.'); return }
+    const payload = {
+      nome, categoria: $('#tr-categoria').value, descricao: $('#tr-descricao').value.trim() || null
+    }
+    if (trilha) {
+      payload.ativa = $('#tr-ativa').checked
+      await db.from('trilha').update(payload).eq('id', trilha.id)
+    } else {
+      payload.criado_por = PERFIL.pessoaId
+      await db.from('trilha').insert(payload)
+    }
+    fundo.remove()
+    aoFechar()
+  }
+}
+
+async function abrirDetalheTrilha (trilha, aoFechar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal"><p class="texto-dim2">carregando...</p></div>`
+  document.body.appendChild(fundo)
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+
+  const desenhar = async () => {
+    const [{ data: modulos }, { data: atribs }] = await Promise.all([
+      db.from('trilha_modulo').select('*').eq('trilha_id', trilha.id).order('ordem'),
+      db.from('trilha_atribuicao').select('id,pessoa_id,obrigatoria,prazo,pessoa:pessoa_id(nome)').eq('trilha_id', trilha.id)
+    ])
+    const listaModulos = modulos || []
+    const listaAtribs = atribs || []
+
+    let progressoPorAtrib = {}
+    if (listaAtribs.length && listaModulos.length) {
+      const { data: progressos } = await db.from('trilha_progresso').select('atribuicao_id').in('atribuicao_id', listaAtribs.map(a => a.id))
+      ;(progressos || []).forEach(p => { progressoPorAtrib[p.atribuicao_id] = (progressoPorAtrib[p.atribuicao_id] || 0) + 1 })
+    }
+
+    const modalNovo = document.createElement('div')
+    modalNovo.className = 'modal'
+    modalNovo.style.maxWidth = '680px'
+    modalNovo.innerHTML = `
+      <div class="cabeca-secao"><h3 style="margin:0;">🎓 ${esc(trilha.nome)}</h3>
+        <span class="chip">${esc(ROTULO_CATEGORIA_TRILHA[trilha.categoria] || trilha.categoria)}</span></div>
+      <p class="texto-dim2" style="font-size:12.5px;margin:-6px 0 14px;">${esc(trilha.descricao || '')}</p>
+
+      <div class="subabas" style="margin-bottom:14px;">
+        <button data-sub2="modulos" class="ativo">Módulos (${listaModulos.length})</button>
+        <button data-sub2="pessoas">Pessoas (${listaAtribs.length})</button>
+      </div>
+      <div id="dt-conteudo"></div>
+
+      <div class="acoes" style="margin-top:14px;text-align:right;">
+        <button class="btn-secundario" id="dt-editar">Editar trilha</button>
+        <button class="btn-secundario" id="dt-fechar">Fechar</button>
+      </div>`
+    fundo.innerHTML = ''
+    fundo.appendChild(modalNovo)
+
+    const conteudo = fundo.querySelector('#dt-conteudo')
+    const abaModulos = () => {
+      conteudo.innerHTML = `
+        <div class="tabela-scroll" style="max-height:220px;margin-bottom:12px;">
+          <table><thead><tr><th></th><th>Título</th><th>Tipo</th><th></th></tr></thead><tbody>
+            ${listaModulos.map(m => `<tr>
+              <td class="texto-dim2">${m.ordem}</td>
+              <td>${esc(m.titulo)}</td>
+              <td><span class="chip" style="font-size:10px;">${esc(ROTULO_TIPO_CONTEUDO[m.tipo_conteudo] || m.tipo_conteudo)}</span></td>
+              <td><button class="btn-secundario mini" data-editar-modulo="${m.id}">editar</button></td>
+            </tr>`).join('') || `<tr><td colspan="4" class="vazio">Nenhum módulo ainda.</td></tr>`}
+          </tbody></table>
+        </div>
+        <button class="btn-secundario mini" id="dt-novo-modulo">+ Adicionar módulo</button>`
+      conteudo.querySelector('#dt-novo-modulo').onclick = () => formModuloTrilha(trilha, null, listaModulos.length + 1, desenhar)
+      conteudo.querySelectorAll('[data-editar-modulo]').forEach(b => {
+        b.onclick = () => formModuloTrilha(trilha, listaModulos.find(m => m.id === b.dataset.editarModulo), null, desenhar)
+      })
+    }
+    const abaPessoas = () => {
+      conteudo.innerHTML = `
+        <div class="tabela-scroll" style="max-height:220px;margin-bottom:12px;">
+          <table><thead><tr><th>Pessoa</th><th>Progresso</th><th>Obrigatória</th><th>Prazo</th></tr></thead><tbody>
+            ${listaAtribs.map(a => {
+              const feitos = progressoPorAtrib[a.id] || 0
+              const pct = listaModulos.length ? Math.round(feitos / listaModulos.length * 100) : 0
+              return `<tr>
+                <td>${esc(a.pessoa?.nome ?? '—')}</td>
+                <td class="num">${feitos}/${listaModulos.length} (${pct}%)</td>
+                <td>${a.obrigatoria ? '<span class="badge-alerta" style="font-size:10px;">obrigatória</span>' : '<span class="chip" style="font-size:10px;">opcional</span>'}</td>
+                <td class="texto-dim2">${a.prazo ? fmtData(a.prazo) : '—'}</td>
+              </tr>`
+            }).join('') || `<tr><td colspan="4" class="vazio">Ninguém atribuído ainda.</td></tr>`}
+          </tbody></table>
+        </div>
+        <button class="btn-secundario mini" id="dt-atribuir">+ Atribuir a pessoas</button>`
+      conteudo.querySelector('#dt-atribuir').onclick = () => formAtribuirTrilha(trilha, listaAtribs.map(a => a.pessoa_id), desenhar)
+    }
+
+    fundo.querySelectorAll('[data-sub2]').forEach(b => {
+      b.onclick = () => {
+        fundo.querySelectorAll('[data-sub2]').forEach(x => x.classList.toggle('ativo', x === b))
+        b.dataset.sub2 === 'modulos' ? abaModulos() : abaPessoas()
+      }
+    })
+    abaModulos()
+
+    fundo.querySelector('#dt-fechar').onclick = () => { fundo.remove(); aoFechar() }
+    fundo.querySelector('#dt-editar').onclick = () => formTrilha(trilha, () => { fundo.remove(); aoFechar() })
+  }
+  desenhar()
+}
+
+function formModuloTrilha (trilha, modulo, ordemSugerida, aoFechar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>${modulo ? 'Editar módulo' : 'Novo módulo'}</h3>
+    <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px;">
+      <div class="campo"><label>Título</label><input id="md-titulo" value="${esc(modulo?.titulo || '')}"></div>
+      <div class="campo"><label>Ordem</label><input type="number" id="md-ordem" value="${modulo?.ordem ?? ordemSugerida}"></div>
+    </div>
+    <div class="campo"><label>Tipo de conteúdo</label>
+      <select id="md-tipo">
+        ${Object.entries(ROTULO_TIPO_CONTEUDO).map(([k, v]) => `<option value="${k}" ${modulo?.tipo_conteudo === k ? 'selected' : ''}>${v}</option>`).join('')}
+      </select></div>
+    <div id="md-campo-conteudo"></div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="md-salvar">Salvar</button>
+      ${modulo ? '<button class="btn-secundario" id="md-excluir" style="color:var(--warn-text);">Excluir módulo</button>' : ''}
+      <button class="btn-secundario" id="md-cancelar">Cancelar</button>
+    </div>
+    <div class="recado oculto" id="md-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+  fundo.querySelector('#md-cancelar').onclick = () => fundo.remove()
+
+  const desenharCampoConteudo = () => {
+    const tipo = $('#md-tipo').value
+    const campo = fundo.querySelector('#md-campo-conteudo')
+    if (tipo === 'TEXTO') {
+      campo.innerHTML = `<div class="campo"><label>Conteúdo (texto)</label><textarea id="md-texto" style="min-height:140px;">${esc(modulo?.conteudo_texto || '')}</textarea></div>`
+    } else if (tipo === 'VIDEO') {
+      campo.innerHTML = `<div class="campo"><label>Link do vídeo (YouTube, Drive, etc)</label><input id="md-video" value="${esc(modulo?.video_url || '')}"></div>`
+    } else {
+      campo.innerHTML = `${campoArquivo('md-arquivo', 'Arquivo PDF')}
+        ${modulo?.arquivo_nome ? `<p class="texto-dim2" style="font-size:11.5px;">Já tem: ${esc(modulo.arquivo_nome)} — escolher outro substitui.</p>` : ''}`
+    }
+  }
+  $('#md-tipo').onchange = desenharCampoConteudo
+  desenharCampoConteudo()
+
+  const aviso = t => {
+    const el = fundo.querySelector('#md-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  fundo.querySelector('#md-salvar').onclick = async () => {
+    const titulo = $('#md-titulo').value.trim()
+    if (!titulo) { aviso('Dá um título pro módulo.'); return }
+    const btn = fundo.querySelector('#md-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const tipo = $('#md-tipo').value
+    const payload = { trilha_id: trilha.id, titulo, ordem: Number($('#md-ordem').value) || 1, tipo_conteudo: tipo }
+
+    try {
+      if (tipo === 'TEXTO') payload.conteudo_texto = $('#md-texto').value.trim() || null
+      if (tipo === 'VIDEO') payload.video_url = $('#md-video').value.trim() || null
+      if (tipo === 'PDF') {
+        const arquivo = $('#md-arquivo')?.files[0]
+        if (arquivo) {
+          const enviado = await enviarArquivo(arquivo, `trilhas/${trilha.id}`)
+          payload.arquivo_caminho = enviado.caminho
+          payload.arquivo_nome = enviado.nome
+        }
+      }
+      if (modulo) {
+        await db.from('trilha_modulo').update(payload).eq('id', modulo.id)
+      } else {
+        await db.from('trilha_modulo').insert(payload)
+      }
+      fundo.remove()
+      aoFechar()
+    } catch (erro) {
+      aviso(erro.message)
+      btn.disabled = false; btn.textContent = 'Salvar'
+    }
+  }
+
+  const btnExcluir = fundo.querySelector('#md-excluir')
+  if (btnExcluir) btnExcluir.onclick = async () => {
+    if (!confirm('Excluir esse módulo?')) return
+    await db.from('trilha_modulo').delete().eq('id', modulo.id)
+    fundo.remove()
+    aoFechar()
+  }
+}
+
+function formAtribuirTrilha (trilha, idsJaAtribuidos, aoFechar) {
+  const disponiveis = DESEMP_CACHE.pessoas.filter(p => !idsJaAtribuidos.includes(p.id))
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>Atribuir "${esc(trilha.nome)}" a pessoas</h3>
+    <div style="max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:8px;margin:10px 0;">
+      ${disponiveis.map(p => `<label class="linha-modulo">
+        <input type="checkbox" class="at-pessoa" value="${p.id}"><span class="nome">${esc(p.nome)}</span></label>`).join('') || '<p class="texto-dim2" style="font-size:12px;">Todo mundo já está atribuído.</p>'}
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      <div class="campo"><label class="linha-modulo"><input type="checkbox" id="at-obrigatoria" checked><span class="nome">Obrigatória</span></label></div>
+      <div class="campo"><label>Prazo (opcional)</label><input type="date" id="at-prazo"></div>
+    </div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="at-salvar">Atribuir</button>
+      <button class="btn-secundario" id="at-cancelar">Cancelar</button>
+    </div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+  fundo.querySelector('#at-cancelar').onclick = () => fundo.remove()
+
+  fundo.querySelector('#at-salvar').onclick = async () => {
+    const pessoasEscolhidas = [...fundo.querySelectorAll('.at-pessoa:checked')].map(c => c.value)
+    if (!pessoasEscolhidas.length) { alert('Marca pelo menos uma pessoa.'); return }
+    const payload = pessoasEscolhidas.map(pessoaId => ({
+      trilha_id: trilha.id, pessoa_id: pessoaId,
+      obrigatoria: $('#at-obrigatoria').checked,
+      prazo: $('#at-prazo').value || null,
+      atribuido_por: PERFIL.pessoaId
+    }))
+    await db.from('trilha_atribuicao').insert(payload)
+    fundo.remove()
+    aoFechar()
+  }
 }
 
 async function desempPainel (alvo, editavel) {
@@ -26830,7 +27158,7 @@ function formPdi (item, aoFechar) {
 async function desempMeu (alvo) {
   if (!PERFIL.pessoaId) { alvo.innerHTML = `<p class="vazio">Seu login não está ligado a uma pessoa do cadastro.</p>`; return }
 
-  const [{ data: conduta }, { data: resp360 }, { data: pdi }, { data: bonus }] = await Promise.all([
+  const [{ data: conduta }, { data: resp360 }, { data: pdi }, { data: bonus }, { data: minhasAtribs }] = await Promise.all([
     db.from('avaliacao_conduta').select('data_avaliacao,nota_prazos,nota_demandas,nota_postura,observacoes')
       .eq('pessoa_id', PERFIL.pessoaId).order('data_avaliacao', { ascending: false }).limit(20),
     db.from('avaliacao_360_resposta').select('tipo,status,nota_competencia_tecnica,nota_trabalho_equipe,nota_comunicacao,nota_lideranca,nota_proatividade,pontos_fortes,pontos_melhoria,ciclo:ciclo_id(nome,status)')
@@ -26838,13 +27166,37 @@ async function desempMeu (alvo) {
     db.from('plano_desenvolvimento').select('objetivo,acoes,prazo,status')
       .eq('pessoa_id', PERFIL.pessoaId).order('prazo', { ascending: true, nullsFirst: false }),
     db.from('pontuacao_bonus').select('pontos,motivo,origem,criado_em')
-      .eq('pessoa_id', PERFIL.pessoaId).order('criado_em', { ascending: false }).limit(50)
+      .eq('pessoa_id', PERFIL.pessoaId).order('criado_em', { ascending: false }).limit(50),
+    db.from('trilha_atribuicao').select('id,obrigatoria,prazo,trilha:trilha_id(id,nome,categoria)')
+      .eq('pessoa_id', PERFIL.pessoaId)
   ])
 
   const media = arr => arr.length ? (arr.reduce((s, n) => s + n, 0) / arr.length).toFixed(1) : '—'
   const notasConduta = (conduta || []).flatMap(c => [c.nota_prazos, c.nota_demandas, c.nota_postura].filter(n => n != null))
   const totalBonus = (bonus || []).reduce((s, b) => s + Number(b.pontos || 0), 0)
   const corNota = n => n == null ? '' : n >= 4 ? 'badge-bom' : n >= 3 ? 'chip' : 'badge-alerta'
+
+  // progresso de cada trilha atribuída + se já tem certificado
+  const listaAtribs = minhasAtribs || []
+  let progressoTrilhas = {}, certificadosPorAtrib = {}
+  if (listaAtribs.length) {
+    const idsAtrib = listaAtribs.map(a => a.id)
+    const [{ data: modulosPorTrilha }, { data: progressos }, { data: certs }] = await Promise.all([
+      db.from('trilha_modulo').select('id,trilha_id').in('trilha_id', listaAtribs.map(a => a.trilha.id)),
+      db.from('trilha_progresso').select('atribuicao_id').in('atribuicao_id', idsAtrib),
+      db.from('trilha_certificado').select('atribuicao_id,codigo_verificacao,emitido_em').in('atribuicao_id', idsAtrib)
+    ])
+    const totalModulosPorTrilha = {}
+    ;(modulosPorTrilha || []).forEach(m => { totalModulosPorTrilha[m.trilha_id] = (totalModulosPorTrilha[m.trilha_id] || 0) + 1 })
+    const feitosPorAtrib = {}
+    ;(progressos || []).forEach(p => { feitosPorAtrib[p.atribuicao_id] = (feitosPorAtrib[p.atribuicao_id] || 0) + 1 })
+    ;(certs || []).forEach(c => { certificadosPorAtrib[c.atribuicao_id] = c })
+    listaAtribs.forEach(a => {
+      const total = totalModulosPorTrilha[a.trilha.id] || 0
+      const feitos = feitosPorAtrib[a.id] || 0
+      progressoTrilhas[a.id] = { total, feitos, pct: total ? Math.round(feitos / total * 100) : 0 }
+    })
+  }
 
   alvo.innerHTML = `
     <div class="resumo-topo" style="margin-bottom:16px;">
@@ -26853,6 +27205,25 @@ async function desempMeu (alvo) {
       ${kpi('Avaliações 360 respondidas sobre mim', (resp360 || []).length)}
       ${kpi('Planos de desenvolvimento', (pdi || []).length)}
       ${kpi('Pontos bônus', totalBonus)}
+    </div>
+
+    <h4 style="font-family:var(--serif);font-size:15px;margin:0 0 10px;">🎓 Minhas trilhas de treinamento</h4>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px;margin-bottom:18px;">
+      ${listaAtribs.map(a => {
+        const prog = progressoTrilhas[a.id] || { total: 0, feitos: 0, pct: 0 }
+        const concluida = prog.total > 0 && prog.feitos >= prog.total
+        const temCert = !!certificadosPorAtrib[a.id]
+        return `<div class="panel" style="padding:16px;cursor:pointer;" data-abrir-minha-trilha="${a.id}">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
+            <div style="font-weight:600;font-size:13.5px;">🎓 ${esc(a.trilha.nome)}</div>
+            ${a.obrigatoria ? '<span class="badge-alerta" style="font-size:9.5px;">obrigatória</span>' : '<span class="chip" style="font-size:9.5px;">opcional</span>'}
+          </div>
+          <div style="background:var(--surface2);border-radius:5px;height:8px;overflow:hidden;margin-bottom:6px;">
+            <div style="width:${prog.pct}%;height:100%;background:${concluida ? 'var(--good-text,#4caf50)' : 'var(--rust)'};"></div>
+          </div>
+          <div class="texto-dim2" style="font-size:11px;">${prog.feitos}/${prog.total} módulos ${concluida ? (temCert ? '· 🏆 certificado emitido' : '· concluída!') : ''}</div>
+        </div>`
+      }).join('') || '<p class="vazio">Nenhuma trilha atribuída a você ainda.</p>'}
     </div>
 
     <h4 style="font-family:var(--serif);font-size:15px;margin:0 0 10px;">Minhas avaliações de conduta</h4>
@@ -26904,6 +27275,126 @@ async function desempMeu (alvo) {
         </tr>`).join('') || `<tr><td colspan="3" class="vazio">Nenhum ponto bônus ainda — dar retorno de compras é uma forma de ganhar.</td></tr>`}
       </tbody></table>
     </div></div>`
+
+  alvo.querySelectorAll('[data-abrir-minha-trilha]').forEach(card => {
+    card.onclick = () => abrirMinhaTrilha(listaAtribs.find(a => a.id === card.dataset.abrirMinhaTrilha), () => desempMeu(alvo))
+  })
+}
+
+// ----- Fazer uma trilha: lista os módulos, marca como concluído, e ao
+// bater 100% gera o certificado com botão de exportar pro LinkedIn. -----
+async function abrirMinhaTrilha (atribuicao, aoFechar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal"><p class="texto-dim2">carregando...</p></div>`
+  document.body.appendChild(fundo)
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+
+  const desenhar = async () => {
+    const [{ data: modulos }, { data: progressos }, { data: certExistente }] = await Promise.all([
+      db.from('trilha_modulo').select('*').eq('trilha_id', atribuicao.trilha.id).order('ordem'),
+      db.from('trilha_progresso').select('modulo_id').eq('atribuicao_id', atribuicao.id),
+      db.from('trilha_certificado').select('*').eq('atribuicao_id', atribuicao.id).maybeSingle()
+    ])
+    const listaModulos = modulos || []
+    const idsFeitos = new Set((progressos || []).map(p => p.modulo_id))
+    const todosFeitos = listaModulos.length > 0 && listaModulos.every(m => idsFeitos.has(m.id))
+
+    // gera o certificado automaticamente na primeira vez que bate 100%
+    let certificado = certExistente
+    if (todosFeitos && !certificado) {
+      const { data: novoCert } = await db.from('trilha_certificado').insert({
+        atribuicao_id: atribuicao.id, pessoa_id: PERFIL.pessoaId, trilha_id: atribuicao.trilha.id
+      }).select().single()
+      certificado = novoCert
+    }
+
+    const modalNovo = document.createElement('div')
+    modalNovo.className = 'modal'
+    modalNovo.style.maxWidth = '640px'
+    modalNovo.innerHTML = `
+      <div class="cabeca-secao"><h3 style="margin:0;">🎓 ${esc(atribuicao.trilha.nome)}</h3>
+        <span class="chip">${esc(ROTULO_CATEGORIA_TRILHA[atribuicao.trilha.categoria] || atribuicao.trilha.categoria)}</span></div>
+
+      ${certificado ? `
+        <div class="panel" style="padding:18px;margin:14px 0;text-align:center;background:linear-gradient(135deg,rgba(200,161,26,.12),transparent);border:1px solid var(--gold,#c8a11a);">
+          <div style="font-size:36px;margin-bottom:6px;">🏆</div>
+          <p style="font-family:var(--serif);font-size:16px;margin:0 0 4px;">Trilha concluída!</p>
+          <p class="texto-dim2" style="font-size:11.5px;margin:0 0 12px;">Certificado emitido em ${fmtData(certificado.emitido_em?.slice(0, 10))}</p>
+          <button class="btn" id="mt-linkedin">Adicionar ao LinkedIn</button>
+        </div>` : ''}
+
+      <div style="margin:14px 0;">
+        ${listaModulos.map((m, i) => {
+          const feito = idsFeitos.has(m.id)
+          return `<div class="panel" style="padding:12px 14px;margin-bottom:8px;display:flex;align-items:center;gap:10px;cursor:pointer;" data-abrir-modulo="${m.id}">
+            <span style="font-size:18px;flex:none;">${feito ? '✅' : '⬜'}</span>
+            <div style="flex:1;min-width:0;">
+              <div style="font-weight:600;font-size:13px;">${i + 1}. ${esc(m.titulo)}</div>
+              <div class="texto-dim2" style="font-size:11px;">${esc(ROTULO_TIPO_CONTEUDO[m.tipo_conteudo] || m.tipo_conteudo)}</div>
+            </div>
+          </div>`
+        }).join('') || '<p class="vazio">Essa trilha ainda não tem módulos.</p>'}
+      </div>
+
+      <div class="acoes" style="text-align:right;"><button class="btn-secundario" id="mt-fechar">Fechar</button></div>`
+    fundo.innerHTML = ''
+    fundo.appendChild(modalNovo)
+
+    fundo.querySelector('#mt-fechar').onclick = () => { fundo.remove(); aoFechar() }
+    const btnLinkedin = fundo.querySelector('#mt-linkedin')
+    if (btnLinkedin) btnLinkedin.onclick = () => {
+      const agora = new Date()
+      const params = new URLSearchParams({
+        startTask: 'CERTIFICATION_NAME',
+        name: atribuicao.trilha.nome,
+        organizationName: 'Grupo Gefoscal',
+        issueYear: String(agora.getFullYear()),
+        issueMonth: String(agora.getMonth() + 1),
+        certId: certificado.codigo_verificacao
+      })
+      window.open(`https://www.linkedin.com/profile/add?${params.toString()}`, '_blank', 'noopener')
+    }
+
+    fundo.querySelectorAll('[data-abrir-modulo]').forEach(card => {
+      card.onclick = () => abrirModuloParaFazer(listaModulos.find(m => m.id === card.dataset.abrirModulo), atribuicao, idsFeitos.has(card.dataset.abrirModulo), desenhar)
+    })
+  }
+  desenhar()
+}
+
+function abrirModuloParaFazer (modulo, atribuicao, jaFeito, aoFechar) {
+  const fundo2 = document.createElement('div')
+  fundo2.className = 'modal-fundo'
+  const conteudoHtml = modulo.tipo_conteudo === 'TEXTO'
+    ? `<div class="caixa-texto" style="white-space:pre-wrap;max-height:320px;overflow:auto;">${esc(modulo.conteudo_texto || 'Sem conteúdo.')}</div>`
+    : modulo.tipo_conteudo === 'VIDEO'
+    ? `<p style="margin-bottom:10px;"><a href="${esc(modulo.video_url)}" target="_blank" rel="noopener" style="color:var(--rust);">▶️ Assistir vídeo (abre em nova aba)</a></p>`
+    : `<p style="margin-bottom:10px;"><button class="btn-secundario mini" id="md2-abrir-pdf">📑 Abrir PDF</button></p>`
+
+  fundo2.innerHTML = `<div class="modal">
+    <h3 style="margin:0 0 10px;">${esc(modulo.titulo)}</h3>
+    ${conteudoHtml}
+    <div class="acoes" style="margin-top:16px;">
+      ${jaFeito
+        ? '<span class="badge-bom">✅ já marcado como concluído</span>'
+        : '<button class="btn" id="md2-concluir">Marcar como concluído</button>'}
+      <button class="btn-secundario" id="md2-fechar">Fechar</button>
+    </div>
+  </div>`
+  document.body.appendChild(fundo2)
+  fundo2.onclick = e => { if (e.target === fundo2) fundo2.remove() }
+  fundo2.querySelector('#md2-fechar').onclick = () => fundo2.remove()
+
+  const btnPdf = fundo2.querySelector('#md2-abrir-pdf')
+  if (btnPdf) btnPdf.onclick = () => abrirArquivo(modulo.arquivo_caminho)
+
+  const btnConcluir = fundo2.querySelector('#md2-concluir')
+  if (btnConcluir) btnConcluir.onclick = async () => {
+    await db.from('trilha_progresso').insert({ atribuicao_id: atribuicao.id, modulo_id: modulo.id })
+    fundo2.remove()
+    aoFechar()
+  }
 }
 
 // ---------------------------------------------------------------
