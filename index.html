@@ -25326,7 +25326,7 @@ async function paginaDesempenho () {
   DESEMP_CACHE = { pessoas: pessoas || [], setores: setores || [] }
 
   const abas = [['painel', 'Painel'], ['agilidade', 'Agilidade e prazos'], ['individual', 'Acompanhamento Individual'],
-                ['360', 'Avaliação 360'], ['pdi', 'Planos de desenvolvimento'], ['meu', 'Meu RH']]
+                ['recrutamento', 'Recrutamento e Seleção'], ['360', 'Avaliação 360'], ['pdi', 'Planos de desenvolvimento'], ['meu', 'Meu RH']]
   area.innerHTML = `
     <div class="subabas">
       ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
@@ -25349,6 +25349,7 @@ function abrirDesempenho (sub, editavel) {
   if (sub === 'painel') desempPainel(alvo, editavel)
   if (sub === 'agilidade') desempAgilidade(alvo, editavel)
   if (sub === 'individual') desempIndividual(alvo, editavel)
+  if (sub === 'recrutamento') desempRecrutamento(alvo, editavel)
   if (sub === 'solicitacoes') desempSolicitacoes(alvo, editavel)
   if (sub === 'conduta') desempConduta(alvo, editavel)
   if (sub === '360') desemp360(alvo, editavel)
@@ -25362,13 +25363,14 @@ async function desempPainel (alvo, editavel) {
   const de90 = new Date(Date.now() - 90 * 864e5).toISOString().slice(0, 10)
   const inicioMes = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10)
 
-  const [{ data: cicloAtivo }, { data: bonusTodos }, { data: solicitacoes, error }] = await Promise.all([
+  const [{ data: cicloAtivo }, { data: bonusTodos }, { data: solicitacoes, error }, resumoMensal] = await Promise.all([
     db.from('avaliacao_360_ciclo').select('id,nome,status,data_fim').eq('status', 'ABERTO').maybeSingle(),
     editavel ? db.from('pontuacao_bonus').select('pontos,pessoa:pessoa_id(nome)').limit(2000) : Promise.resolve({ data: [] }),
     editavel ? db.from('solicitacao_interna').select(`
       id, status, data_solicitacao, data_limite, data_conclusao, progresso_pct, pontuacao_agilidade,
       setor_destino_id, responsavel_id, setor:setor_destino_id ( nome ), responsavel:responsavel_id ( nome )
-    `).gte('data_solicitacao', de90).not('responsavel_id', 'is', null).limit(2000) : Promise.resolve({ data: [] })
+    `).gte('data_solicitacao', de90).not('responsavel_id', 'is', null).limit(2000) : Promise.resolve({ data: [] }),
+    editavel ? resumoAgilidadeIndividual() : Promise.resolve({ media: null, top3: [] })
   ])
   if (faltaMigracao(error)) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
 
@@ -25431,6 +25433,20 @@ async function desempPainel (alvo, editavel) {
         ${barrasHorizontais(rankingAgilidade.slice(0, 8), { unidade: 'pts', casas: 0 })}
         <p class="texto-dim2" style="font-size:11px;margin-top:10px;">Baseado nas solicitações internas concluídas com responsável definido. 100 pts = sempre no prazo.</p>
       </div>` : ''}
+    ${editavel && resumoMensal.media != null ? `
+      <div class="panel" style="padding:18px;margin-top:16px;background:linear-gradient(135deg,rgba(var(--rust-rgb),.06),transparent);">
+        <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:15px;margin:0;">📅 Acompanhamento Individual — processo mensal</h3>
+          <button class="btn-secundario mini" id="dp-ver-individual">Abrir completo →</button></div>
+        <p class="texto-dim2" style="font-size:12px;margin:6px 0 12px;">Cada pessoa tem um histórico mensal salvo (solicitações, % no prazo, agilidade), editável pelo RH e com anexos.</p>
+        <div style="display:flex;gap:24px;align-items:center;flex-wrap:wrap;">
+          <div style="text-align:center;"><div style="font-family:var(--serif);font-size:26px;">${resumoMensal.media}</div>
+            <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;">média geral do mês</div></div>
+          <div style="flex:1;min-width:200px;">
+            ${resumoMensal.top3.map((t, i) => `<div style="display:flex;justify-content:space-between;font-size:12.5px;padding:3px 0;">
+              <span>${i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉'} ${esc(t.nome)}</span><b class="${corAgilidade(t.pontos)}">${t.pontos}</b></div>`).join('')}
+          </div>
+        </div>
+      </div>` : ''}
     ${editavel && rankingBonus.length ? `
       <div class="panel" style="padding:18px;margin-top:16px;">
         <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Pontos bônus por pessoa</h3>
@@ -25443,13 +25459,19 @@ async function desempPainel (alvo, editavel) {
     document.querySelectorAll('.subabas button').forEach(b => b.classList.toggle('ativo', b.dataset.sub === 'agilidade'))
     abrirDesempenho('agilidade', editavel)
   }
+  const btnVerIndividual = $('#dp-ver-individual')
+  if (btnVerIndividual) btnVerIndividual.onclick = () => {
+    document.querySelectorAll('.subabas button').forEach(b => b.classList.toggle('ativo', b.dataset.sub === 'individual'))
+    abrirDesempenho('individual', editavel)
+  }
 }
 
 
 // ----- Acompanhamento Individual: histórico mensal de agilidade por pessoa,
-// com ajuste manual do RH. Recalcula os últimos 12 meses toda vez que abre,
-// mas nunca sobrescreve ajuste_manual_pontos/observacao_rh (só o RH edita
-// esses dois campos, o resto é sempre recalculado a partir das solicitações). -----
+// com ajuste manual do RH e anexos. Recalcula os últimos 12 meses toda vez
+// que abre, mas nunca sobrescreve ajuste_manual_pontos/observacao_rh (só o
+// RH edita esses dois campos, o resto é sempre recalculado a partir das
+// solicitações). -----
 let DESEMP_INDIVIDUAL_MES = new Date(new Date().getFullYear(), new Date().getMonth(), 1)
 
 async function recalcularAgilidadeMensal () {
@@ -25490,10 +25512,21 @@ async function recalcularAgilidadeMensal () {
   }))
 
   if (linhas.length) {
-    // Upsert só nos campos calculados -- como ajuste_manual_pontos e observacao_rh
-    // não entram no payload, o Postgres preserva o valor que já estava salvo.
     await db.from('agilidade_mensal').upsert(linhas, { onConflict: 'pessoa_id,ano_mes' })
   }
+}
+
+// Resumo pra usar no Painel: agilidade média geral do mês + top 3 do mês.
+async function resumoAgilidadeIndividual () {
+  const anoMesStr = isoMes(new Date())
+  const { data: registros } = await db.from('agilidade_mensal')
+    .select('pontuacao_media,ajuste_manual_pontos,pessoa:pessoa_id(nome)')
+    .eq('ano_mes', anoMesStr)
+  const linhas = (registros || []).map(r => ({
+    nome: r.pessoa?.nome ?? '—', pontos: r.ajuste_manual_pontos ?? r.pontuacao_media
+  })).filter(l => l.pontos != null).sort((a, b) => b.pontos - a.pontos)
+  const media = linhas.length ? Math.round(linhas.reduce((s, l) => s + l.pontos, 0) / linhas.length) : null
+  return { media, top3: linhas.slice(0, 3) }
 }
 
 function navMesDesempHtml (mesAtual) {
@@ -25516,13 +25549,16 @@ async function desempIndividual (alvo, editavel) {
 
 async function desenharDesempIndividual (alvo, editavel) {
   const anoMesStr = isoMes(DESEMP_INDIVIDUAL_MES)
-  const [{ data: pessoas }, { data: registros }] = await Promise.all([
-    db.from('pessoa').select('id,nome,setor:setor_id(nome)').eq('status', 'ATIVO').order('nome'),
-    db.from('agilidade_mensal').select('*').eq('ano_mes', anoMesStr)
+  const [{ data: pessoas }, { data: registros }, { data: anexosTodos }] = await Promise.all([
+    db.from('pessoa').select('id,nome,foto_url,setor:setor_id(nome)').eq('status', 'ATIVO').order('nome'),
+    db.from('agilidade_mensal').select('*').eq('ano_mes', anoMesStr),
+    db.from('agilidade_anexo').select('pessoa_id')
   ])
 
   const porPessoa = {}
   ;(registros || []).forEach(r => { porPessoa[r.pessoa_id] = r })
+  const qtdAnexosPorPessoa = {}
+  ;(anexosTodos || []).forEach(a => { qtdAnexosPorPessoa[a.pessoa_id] = (qtdAnexosPorPessoa[a.pessoa_id] || 0) + 1 })
 
   const linhas = (pessoas || []).map(p => {
     const r = porPessoa[p.id]
@@ -25532,37 +25568,61 @@ async function desenharDesempIndividual (alvo, editavel) {
       total: r?.total_solicitacoes ?? 0, concluidas: r?.concluidas ?? 0,
       pctNoPrazo: r?.concluidas ? Math.round(r.concluidas_no_prazo / r.concluidas * 100) : null,
       pontuacao: pontuacaoFinal, temAjuste: r?.ajuste_manual_pontos != null,
-      observacao: r?.observacao_rh ?? ''
+      observacao: r?.observacao_rh ?? '', qtdAnexos: qtdAnexosPorPessoa[p.id] || 0
     }
   }).sort((a, b) => (b.pontuacao ?? -1) - (a.pontuacao ?? -1))
 
+  const comDados = linhas.filter(l => l.pontuacao != null)
+  const mediaGeral = comDados.length ? Math.round(comDados.reduce((s, l) => s + l.pontuacao, 0) / comDados.length) : null
+  const totalSolicMes = linhas.reduce((s, l) => s + l.total, 0)
+
   alvo.innerHTML = `
-    ${navMesDesempHtml(DESEMP_INDIVIDUAL_MES)}
-    <p class="texto-dim2" style="font-size:12px;margin:-8px 0 14px;">
-      Puxa todo mundo com cadastro ativo (usuários do sistema + DP). Clica numa pessoa pra ver o histórico completo e ajustar manualmente.
-      <span style="opacity:.8;">✎ = pontuação ajustada pelo RH</span> · <span style="opacity:.8;">📝 = tem observação</span></p>
-    <div class="panel" style="padding:0;"><div class="tabela-scroll">
-      <table><thead><tr>
-        <th>Pessoa</th><th>Setor</th><th class="num">Solicitações</th><th class="num">Concluídas</th>
-        <th class="num">% no prazo</th><th class="num">Agilidade</th><th></th>
-      </tr></thead><tbody>
-        ${linhas.map(l => `<tr style="cursor:pointer;" data-abrir-pessoa="${l.pessoa.id}">
-          <td>${esc(l.nome)}</td>
-          <td class="texto-dim2">${esc(l.setor)}</td>
-          <td class="num">${l.total}</td>
-          <td class="num">${l.concluidas}</td>
-          <td class="num">${l.pctNoPrazo != null ? `<span class="${l.pctNoPrazo >= 80 ? 'badge-bom' : l.pctNoPrazo >= 50 ? 'chip' : 'badge-alerta'}">${l.pctNoPrazo}%</span>` : '—'}</td>
-          <td class="num">${l.pontuacao != null ? `<span class="${corAgilidade(l.pontuacao)}">${l.pontuacao}${l.temAjuste ? ' ✎' : ''}</span>` : '—'}</td>
-          <td class="texto-dim2" style="font-size:11px;">${l.observacao ? '📝' : ''}</td>
-        </tr>`).join('') || `<tr><td colspan="7" class="vazio">Nenhuma pessoa ativa cadastrada.</td></tr>`}
-      </tbody></table>
-    </div></div>`
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:4px;">
+      ${navMesDesempHtml(DESEMP_INDIVIDUAL_MES)}
+      <div style="display:flex;gap:18px;">
+        <div style="text-align:center;"><div style="font-family:var(--serif);font-size:22px;">${mediaGeral ?? '—'}</div>
+          <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;">agilidade média</div></div>
+        <div style="text-align:center;"><div style="font-family:var(--serif);font-size:22px;">${totalSolicMes}</div>
+          <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;">solicitações no mês</div></div>
+      </div>
+    </div>
+    <p class="texto-dim2" style="font-size:12px;margin:0 0 16px;">
+      Puxa todo mundo com cadastro ativo (usuários do sistema + DP). Clica num card pra ver o histórico completo, ajustar manualmente e anexar arquivo.
+      <span style="opacity:.8;">✎ ajustado pelo RH</span> · <span style="opacity:.8;">📎 tem anexo</span> · <span style="opacity:.8;">📝 tem observação</span></p>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px;">
+      ${linhas.map(l => `
+        <div class="panel" style="padding:16px;cursor:pointer;transition:transform .12s ease,box-shadow .12s ease;" data-abrir-pessoa="${l.pessoa.id}"
+          onmouseenter="this.style.transform='translateY(-2px)';this.style.boxShadow='0 8px 18px rgba(0,0,0,.12)'"
+          onmouseleave="this.style.transform='';this.style.boxShadow=''">
+          <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;">
+            ${avatarHtml(l.pessoa.foto_url, l.nome, 40)}
+            <div style="min-width:0;flex:1;">
+              <div style="font-weight:600;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(l.nome)}</div>
+              <div class="texto-dim2" style="font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(l.setor)}</div>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:14px;">
+            ${l.pontuacao != null ? anelHtml(l.pontuacao, '') : `<div style="width:96px;height:96px;display:flex;align-items:center;justify-content:center;" class="texto-dim2">sem dados</div>`}
+            <div style="flex:1;font-size:12px;">
+              <div style="margin-bottom:4px;"><span class="texto-dim2">Solicitações:</span> <b>${l.total}</b></div>
+              <div style="margin-bottom:4px;"><span class="texto-dim2">Concluídas:</span> <b>${l.concluidas}</b></div>
+              <div>${l.pctNoPrazo != null ? `<span class="${l.pctNoPrazo >= 80 ? 'badge-bom' : l.pctNoPrazo >= 50 ? 'chip' : 'badge-alerta'}" style="font-size:10px;">${l.pctNoPrazo}% no prazo</span>` : ''}</div>
+            </div>
+          </div>
+          <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--line2);display:flex;gap:8px;font-size:11px;">
+            ${l.temAjuste ? '<span title="Pontuação ajustada pelo RH">✎</span>' : ''}
+            ${l.qtdAnexos ? `<span title="${l.qtdAnexos} anexo(s)">📎 ${l.qtdAnexos}</span>` : ''}
+            ${l.observacao ? '<span title="Tem observação">📝</span>' : ''}
+          </div>
+        </div>`).join('') || `<p class="vazio">Nenhuma pessoa ativa cadastrada.</p>`}
+    </div>`
 
   $('#dsi-mes-menos').onclick = () => { DESEMP_INDIVIDUAL_MES = new Date(DESEMP_INDIVIDUAL_MES.getFullYear(), DESEMP_INDIVIDUAL_MES.getMonth() - 1, 1); desenharDesempIndividual(alvo, editavel) }
   $('#dsi-mes-mais').onclick = () => { DESEMP_INDIVIDUAL_MES = new Date(DESEMP_INDIVIDUAL_MES.getFullYear(), DESEMP_INDIVIDUAL_MES.getMonth() + 1, 1); desenharDesempIndividual(alvo, editavel) }
   $('#dsi-mes-hoje').onclick = () => { DESEMP_INDIVIDUAL_MES = new Date(new Date().getFullYear(), new Date().getMonth(), 1); desenharDesempIndividual(alvo, editavel) }
-  alvo.querySelectorAll('[data-abrir-pessoa]').forEach(tr => {
-    tr.onclick = () => abrirDetalheIndividualRh(linhas.find(l => l.pessoa.id === tr.dataset.abrirPessoa).pessoa, editavel, alvo)
+  alvo.querySelectorAll('[data-abrir-pessoa]').forEach(card => {
+    card.onclick = () => abrirDetalheIndividualRh(linhas.find(l => l.pessoa.id === card.dataset.abrirPessoa).pessoa, editavel, alvo)
   })
 }
 
@@ -25573,79 +25633,446 @@ async function abrirDetalheIndividualRh (pessoa, editavel, alvoLista) {
   document.body.appendChild(fundo)
   fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
 
-  const { data: historico } = await db.from('agilidade_mensal').select('*')
-    .eq('pessoa_id', pessoa.id).order('ano_mes', { ascending: false }).limit(12)
+  const [{ data: historico }, { data: anexos }] = await Promise.all([
+    db.from('agilidade_mensal').select('*').eq('pessoa_id', pessoa.id).order('ano_mes', { ascending: false }).limit(12),
+    db.from('agilidade_anexo').select('id,arquivo_caminho,arquivo_nome,descricao,criado_em').eq('pessoa_id', pessoa.id).order('criado_em', { ascending: false })
+  ])
   const linhas = historico || []
   const mesAtualStr = isoMes(new Date())
   const registroMesAtual = linhas.find(l => l.ano_mes === mesAtualStr)
 
-  const modalNovo = document.createElement('div')
-  modalNovo.className = 'modal'
-  modalNovo.style.maxWidth = '640px'
-  modalNovo.innerHTML = `
-    <div class="cabeca-secao"><h3 style="margin:0;">${esc(pessoa.nome)}</h3></div>
-    <p class="texto-dim2" style="font-size:12.5px;margin:-6px 0 14px;">Histórico de agilidade — últimos ${linhas.length || 0} meses com dados</p>
-
-    <div class="tabela-scroll" style="max-height:220px;margin-bottom:16px;">
-      <table><thead><tr><th>Mês</th><th class="num">Solicitações</th><th class="num">Concluídas</th><th class="num">% no prazo</th><th class="num">Agilidade</th></tr></thead><tbody>
-        ${linhas.map(l => {
-          const pct = l.concluidas ? Math.round(l.concluidas_no_prazo / l.concluidas * 100) : null
-          const pontosFinal = l.ajuste_manual_pontos ?? l.pontuacao_media
-          return `<tr>
-            <td>${nomeMes(new Date(l.ano_mes + 'T00:00:00'))}</td>
-            <td class="num">${l.total_solicitacoes}</td>
-            <td class="num">${l.concluidas}</td>
-            <td class="num">${pct != null ? pct + '%' : '—'}</td>
-            <td class="num">${pontosFinal != null ? `<span class="${corAgilidade(pontosFinal)}">${pontosFinal}${l.ajuste_manual_pontos != null ? ' ✎' : ''}</span>` : '—'}</td>
-          </tr>`
-        }).join('') || `<tr><td colspan="5" class="vazio">Sem solicitações registradas ainda.</td></tr>`}
-      </tbody></table>
-    </div>
-
-    ${editavel ? `
-      <h4 style="font-family:var(--serif);font-size:14px;margin:0 0 8px;">✏️ Ajustar mês atual (${nomeMes(new Date())})</h4>
-      <div style="display:grid;grid-template-columns:1fr 2fr;gap:10px;margin-bottom:10px;">
-        <div class="campo">
-          <label>Pontuação ajustada ${registroMesAtual?.pontuacao_media != null ? '(calculada: ' + registroMesAtual.pontuacao_media + ')' : ''}</label>
-          <input type="number" id="dsi-ajuste" min="0" max="100" value="${registroMesAtual?.ajuste_manual_pontos ?? ''}" placeholder="deixa em branco pra usar a calculada">
-        </div>
-        <div class="campo">
-          <label>Observação do RH</label>
-          <input type="text" id="dsi-obs" value="${esc(registroMesAtual?.observacao_rh || '')}">
-        </div>
+  const desenharModal = (listaAnexos) => {
+    const modalNovo = document.createElement('div')
+    modalNovo.className = 'modal'
+    modalNovo.style.maxWidth = '680px'
+    modalNovo.innerHTML = `
+      <div class="cabeca-secao" style="display:flex;align-items:center;gap:12px;">
+        ${avatarHtml(pessoa.foto_url, pessoa.nome, 44)}
+        <div><h3 style="margin:0;">${esc(pessoa.nome)}</h3>
+          <p class="texto-dim2" style="font-size:12px;margin:2px 0 0;">Histórico de agilidade — últimos ${linhas.length || 0} meses com dados</p></div>
       </div>
-      <div class="acoes" style="margin-top:14px;display:flex;justify-content:space-between;align-items:center;">
-        <span id="dsi-status" class="texto-dim2" style="font-size:12px;"></span>
-        <div style="display:flex;gap:8px;">
-          <button class="btn-secundario" id="dsi-fechar">Fechar</button>
-          <button class="btn" id="dsi-salvar">Salvar ajuste</button>
+
+      <div class="tabela-scroll" style="max-height:200px;margin:14px 0 16px;">
+        <table><thead><tr><th>Mês</th><th class="num">Solicitações</th><th class="num">Concluídas</th><th class="num">% no prazo</th><th class="num">Agilidade</th></tr></thead><tbody>
+          ${linhas.map(l => {
+            const pct = l.concluidas ? Math.round(l.concluidas_no_prazo / l.concluidas * 100) : null
+            const pontosFinal = l.ajuste_manual_pontos ?? l.pontuacao_media
+            return `<tr>
+              <td>${nomeMes(new Date(l.ano_mes + 'T00:00:00'))}</td>
+              <td class="num">${l.total_solicitacoes}</td>
+              <td class="num">${l.concluidas}</td>
+              <td class="num">${pct != null ? pct + '%' : '—'}</td>
+              <td class="num">${pontosFinal != null ? `<span class="${corAgilidade(pontosFinal)}">${pontosFinal}${l.ajuste_manual_pontos != null ? ' ✎' : ''}</span>` : '—'}</td>
+            </tr>`
+          }).join('') || `<tr><td colspan="5" class="vazio">Sem solicitações registradas ainda.</td></tr>`}
+        </tbody></table>
+      </div>
+
+      <h4 style="font-family:var(--serif);font-size:14px;margin:0 0 8px;">📎 Arquivos anexados</h4>
+      <div id="dsi-lista-anexos" style="margin-bottom:10px;">
+        ${listaAnexos.length ? listaAnexos.map(a => `
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 10px;border:1px solid var(--line2);border-radius:8px;margin-bottom:6px;font-size:12.5px;">
+            <div style="min-width:0;">
+              <a href="#" data-abrir-anexo="${a.arquivo_caminho}" style="color:var(--rust);text-decoration:none;font-weight:600;">${esc(a.arquivo_nome)}</a>
+              ${a.descricao ? `<div class="texto-dim2" style="font-size:11px;">${esc(a.descricao)}</div>` : ''}
+            </div>
+            <button class="btn-secundario mini" data-remover-anexo="${a.id}" style="flex:none;">remover</button>
+          </div>`).join('') : '<p class="texto-dim2" style="font-size:12px;">Nenhum arquivo anexado ainda.</p>'}
+      </div>
+      ${editavel ? `
+        <div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:16px;">
+          <div class="campo" style="flex:1;margin:0;">
+            <label>Anexar arquivo</label>
+            <input type="file" id="dsi-arquivo" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx">
+          </div>
+          <div class="campo" style="flex:1;margin:0;">
+            <label>Descrição (opcional)</label>
+            <input type="text" id="dsi-arquivo-desc" placeholder="ex: avaliação de desempenho">
+          </div>
+          <button class="btn-secundario mini" id="dsi-enviar-arquivo">Enviar</button>
+        </div>` : ''}
+
+      ${editavel ? `
+        <h4 style="font-family:var(--serif);font-size:14px;margin:0 0 8px;">✏️ Ajustar mês atual (${nomeMes(new Date())})</h4>
+        <div style="display:grid;grid-template-columns:1fr 2fr;gap:10px;margin-bottom:10px;">
+          <div class="campo">
+            <label>Pontuação ajustada ${registroMesAtual?.pontuacao_media != null ? '(calculada: ' + registroMesAtual.pontuacao_media + ')' : ''}</label>
+            <input type="number" id="dsi-ajuste" min="0" max="100" value="${registroMesAtual?.ajuste_manual_pontos ?? ''}" placeholder="em branco usa a calculada">
+          </div>
+          <div class="campo">
+            <label>Observação do RH</label>
+            <input type="text" id="dsi-obs" value="${esc(registroMesAtual?.observacao_rh || '')}">
+          </div>
         </div>
-      </div>` : `<div class="acoes" style="margin-top:14px;text-align:right;"><button class="btn-secundario" id="dsi-fechar">Fechar</button></div>`}
-  `
-  fundo.innerHTML = ''
-  fundo.appendChild(modalNovo)
+        <div class="acoes" style="margin-top:14px;display:flex;justify-content:space-between;align-items:center;">
+          <span id="dsi-status" class="texto-dim2" style="font-size:12px;"></span>
+          <div style="display:flex;gap:8px;">
+            <button class="btn-secundario" id="dsi-fechar">Fechar</button>
+            <button class="btn" id="dsi-salvar">Salvar ajuste</button>
+          </div>
+        </div>` : `<div class="acoes" style="margin-top:14px;text-align:right;"><button class="btn-secundario" id="dsi-fechar">Fechar</button></div>`}
+    `
+    fundo.innerHTML = ''
+    fundo.appendChild(modalNovo)
 
-  fundo.querySelector('#dsi-fechar').onclick = () => fundo.remove()
+    fundo.querySelector('#dsi-fechar').onclick = () => fundo.remove()
 
-  const btnSalvar = fundo.querySelector('#dsi-salvar')
-  if (btnSalvar) btnSalvar.onclick = async () => {
-    const status = fundo.querySelector('#dsi-status')
-    btnSalvar.disabled = true; btnSalvar.textContent = 'Salvando...'
-    const valorAjuste = fundo.querySelector('#dsi-ajuste').value.trim()
-    const payload = {
-      pessoa_id: pessoa.id,
-      ano_mes: mesAtualStr,
-      ajuste_manual_pontos: valorAjuste === '' ? null : Number(valorAjuste),
-      observacao_rh: fundo.querySelector('#dsi-obs').value.trim() || null,
-      atualizado_por: PERFIL.pessoaId,
-      atualizado_em: new Date().toISOString()
+    fundo.querySelectorAll('[data-abrir-anexo]').forEach(a => {
+      a.onclick = e => { e.preventDefault(); abrirArquivo(a.dataset.abrirAnexo) }
+    })
+    fundo.querySelectorAll('[data-remover-anexo]').forEach(btn => {
+      btn.onclick = async () => {
+        if (!confirm('Remover esse anexo?')) return
+        await db.from('agilidade_anexo').delete().eq('id', btn.dataset.removerAnexo)
+        const { data: novaLista } = await db.from('agilidade_anexo').select('id,arquivo_caminho,arquivo_nome,descricao,criado_em').eq('pessoa_id', pessoa.id).order('criado_em', { ascending: false })
+        desenharModal(novaLista || [])
+      }
+    })
+
+    const btnEnviar = fundo.querySelector('#dsi-enviar-arquivo')
+    if (btnEnviar) btnEnviar.onclick = async () => {
+      const input = fundo.querySelector('#dsi-arquivo')
+      const arquivo = input.files[0]
+      if (!arquivo) { alert('Escolhe um arquivo primeiro.'); return }
+      btnEnviar.disabled = true; btnEnviar.textContent = 'Enviando...'
+      try {
+        const enviado = await enviarArquivo(arquivo, `agilidade/${pessoa.id}`)
+        await db.from('agilidade_anexo').insert({
+          pessoa_id: pessoa.id, arquivo_caminho: enviado.caminho, arquivo_nome: enviado.nome,
+          descricao: fundo.querySelector('#dsi-arquivo-desc').value.trim() || null, enviado_por: PERFIL.pessoaId
+        })
+        const { data: novaLista } = await db.from('agilidade_anexo').select('id,arquivo_caminho,arquivo_nome,descricao,criado_em').eq('pessoa_id', pessoa.id).order('criado_em', { ascending: false })
+        desenharModal(novaLista || [])
+      } catch (erro) {
+        alert(erro.message)
+        btnEnviar.disabled = false; btnEnviar.textContent = 'Enviar'
+      }
     }
-    const { error } = await db.from('agilidade_mensal').upsert(payload, { onConflict: 'pessoa_id,ano_mes' })
-    btnSalvar.disabled = false; btnSalvar.textContent = 'Salvar ajuste'
-    if (error) { status.textContent = 'Erro: ' + error.message; status.style.color = 'var(--critico-text)'; return }
-    status.textContent = '✓ Salvo!'
-    status.style.color = 'var(--good-text)'
-    if (alvoLista) desenharDesempIndividual(alvoLista, editavel)
+
+    const btnSalvar = fundo.querySelector('#dsi-salvar')
+    if (btnSalvar) btnSalvar.onclick = async () => {
+      const status = fundo.querySelector('#dsi-status')
+      btnSalvar.disabled = true; btnSalvar.textContent = 'Salvando...'
+      const valorAjuste = fundo.querySelector('#dsi-ajuste').value.trim()
+      const payload = {
+        pessoa_id: pessoa.id,
+        ano_mes: mesAtualStr,
+        ajuste_manual_pontos: valorAjuste === '' ? null : Number(valorAjuste),
+        observacao_rh: fundo.querySelector('#dsi-obs').value.trim() || null,
+        atualizado_por: PERFIL.pessoaId,
+        atualizado_em: new Date().toISOString()
+      }
+      const { error } = await db.from('agilidade_mensal').upsert(payload, { onConflict: 'pessoa_id,ano_mes' })
+      btnSalvar.disabled = false; btnSalvar.textContent = 'Salvar ajuste'
+      if (error) { status.textContent = 'Erro: ' + error.message; status.style.color = 'var(--critico-text)'; return }
+      status.textContent = '✓ Salvo!'
+      status.style.color = 'var(--good-text)'
+      if (alvoLista) desenharDesempIndividual(alvoLista, editavel)
+    }
+  }
+
+  desenharModal(anexos || [])
+}
+
+
+// ----- Recrutamento e Seleção: Kanban de vagas + Banco de Currículos -----
+// Fluxo de etapas da vaga: ABERTA -> DIVULGANDO (Marketing divulga/monta arte)
+// -> SELECIONANDO (RH seleciona) -> EM_DP (se CLT) ou EM_JURIDICO (se PJ) -> FECHADA.
+// O banco de currículos cruza candidato.area_interesse/tags com vaga.tags pra
+// já sugerir candidatos quando abre uma vaga nova, sem precisar de nada externo.
+const ETAPAS_VAGA = [
+  ['ABERTA', 'Aberta'], ['DIVULGANDO', 'Divulgando'], ['SELECIONANDO', 'Selecionando'],
+  ['EM_DP', 'Com DP'], ['EM_JURIDICO', 'Com Jurídico'], ['FECHADA', 'Fechada']
+]
+const ROTULO_ETAPA_VAGA = Object.fromEntries(ETAPAS_VAGA)
+
+function proximaEtapaVaga (vaga) {
+  if (vaga.etapa === 'ABERTA') return 'DIVULGANDO'
+  if (vaga.etapa === 'DIVULGANDO') return 'SELECIONANDO'
+  if (vaga.etapa === 'SELECIONANDO') return vaga.tipo_contratacao === 'CLT' ? 'EM_DP' : 'EM_JURIDICO'
+  if (vaga.etapa === 'EM_DP' || vaga.etapa === 'EM_JURIDICO') return 'FECHADA'
+  return null
+}
+
+let RECR_SUBABA = 'vagas'
+
+async function desempRecrutamento (alvo, editavel) {
+  if (!editavel) { alvo.innerHTML = `<div class="panel" style="padding:22px;">
+    <p class="texto-dim">Recrutamento e Seleção é sensível e só quem edita o módulo de RH enxerga.</p></div>`; return }
+
+  alvo.innerHTML = `
+    <div class="subabas" style="margin-bottom:14px;">
+      <button data-recr-sub="vagas" class="${RECR_SUBABA === 'vagas' ? 'ativo' : ''}">🗂️ Vagas</button>
+      <button data-recr-sub="curriculos" class="${RECR_SUBABA === 'curriculos' ? 'ativo' : ''}">📇 Banco de Currículos</button>
+    </div>
+    <div id="recr-conteudo"><p class="texto-dim2">carregando...</p></div>`
+
+  alvo.querySelectorAll('[data-recr-sub]').forEach(b => {
+    b.onclick = () => {
+      RECR_SUBABA = b.dataset.recrSub
+      alvo.querySelectorAll('[data-recr-sub]').forEach(x => x.classList.toggle('ativo', x === b))
+      abrirRecrSubaba(alvo)
+    }
+  })
+  abrirRecrSubaba(alvo)
+}
+
+function abrirRecrSubaba (alvo) {
+  const area = $('#recr-conteudo')
+  if (RECR_SUBABA === 'vagas') recrKanbanVagas(area)
+  if (RECR_SUBABA === 'curriculos') recrBancoCurriculos(area)
+}
+
+// ----- Kanban de vagas -----
+async function recrKanbanVagas (area) {
+  area.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  const [{ data: vagas, error }, { data: setores }] = await Promise.all([
+    db.from('vaga').select('*').neq('status', 'CANCELADA').order('aberta_em', { ascending: false }),
+    db.from('setor').select('id,nome').order('nome')
+  ])
+  if (faltaMigracao(error)) { area.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  const lista = vagas || []
+  const setoresPorId = Object.fromEntries((setores || []).map(s => [s.id, s.nome]))
+
+  area.innerHTML = `
+    <div class="acoes" style="margin-bottom:14px;"><button class="btn" id="recr-nova-vaga">+ Nova vaga</button></div>
+    <div style="display:grid;grid-template-columns:repeat(6,minmax(180px,1fr));gap:12px;overflow-x:auto;">
+      ${ETAPAS_VAGA.map(([chave, rotulo]) => {
+        const daColuna = lista.filter(v => v.etapa === chave)
+        return `<div>
+          <div class="texto-dim2" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">${esc(rotulo)} (${daColuna.length})</div>
+          ${daColuna.map(v => `
+            <div class="panel" style="padding:12px;margin-bottom:8px;cursor:pointer;" data-abrir-vaga="${v.id}">
+              <div style="font-weight:600;font-size:13px;margin-bottom:4px;">${esc(v.cargo)}</div>
+              <div class="texto-dim2" style="font-size:11px;margin-bottom:6px;">${esc(setoresPorId[v.setor_id] || '—')}</div>
+              <span class="chip" style="font-size:10px;">${v.tipo_contratacao}</span>
+              ${(v.tags || []).slice(0, 2).map(t => `<span class="chip" style="font-size:10px;">${esc(t)}</span>`).join('')}
+            </div>`).join('') || '<p class="texto-dim2" style="font-size:11px;">vazio</p>'}
+        </div>`
+      }).join('')}
+    </div>`
+
+  $('#recr-nova-vaga').onclick = () => abrirFormVaga(null, setores, area)
+  area.querySelectorAll('[data-abrir-vaga]').forEach(card => {
+    card.onclick = () => abrirDetalheVaga(lista.find(v => v.id === card.dataset.abrirVaga), setoresPorId, area)
+  })
+}
+
+function abrirFormVaga (vaga, setores, area) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <div class="cabeca-secao"><h3 style="margin:0;">${vaga ? 'Editar vaga' : 'Nova vaga'}</h3></div>
+    <div class="campo"><label>Cargo</label><input type="text" id="vg-cargo" value="${esc(vaga?.cargo || '')}"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      <div class="campo"><label>Tipo de contratação</label>
+        <select id="vg-tipo">
+          <option value="CLT" ${vaga?.tipo_contratacao === 'CLT' ? 'selected' : ''}>CLT</option>
+          <option value="PJ" ${vaga?.tipo_contratacao === 'PJ' ? 'selected' : ''}>PJ recorrente</option>
+        </select></div>
+      <div class="campo"><label>Setor</label>
+        <select id="vg-setor"><option value="">— sem setor —</option>
+          ${(setores || []).map(s => `<option value="${s.id}" ${s.id === vaga?.setor_id ? 'selected' : ''}>${esc(s.nome)}</option>`).join('')}
+        </select></div>
+    </div>
+    <div class="campo"><label>Área/tags (separadas por vírgula — cruza com o Banco de Currículos)</label>
+      <input type="text" id="vg-tags" value="${esc((vaga?.tags || []).join(', '))}" placeholder="ex: comercial, agronômico"></div>
+    <div class="campo"><label>Vagas disponíveis</label><input type="number" id="vg-qtd" min="1" value="${vaga?.vagas_disponiveis || 1}"></div>
+    <div class="campo"><label>Descrição</label><textarea id="vg-desc" style="min-height:70px;">${esc(vaga?.descricao || '')}</textarea></div>
+    <div class="campo"><label>Requisitos</label><textarea id="vg-req" style="min-height:70px;">${esc(vaga?.requisitos || '')}</textarea></div>
+    <div class="acoes" style="margin-top:14px;text-align:right;">
+      <button class="btn-secundario" id="vg-cancelar">Cancelar</button>
+      <button class="btn" id="vg-salvar">Salvar</button>
+    </div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+  fundo.querySelector('#vg-cancelar').onclick = () => fundo.remove()
+
+  fundo.querySelector('#vg-salvar').onclick = async () => {
+    const cargo = $('#vg-cargo').value.trim()
+    if (!cargo) { alert('Escreve o cargo da vaga.'); return }
+    const payload = {
+      cargo,
+      tipo_contratacao: $('#vg-tipo').value,
+      setor_id: $('#vg-setor').value || null,
+      tags: $('#vg-tags').value.split(',').map(t => t.trim()).filter(Boolean),
+      vagas_disponiveis: Number($('#vg-qtd').value) || 1,
+      descricao: $('#vg-desc').value.trim() || null,
+      requisitos: $('#vg-req').value.trim() || null
+    }
+    if (vaga) {
+      await db.from('vaga').update(payload).eq('id', vaga.id)
+    } else {
+      payload.aberta_por = PERFIL.pessoaId
+      await db.from('vaga').insert(payload)
+    }
+    fundo.remove()
+    recrKanbanVagas(area)
+  }
+}
+
+async function abrirDetalheVaga (vaga, setoresPorId, area) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal"><p class="texto-dim2">carregando...</p></div>`
+  document.body.appendChild(fundo)
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+
+  const desenhar = async () => {
+    const [{ data: candidaturas }, { data: sugestoes }] = await Promise.all([
+      db.from('vaga_candidatura').select('id,etapa,observacoes,candidato:candidato_id(id,nome,telefone,email,cv_caminho,cv_nome)').eq('vaga_id', vaga.id),
+      (vaga.tags || []).length
+        ? db.from('candidato').select('id,nome,telefone,email,area_interesse,tags').overlaps('tags', vaga.tags).limit(10)
+        : Promise.resolve({ data: [] })
+    ])
+    const idsJaCandidatos = new Set((candidaturas || []).map(c => c.candidato.id))
+    const sugestoesFiltradas = (sugestoes || []).filter(s => !idsJaCandidatos.has(s.id))
+    const proxima = proximaEtapaVaga(vaga)
+
+    const modalNovo = document.createElement('div')
+    modalNovo.className = 'modal'
+    modalNovo.style.maxWidth = '640px'
+    modalNovo.innerHTML = `
+      <div class="cabeca-secao"><h3 style="margin:0;">${esc(vaga.cargo)}</h3>
+        <span class="chip">${ROTULO_ETAPA_VAGA[vaga.etapa] || vaga.etapa}</span></div>
+      <p class="texto-dim2" style="font-size:12.5px;margin:-6px 0 14px;">
+        ${esc(vaga.tipo_contratacao)} · ${esc(setoresPorId[vaga.setor_id] || 'sem setor')} · ${vaga.vagas_disponiveis} vaga(s)
+        ${(vaga.tags || []).length ? ' · ' + vaga.tags.map(esc).join(', ') : ''}</p>
+
+      ${vaga.descricao ? `<div class="caixa-texto" style="margin-bottom:10px;"><div class="rot">Descrição</div><p>${esc(vaga.descricao)}</p></div>` : ''}
+      ${vaga.requisitos ? `<div class="caixa-texto" style="margin-bottom:14px;"><div class="rot">Requisitos</div><p>${esc(vaga.requisitos)}</p></div>` : ''}
+
+      <h4 style="font-family:var(--serif);font-size:14px;margin:0 0 8px;">Candidatos inscritos (${(candidaturas || []).length})</h4>
+      <div class="tabela-scroll" style="max-height:160px;margin-bottom:14px;">
+        <table><thead><tr><th>Nome</th><th>Contato</th><th>Etapa</th><th></th></tr></thead><tbody>
+          ${(candidaturas || []).map(c => `<tr>
+            <td>${esc(c.candidato.nome)}</td>
+            <td class="texto-dim2" style="font-size:11px;">${esc(c.candidato.telefone || c.candidato.email || '—')}</td>
+            <td><span class="chip" style="font-size:10px;">${esc(c.etapa)}</span></td>
+            <td>${c.candidato.cv_caminho ? `<button class="btn-secundario mini" data-ver-cv="${c.candidato.cv_caminho}">CV</button>` : ''}</td>
+          </tr>`).join('') || `<tr><td colspan="4" class="vazio">Nenhum candidato inscrito ainda.</td></tr>`}
+        </tbody></table>
+      </div>
+
+      ${sugestoesFiltradas.length ? `
+        <h4 style="font-family:var(--serif);font-size:14px;margin:0 0 8px;">💡 Sugestões do Banco de Currículos</h4>
+        <div style="margin-bottom:14px;">
+          ${sugestoesFiltradas.map(s => `
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 10px;border:1px solid var(--line2);border-radius:8px;margin-bottom:6px;font-size:12.5px;">
+              <div><b>${esc(s.nome)}</b> <span class="texto-dim2">— ${esc(s.area_interesse || '')}</span></div>
+              <button class="btn-secundario mini" data-add-candidato="${s.id}">adicionar à vaga</button>
+            </div>`).join('')}
+        </div>` : ''}
+
+      <div class="acoes" style="margin-top:14px;display:flex;justify-content:space-between;align-items:center;">
+        <button class="btn-secundario mini" id="vg-editar">Editar vaga</button>
+        <div style="display:flex;gap:8px;">
+          <button class="btn-secundario" id="vg-fechar-modal">Fechar</button>
+          ${proxima ? `<button class="btn" id="vg-avancar">Avançar → ${ROTULO_ETAPA_VAGA[proxima]}</button>` : ''}
+        </div>
+      </div>`
+    fundo.innerHTML = ''
+    fundo.appendChild(modalNovo)
+
+    fundo.querySelector('#vg-fechar-modal').onclick = () => fundo.remove()
+    fundo.querySelector('#vg-editar').onclick = () => { fundo.remove(); abrirFormVagaComoEdicao(vaga, area) }
+
+    const btnAvancar = fundo.querySelector('#vg-avancar')
+    if (btnAvancar) btnAvancar.onclick = async () => {
+      const payload = { etapa: proxima }
+      if (proxima === 'FECHADA') payload.fechada_em = new Date().toISOString()
+      await db.from('vaga').update(payload).eq('id', vaga.id)
+      fundo.remove()
+      recrKanbanVagas(area)
+    }
+
+    fundo.querySelectorAll('[data-ver-cv]').forEach(b => { b.onclick = () => abrirArquivo(b.dataset.verCv) })
+    fundo.querySelectorAll('[data-add-candidato]').forEach(b => {
+      b.onclick = async () => {
+        await db.from('vaga_candidatura').insert({ vaga_id: vaga.id, candidato_id: b.dataset.addCandidato })
+        desenhar()
+      }
+    })
+  }
+  desenhar()
+}
+
+async function abrirFormVagaComoEdicao (vaga, area) {
+  const { data: setores } = await db.from('setor').select('id,nome').order('nome')
+  abrirFormVaga(vaga, setores, area)
+}
+
+// ----- Banco de Currículos -----
+async function recrBancoCurriculos (area) {
+  area.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  const { data: candidatos, error } = await db.from('candidato').select('*').order('criado_em', { ascending: false })
+  if (faltaMigracao(error)) { area.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  const lista = candidatos || []
+
+  area.innerHTML = `
+    <div class="acoes" style="margin-bottom:14px;"><button class="btn" id="recr-novo-candidato">+ Adicionar candidato</button></div>
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr><th>Nome</th><th>Área de interesse</th><th>Contato</th><th>Tags</th><th></th></tr></thead><tbody>
+        ${lista.map(c => `<tr>
+          <td>${esc(c.nome)}</td>
+          <td class="texto-dim2">${esc(c.area_interesse || '—')}</td>
+          <td class="texto-dim2" style="font-size:11px;">${esc(c.telefone || c.email || '—')}</td>
+          <td>${(c.tags || []).map(t => `<span class="chip" style="font-size:10px;">${esc(t)}</span>`).join('')}</td>
+          <td>${c.cv_caminho ? `<button class="btn-secundario mini" data-ver-cv="${c.cv_caminho}">CV</button>` : ''}</td>
+        </tr>`).join('') || `<tr><td colspan="5" class="vazio">Nenhum candidato no banco ainda.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+
+  $('#recr-novo-candidato').onclick = () => abrirFormCandidato(area)
+  area.querySelectorAll('[data-ver-cv]').forEach(b => { b.onclick = () => abrirArquivo(b.dataset.verCv) })
+}
+
+function abrirFormCandidato (area) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <div class="cabeca-secao"><h3 style="margin:0;">Adicionar candidato ao banco</h3></div>
+    <div class="campo"><label>Nome</label><input type="text" id="cd-nome"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      <div class="campo"><label>Telefone</label><input type="text" id="cd-tel"></div>
+      <div class="campo"><label>E-mail</label><input type="text" id="cd-email"></div>
+    </div>
+    <div class="campo"><label>Área de interesse</label><input type="text" id="cd-area" placeholder="ex: comercial, agronômico"></div>
+    <div class="campo"><label>Tags (separadas por vírgula — usadas pra cruzar com vagas)</label><input type="text" id="cd-tags"></div>
+    ${campoArquivo('cd-cv', 'Currículo (PDF)')}
+    <div class="campo"><label>Observações</label><input type="text" id="cd-obs"></div>
+    <div class="acoes" style="margin-top:14px;text-align:right;">
+      <button class="btn-secundario" id="cd-cancelar">Cancelar</button>
+      <button class="btn" id="cd-salvar">Salvar</button>
+    </div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+  fundo.querySelector('#cd-cancelar').onclick = () => fundo.remove()
+
+  fundo.querySelector('#cd-salvar').onclick = async () => {
+    const nome = $('#cd-nome').value.trim()
+    if (!nome) { alert('Escreve o nome do candidato.'); return }
+    const btn = fundo.querySelector('#cd-salvar')
+    btn.disabled = true; btn.textContent = 'Salvando...'
+    try {
+      const arquivo = $('#cd-cv').files[0]
+      let cvInfo = null
+      if (arquivo) cvInfo = await enviarArquivo(arquivo, 'recrutamento/curriculos')
+      await db.from('candidato').insert({
+        nome, telefone: $('#cd-tel').value.trim() || null, email: $('#cd-email').value.trim() || null,
+        area_interesse: $('#cd-area').value.trim() || null,
+        tags: $('#cd-tags').value.split(',').map(t => t.trim()).filter(Boolean),
+        cv_caminho: cvInfo?.caminho || null, cv_nome: cvInfo?.nome || null,
+        observacoes: $('#cd-obs').value.trim() || null, criado_por: PERFIL.pessoaId
+      })
+      fundo.remove()
+      recrBancoCurriculos(area)
+    } catch (erro) {
+      alert(erro.message)
+      btn.disabled = false; btn.textContent = 'Salvar'
+    }
   }
 }
 
