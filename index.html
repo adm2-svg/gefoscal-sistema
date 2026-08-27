@@ -26307,6 +26307,36 @@ const ETAPAS_VAGA = [
 ]
 const ROTULO_ETAPA_VAGA = Object.fromEntries(ETAPAS_VAGA)
 
+// Quando uma vaga entra em DIVULGANDO, avisa o Marketing de dois jeitos:
+// cria um cartão pronto no Quadro deles (coluna A Fazer) e manda uma
+// notificação no sininho pra quem tem acesso ao módulo -- sem precisar
+// a Amanda avisar no WhatsApp/verbal, o sistema já entrega o recado.
+async function avisarMarketingSobreVaga (vaga) {
+  const resumo = [vaga.descricao, vaga.requisitos].filter(Boolean).join('\n\n')
+  await db.from('marketing_card').insert({
+    titulo: `Vaga: ${vaga.cargo}`,
+    tipo: 'ORGANICO',
+    coluna: 'A_FAZER',
+    observacoes: `Divulgar vaga de ${vaga.cargo}${vaga.tipo_contratacao ? ' (' + vaga.tipo_contratacao + ')' : ''} -- fazer a arte e postar nas redes.\n\n${resumo}`.trim(),
+    tags: ['vaga', 'recrutamento'],
+    criado_por: PERFIL.pessoaId
+  })
+
+  const { data: permsMarketing } = await db.from('modulo_permissao').select('pessoa_id,modulo:modulo_id(chave)')
+  const idsMarketing = [...new Set((permsMarketing || [])
+    .filter(p => p.modulo?.chave === 'marketing' && p.pessoa_id)
+    .map(p => p.pessoa_id))]
+  if (idsMarketing.length) {
+    await db.from('notificacao_pessoal').insert(idsMarketing.map(pessoaId => ({
+      destinatario_id: pessoaId,
+      titulo: '📣 Nova vaga pra divulgar',
+      mensagem: `A vaga de ${vaga.cargo} está pronta pra divulgação. Já criei um cartão pra você no Quadro do Marketing.`,
+      entidade: 'vaga',
+      entidade_id: vaga.id
+    })))
+  }
+}
+
 function proximaEtapaVaga (vaga) {
   if (vaga.etapa === 'ABERTA') return 'DIVULGANDO'
   if (vaga.etapa === 'DIVULGANDO') return 'SELECIONANDO'
@@ -26515,6 +26545,7 @@ async function abrirDetalheVaga (vaga, setoresPorId, area) {
       const payload = { etapa: proxima }
       if (proxima === 'FECHADA') payload.fechada_em = new Date().toISOString()
       await db.from('vaga').update(payload).eq('id', vaga.id)
+      if (proxima === 'DIVULGANDO') await avisarMarketingSobreVaga(vaga)
       fundo.remove()
       recrKanbanVagas(area)
     }
