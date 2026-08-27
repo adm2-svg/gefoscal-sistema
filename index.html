@@ -8063,6 +8063,7 @@ async function expedConferenciaClientes (alvo) {
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
   const { data, error } = await db.from('pedido').select(`
     id, numero, data_pedido, observacoes, quantidade_t, status, criado_em,
+    pedido_vinculado_id, comprador_original,
     cliente:cliente_id ( razao_social ), vendedor:vendedor_id ( nome ), produto:produto_id ( nome, unidade ),
     carregamento ( id, quantidade_t, status, data_carregamento, observacoes, motorista )
   `).neq('status', 'CANCELADO').order('numero')
@@ -8084,12 +8085,26 @@ async function expedConferenciaClientes (alvo) {
     // totalmente expedido, pra não pesar no saldo à toa
     const expedido = p.status === 'CONCLUIDO' ? total : carregamentos.reduce((s, c) => s + Number(c.quantidade_t || 0), 0)
     return {
-      pedido: p, numero: p.numero, ano: anoDoPedido(p), cliente: p.cliente?.razao_social ?? '—',
+      pedido: p, id: p.id, numero: p.numero, ano: anoDoPedido(p), cliente: p.cliente?.razao_social ?? '—',
       produto: p.produto?.nome ?? '—', expedido, total, saldo: Math.max(0, total - expedido),
-      vendedor: p.vendedor?.nome ?? '—', carregamentos, origem: origemDoPedido(p), status: p.status,
-      criadoEm: p.criado_em
+      vendedor: p.vendedor?.nome ?? '—', vendedorId: p.pedido?.vendedor_id, carregamentos, origem: origemDoPedido(p), status: p.status,
+      criadoEm: p.criado_em, vinculoId: p.pedido_vinculado_id, compradorOriginal: p.comprador_original
     }
   }).sort((a, b) => a.cliente.localeCompare(b.cliente))
+
+  // Monta os grupos de pedidos vinculados: cada linha "raiz" (sem vinculoId)
+  // que tem alguma filha apontando pra ela vira um grupo, com total combinado.
+  linhas.forEach(l => {
+    if (l.vinculoId) {
+      const raiz = linhas.find(x => x.id === l.vinculoId)
+      if (raiz) { l.raizNumero = raiz.numero; l.raizCliente = raiz.cliente }
+    }
+  })
+  linhas.forEach(l => {
+    l.grupo = linhas.filter(x => x.id === l.id || x.vinculoId === l.id || (x.vinculoId && x.vinculoId === l.vinculoId))
+    l.grupoTotal = l.grupo.reduce((s, x) => s + x.total, 0)
+    l.grupoExpedido = l.grupo.reduce((s, x) => s + x.expedido, 0)
+  })
 
   const totalExpedido = linhas.reduce((s, l) => s + l.expedido, 0)
   const totalPedido = linhas.reduce((s, l) => s + l.total, 0)
@@ -8103,6 +8118,7 @@ async function expedConferenciaClientes (alvo) {
   const desenhar = () => {
     const exibidas = filtro === 'saldo' ? linhas.filter(l => l.saldo > 0.01)
       : filtro === 'concluidos' ? linhas.filter(l => l.saldo <= 0.01 && l.total > 0)
+      : filtro === 'vinculados' ? linhas.filter(l => l.grupo.length > 1)
       : linhas
 
     alvo.innerHTML = `
@@ -8116,12 +8132,14 @@ async function expedConferenciaClientes (alvo) {
           <div class="rot">⏳ Saldo a expedir</div><div class="val">${fmtNum(totalSaldo)} t</div></div>
         <div class="bloco mke-card" data-card-filtro="concluidos" style="cursor:pointer;${filtro === 'concluidos' ? 'border-color:var(--rust);' : ''}">
           <div class="rot">✅ Já totalmente expedidos</div><div class="val">${totalmenteExpedidos}</div></div>
+        <div class="bloco mke-card" data-card-filtro="vinculados" style="cursor:pointer;${filtro === 'vinculados' ? 'border-color:var(--rust);' : ''}">
+          <div class="rot">🔗 Em grupo vinculado</div><div class="val">${linhas.filter(l => l.grupo.length > 1).length}</div></div>
       </div>
 
-      <p class="texto-dim2" style="font-size:12px;margin:0 0 12px;">Clica num card pra filtrar a lista. Em <span class="badge-bom" style="font-size:10px;">verde</span>: cliente sem saldo.</p>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 12px;">Clica num card pra filtrar a lista. Em <span class="badge-bom" style="font-size:10px;">verde</span>: cliente sem saldo. <span class="chip" style="font-size:10px;">🔗</span>: pedido vinculado a outros (mesmo negócio dividido entre várias pessoas).</p>
 
       <div class="panel" style="padding:0;"><div class="tabela-scroll">
-        <table><thead><tr><th>Pedido</th><th>Ano</th><th>Cliente</th><th class="num">Expedido</th><th class="num">Total/Pedido</th><th class="num">Saldo a expedir</th><th>Vendedor</th></tr></thead><tbody>
+        <table><thead><tr><th>Pedido</th><th>Ano</th><th>Cliente</th><th class="num">Expedido</th><th class="num">Total/Pedido</th><th class="num">Saldo a expedir</th><th>Vendedor</th><th></th></tr></thead><tbody>
           ${exibidas.map(l => {
             const totalmenteExpedido = l.saldo <= 0.01 && l.total > 0
             return `<tr style="cursor:pointer;${totalmenteExpedido ? 'background:rgba(88,166,90,.12);' : ''}" data-abrir-pedido="${l.numero}">
@@ -8132,8 +8150,9 @@ async function expedConferenciaClientes (alvo) {
               <td class="num">${fmtNum(l.total)}</td>
               <td class="num">${totalmenteExpedido ? `<span class="badge-bom">expedido</span>` : fmtNum(l.saldo)}</td>
               <td class="texto-dim">${esc(l.vendedor)}</td>
+              <td>${l.grupo.length > 1 ? `<span class="chip" style="font-size:10px;" title="Grupo: ${fmtNum(l.grupoTotal)}t no total">🔗 grupo de ${l.grupo.length}</span>` : ''}</td>
             </tr>`
-          }).join('') || `<tr><td colspan="7" class="vazio">Nenhum pedido nesse filtro.</td></tr>`}
+          }).join('') || `<tr><td colspan="8" class="vazio">Nenhum pedido nesse filtro.</td></tr>`}
         </tbody></table>
       </div></div>
 
@@ -8152,47 +8171,18 @@ async function expedConferenciaClientes (alvo) {
     const cardExpedido = alvo.querySelector('[data-card-expedido]')
     if (cardExpedido) cardExpedido.onclick = () => abrirDetalheExpedicaoGeral(linhas)
     alvo.querySelectorAll('[data-abrir-pedido]').forEach(tr => {
-      tr.onclick = () => abrirDetalhePedidoConferencia(linhas.find(l => l.numero === tr.dataset.abrirPedido))
+      tr.onclick = () => abrirDetalhePedidoConferencia(linhas.find(l => l.numero === tr.dataset.abrirPedido), linhas, alvo)
     })
   }
   desenhar()
 }
 
-// ----- Detalhe de todas as expedições (carregamentos), cada uma
-// com o pedido/cliente de onde veio -----
-function abrirDetalheExpedicaoGeral (linhas) {
-  const todasExp = []
-  linhas.forEach(l => {
-    l.carregamentos.forEach(c => todasExp.push({ ...c, numero: l.numero, cliente: l.cliente, vendedor: l.vendedor }))
-  })
-  todasExp.sort((a, b) => (b.data_carregamento ?? '').localeCompare(a.data_carregamento ?? ''))
-
+function abrirDetalhePedidoConferencia (l, todasLinhas, alvoLista) {
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
-  fundo.innerHTML = `<div class="modal" style="max-width:720px;">
-    <h3 style="margin:0 0 4px;">🚚 Todas as expedições</h3>
-    <p class="texto-dim2" style="font-size:12px;margin:0 0 14px;">${todasExp.length} carregamento(s) lançado(s), de todos os pedidos.</p>
-    <div class="tabela-scroll" style="max-height:400px;">
-      <table><thead><tr><th>Data</th><th>Pedido</th><th>Cliente</th><th class="num">Quantidade</th><th>Vendedor</th></tr></thead><tbody>
-        ${todasExp.map(c => `<tr>
-          <td class="texto-dim2">${fmtData(c.data_carregamento)}</td>
-          <td><b>${esc(c.numero)}</b></td>
-          <td>${esc(c.cliente)}</td>
-          <td class="num">${fmtNum(c.quantidade_t)} t</td>
-          <td class="texto-dim">${esc(c.vendedor)}</td>
-        </tr>`).join('') || `<tr><td colspan="5" class="vazio">Nenhuma expedição lançada ainda.</td></tr>`}
-      </tbody></table>
-    </div>
-    <div class="acoes" style="margin-top:14px;"><button class="btn-secundario" id="de-fechar">Fechar</button></div>
-  </div>`
-  document.body.appendChild(fundo)
-  fundo.querySelector('#de-fechar').onclick = () => fundo.remove()
-  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
-}
 
-function abrirDetalhePedidoConferencia (l) {
-  const fundo = document.createElement('div')
-  fundo.className = 'modal-fundo'
+  const outrosDoGrupo = l.grupo.filter(x => x.id !== l.id)
+
   fundo.innerHTML = `<div class="modal">
     <div class="cabeca-secao">
       <h3 style="margin:0;">Pedido ${esc(l.numero)}</h3>
@@ -8213,7 +8203,7 @@ function abrirDetalhePedidoConferencia (l) {
     <p class="texto-dim2" style="font-size:12.5px;margin:0 0 14px;">Vendedor: <b>${esc(l.vendedor)}</b> · Ano: ${esc(l.ano)}</p>
 
     <h4 style="font-family:var(--serif);font-size:14px;margin:0 0 8px;">Carregamentos (${l.carregamentos.length})</h4>
-    <div class="tabela-scroll" style="max-height:240px;">
+    <div class="tabela-scroll" style="max-height:180px;margin-bottom:16px;">
       <table><thead><tr><th>Data</th><th class="num">Quantidade</th><th>Status</th><th>Motorista</th><th>Observação</th></tr></thead><tbody>
         ${l.carregamentos.map(c => `<tr>
           <td class="texto-dim2">${fmtData(c.data_carregamento)}</td>
@@ -8224,11 +8214,91 @@ function abrirDetalhePedidoConferencia (l) {
         </tr>`).join('') || `<tr><td colspan="5" class="vazio">${l.status === 'CONCLUIDO' ? 'Marcado como concluído/faturado sem carregamento detalhado lançado — foi expedido na vida real, mas o passo a passo não ficou registrado no sistema.' : 'Nenhum carregamento lançado ainda.'}</td></tr>`}
       </tbody></table>
     </div>
-    <div class="acoes" style="margin-top:14px;"><button class="btn-secundario" id="dp-fechar">Fechar</button></div>
+
+    ${outrosDoGrupo.length ? `
+      <h4 style="font-family:var(--serif);font-size:14px;margin:0 0 8px;">🔗 Pedido vinculado — negócio dividido</h4>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 8px;">
+        ${l.compradorOriginal ? `Comprador original: <b>${esc(l.compradorOriginal)}</b>. ` : ''}
+        Total combinado do grupo: <b>${fmtNum(l.grupoTotal)} t</b> pedidas, <b>${fmtNum(l.grupoExpedido)} t</b> expedidas.
+      </p>
+      <div class="tabela-scroll" style="max-height:160px;margin-bottom:16px;">
+        <table><thead><tr><th>Pedido</th><th>Cliente</th><th class="num">Quantidade</th><th>Status</th></tr></thead><tbody>
+          ${l.grupo.map(g => `<tr ${g.id === l.id ? 'style="background:var(--hover-bg);"' : ''}>
+            <td><b>${esc(g.numero)}</b>${g.id === l.id ? ' <span class="texto-dim2">(esse aqui)</span>' : ''}</td>
+            <td>${esc(g.cliente)}</td>
+            <td class="num">${fmtNum(g.total)} t</td>
+            <td><span class="chip" style="font-size:10px;">${esc(g.status)}</span></td>
+          </tr>`).join('')}
+        </tbody></table>
+      </div>` : ''}
+
+    <h4 style="font-family:var(--serif);font-size:14px;margin:0 0 8px;">✏️ Editar</h4>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+      <div class="campo">
+        <label>Vendedor</label>
+        <select id="dp-vendedor">
+          <option value="">— sem vendedor —</option>
+          ${(EXPED_CACHE.vendedores || []).map(v => `<option value="${v.id}" ${v.id === l.vendedorId ? 'selected' : ''}>${esc(v.nome)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="campo">
+        <label>Comprador original (se diferente do cliente do pedido)</label>
+        <input type="text" id="dp-comprador-original" value="${esc(l.compradorOriginal || '')}" placeholder="ex: Carlos Roque Reginatto">
+      </div>
+    </div>
+    <div class="campo" style="margin-bottom:14px;">
+      <label>Vincular a outro pedido (número) — deixa em branco pra desvincular</label>
+      <input type="text" id="dp-vincular-numero" value="${esc(l.vinculoId ? (todasLinhas.find(x => x.id === l.vinculoId)?.numero || '') : '')}" placeholder="ex: 2273">
+      <p class="texto-dim2" style="font-size:11px;margin-top:4px;">Use quando esse pedido é, na prática, parte de um negócio maior dividido entre várias pessoas — como retirada em nome de um parente/sócio de um pedido combinado.</p>
+    </div>
+
+    <div class="acoes" style="margin-top:14px;display:flex;justify-content:space-between;align-items:center;">
+      <span id="dp-status" class="texto-dim2" style="font-size:12px;"></span>
+      <div style="display:flex;gap:8px;">
+        <button class="btn-secundario" id="dp-fechar">Fechar</button>
+        <button class="btn" id="dp-salvar">Salvar alterações</button>
+      </div>
+    </div>
   </div>`
   document.body.appendChild(fundo)
   fundo.querySelector('#dp-fechar').onclick = () => fundo.remove()
   fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+
+  fundo.querySelector('#dp-salvar').onclick = async () => {
+    const btn = fundo.querySelector('#dp-salvar')
+    const status = fundo.querySelector('#dp-status')
+    btn.disabled = true; btn.textContent = 'Salvando...'
+
+    const numeroVinculo = fundo.querySelector('#dp-vincular-numero').value.trim()
+    let novoVinculoId = null
+    if (numeroVinculo) {
+      const alvoPedido = todasLinhas.find(x => x.numero === numeroVinculo && x.id !== l.id)
+      if (!alvoPedido) {
+        status.textContent = `Não achei nenhum pedido com número "${numeroVinculo}".`
+        status.style.color = 'var(--critico-text)'
+        btn.disabled = false; btn.textContent = 'Salvar alterações'
+        return
+      }
+      novoVinculoId = alvoPedido.id
+    }
+
+    const payload = {
+      vendedor_id: fundo.querySelector('#dp-vendedor').value || null,
+      comprador_original: fundo.querySelector('#dp-comprador-original').value.trim() || null,
+      pedido_vinculado_id: novoVinculoId
+    }
+    const { error } = await db.from('pedido').update(payload).eq('id', l.id)
+
+    btn.disabled = false; btn.textContent = 'Salvar alterações'
+    if (error) { status.textContent = 'Erro: ' + error.message; status.style.color = 'var(--critico-text)'; return }
+
+    status.textContent = '✓ Salvo!'
+    status.style.color = 'var(--good-text)'
+    setTimeout(() => {
+      fundo.remove()
+      if (alvoLista) expedConferenciaClientes(alvoLista)
+    }, 600)
+  }
 }
 
 
