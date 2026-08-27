@@ -25325,7 +25325,7 @@ async function paginaDesempenho () {
   ])
   DESEMP_CACHE = { pessoas: pessoas || [], setores: setores || [] }
 
-  const abas = [['painel', 'Painel'], ['agilidade', 'Agilidade e prazos'],
+  const abas = [['painel', 'Painel'], ['agilidade', 'Agilidade e prazos'], ['individual', 'Acompanhamento Individual'],
                 ['360', 'Avaliação 360'], ['pdi', 'Planos de desenvolvimento'], ['meu', 'Meu RH']]
   area.innerHTML = `
     <div class="subabas">
@@ -25348,6 +25348,7 @@ function abrirDesempenho (sub, editavel) {
   $('#kpis').innerHTML = ''
   if (sub === 'painel') desempPainel(alvo, editavel)
   if (sub === 'agilidade') desempAgilidade(alvo, editavel)
+  if (sub === 'individual') desempIndividual(alvo, editavel)
   if (sub === 'solicitacoes') desempSolicitacoes(alvo, editavel)
   if (sub === 'conduta') desempConduta(alvo, editavel)
   if (sub === '360') desemp360(alvo, editavel)
@@ -25441,6 +25442,210 @@ async function desempPainel (alvo, editavel) {
   if (btnVerAgilidade) btnVerAgilidade.onclick = () => {
     document.querySelectorAll('.subabas button').forEach(b => b.classList.toggle('ativo', b.dataset.sub === 'agilidade'))
     abrirDesempenho('agilidade', editavel)
+  }
+}
+
+
+// ----- Acompanhamento Individual: histórico mensal de agilidade por pessoa,
+// com ajuste manual do RH. Recalcula os últimos 12 meses toda vez que abre,
+// mas nunca sobrescreve ajuste_manual_pontos/observacao_rh (só o RH edita
+// esses dois campos, o resto é sempre recalculado a partir das solicitações). -----
+let DESEMP_INDIVIDUAL_MES = new Date(new Date().getFullYear(), new Date().getMonth(), 1)
+
+async function recalcularAgilidadeMensal () {
+  const inicio12m = new Date(Date.now() - 365 * 864e5).toISOString().slice(0, 10)
+  const { data: solicitacoes } = await db.from('solicitacao_interna')
+    .select('id,status,data_solicitacao,data_limite,data_conclusao,progresso_pct,pontuacao_agilidade,responsavel_id')
+    .gte('data_solicitacao', inicio12m)
+    .not('responsavel_id', 'is', null)
+    .limit(5000)
+
+  const porPessoaMes = {}
+  const garante = (pessoaId, anoMes) => {
+    const k = `${pessoaId}_${anoMes}`
+    porPessoaMes[k] = porPessoaMes[k] || { pessoa_id: pessoaId, anoMes, total: 0, concluidas: 0, noPrazo: 0, pontos: [] }
+    return porPessoaMes[k]
+  }
+
+  ;(solicitacoes || []).forEach(s => {
+    const mesCriacao = (s.data_solicitacao || '').slice(0, 7)
+    if (mesCriacao) garante(s.responsavel_id, mesCriacao).total++
+
+    if (s.status === 'CONCLUIDA' && s.data_conclusao) {
+      const v = garante(s.responsavel_id, s.data_conclusao.slice(0, 7))
+      v.concluidas++
+      if (!estaAtrasadaConcluida(s)) v.noPrazo++
+      const pts = pontuacaoAgilidadeSolicitacao(s)
+      if (pts != null) v.pontos.push(pts)
+    }
+  })
+
+  const linhas = Object.values(porPessoaMes).map(v => ({
+    pessoa_id: v.pessoa_id,
+    ano_mes: v.anoMes + '-01',
+    total_solicitacoes: v.total,
+    concluidas: v.concluidas,
+    concluidas_no_prazo: v.noPrazo,
+    pontuacao_media: v.pontos.length ? Math.round(v.pontos.reduce((s, n) => s + n, 0) / v.pontos.length) : null
+  }))
+
+  if (linhas.length) {
+    // Upsert só nos campos calculados -- como ajuste_manual_pontos e observacao_rh
+    // não entram no payload, o Postgres preserva o valor que já estava salvo.
+    await db.from('agilidade_mensal').upsert(linhas, { onConflict: 'pessoa_id,ano_mes' })
+  }
+}
+
+function navMesDesempHtml (mesAtual) {
+  return `<div class="filtros" style="margin-bottom:14px;align-items:center;">
+    <button class="btn-secundario mini" id="dsi-mes-menos">‹</button>
+    <span style="min-width:150px;text-align:center;">${nomeMes(mesAtual)}</span>
+    <button class="btn-secundario mini" id="dsi-mes-mais">›</button>
+    <button class="btn-secundario mini" id="dsi-mes-hoje">hoje</button>
+  </div>`
+}
+
+async function desempIndividual (alvo, editavel) {
+  if (!editavel) { alvo.innerHTML = `<div class="panel" style="padding:22px;">
+    <p class="texto-dim">Esse painel é sensível e só quem edita o módulo de RH enxerga. Veja o seu em "Meu RH".</p></div>`; return }
+
+  alvo.innerHTML = `<p class="texto-dim2">Calculando os números do mês, um instante...</p>`
+  await recalcularAgilidadeMensal()
+  await desenharDesempIndividual(alvo, editavel)
+}
+
+async function desenharDesempIndividual (alvo, editavel) {
+  const anoMesStr = isoMes(DESEMP_INDIVIDUAL_MES)
+  const [{ data: pessoas }, { data: registros }] = await Promise.all([
+    db.from('pessoa').select('id,nome,setor:setor_id(nome)').eq('status', 'ATIVO').order('nome'),
+    db.from('agilidade_mensal').select('*').eq('ano_mes', anoMesStr)
+  ])
+
+  const porPessoa = {}
+  ;(registros || []).forEach(r => { porPessoa[r.pessoa_id] = r })
+
+  const linhas = (pessoas || []).map(p => {
+    const r = porPessoa[p.id]
+    const pontuacaoFinal = r?.ajuste_manual_pontos ?? r?.pontuacao_media ?? null
+    return {
+      pessoa: p, nome: p.nome, setor: p.setor?.nome ?? '—',
+      total: r?.total_solicitacoes ?? 0, concluidas: r?.concluidas ?? 0,
+      pctNoPrazo: r?.concluidas ? Math.round(r.concluidas_no_prazo / r.concluidas * 100) : null,
+      pontuacao: pontuacaoFinal, temAjuste: r?.ajuste_manual_pontos != null,
+      observacao: r?.observacao_rh ?? ''
+    }
+  }).sort((a, b) => (b.pontuacao ?? -1) - (a.pontuacao ?? -1))
+
+  alvo.innerHTML = `
+    ${navMesDesempHtml(DESEMP_INDIVIDUAL_MES)}
+    <p class="texto-dim2" style="font-size:12px;margin:-8px 0 14px;">
+      Puxa todo mundo com cadastro ativo (usuários do sistema + DP). Clica numa pessoa pra ver o histórico completo e ajustar manualmente.
+      <span style="opacity:.8;">✎ = pontuação ajustada pelo RH</span> · <span style="opacity:.8;">📝 = tem observação</span></p>
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>Pessoa</th><th>Setor</th><th class="num">Solicitações</th><th class="num">Concluídas</th>
+        <th class="num">% no prazo</th><th class="num">Agilidade</th><th></th>
+      </tr></thead><tbody>
+        ${linhas.map(l => `<tr style="cursor:pointer;" data-abrir-pessoa="${l.pessoa.id}">
+          <td>${esc(l.nome)}</td>
+          <td class="texto-dim2">${esc(l.setor)}</td>
+          <td class="num">${l.total}</td>
+          <td class="num">${l.concluidas}</td>
+          <td class="num">${l.pctNoPrazo != null ? `<span class="${l.pctNoPrazo >= 80 ? 'badge-bom' : l.pctNoPrazo >= 50 ? 'chip' : 'badge-alerta'}">${l.pctNoPrazo}%</span>` : '—'}</td>
+          <td class="num">${l.pontuacao != null ? `<span class="${corAgilidade(l.pontuacao)}">${l.pontuacao}${l.temAjuste ? ' ✎' : ''}</span>` : '—'}</td>
+          <td class="texto-dim2" style="font-size:11px;">${l.observacao ? '📝' : ''}</td>
+        </tr>`).join('') || `<tr><td colspan="7" class="vazio">Nenhuma pessoa ativa cadastrada.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+
+  $('#dsi-mes-menos').onclick = () => { DESEMP_INDIVIDUAL_MES = new Date(DESEMP_INDIVIDUAL_MES.getFullYear(), DESEMP_INDIVIDUAL_MES.getMonth() - 1, 1); desenharDesempIndividual(alvo, editavel) }
+  $('#dsi-mes-mais').onclick = () => { DESEMP_INDIVIDUAL_MES = new Date(DESEMP_INDIVIDUAL_MES.getFullYear(), DESEMP_INDIVIDUAL_MES.getMonth() + 1, 1); desenharDesempIndividual(alvo, editavel) }
+  $('#dsi-mes-hoje').onclick = () => { DESEMP_INDIVIDUAL_MES = new Date(new Date().getFullYear(), new Date().getMonth(), 1); desenharDesempIndividual(alvo, editavel) }
+  alvo.querySelectorAll('[data-abrir-pessoa]').forEach(tr => {
+    tr.onclick = () => abrirDetalheIndividualRh(linhas.find(l => l.pessoa.id === tr.dataset.abrirPessoa).pessoa, editavel, alvo)
+  })
+}
+
+async function abrirDetalheIndividualRh (pessoa, editavel, alvoLista) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal"><p class="texto-dim2">carregando histórico...</p></div>`
+  document.body.appendChild(fundo)
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+
+  const { data: historico } = await db.from('agilidade_mensal').select('*')
+    .eq('pessoa_id', pessoa.id).order('ano_mes', { ascending: false }).limit(12)
+  const linhas = historico || []
+  const mesAtualStr = isoMes(new Date())
+  const registroMesAtual = linhas.find(l => l.ano_mes === mesAtualStr)
+
+  const modalNovo = document.createElement('div')
+  modalNovo.className = 'modal'
+  modalNovo.style.maxWidth = '640px'
+  modalNovo.innerHTML = `
+    <div class="cabeca-secao"><h3 style="margin:0;">${esc(pessoa.nome)}</h3></div>
+    <p class="texto-dim2" style="font-size:12.5px;margin:-6px 0 14px;">Histórico de agilidade — últimos ${linhas.length || 0} meses com dados</p>
+
+    <div class="tabela-scroll" style="max-height:220px;margin-bottom:16px;">
+      <table><thead><tr><th>Mês</th><th class="num">Solicitações</th><th class="num">Concluídas</th><th class="num">% no prazo</th><th class="num">Agilidade</th></tr></thead><tbody>
+        ${linhas.map(l => {
+          const pct = l.concluidas ? Math.round(l.concluidas_no_prazo / l.concluidas * 100) : null
+          const pontosFinal = l.ajuste_manual_pontos ?? l.pontuacao_media
+          return `<tr>
+            <td>${nomeMes(new Date(l.ano_mes + 'T00:00:00'))}</td>
+            <td class="num">${l.total_solicitacoes}</td>
+            <td class="num">${l.concluidas}</td>
+            <td class="num">${pct != null ? pct + '%' : '—'}</td>
+            <td class="num">${pontosFinal != null ? `<span class="${corAgilidade(pontosFinal)}">${pontosFinal}${l.ajuste_manual_pontos != null ? ' ✎' : ''}</span>` : '—'}</td>
+          </tr>`
+        }).join('') || `<tr><td colspan="5" class="vazio">Sem solicitações registradas ainda.</td></tr>`}
+      </tbody></table>
+    </div>
+
+    ${editavel ? `
+      <h4 style="font-family:var(--serif);font-size:14px;margin:0 0 8px;">✏️ Ajustar mês atual (${nomeMes(new Date())})</h4>
+      <div style="display:grid;grid-template-columns:1fr 2fr;gap:10px;margin-bottom:10px;">
+        <div class="campo">
+          <label>Pontuação ajustada ${registroMesAtual?.pontuacao_media != null ? '(calculada: ' + registroMesAtual.pontuacao_media + ')' : ''}</label>
+          <input type="number" id="dsi-ajuste" min="0" max="100" value="${registroMesAtual?.ajuste_manual_pontos ?? ''}" placeholder="deixa em branco pra usar a calculada">
+        </div>
+        <div class="campo">
+          <label>Observação do RH</label>
+          <input type="text" id="dsi-obs" value="${esc(registroMesAtual?.observacao_rh || '')}">
+        </div>
+      </div>
+      <div class="acoes" style="margin-top:14px;display:flex;justify-content:space-between;align-items:center;">
+        <span id="dsi-status" class="texto-dim2" style="font-size:12px;"></span>
+        <div style="display:flex;gap:8px;">
+          <button class="btn-secundario" id="dsi-fechar">Fechar</button>
+          <button class="btn" id="dsi-salvar">Salvar ajuste</button>
+        </div>
+      </div>` : `<div class="acoes" style="margin-top:14px;text-align:right;"><button class="btn-secundario" id="dsi-fechar">Fechar</button></div>`}
+  `
+  fundo.innerHTML = ''
+  fundo.appendChild(modalNovo)
+
+  fundo.querySelector('#dsi-fechar').onclick = () => fundo.remove()
+
+  const btnSalvar = fundo.querySelector('#dsi-salvar')
+  if (btnSalvar) btnSalvar.onclick = async () => {
+    const status = fundo.querySelector('#dsi-status')
+    btnSalvar.disabled = true; btnSalvar.textContent = 'Salvando...'
+    const valorAjuste = fundo.querySelector('#dsi-ajuste').value.trim()
+    const payload = {
+      pessoa_id: pessoa.id,
+      ano_mes: mesAtualStr,
+      ajuste_manual_pontos: valorAjuste === '' ? null : Number(valorAjuste),
+      observacao_rh: fundo.querySelector('#dsi-obs').value.trim() || null,
+      atualizado_por: PERFIL.pessoaId,
+      atualizado_em: new Date().toISOString()
+    }
+    const { error } = await db.from('agilidade_mensal').upsert(payload, { onConflict: 'pessoa_id,ano_mes' })
+    btnSalvar.disabled = false; btnSalvar.textContent = 'Salvar ajuste'
+    if (error) { status.textContent = 'Erro: ' + error.message; status.style.color = 'var(--critico-text)'; return }
+    status.textContent = '✓ Salvo!'
+    status.style.color = 'var(--good-text)'
+    if (alvoLista) desenharDesempIndividual(alvoLista, editavel)
   }
 }
 
