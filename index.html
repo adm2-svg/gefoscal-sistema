@@ -353,6 +353,28 @@ tbody tr:hover { background: var(--hover-bg); }
                           transition:background .15s ease; min-height:30px; }
 .crm-card .btn-agendar:hover { background:rgba(var(--rust-rgb),.22); }
 
+/* ---- Card do Kanban da SDR WhatsApp — mesmo espírito do .crm-card, mas
+   com campos e fileira de ações próprios (chamar, ver conversa, relatório). */
+.sdr-kanban-card { position:relative; background:var(--card); border:1px solid var(--line); border-radius:13px;
+  padding:12px 13px; cursor:grab; transition:transform .12s ease, box-shadow .12s ease, border-color .12s ease; }
+.sdr-kanban-card:hover { transform:translateY(-1px); box-shadow:0 8px 18px rgba(0,0,0,.10); border-color:var(--line2); }
+.sdr-kanban-card:active { cursor:grabbing; }
+.sdr-kc-topo { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+.sdr-kc-nome { font-weight:700; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.sdr-kc-disc { flex:none; width:22px; height:22px; border-radius:7px; font-size:11px; font-weight:800;
+  display:flex; align-items:center; justify-content:center; color:#fff;
+  background:linear-gradient(135deg,var(--rust),var(--gold)); }
+.sdr-kc-campos { margin-top:10px; display:grid; grid-template-columns:1fr 1fr; gap:4px 10px; }
+.sdr-kc-campos .rot { display:block; font-size:9.5px; text-transform:uppercase; letter-spacing:.4px; color:var(--dim2); }
+.sdr-kc-campos .val { display:block; font-size:12px; color:var(--dim); margin-top:1px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.sdr-kc-acoes { margin-top:10px; padding-top:8px; border-top:1px solid var(--line); display:flex;
+  align-items:center; gap:10px; }
+.sdr-kc-acoes a, .sdr-kc-acoes button { border:0; background:none; padding:0; font-size:14px; line-height:1;
+  cursor:pointer; opacity:.8; transition:opacity .12s ease; text-decoration:none; }
+.sdr-kc-acoes a:hover, .sdr-kc-acoes button:hover:not(:disabled) { opacity:1; }
+.sdr-kc-acoes .sdr-kc-data { margin-left:auto; font-size:10px; color:var(--dim2); }
+
 /* ---- CRM Técnico — reaproveita quase tudo que já existe (.cabeca-secao,
    .passo, .form-grade, .chip-filtro, .modal); só o kanban de ciclo e o
    farol de atraso precisam de classe própria. ---- */
@@ -15033,24 +15055,36 @@ async function sdrAbaFunil (alvo) {
 
   const lista = SDR_CACHE.leads.filter(l => !l.enviado_para_consultor)
 
-  const cartao = l => `<div class="crm-card" data-lead-sdr="${l.id}" draggable="true" style="cursor:grab;">
-    <div class="nome">${esc(l.nome || l.telefone)}</div>
-    <div class="sub">${esc(l.telefone)}${l.perfil_disc ? ' · <b>' + esc(l.perfil_disc) + '</b>' : ''}${l.uf ? ' · ' + esc(l.uf) : ''}</div>
-    <div class="linhas">
-      ${l.cultura ? `<div><span class="ic">🌱</span>${esc(l.cultura)}</div>` : ''}
-      ${l.volume_producao ? `<div><span class="ic">📦</span>${esc(l.volume_producao)}</div>` : ''}
-      ${l.momento_compra ? `<div><span class="ic">⏱</span>${esc(l.momento_compra)}</div>` : ''}
-    </div>
-    <div class="rodape">
-      <span class="data">${formatarHoraRelativa(l.updated_at)}</span>
-    </div>
-  </div>`
+  const cartao = l => {
+    const iniciais = (l.nome || l.telefone || '?').trim().split(/\s+/).slice(0, 2).map(p => p[0]).join('').toUpperCase()
+    return `<div class="sdr-kanban-card" data-lead-sdr="${l.id}" draggable="true">
+      <div class="sdr-kc-topo">
+        <div style="display:flex;gap:8px;align-items:center;min-width:0;">
+          ${avatarHtml(null, l.nome || l.telefone, 26)}
+          <span class="sdr-kc-nome">${esc(l.nome || l.telefone)}</span>
+        </div>
+        ${l.perfil_disc ? `<span class="sdr-kc-disc" title="Perfil DISC inferido pela IA">${esc(l.perfil_disc)}</span>` : ''}
+      </div>
+      <div class="sdr-kc-campos">
+        <div><span class="rot">Cultura</span><span class="val">${esc(l.cultura || '—')}</span></div>
+        <div><span class="rot">Volume</span><span class="val">${esc(l.volume_producao || '—')}</span></div>
+      </div>
+      <div class="sdr-kc-acoes">
+        <a href="https://wa.me/${esc((l.telefone || '').replace(/\D/g, ''))}" target="_blank" rel="noopener"
+           onclick="event.stopPropagation()" title="Chamar no WhatsApp">📞</a>
+        <button type="button" data-abrir-conversa="${l.id}" onclick="event.stopPropagation()" title="Ver conversa">💬</button>
+        <button type="button" data-ver-relatorio="${l.id}" onclick="event.stopPropagation()" title="Relatório / DISC">🏷️</button>
+        <button type="button" disabled title="Agendar (em breve)" style="opacity:.35;cursor:not-allowed;">📅</button>
+        <span class="sdr-kc-data">${formatarHoraRelativa(l.updated_at)}</span>
+      </div>
+    </div>`
+  }
 
   alvo.innerHTML = `
     <p class="texto-dim2" style="margin-bottom:12px;font-size:12.5px;">
       A IA atualiza o status automaticamente conforme a conversa. Você também pode arrastar entre colunas.
     </p>
-    <div class="crm-board" style="grid-template-columns:repeat(${STATUS_LEAD_SDR.length},minmax(210px,1fr));">
+    <div class="crm-board" style="grid-template-columns:repeat(${STATUS_LEAD_SDR.length},minmax(220px,1fr));">
       ${STATUS_LEAD_SDR.map(st => {
         const desta = lista.filter(l => (l.status || 'novo') === st)
         return `<div class="crm-col" data-coluna-sdr="${st}">
@@ -15063,16 +15097,33 @@ async function sdrAbaFunil (alvo) {
     </div>`
 
   alvo.querySelectorAll('[data-lead-sdr]').forEach(el => {
-    el.onclick = () => {
-      const lead = SDR_CACHE.leads.find(l => String(l.id) === el.dataset.leadSdr)
-      if (lead) { SDR_CACHE.selecionado = lead; abrirRelatorioLeadSdr(lead) }
-    }
     el.ondragstart = e => {
       SDR_ARRASTANDO = el.dataset.leadSdr
       e.dataTransfer.effectAllowed = 'move'
       el.style.opacity = '.4'
     }
     el.ondragend = () => { el.style.opacity = '1'; SDR_ARRASTANDO = null }
+  })
+
+  alvo.querySelectorAll('[data-ver-relatorio]').forEach(btn => {
+    btn.onclick = () => {
+      const lead = SDR_CACHE.leads.find(l => String(l.id) === btn.dataset.verRelatorio)
+      if (lead) { SDR_CACHE.selecionado = lead; abrirRelatorioLeadSdr(lead) }
+    }
+  })
+
+  alvo.querySelectorAll('[data-abrir-conversa]').forEach(btn => {
+    btn.onclick = () => {
+      const lead = SDR_CACHE.leads.find(l => String(l.id) === btn.dataset.abrirConversa)
+      if (!lead) return
+      document.querySelectorAll('#sub-sdr').forEach(() => {})
+      const abaLeadsBtn = document.querySelector('.subabas button[data-sub="leads"]')
+      if (abaLeadsBtn) {
+        document.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === abaLeadsBtn))
+        abrirSubAbaSdr('leads')
+        setTimeout(() => selecionarLeadSdr(lead.id), 250)
+      }
+    }
   })
 
   alvo.querySelectorAll('[data-drop-sdr]').forEach(zona => {
