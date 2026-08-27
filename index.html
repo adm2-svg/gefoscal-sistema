@@ -14732,7 +14732,7 @@ async function paginaSdrWhatsapp () {
   const area = areaLivre()
   area.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
-  const abas = [['leads', 'Leads'], ['funil', 'Funil'], ['regioes', 'Regiões']]
+  const abas = [['leads', 'Leads'], ['funil', 'Funil'], ['regioes', 'Regiões'], ['treinar', 'Treinar IA']]
   area.innerHTML = `
     <div class="subabas">
       ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
@@ -14753,6 +14753,7 @@ function abrirSubAbaSdr (sub) {
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
   if (sub === 'leads') sdrAbaLeads(alvo)
   if (sub === 'funil') sdrAbaFunil(alvo)
+  if (sub === 'treinar') sdrAbaTreinar(alvo)
   if (sub === 'regioes') sdrAbaRegioes(alvo)
 }
 
@@ -15202,6 +15203,121 @@ function renderTabelaRegioes () {
       renderTabelaRegioes()
     }
   })
+}
+
+
+// ----- Aba Treinar IA: editar o SYSTEM_PROMPT do bot, com histórico -----
+async function sdrAbaTreinar (alvo) {
+  const { data: versoes, error } = await db.from('sdr_prompt')
+    .select('id,conteudo,ativo,criado_em,atualizado_por:atualizado_por(nome)')
+    .order('criado_em', { ascending: false })
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  const ativa = (versoes || []).find(v => v.ativo)
+  const historico = (versoes || []).filter(v => !v.ativo)
+
+  alvo.innerHTML = `
+    <p class="texto-dim2" style="margin-bottom:12px;font-size:12.5px;">
+      Esse é o prompt que a SDR IA segue em toda conversa no WhatsApp. Editar aqui atualiza o bot
+      na próxima mensagem, sem precisar de deploy. Se algo não ficar bom, dá pra voltar pra
+      qualquer versão anterior com um clique.
+    </p>
+
+    <div class="campo" style="margin-bottom:10px;">
+      <label>Prompt ativo agora ${ativa ? '· salvo ' + formatarHoraRelativa(ativa.criado_em) + (ativa.atualizado_por?.nome ? ' por ' + esc(ativa.atualizado_por.nome) : '') : ''}</label>
+      <textarea id="sdr-prompt-texto" style="width:100%;min-height:360px;font-family:monospace;font-size:12.5px;
+        line-height:1.5;padding:12px;border:1px solid var(--line);border-radius:8px;
+        background:var(--surface2);color:var(--txt);resize:vertical;">${esc(ativa?.conteudo || '')}</textarea>
+    </div>
+
+    <div class="acoes" style="margin-bottom:24px;">
+      <button class="btn" id="sdr-btn-salvar-prompt">Salvar nova versão</button>
+      <span id="sdr-prompt-status" style="margin-left:10px;font-size:12px;color:var(--dim2);"></span>
+    </div>
+
+    <h4 style="font-family:var(--serif);font-size:15px;margin-bottom:10px;">Versões anteriores</h4>
+    <div id="sdr-historico-prompt">
+      ${historico.length ? historico.map(v => `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;
+          padding:10px 12px;border:1px solid var(--line2);border-radius:8px;margin-bottom:8px;">
+          <div style="min-width:0;">
+            <div style="font-size:12.5px;font-weight:600;">${formatarHoraRelativa(v.criado_em)}${v.atualizado_por?.nome ? ' · ' + esc(v.atualizado_por.nome) : ''}</div>
+            <div class="texto-dim2" style="font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:520px;">
+              ${esc((v.conteudo || '').replace(/\s+/g, ' ').trim().slice(0, 140))}...
+            </div>
+          </div>
+          <div style="display:flex;gap:6px;flex:none;">
+            <button class="btn-secundario mini" data-ver-prompt="${v.id}">ver</button>
+            <button class="btn-secundario mini" data-reverter-prompt="${v.id}">reverter</button>
+          </div>
+        </div>`).join('') : '<p class="texto-dim2">Nenhuma versão anterior ainda.</p>'}
+    </div>`
+
+  $('#sdr-btn-salvar-prompt').onclick = () => salvarNovoPromptSdr(ativa)
+
+  alvo.querySelectorAll('[data-ver-prompt]').forEach(btn => {
+    btn.onclick = () => {
+      const v = historico.find(h => String(h.id) === btn.dataset.verPrompt)
+      if (v) abrirVisualizarPromptSdr(v)
+    }
+  })
+
+  alvo.querySelectorAll('[data-reverter-prompt]').forEach(btn => {
+    btn.onclick = () => reverterPromptSdr(btn.dataset.reverterPrompt, alvo)
+  })
+}
+
+async function salvarNovoPromptSdr (versaoAtual) {
+  const texto = $('#sdr-prompt-texto')?.value.trim()
+  if (!texto) { alert('O prompt não pode ficar vazio.'); return }
+  if (versaoAtual && texto === versaoAtual.conteudo) {
+    $('#sdr-prompt-status').textContent = 'Nada mudou desde a última versão.'
+    return
+  }
+
+  const btn = $('#sdr-btn-salvar-prompt')
+  btn.disabled = true; btn.textContent = 'Salvando...'
+
+  if (versaoAtual) {
+    await db.from('sdr_prompt').update({ ativo: false }).eq('id', versaoAtual.id)
+  }
+  const { error } = await db.from('sdr_prompt').insert({
+    conteudo: texto, ativo: true, atualizado_por: PERFIL.pessoaId
+  })
+
+  btn.disabled = false; btn.textContent = 'Salvar nova versão'
+  if (error) { alert('Erro ao salvar: ' + error.message); return }
+
+  $('#sdr-prompt-status').textContent = '✓ Salvo — o bot já está usando essa versão.'
+  const alvo = $('#sub-sdr')
+  if (alvo) sdrAbaTreinar(alvo)
+}
+
+async function reverterPromptSdr (versaoId, alvo) {
+  if (!confirm('Voltar pra essa versão? Ela vira o prompt ativo do bot agora.')) return
+
+  await db.from('sdr_prompt').update({ ativo: false }).eq('ativo', true)
+  const { error } = await db.from('sdr_prompt').update({ ativo: true }).eq('id', versaoId)
+  if (error) { alert('Erro ao reverter: ' + error.message); return }
+
+  sdrAbaTreinar(alvo)
+}
+
+function abrirVisualizarPromptSdr (versao) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:640px;">
+    <div class="cabeca-secao"><h3>Versão de ${formatarHoraRelativa(versao.criado_em)}</h3></div>
+    <textarea readonly style="width:100%;min-height:360px;font-family:monospace;font-size:12px;
+      line-height:1.5;padding:12px;border:1px solid var(--line);border-radius:8px;
+      background:var(--surface2);color:var(--txt);">${esc(versao.conteudo)}</textarea>
+    <div class="acoes" style="margin-top:14px;text-align:right;">
+      <button class="btn-secundario" id="vp-fechar">Fechar</button>
+    </div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.querySelector('#vp-fechar').onclick = () => fundo.remove()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
 }
 
 // ---------------------------------------------------------------
