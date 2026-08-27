@@ -26311,6 +26311,24 @@ const ROTULO_ETAPA_VAGA = Object.fromEntries(ETAPAS_VAGA)
 // cria um cartão pronto no Quadro deles (coluna A Fazer) e manda uma
 // notificação no sininho pra quem tem acesso ao módulo -- sem precisar
 // a Amanda avisar no WhatsApp/verbal, o sistema já entrega o recado.
+// Chamado sempre que um cartão do Quadro de Marketing vira CONCLUIDO --
+// se esse cartão nasceu de uma vaga (vaga_id preenchido), avisa quem abriu
+// a vaga que a divulgação já foi feita. Não faz nada se o cartão não tiver
+// vínculo com vaga nenhuma (cartão comum de marketing).
+async function avisarRHQueMarketingConcluiu (cardId) {
+  const { data: card } = await db.from('marketing_card').select('vaga_id').eq('id', cardId).maybeSingle()
+  if (!card?.vaga_id) return
+  const { data: vaga } = await db.from('vaga').select('id,cargo,aberta_por').eq('id', card.vaga_id).maybeSingle()
+  if (!vaga?.aberta_por) return
+  await db.from('notificacao_pessoal').insert({
+    destinatario_id: vaga.aberta_por,
+    titulo: '✅ Divulgação concluída',
+    mensagem: `O Marketing terminou a arte e divulgação da vaga de ${vaga.cargo}. Já dá pra avançar ela pra "Selecionando" no Recrutamento.`,
+    entidade: 'vaga',
+    entidade_id: vaga.id
+  })
+}
+
 async function avisarMarketingSobreVaga (vaga) {
   const resumo = [vaga.descricao, vaga.requisitos].filter(Boolean).join('\n\n')
   await db.from('marketing_card').insert({
@@ -26319,6 +26337,7 @@ async function avisarMarketingSobreVaga (vaga) {
     coluna: 'A_FAZER',
     observacoes: `Divulgar vaga de ${vaga.cargo}${vaga.tipo_contratacao ? ' (' + vaga.tipo_contratacao + ')' : ''} -- fazer a arte e postar nas redes.\n\n${resumo}`.trim(),
     tags: ['vaga', 'recrutamento'],
+    vaga_id: vaga.id,
     criado_por: PERFIL.pessoaId
   })
 
@@ -26516,6 +26535,7 @@ async function abrirDetalheVaga (vaga, setoresPorId, area) {
           </tr>`).join('') || `<tr><td colspan="4" class="vazio">Nenhum candidato inscrito ainda.</td></tr>`}
         </tbody></table>
       </div>
+      <button class="btn-secundario mini" id="vg-cadastrar-candidato" style="margin-bottom:14px;">+ Cadastrar novo candidato pra essa vaga</button>
 
       ${sugestoesFiltradas.length ? `
         <h4 style="font-family:var(--serif);font-size:14px;margin:0 0 8px;">💡 Sugestões do Banco de Currículos</h4>
@@ -26557,6 +26577,7 @@ async function abrirDetalheVaga (vaga, setoresPorId, area) {
         desenhar()
       }
     })
+    fundo.querySelector('#vg-cadastrar-candidato').onclick = () => formCadastroRapidoCandidato(vaga, desenhar)
     fundo.querySelectorAll('[data-definir-tipo]').forEach(b => {
       b.onclick = async () => {
         vaga.tipo_contratacao = b.dataset.definirTipo
@@ -26596,6 +26617,54 @@ async function recrBancoCurriculos (area) {
 
   $('#recr-novo-candidato').onclick = () => abrirFormCandidato(area)
   area.querySelectorAll('[data-ver-cv]').forEach(b => { b.onclick = () => abrirArquivo(b.dataset.verCv) })
+}
+
+// Atalho de dentro do detalhe da vaga: cadastra o candidato no Banco de
+// Currículos E já vincula ele a essa vaga numa ação só -- sem precisar ir
+// no Banco de Currículos separado e depois voltar pra vincular.
+function formCadastroRapidoCandidato (vaga, aoFechar) {
+  const fundo2 = document.createElement('div')
+  fundo2.className = 'modal-fundo'
+  fundo2.innerHTML = `<div class="modal">
+    <h3>Cadastrar candidato pra "${esc(vaga.cargo)}"</h3>
+    <div class="campo"><label>Nome</label><input type="text" id="crc-nome"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      <div class="campo"><label>Telefone</label><input type="text" id="crc-tel"></div>
+      <div class="campo"><label>E-mail</label><input type="text" id="crc-email"></div>
+    </div>
+    ${campoArquivo('crc-cv', 'Currículo (PDF, opcional)')}
+    <div class="acoes" style="margin-top:14px;text-align:right;">
+      <button class="btn-secundario" id="crc-cancelar">Cancelar</button>
+      <button class="btn" id="crc-salvar">Cadastrar e vincular à vaga</button>
+    </div>
+  </div>`
+  document.body.appendChild(fundo2)
+  fundo2.onclick = e => { if (e.target === fundo2) fundo2.remove() }
+  fundo2.querySelector('#crc-cancelar').onclick = () => fundo2.remove()
+
+  fundo2.querySelector('#crc-salvar').onclick = async () => {
+    const nome = $('#crc-nome').value.trim()
+    if (!nome) { alert('Escreve o nome do candidato.'); return }
+    const btn = fundo2.querySelector('#crc-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    try {
+      const arquivo = $('#crc-cv').files[0]
+      let cvInfo = null
+      if (arquivo) cvInfo = await enviarArquivo(arquivo, 'recrutamento/curriculos')
+      const { data: candidatoNovo, error } = await db.from('candidato').insert({
+        nome, telefone: $('#crc-tel').value.trim() || null, email: $('#crc-email').value.trim() || null,
+        area_interesse: (vaga.tags || [])[0] || null, tags: vaga.tags || [],
+        cv_caminho: cvInfo?.caminho || null, cv_nome: cvInfo?.nome || null,
+        criado_por: PERFIL.pessoaId
+      }).select().single()
+      if (error) throw error
+      await db.from('vaga_candidatura').insert({ vaga_id: vaga.id, candidato_id: candidatoNovo.id })
+      fundo2.remove()
+      aoFechar()
+    } catch (erro) {
+      alert(erro.message)
+      btn.disabled = false; btn.textContent = 'Cadastrar e vincular à vaga'
+    }
+  }
 }
 
 function abrirFormCandidato (area) {
@@ -27701,6 +27770,7 @@ async function mktVisaoGeral (alvo, editavel) {
   alvo.querySelectorAll('[data-concluir-demanda]').forEach(cb => {
     cb.onchange = async () => {
       await db.from('marketing_card').update({ coluna: 'CONCLUIDO', atualizado_em: new Date().toISOString() }).eq('id', cb.dataset.concluirDemanda)
+      await avisarRHQueMarketingConcluiu(cb.dataset.concluirDemanda)
       mktVisaoGeral(alvo, editavel)
     }
   })
@@ -28136,7 +28206,10 @@ function formMktCard (registro, aoSalvar) {
       tags, observacoes: fundo.querySelector('#mkq-obs').value.trim() || null, atualizado_em: new Date().toISOString()
     }
     let error
-    if (registro) { ({ error } = await db.from('marketing_card').update(corpo).eq('id', registro.id)) }
+    if (registro) {
+      ({ error } = await db.from('marketing_card').update(corpo).eq('id', registro.id))
+      if (!error && registro.coluna !== 'CONCLUIDO' && corpo.coluna === 'CONCLUIDO') await avisarRHQueMarketingConcluiu(registro.id)
+    }
     else {
       const { data: codigoGerado } = await db.rpc('gerar_codigo_card_marketing', { p_tipo: tipo })
       ;({ error } = await db.from('marketing_card').insert({ ...corpo, codigo: codigoGerado, criado_por: PERFIL.pessoaId }))
