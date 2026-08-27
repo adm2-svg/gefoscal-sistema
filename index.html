@@ -25311,14 +25311,18 @@ const ROTULO_TIPO_360 = { AUTOAVALIACAO: 'Autoavaliação', PARES: 'Pares', GEST
 const ROTULO_STATUS_360_CICLO = { PLANEJADO: 'Planejado', ABERTO: 'Aberto', ENCERRADO: 'Encerrado' }
 
 async function paginaDesempenho () {
-  if (!podeVer('desempenho')) { areaLivre().innerHTML =
-    `<div class="panel" style="padding:22px;"><p class="texto-dim">
-     Você não tem acesso à gestão de RH, mas pode ver o que é sobre você
-     em "Meu RH".</p>
-     <div class="acoes" style="margin-top:10px;"><button class="btn-secundario" id="ds-so-meu">Ver meu RH</button></div>
-     </div>`
-    const b = document.getElementById('ds-so-meu')
-    if (b) b.onclick = () => { areaLivre().innerHTML = `<div class="subabas"><button class="ativo">Meu RH</button></div><div id="sub-desempenho"></div>`; desempMeu($('#sub-desempenho')) }
+  if (!podeVer('desempenho')) {
+    const area = areaLivre()
+    area.innerHTML = `
+      <div style="background:linear-gradient(120deg,#0f2418 0%,#1a3a26 55%,#0f2418 100%);border-radius:14px;padding:22px 26px;margin-bottom:18px;position:relative;overflow:hidden;border:1px solid #1f4530;">
+        <div style="position:absolute;right:-16px;top:-22px;font-size:120px;opacity:.09;line-height:1;">🙋</div>
+        <div style="position:relative;">
+          <div style="color:var(--gold,#c8a11a);font-size:11px;text-transform:uppercase;letter-spacing:.14em;font-weight:700;">Meu RH</div>
+          <div style="color:#eaf5ec;font-family:var(--serif);font-size:22px;margin-top:3px;">Seu espaço pessoal — conduta, avaliações e trilhas de desenvolvimento</div>
+        </div>
+      </div>
+      <div id="sub-desempenho"></div>`
+    desempMeu($('#sub-desempenho'))
     return
   }
 
@@ -25334,11 +25338,19 @@ async function paginaDesempenho () {
   DESEMP_CACHE = { pessoas: pessoas || [], setores: setores || [] }
 
   const abas = [
-    ['painel', '📊', 'Painel'], ['agilidade', '⚡', 'Agilidade e prazos'], ['individual', '👤', 'Acompanhamento Individual'],
-    ['recrutamento', '🗂️', 'Recrutamento e Seleção'], ['360', '🔄', 'Avaliação 360'], ['pdi', '🌱', 'Planos de desenvolvimento'],
-    ['trilhas', '🎓', 'Trilhas'], ['especialista', '🎯', 'Especialista RH'], ['meu', '🙋', 'Meu RH']
+    ['painel', '📊', 'Painel'], ['especialista', '🎯', 'Especialista RH'], ['agilidade', '⚡', 'Agilidade e prazos'],
+    ['individual', '👤', 'Acompanhamento Individual'], ['recrutamento', '🗂️', 'Recrutamento e Seleção'],
+    ['360', '🔄', 'Avaliação 360'], ['pdi', '🌱', 'Planos de desenvolvimento'],
+    ['trilhas', '🎓', 'Trilhas'], ['meu', '🙋', 'Meu RH']
   ]
   area.innerHTML = `
+    <div style="background:linear-gradient(120deg,#0f2418 0%,#1a3a26 55%,#0f2418 100%);border-radius:14px;padding:22px 26px;margin-bottom:18px;position:relative;overflow:hidden;border:1px solid #1f4530;">
+      <div style="position:absolute;right:-16px;top:-22px;font-size:120px;opacity:.09;line-height:1;">👥</div>
+      <div style="position:relative;">
+        <div style="color:var(--gold,#c8a11a);font-size:11px;text-transform:uppercase;letter-spacing:.14em;font-weight:700;">Recursos Humanos</div>
+        <div style="color:#eaf5ec;font-family:var(--serif);font-size:22px;margin-top:3px;">Pessoas, cultura e desenvolvimento — Grupo Gefoscal</div>
+      </div>
+    </div>
     <div class="subabas-rh">
       ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}"><span class="icone-sub">${a[1]}</span>${esc(a[2])}</button>`).join('')}
     </div>
@@ -25414,32 +25426,94 @@ async function coletarContextoRH () {
 
 async function desempEspecialistaRH (alvo) {
   alvo.innerHTML = `
-    <div class="panel" style="padding:0;max-width:900px;">
-      <div style="padding:16px 18px;border-bottom:1px solid var(--line);">
-        <h3 style="font-family:var(--serif);font-size:16px;margin:0 0 4px;">🎯 Especialista em RH</h3>
-        <p class="texto-dim2" style="font-size:12px;margin:0;">
-          Já entra sabendo os números atuais do seu RH — agilidade, avaliação 360, planos de desenvolvimento e vagas.
-          Pergunte onde melhorar, como avaliar alguém, ou peça sugestões de RH.</p>
+    <div class="panel" style="padding:0;max-width:900px;overflow:hidden;">
+      <div style="padding:18px 20px;background:linear-gradient(120deg,rgba(138,92,246,.14),rgba(138,92,246,.03));border-bottom:1px solid rgba(138,92,246,.25);display:flex;align-items:center;gap:12px;">
+        <div style="width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,#8a5cf6,#6a3fd6);display:flex;align-items:center;justify-content:center;font-size:22px;flex:none;">🎯</div>
+        <div>
+          <h3 style="font-family:var(--serif);font-size:16px;margin:0 0 3px;">Especialista em RH</h3>
+          <p class="texto-dim2" style="font-size:11.5px;margin:0;">
+            Já entra sabendo os números do seu RH — agilidade, 360, desenvolvimento e vagas. Pergunte, peça sugestão, ou peça "cria uma vaga de..." que ela monta pra você.</p>
+        </div>
       </div>
       <div id="erh-chat" style="padding:18px;display:flex;flex-direction:column;gap:12px;max-height:480px;overflow-y:auto;"></div>
-      <div style="padding:14px 18px;border-top:1px solid var(--line);">
+      <div style="padding:14px 18px;border-top:1px solid var(--line);background:var(--surface2);">
         <div style="display:flex;gap:8px;align-items:flex-end;">
           <textarea id="erh-pergunta" placeholder="Digite sua pergunta..." style="flex:1;min-height:48px;max-height:120px;"></textarea>
-          <button class="btn" id="erh-enviar">Enviar</button>
+          <button class="btn" id="erh-enviar" style="background:linear-gradient(135deg,#8a5cf6,#6a3fd6);border:none;">Enviar</button>
         </div>
       </div>
     </div>`
 
   const chat = $('#erh-chat')
+
+  // detecta o bloco <<<VAGA_PRONTA>>>{...}<<<FIM_VAGA_PRONTA>>> que a
+  // especialista devolve quando termina de montar uma vaga -- separa o
+  // texto normal (pra mostrar na bolha) dos dados estruturados (pro card
+  // de confirmação com botão de salvar).
+  const extrairVagaProntaDoTexto = texto => {
+    const m = texto.match(/<<<VAGA_PRONTA>>>\s*([\s\S]*?)\s*<<<FIM_VAGA_PRONTA>>>/)
+    if (!m) return { textoLimpo: texto, vagaExtraida: null }
+    let vagaExtraida = null
+    try { vagaExtraida = JSON.parse(m[1]) } catch { /* JSON inválido, ignora o bloco */ }
+    const textoLimpo = texto.slice(0, m.index).trim()
+    return { textoLimpo: textoLimpo || 'Aqui está a vaga que preparei:', vagaExtraida }
+  }
+
+  const renderCardVaga = (vagaExtraida, bolhaPai) => {
+    const card = document.createElement('div')
+    card.className = 'panel'
+    card.style.cssText = 'padding:14px;margin-top:8px;border:1px solid rgba(138,92,246,.3);background:rgba(138,92,246,.05);'
+    card.innerHTML = `
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#8a5cf6;font-weight:700;margin-bottom:6px;">📋 Vaga pronta pra revisar</div>
+      <div style="font-weight:600;font-size:14px;margin-bottom:6px;">${esc(vagaExtraida.cargo)}</div>
+      <p class="texto-dim" style="font-size:12px;margin:0 0 6px;white-space:pre-wrap;">${esc(vagaExtraida.descricao || '')}</p>
+      <p class="texto-dim2" style="font-size:11.5px;margin:0 0 10px;white-space:pre-wrap;"><b>Requisitos:</b> ${esc(vagaExtraida.requisitos || '')}</p>
+      <p class="texto-dim2" style="font-size:11px;margin:0 0 10px;">Tipo de contratação: <i>a definir depois, no Kanban de vagas</i></p>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button class="btn mini" id="erh-salvar-vaga" style="background:linear-gradient(135deg,#8a5cf6,#6a3fd6);border:none;">✓ Salvar essa vaga</button>
+        <span id="erh-vaga-status" class="texto-dim2" style="font-size:11.5px;"></span>
+      </div>`
+    bolhaPai.appendChild(card)
+
+    card.querySelector('#erh-salvar-vaga').onclick = async () => {
+      const btn = card.querySelector('#erh-salvar-vaga')
+      const status = card.querySelector('#erh-vaga-status')
+      btn.disabled = true; btn.textContent = 'Salvando...'
+      const { error } = await db.from('vaga').insert({
+        cargo: vagaExtraida.cargo,
+        tags: vagaExtraida.categoria_area ? [vagaExtraida.categoria_area] : [],
+        descricao: vagaExtraida.descricao || null,
+        requisitos: vagaExtraida.requisitos || null,
+        tipo_contratacao: null,
+        etapa: 'ABERTA',
+        aberta_por: PERFIL.pessoaId
+      })
+      if (error) {
+        status.textContent = 'Erro: ' + error.message
+        status.style.color = 'var(--critico-text)'
+        btn.disabled = false; btn.textContent = '✓ Salvar essa vaga'
+        return
+      }
+      btn.remove()
+      status.textContent = '✓ Vaga salva! Já está no Kanban de Recrutamento e Seleção, na coluna "Aberta".'
+      status.style.color = 'var(--good-text)'
+    }
+  }
+
   const renderMensagem = (autor, texto) => {
     const minha = autor === 'user'
     const bolha = document.createElement('div')
     bolha.style.cssText = `align-self:${minha ? 'flex-end' : 'flex-start'};max-width:85%;`
+
+    const { textoLimpo, vagaExtraida } = minha ? { textoLimpo: texto, vagaExtraida: null } : extrairVagaProntaDoTexto(texto)
+
     bolha.innerHTML = `
       <div class="texto-dim2" style="font-size:10.5px;margin-bottom:3px;${minha ? 'text-align:right;' : ''}">${minha ? 'Você' : '🎯 Especialista RH'}</div>
-      <div style="background:${minha ? 'var(--rust)' : 'var(--surface2)'};color:${minha ? '#fff' : 'inherit'};
-                  padding:10px 14px;border-radius:10px;font-size:13px;line-height:1.55;white-space:pre-wrap;">${esc(texto)}</div>`
+      <div style="background:${minha ? 'var(--rust)' : 'linear-gradient(135deg,rgba(138,92,246,.14),rgba(138,92,246,.06))'};color:${minha ? '#fff' : 'inherit'};
+                  border:${minha ? 'none' : '1px solid rgba(138,92,246,.2)'};
+                  padding:10px 14px;border-radius:10px;font-size:13px;line-height:1.55;white-space:pre-wrap;">${esc(textoLimpo)}</div>`
     chat.appendChild(bolha)
+    if (vagaExtraida?.cargo) renderCardVaga(vagaExtraida, bolha)
     chat.scrollTop = chat.scrollHeight
     return bolha
   }
@@ -26236,7 +26310,10 @@ const ROTULO_ETAPA_VAGA = Object.fromEntries(ETAPAS_VAGA)
 function proximaEtapaVaga (vaga) {
   if (vaga.etapa === 'ABERTA') return 'DIVULGANDO'
   if (vaga.etapa === 'DIVULGANDO') return 'SELECIONANDO'
-  if (vaga.etapa === 'SELECIONANDO') return vaga.tipo_contratacao === 'CLT' ? 'EM_DP' : 'EM_JURIDICO'
+  if (vaga.etapa === 'SELECIONANDO') {
+    if (!vaga.tipo_contratacao) return null // precisa definir CLT/PJ antes de avançar
+    return vaga.tipo_contratacao === 'CLT' ? 'EM_DP' : 'EM_JURIDICO'
+  }
   if (vaga.etapa === 'EM_DP' || vaga.etapa === 'EM_JURIDICO') return 'FECHADA'
   return null
 }
@@ -26292,7 +26369,7 @@ async function recrKanbanVagas (area) {
             <div class="panel" style="padding:12px;margin-bottom:8px;cursor:pointer;" data-abrir-vaga="${v.id}">
               <div style="font-weight:600;font-size:13px;margin-bottom:4px;">${esc(v.cargo)}</div>
               <div class="texto-dim2" style="font-size:11px;margin-bottom:6px;">${esc(setoresPorId[v.setor_id] || '—')}</div>
-              <span class="chip" style="font-size:10px;">${v.tipo_contratacao}</span>
+              <span class="chip" style="font-size:10px;${!v.tipo_contratacao ? 'border-color:var(--warn-text,#c8901a);color:var(--warn-text,#c8901a);' : ''}">${v.tipo_contratacao || '⚠️ definir CLT/PJ'}</span>
               ${(v.tags || []).slice(0, 2).map(t => `<span class="chip" style="font-size:10px;">${esc(t)}</span>`).join('')}
             </div>`).join('') || '<p class="texto-dim2" style="font-size:11px;">vazio</p>'}
         </div>`
@@ -26384,8 +26461,16 @@ async function abrirDetalheVaga (vaga, setoresPorId, area) {
       <div class="cabeca-secao"><h3 style="margin:0;">${esc(vaga.cargo)}</h3>
         <span class="chip">${ROTULO_ETAPA_VAGA[vaga.etapa] || vaga.etapa}</span></div>
       <p class="texto-dim2" style="font-size:12.5px;margin:-6px 0 14px;">
-        ${esc(vaga.tipo_contratacao)} · ${esc(setoresPorId[vaga.setor_id] || 'sem setor')} · ${vaga.vagas_disponiveis} vaga(s)
+        ${vaga.tipo_contratacao ? esc(vaga.tipo_contratacao) : '⚠️ tipo de contratação a definir'} · ${esc(setoresPorId[vaga.setor_id] || 'sem setor')} · ${vaga.vagas_disponiveis} vaga(s)
         ${(vaga.tags || []).length ? ' · ' + vaga.tags.map(esc).join(', ') : ''}</p>
+      ${!vaga.tipo_contratacao ? `
+      <div class="panel" style="padding:12px 14px;margin-bottom:14px;border:1px solid var(--warn-text,#c8901a);background:rgba(200,144,26,.08);">
+        <div style="font-size:12px;font-weight:600;margin-bottom:8px;">Essa vaga ainda não tem tipo de contratação definido:</div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn-secundario mini" data-definir-tipo="CLT">É CLT</button>
+          <button class="btn-secundario mini" data-definir-tipo="PJ">É PJ recorrente</button>
+        </div>
+      </div>` : ''}
 
       ${vaga.descricao ? `<div class="caixa-texto" style="margin-bottom:10px;"><div class="rot">Descrição</div><p>${esc(vaga.descricao)}</p></div>` : ''}
       ${vaga.requisitos ? `<div class="caixa-texto" style="margin-bottom:14px;"><div class="rot">Requisitos</div><p>${esc(vaga.requisitos)}</p></div>` : ''}
@@ -26438,6 +26523,13 @@ async function abrirDetalheVaga (vaga, setoresPorId, area) {
     fundo.querySelectorAll('[data-add-candidato]').forEach(b => {
       b.onclick = async () => {
         await db.from('vaga_candidatura').insert({ vaga_id: vaga.id, candidato_id: b.dataset.addCandidato })
+        desenhar()
+      }
+    })
+    fundo.querySelectorAll('[data-definir-tipo]').forEach(b => {
+      b.onclick = async () => {
+        vaga.tipo_contratacao = b.dataset.definirTipo
+        await db.from('vaga').update({ tipo_contratacao: vaga.tipo_contratacao }).eq('id', vaga.id)
         desenhar()
       }
     })
