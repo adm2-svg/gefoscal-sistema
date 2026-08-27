@@ -9471,8 +9471,8 @@ let SETOR_TI_ID = null
 // (ia-agente-chat) atende todos, então criar um agente novo não
 // precisa de código novo nenhum.
 // ==================================================================
-const ROTULO_ESPECIALIDADE_IA = { VENDAS: 'Vendas', TECNICA: 'Técnica', OUTRO: 'Outro' }
-const COR_ESPECIALIDADE_IA = { VENDAS: 'var(--rust)', TECNICA: '#4a90d9', OUTRO: 'var(--dim2)' }
+const ROTULO_ESPECIALIDADE_IA = { VENDAS: 'Vendas', TECNICA: 'Técnica', RH: 'Recursos Humanos', OUTRO: 'Outro' }
+const COR_ESPECIALIDADE_IA = { VENDAS: 'var(--rust)', TECNICA: '#4a90d9', RH: '#8a5cf6', OUTRO: 'var(--dim2)' }
 
 async function paginaTreinamentoIA () {
   const editavel = podeEditar('ia_treinamento')
@@ -25326,7 +25326,8 @@ async function paginaDesempenho () {
   DESEMP_CACHE = { pessoas: pessoas || [], setores: setores || [] }
 
   const abas = [['painel', 'Painel'], ['agilidade', 'Agilidade e prazos'], ['individual', 'Acompanhamento Individual'],
-                ['recrutamento', 'Recrutamento e Seleção'], ['360', 'Avaliação 360'], ['pdi', 'Planos de desenvolvimento'], ['meu', 'Meu RH']]
+                ['recrutamento', 'Recrutamento e Seleção'], ['360', 'Avaliação 360'], ['pdi', 'Planos de desenvolvimento'],
+                ['especialista', '🎯 Especialista RH'], ['meu', 'Meu RH']]
   area.innerHTML = `
     <div class="subabas">
       ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
@@ -25354,10 +25355,128 @@ function abrirDesempenho (sub, editavel) {
   if (sub === 'conduta') desempConduta(alvo, editavel)
   if (sub === '360') desemp360(alvo, editavel)
   if (sub === 'pdi') desempPdi(alvo, editavel)
+  if (sub === 'especialista') desempEspecialistaRH(alvo)
   if (sub === 'meu') desempMeu(alvo)
 }
 
 // ----- Painel de conduta -----
+
+// ----- Especialista em RH: agente de IA (mesmo framework genérico do
+// Treinamento IA) com um diferencial -- ao abrir, busca o panorama real
+// e atual do RH (agilidade, 360, PDI, recrutamento) e injeta como
+// contexto antes da primeira pergunta, sem o usuário precisar copiar
+// número nenhum manualmente. -----
+const AGENTE_ESPECIALISTA_RH_ID = '469c5bfc-1f69-4bad-9756-a1cc6a587bf9'
+let RH_ESPEC_HISTORICO = []
+
+async function coletarContextoRH () {
+  const [resumoAgil, { data: cicloAtivo }, { data: pdiTodos }, { data: vagas }] = await Promise.all([
+    resumoAgilidadeIndividual(),
+    db.from('avaliacao_360_ciclo').select('id,nome,status').eq('status', 'ABERTO').maybeSingle(),
+    db.from('plano_desenvolvimento').select('status'),
+    db.from('vaga').select('cargo,etapa,tipo_contratacao').neq('status', 'CANCELADA')
+  ])
+
+  const pdiAtivos = (pdiTodos || []).filter(p => p.status === 'EM_ANDAMENTO').length
+  const pdiAtrasados = (pdiTodos || []).filter(p => p.status === 'ATRASADO').length
+  const pdiConcluidos = (pdiTodos || []).filter(p => p.status === 'CONCLUIDO').length
+  const vagasAbertas = (vagas || []).filter(v => v.etapa !== 'FECHADA')
+
+  let texto = `PANORAMA ATUAL DO RH — ${nomeMes(new Date())}\n\n`
+  texto += `AGILIDADE E PRAZOS:\n`
+  texto += resumoAgil.media != null ? `- Agilidade média geral do mês: ${resumoAgil.media} pts (escala 0-100)\n` : `- Sem dados de agilidade lançados ainda esse mês\n`
+  if (resumoAgil.top3.length) texto += `- Top 3 do mês: ${resumoAgil.top3.map(t => `${t.nome} (${t.pontos} pts)`).join(', ')}\n`
+
+  texto += `\nAVALIAÇÃO 360:\n`
+  texto += cicloAtivo ? `- Ciclo aberto agora: "${cicloAtivo.nome}"\n` : `- Nenhum ciclo 360 aberto no momento\n`
+
+  texto += `\nPLANOS DE DESENVOLVIMENTO:\n`
+  texto += `- ${pdiAtivos} em andamento, ${pdiAtrasados} atrasados, ${pdiConcluidos} concluídos no total\n`
+
+  texto += `\nRECRUTAMENTO E SELEÇÃO:\n`
+  texto += vagasAbertas.length
+    ? `- ${vagasAbertas.length} vaga(s) em aberto: ${vagasAbertas.map(v => `${v.cargo} (${v.tipo_contratacao}, etapa: ${ROTULO_ETAPA_VAGA[v.etapa] || v.etapa})`).join('; ')}\n`
+    : `- Nenhuma vaga em aberto no momento\n`
+
+  return texto
+}
+
+async function desempEspecialistaRH (alvo) {
+  alvo.innerHTML = `
+    <div class="panel" style="padding:0;max-width:900px;">
+      <div style="padding:16px 18px;border-bottom:1px solid var(--line);">
+        <h3 style="font-family:var(--serif);font-size:16px;margin:0 0 4px;">🎯 Especialista em RH</h3>
+        <p class="texto-dim2" style="font-size:12px;margin:0;">
+          Já entra sabendo os números atuais do seu RH — agilidade, avaliação 360, planos de desenvolvimento e vagas.
+          Pergunte onde melhorar, como avaliar alguém, ou peça sugestões de RH.</p>
+      </div>
+      <div id="erh-chat" style="padding:18px;display:flex;flex-direction:column;gap:12px;max-height:480px;overflow-y:auto;"></div>
+      <div style="padding:14px 18px;border-top:1px solid var(--line);">
+        <div style="display:flex;gap:8px;align-items:flex-end;">
+          <textarea id="erh-pergunta" placeholder="Digite sua pergunta..." style="flex:1;min-height:48px;max-height:120px;"></textarea>
+          <button class="btn" id="erh-enviar">Enviar</button>
+        </div>
+      </div>
+    </div>`
+
+  const chat = $('#erh-chat')
+  const renderMensagem = (autor, texto) => {
+    const minha = autor === 'user'
+    const bolha = document.createElement('div')
+    bolha.style.cssText = `align-self:${minha ? 'flex-end' : 'flex-start'};max-width:85%;`
+    bolha.innerHTML = `
+      <div class="texto-dim2" style="font-size:10.5px;margin-bottom:3px;${minha ? 'text-align:right;' : ''}">${minha ? 'Você' : '🎯 Especialista RH'}</div>
+      <div style="background:${minha ? 'var(--rust)' : 'var(--surface2)'};color:${minha ? '#fff' : 'inherit'};
+                  padding:10px 14px;border-radius:10px;font-size:13px;line-height:1.55;white-space:pre-wrap;">${esc(texto)}</div>`
+    chat.appendChild(bolha)
+    chat.scrollTop = chat.scrollHeight
+    return bolha
+  }
+
+  const enviarParaIA = async (textoParaIA) => {
+    const btn = $('#erh-enviar'); btn.disabled = true; btn.textContent = 'Pensando...'
+    const carregando = renderMensagem('assistant', 'Analisando...')
+    RH_ESPEC_HISTORICO.push({ role: 'user', content: textoParaIA })
+    const { data, error } = await db.functions.invoke('ia-agente-chat', { body: { agenteId: AGENTE_ESPECIALISTA_RH_ID, mensagens: RH_ESPEC_HISTORICO } })
+    btn.disabled = false; btn.textContent = 'Enviar'
+    carregando.remove()
+    if (error || data?.erro) {
+      let msg = data?.erro || error?.message || 'Erro ao consultar.'
+      if (error?.context?.json) { try { const corpo = await error.context.json(); msg = corpo?.erro || msg } catch { /* corpo não veio em JSON */ } }
+      renderMensagem('assistant', msg)
+      RH_ESPEC_HISTORICO.pop()
+      return
+    }
+    RH_ESPEC_HISTORICO.push({ role: 'assistant', content: data.resposta })
+    renderMensagem('assistant', data.resposta)
+  }
+
+  if (!RH_ESPEC_HISTORICO.length) {
+    chat.innerHTML = `<p class="texto-dim2">Carregando o panorama atual do RH...</p>`
+    const contexto = await coletarContextoRH()
+    chat.innerHTML = ''
+    await enviarParaIA(`${contexto}\n\nCom base nesse panorama, me dê uma saudação breve reconhecendo os principais pontos (o que está indo bem, o que merece atenção). Depois disso eu vou fazer perguntas.`)
+  } else {
+    RH_ESPEC_HISTORICO.forEach(m => {
+      // pula a mensagem de contexto inicial -- ela nunca deve aparecer
+      // visualmente, só a resposta já contextualizada da IA
+      if (m.role === 'user' && m.content.startsWith('PANORAMA ATUAL DO RH')) return
+      renderMensagem(m.role === 'user' ? 'user' : 'assistant', m.content)
+    })
+  }
+
+  $('#erh-enviar').onclick = () => {
+    const texto = $('#erh-pergunta').value.trim()
+    if (!texto) return
+    renderMensagem('user', texto)
+    $('#erh-pergunta').value = ''
+    enviarParaIA(texto)
+  }
+  $('#erh-pergunta').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#erh-enviar').click() }
+  })
+}
+
 async function desempPainel (alvo, editavel) {
   const hoje = new Date().toISOString().slice(0, 10)
   const de90 = new Date(Date.now() - 90 * 864e5).toISOString().slice(0, 10)
@@ -26330,20 +26449,60 @@ function desempConduta (alvo, editavel) {
 async function desemp360 (alvo, editavel) {
   const { data: ciclos, error } = await db.from('avaliacao_360_ciclo').select('id,nome,data_inicio,data_fim,status').order('data_inicio', { ascending: false })
   if (faltaMigracao(error)) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  const listaCiclos = ciclos || []
+
+  const { data: respostasTodas } = listaCiclos.length
+    ? await db.from('avaliacao_360_resposta').select('ciclo_id,status')
+    : { data: [] }
+  const progressoPorCiclo = {}
+  ;(respostasTodas || []).forEach(r => {
+    progressoPorCiclo[r.ciclo_id] = progressoPorCiclo[r.ciclo_id] || { total: 0, respondidas: 0 }
+    progressoPorCiclo[r.ciclo_id].total++
+    if (r.status === 'RESPONDIDO') progressoPorCiclo[r.ciclo_id].respondidas++
+  })
+
+  const cicloAberto = listaCiclos.find(c => c.status === 'ABERTO')
+  const progressoAberto = cicloAberto ? progressoPorCiclo[cicloAberto.id] : null
+
+  const corStatus360 = s => s === 'ENCERRADO' ? 'texto-dim2' : s === 'ABERTO' ? 'badge-alerta' : 'chip'
 
   alvo.innerHTML = `
-    ${editavel ? `<div class="acoes" style="margin-bottom:14px;"><button class="btn" id="c360-novo">+ Novo ciclo trimestral</button></div>` : ''}
-    <div class="panel" style="padding:0;"><div class="tabela-scroll">
-      <table><thead><tr><th>Ciclo</th><th>Vigência</th><th>Status</th><th></th></tr></thead><tbody>
-        ${(ciclos || []).map(c => `<tr>
-          <td><b>${esc(c.nome)}</b></td>
-          <td class="texto-dim">${fmtData(c.data_inicio)} – ${fmtData(c.data_fim)}</td>
-          <td><span class="${c.status === 'ENCERRADO' ? 'texto-dim2' : c.status === 'ABERTO' ? 'badge-alerta' : 'chip'}">${ROTULO_STATUS_360_CICLO[c.status]}</span></td>
-          <td><button class="btn-secundario mini" data-abrir-ciclo="${c.id}">abrir</button></td>
-        </tr>`).join('') || `<tr><td colspan="4" class="vazio">Nenhum ciclo criado ainda.</td></tr>`}
-      </tbody></table>
-    </div></div>
-    <div id="c360-minhas" style="margin-top:16px;"></div>`
+    <div class="resumo-topo" style="margin-bottom:18px;">
+      ${kpi('Ciclos criados', listaCiclos.length)}
+      ${kpi('Ciclo atual', cicloAberto ? cicloAberto.nome : 'nenhum aberto')}
+      ${kpi('Respostas preenchidas', progressoAberto ? `${progressoAberto.respondidas}/${progressoAberto.total}` : '—')}
+      ${kpi('% concluído', progressoAberto?.total ? Math.round(progressoAberto.respondidas / progressoAberto.total * 100) + '%' : '—')}
+    </div>
+    ${editavel ? `<div class="acoes" style="margin-bottom:16px;"><button class="btn" id="c360-novo">+ Novo ciclo trimestral</button></div>` : ''}
+
+    <div id="c360-minhas" style="margin-bottom:18px;"></div>
+
+    ${listaCiclos.length ? `
+      <h4 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Ciclos de avaliação</h4>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;">
+        ${listaCiclos.map(c => {
+          const prog = progressoPorCiclo[c.id]
+          const pct = prog?.total ? Math.round(prog.respondidas / prog.total * 100) : 0
+          return `<div class="panel" style="padding:16px;cursor:pointer;transition:transform .12s ease,box-shadow .12s ease;" data-abrir-ciclo="${c.id}"
+            onmouseenter="this.style.transform='translateY(-2px)';this.style.boxShadow='0 8px 18px rgba(0,0,0,.12)'"
+            onmouseleave="this.style.transform='';this.style.boxShadow=''">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
+              <div style="font-weight:600;font-size:14px;">${esc(c.nome)}</div>
+              <span class="${corStatus360(c.status)}" style="font-size:10px;">${esc(ROTULO_STATUS_360_CICLO[c.status])}</span>
+            </div>
+            <div class="texto-dim2" style="font-size:11.5px;margin-bottom:10px;">${fmtData(c.data_inicio)} – ${fmtData(c.data_fim)}</div>
+            <div style="background:var(--surface2);border-radius:5px;height:8px;overflow:hidden;margin-bottom:6px;">
+              <div style="width:${pct}%;height:100%;background:var(--rust);"></div>
+            </div>
+            <div class="texto-dim2" style="font-size:11px;">${prog ? `${prog.respondidas} de ${prog.total} respostas (${pct}%)` : 'sem participantes ainda'}</div>
+          </div>`
+        }).join('')}
+      </div>` : `
+      <div class="panel" style="padding:40px 24px;text-align:center;">
+        <div style="font-size:32px;margin-bottom:8px;opacity:.5;">🔄</div>
+        <p class="texto-dim" style="margin:0 0 4px;font-weight:600;">Nenhum ciclo criado ainda</p>
+        <p class="texto-dim2" style="font-size:12.5px;margin:0;">${editavel ? 'Clica em "+ Novo ciclo trimestral" pra começar o primeiro.' : 'Assim que o RH abrir um ciclo, ele aparece aqui.'}</p>
+      </div>`}`
 
   // respostas pendentes que EU preciso preencher, de qualquer ciclo aberto
   ;(async () => {
@@ -26353,8 +26512,8 @@ async function desemp360 (alvo, editavel) {
     const pendentes = (minhas || []).filter(m => m.ciclo?.status === 'ABERTO')
     if (!pendentes.length) return
     $('#c360-minhas').innerHTML = `
-      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Suas avaliações pendentes</h3></div>
-      <div class="panel" style="padding:0;">
+      <div class="panel" style="padding:16px;border-left:3px solid var(--rust);">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 10px;">📋 Suas avaliações pendentes (${pendentes.length})</h3>
         ${pendentes.map(p => `<div class="passo">
           <span class="quando">${ROTULO_TIPO_360[p.tipo]}</span>
           <span>Avaliar <b>${esc(p.avaliado?.nome ?? '—')}</b> — ${esc(p.ciclo?.nome ?? '')}</span>
@@ -26367,11 +26526,12 @@ async function desemp360 (alvo, editavel) {
   })()
 
   alvo.querySelectorAll('[data-abrir-ciclo]').forEach(b => {
-    b.onclick = () => detalheCiclo360((ciclos || []).find(c => c.id === b.dataset.abrirCiclo), editavel, () => desemp360(alvo, editavel))
+    b.onclick = () => detalheCiclo360(listaCiclos.find(c => c.id === b.dataset.abrirCiclo), editavel, () => desemp360(alvo, editavel))
   })
 
   if (!editavel) return
-  $('#c360-novo').onclick = () => formNovoCiclo360(() => desemp360(alvo, editavel))
+  const btnNovo = $('#c360-novo')
+  if (btnNovo) btnNovo.onclick = () => formNovoCiclo360(() => desemp360(alvo, editavel))
 }
 
 function formNovoCiclo360 (aoFechar) {
@@ -26549,24 +26709,48 @@ function formResponder360 (item, aoFechar) {
 // ----- Planos de desenvolvimento (PDI) -----
 async function desempPdi (alvo, editavel) {
   const { data, error } = await db.from('plano_desenvolvimento')
-    .select('id,objetivo,acoes,prazo,status,pessoa:pessoa_id(nome),responsavel:responsavel_acompanhamento_id(nome)')
+    .select('id,objetivo,acoes,prazo,status,pessoa:pessoa_id(nome,foto_url),responsavel:responsavel_acompanhamento_id(nome)')
     .order('prazo', { ascending: true, nullsFirst: false })
   if (faltaMigracao(error)) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  const lista = data || []
+
+  const emAndamento = lista.filter(p => p.status === 'EM_ANDAMENTO').length
+  const concluidos = lista.filter(p => p.status === 'CONCLUIDO').length
+  const atrasados = lista.filter(p => p.status === 'ATRASADO').length
 
   alvo.innerHTML = `
-    ${editavel ? `<div class="acoes" style="margin-bottom:14px;"><button class="btn" id="pdi-novo">+ Novo plano</button></div>` : ''}
-    <div class="panel" style="padding:0;"><div class="tabela-scroll">
-      <table><thead><tr><th>Pessoa</th><th>Objetivo</th><th>Prazo</th><th>Status</th><th>Acompanha</th>${editavel ? '<th></th>' : ''}</tr></thead><tbody>
-        ${(data || []).map(p => `<tr>
-          <td>${esc(p.pessoa?.nome ?? '—')}</td>
-          <td class="texto-dim2">${esc((p.objetivo ?? '').slice(0, 70))}</td>
-          <td class="texto-dim">${p.prazo ? fmtData(p.prazo) : '—'}</td>
-          <td><span class="${p.status === 'CONCLUIDO' ? 'badge-bom' : p.status === 'ATRASADO' ? 'badge-alerta' : 'chip'}">${ROTULO_STATUS_PDI[p.status]}</span></td>
-          <td class="texto-dim">${esc(p.responsavel?.nome ?? '—')}</td>
-          ${editavel ? `<td><button class="btn-secundario mini" data-editar="${p.id}">editar</button></td>` : ''}
-        </tr>`).join('') || `<tr><td colspan="${editavel ? 6 : 5}" class="vazio">Nenhum plano cadastrado ainda.</td></tr>`}
-      </tbody></table>
-    </div></div>`
+    <div class="resumo-topo" style="margin-bottom:16px;">
+      ${kpi('Planos ativos', lista.length)}
+      ${kpi('Em andamento', emAndamento)}
+      ${kpi('Concluídos', concluidos)}
+      ${kpi('Atrasados', atrasados, atrasados ? 'alerta' : '')}
+    </div>
+    ${editavel ? `<div class="acoes" style="margin-bottom:16px;"><button class="btn" id="pdi-novo">+ Novo plano</button></div>` : ''}
+
+    ${lista.length ? `
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;">
+        ${lista.map(p => `
+          <div class="panel" style="padding:16px;">
+            <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;">
+              ${avatarHtml(p.pessoa?.foto_url, p.pessoa?.nome ?? '—', 36)}
+              <div style="min-width:0;flex:1;">
+                <div style="font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(p.pessoa?.nome ?? '—')}</div>
+                <div class="texto-dim2" style="font-size:11px;">acompanha: ${esc(p.responsavel?.nome ?? '—')}</div>
+              </div>
+              <span class="${p.status === 'CONCLUIDO' ? 'badge-bom' : p.status === 'ATRASADO' ? 'badge-alerta' : 'chip'}" style="font-size:10px;flex:none;">${esc(ROTULO_STATUS_PDI[p.status])}</span>
+            </div>
+            <p class="texto-dim" style="font-size:12.5px;margin:0 0 10px;min-height:36px;">${esc((p.objetivo ?? '').slice(0, 110))}${(p.objetivo ?? '').length > 110 ? '…' : ''}</p>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding-top:8px;border-top:1px solid var(--line2);">
+              <span class="texto-dim2" style="font-size:11.5px;">📅 ${p.prazo ? fmtData(p.prazo) : 'sem prazo'}</span>
+              ${editavel ? `<button class="btn-secundario mini" data-editar="${p.id}">editar</button>` : ''}
+            </div>
+          </div>`).join('')}
+      </div>` : `
+      <div class="panel" style="padding:40px 24px;text-align:center;">
+        <div style="font-size:32px;margin-bottom:8px;opacity:.5;">🌱</div>
+        <p class="texto-dim" style="margin:0 0 4px;font-weight:600;">Nenhum plano cadastrado ainda</p>
+        <p class="texto-dim2" style="font-size:12.5px;margin:0;">${editavel ? 'Clica em "+ Novo plano" pra criar o primeiro.' : 'Assim que o RH criar um plano pra você, ele aparece aqui.'}</p>
+      </div>`}`
 
   if (!editavel) return
   $('#pdi-novo').onclick = () => formPdi(null, () => desempPdi(alvo, editavel))
@@ -26660,6 +26844,7 @@ async function desempMeu (alvo) {
   const media = arr => arr.length ? (arr.reduce((s, n) => s + n, 0) / arr.length).toFixed(1) : '—'
   const notasConduta = (conduta || []).flatMap(c => [c.nota_prazos, c.nota_demandas, c.nota_postura].filter(n => n != null))
   const totalBonus = (bonus || []).reduce((s, b) => s + Number(b.pontos || 0), 0)
+  const corNota = n => n == null ? '' : n >= 4 ? 'badge-bom' : n >= 3 ? 'chip' : 'badge-alerta'
 
   alvo.innerHTML = `
     <div class="resumo-topo" style="margin-bottom:16px;">
@@ -26670,48 +26855,52 @@ async function desempMeu (alvo) {
       ${kpi('Pontos bônus', totalBonus)}
     </div>
 
-    <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Minhas avaliações de conduta</h3></div>
-    <div class="panel" style="padding:0;margin-bottom:16px;"><div class="tabela-scroll">
+    <h4 style="font-family:var(--serif);font-size:15px;margin:0 0 10px;">Minhas avaliações de conduta</h4>
+    <div class="panel" style="padding:0;margin-bottom:18px;"><div class="tabela-scroll">
       <table><thead><tr><th>Data</th><th class="num">Prazos</th><th class="num">Demandas</th><th class="num">Postura</th><th>Observações</th></tr></thead><tbody>
         ${(conduta || []).map(c => `<tr>
           <td class="texto-dim">${fmtData(c.data_avaliacao)}</td>
-          <td class="num">${c.nota_prazos ?? '—'}</td><td class="num">${c.nota_demandas ?? '—'}</td><td class="num">${c.nota_postura ?? '—'}</td>
+          <td class="num">${c.nota_prazos != null ? `<span class="${corNota(c.nota_prazos)}" style="font-size:10.5px;">${c.nota_prazos}</span>` : '—'}</td>
+          <td class="num">${c.nota_demandas != null ? `<span class="${corNota(c.nota_demandas)}" style="font-size:10.5px;">${c.nota_demandas}</span>` : '—'}</td>
+          <td class="num">${c.nota_postura != null ? `<span class="${corNota(c.nota_postura)}" style="font-size:10.5px;">${c.nota_postura}</span>` : '—'}</td>
           <td class="texto-dim2">${esc(c.observacoes ?? '—')}</td>
         </tr>`).join('') || `<tr><td colspan="5" class="vazio">Nenhuma avaliação registrada ainda.</td></tr>`}
       </tbody></table>
     </div></div>
 
-    <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Minha avaliação 360 (ciclos encerrados/respondidos)</h3></div>
-    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px;">
+    <h4 style="font-family:var(--serif);font-size:15px;margin:0 0 10px;">Minha avaliação 360 (ciclos encerrados/respondidos)</h4>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:18px;">
       ${(resp360 || []).map(r => {
         const notas = [r.nota_competencia_tecnica, r.nota_trabalho_equipe, r.nota_comunicacao, r.nota_lideranca, r.nota_proatividade].filter(n => n != null)
         return `<div class="panel" style="padding:14px;">
           <div class="cabeca-secao"><span><b>${esc(r.ciclo?.nome ?? '—')}</b> · ${ROTULO_TIPO_360[r.tipo]}</span>
-            <span class="chip">média ${media(notas)}</span></div>
+            <span class="${corNota(Number(media(notas)))}">média ${media(notas)}</span></div>
           ${r.pontos_fortes ? `<p class="texto-dim" style="font-size:12.5px;margin:6px 0 0;"><b>Pontos fortes:</b> ${esc(r.pontos_fortes)}</p>` : ''}
           ${r.pontos_melhoria ? `<p class="texto-dim" style="font-size:12.5px;margin:4px 0 0;"><b>A melhorar:</b> ${esc(r.pontos_melhoria)}</p>` : ''}
         </div>`
       }).join('') || `<p class="vazio">Nenhuma avaliação 360 concluída sobre você ainda.</p>`}
     </div>
 
-    <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Meus planos de desenvolvimento</h3></div>
-    <div class="panel" style="padding:0;margin-bottom:16px;"><div class="tabela-scroll">
-      <table><thead><tr><th>Objetivo</th><th>Ações</th><th>Prazo</th><th>Status</th></tr></thead><tbody>
-        ${(pdi || []).map(p => `<tr>
-          <td>${esc(p.objetivo)}</td><td class="texto-dim2">${esc(p.acoes ?? '—')}</td>
-          <td class="texto-dim">${p.prazo ? fmtData(p.prazo) : '—'}</td>
-          <td><span class="${p.status === 'CONCLUIDO' ? 'badge-bom' : p.status === 'ATRASADO' ? 'badge-alerta' : 'chip'}">${ROTULO_STATUS_PDI[p.status]}</span></td>
-        </tr>`).join('') || `<tr><td colspan="4" class="vazio">Nenhum plano de desenvolvimento ainda.</td></tr>`}
-      </tbody></table>
-    </div></div>
+    <h4 style="font-family:var(--serif);font-size:15px;margin:0 0 10px;">Meus planos de desenvolvimento</h4>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px;margin-bottom:18px;">
+      ${(pdi || []).map(p => `
+        <div class="panel" style="padding:14px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
+            <span class="${p.status === 'CONCLUIDO' ? 'badge-bom' : p.status === 'ATRASADO' ? 'badge-alerta' : 'chip'}" style="font-size:10px;">${esc(ROTULO_STATUS_PDI[p.status])}</span>
+            <span class="texto-dim2" style="font-size:11px;">${p.prazo ? fmtData(p.prazo) : 'sem prazo'}</span>
+          </div>
+          <p class="texto-dim" style="font-size:12.5px;margin:0 0 4px;font-weight:600;">${esc(p.objetivo)}</p>
+          ${p.acoes ? `<p class="texto-dim2" style="font-size:11.5px;margin:0;">${esc(p.acoes)}</p>` : ''}
+        </div>`).join('') || `<p class="vazio">Nenhum plano de desenvolvimento ainda.</p>`}
+    </div>
 
-    <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Pontos bônus <span class="texto-dim2" style="font-size:12px;font-weight:400;">— total ${totalBonus}</span></h3></div>
+    <h4 style="font-family:var(--serif);font-size:15px;margin:0 0 10px;">🏆 Pontos bônus <span class="texto-dim2" style="font-size:12px;font-weight:400;">— total ${totalBonus}</span></h4>
     <div class="panel" style="padding:0;"><div class="tabela-scroll">
       <table><thead><tr><th>Quando</th><th>Motivo</th><th class="num">Pontos</th></tr></thead><tbody>
         ${(bonus || []).map(b => `<tr>
           <td class="texto-dim">${fmtQuando(b.criado_em) ?? '—'}</td>
           <td>${esc(b.motivo ?? '—')}</td>
-          <td class="num">+${b.pontos}</td>
+          <td class="num"><span class="badge-bom" style="font-size:10.5px;">+${b.pontos}</span></td>
         </tr>`).join('') || `<tr><td colspan="3" class="vazio">Nenhum ponto bônus ainda — dar retorno de compras é uma forma de ganhar.</td></tr>`}
       </tbody></table>
     </div></div>`
