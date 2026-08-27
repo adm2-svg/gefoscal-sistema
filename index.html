@@ -25325,7 +25325,7 @@ async function paginaDesempenho () {
   ])
   DESEMP_CACHE = { pessoas: pessoas || [], setores: setores || [] }
 
-  const abas = [['painel', 'Painel de conduta'], ['agilidade', 'Agilidade e prazos'], ['solicitacoes', 'Solicitações'], ['conduta', 'Avaliar conduta'],
+  const abas = [['painel', 'Painel'], ['agilidade', 'Agilidade e prazos'],
                 ['360', 'Avaliação 360'], ['pdi', 'Planos de desenvolvimento'], ['meu', 'Meu RH']]
   area.innerHTML = `
     <div class="subabas">
@@ -25357,34 +25357,40 @@ function abrirDesempenho (sub, editavel) {
 
 // ----- Painel de conduta -----
 async function desempPainel (alvo, editavel) {
+  const hoje = new Date().toISOString().slice(0, 10)
+  const de90 = new Date(Date.now() - 90 * 864e5).toISOString().slice(0, 10)
   const inicioMes = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10)
-  const [{ data: avaliacoes, error }, { data: cicloAtivo }, { data: bonusTodos }] = await Promise.all([
-    db.from('avaliacao_conduta').select('pessoa_id,nota_prazos,nota_demandas,nota_postura,data_avaliacao,pessoa:pessoa_id(nome)')
-      .order('data_avaliacao', { ascending: false }).limit(500),
+
+  const [{ data: cicloAtivo }, { data: bonusTodos }, { data: solicitacoes, error }] = await Promise.all([
     db.from('avaliacao_360_ciclo').select('id,nome,status,data_fim').eq('status', 'ABERTO').maybeSingle(),
-    editavel ? db.from('pontuacao_bonus').select('pontos,pessoa:pessoa_id(nome)').limit(2000) : Promise.resolve({ data: [] })
+    editavel ? db.from('pontuacao_bonus').select('pontos,pessoa:pessoa_id(nome)').limit(2000) : Promise.resolve({ data: [] }),
+    editavel ? db.from('solicitacao_interna').select(`
+      id, status, data_solicitacao, data_limite, data_conclusao, progresso_pct, pontuacao_agilidade,
+      setor_destino_id, responsavel_id, setor:setor_destino_id ( nome ), responsavel:responsavel_id ( nome )
+    `).gte('data_solicitacao', de90).not('responsavel_id', 'is', null).limit(2000) : Promise.resolve({ data: [] })
   ])
   if (faltaMigracao(error)) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-  const lista = avaliacoes || []
-  const doMes = lista.filter(a => a.data_avaliacao >= inicioMes)
 
-  const media = arr => arr.length ? arr.reduce((s, x) => s + x, 0) / arr.length : null
-  const mediaGeral = media(lista.flatMap(a => [a.nota_prazos, a.nota_demandas, a.nota_postura].filter(n => n != null)))
+  // ----- Agilidade e prazos (últimos 90 dias) -----
+  const listaSolic = solicitacoes || []
+  const concluidas = listaSolic.filter(s => s.status === 'CONCLUIDA')
+  const noPrazo = concluidas.filter(s => !estaAtrasadaConcluida(s))
+  const pctNoPrazoGeral = concluidas.length ? Math.round(noPrazo.length / concluidas.length * 100) : null
 
-  // média por pessoa (últimos lançamentos) — pra achar quem está mais baixo,
-  // sem virar ranking público: só aparece pra quem edita o módulo
+  const media = arr => arr.length ? arr.reduce((s, n) => s + n, 0) / arr.length : null
   const porPessoa = {}
-  lista.forEach(a => {
-    const notas = [a.nota_prazos, a.nota_demandas, a.nota_postura].filter(n => n != null)
-    if (!notas.length) return
-    const k = a.pessoa?.nome ?? '—'
-    porPessoa[k] = porPessoa[k] || []
-    porPessoa[k].push(...notas)
+  concluidas.forEach(s => {
+    const nome = s.responsavel?.nome ?? '—'
+    const pts = pontuacaoAgilidadeSolicitacao(s)
+    if (pts == null) return
+    porPessoa[nome] = porPessoa[nome] || []
+    porPessoa[nome].push(pts)
   })
-  const mediasPorPessoa = Object.entries(porPessoa).map(([nome, notas]) => ({ rotulo: nome, valor: media(notas) }))
+  const rankingAgilidade = Object.entries(porPessoa).map(([rotulo, pontos]) => ({ rotulo, valor: Math.round(media(pontos)) }))
     .sort((a, b) => a.valor - b.valor)
+  const agilidadeMediaGeral = rankingAgilidade.length ? Math.round(media(rankingAgilidade.map(p => p.valor))) : null
 
-  // ranking de pontos bônus por pessoa (RH → dar retorno de compras hoje, outros módulos depois)
+  // ----- Pontos bônus -----
   const porPessoaBonus = {}
   ;(bonusTodos || []).forEach(b => {
     const nome = b.pessoa?.nome ?? '—'
@@ -25411,17 +25417,18 @@ async function desempPainel (alvo, editavel) {
 
   alvo.innerHTML = `
     <div class="resumo-topo" style="margin-bottom:16px;">
-      ${kpi('Avaliações no mês', doMes.length)}
-      ${kpi('Nota média geral', mediaGeral != null ? mediaGeral.toFixed(1) : '—', 'de 1 a 5')}
-      ${kpi('Pessoas avaliadas', Object.keys(porPessoa).length)}
+      ${kpi('Agilidade média (90d)', agilidadeMediaGeral != null ? agilidadeMediaGeral : '—', 'de 0 a 100 pts')}
+      ${kpi('Concluídas no prazo', pctNoPrazoGeral != null ? pctNoPrazoGeral + '%' : '—')}
       ${kpi('Ciclo 360', cicloAtivo ? 'em andamento' : 'nenhum aberto')}
+      ${kpi('Bônus no total', rankingBonus.reduce((s, r) => s + r.valor, 0), 'pontos')}
     </div>
     ${cicloHtml}
-    ${editavel && mediasPorPessoa.length ? `
+    ${editavel && rankingAgilidade.length ? `
       <div class="panel" style="padding:18px;">
-        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Média de conduta por pessoa (histórico)</h3>
-        ${barrasHorizontais(mediasPorPessoa, { unidade: '', casas: 1 })}
-        <p class="texto-dim2" style="font-size:11px;margin-top:10px;">Visível só pra quem tem edição do módulo — não é um ranking público.</p>
+        <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:15px;margin:0;">Top agilidade por pessoa (90 dias)</h3>
+          <button class="btn-secundario mini" id="dp-ver-agilidade">Ver detalhado →</button></div>
+        ${barrasHorizontais(rankingAgilidade.slice(0, 8), { unidade: 'pts', casas: 0 })}
+        <p class="texto-dim2" style="font-size:11px;margin-top:10px;">Baseado nas solicitações internas concluídas com responsável definido. 100 pts = sempre no prazo.</p>
       </div>` : ''}
     ${editavel && rankingBonus.length ? `
       <div class="panel" style="padding:18px;margin-top:16px;">
@@ -25429,6 +25436,12 @@ async function desempPainel (alvo, editavel) {
         ${barrasHorizontais(rankingBonus, { unidade: 'pts', casas: 0 })}
         <p class="texto-dim2" style="font-size:11px;margin-top:10px;">Soma pontos de qualquer origem — hoje só "dar retorno de compra" gera ponto, mas o placar já está pronto pra outros módulos.</p>
       </div>` : ''}`
+
+  const btnVerAgilidade = $('#dp-ver-agilidade')
+  if (btnVerAgilidade) btnVerAgilidade.onclick = () => {
+    document.querySelectorAll('.subabas button').forEach(b => b.classList.toggle('ativo', b.dataset.sub === 'agilidade'))
+    abrirDesempenho('agilidade', editavel)
+  }
 }
 
 // ----- Agilidade e prazos -----
