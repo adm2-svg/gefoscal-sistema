@@ -6050,6 +6050,7 @@ const selSolicitacao = `
   parecer_cotacao, cotado_em, forma_pagamento, condicao_pagamento,
   parcelas, vencimento, dados_pagamento, orcamento_escolhido_id,
   retorno_texto, retorno_anexo_url, retorno_anexo_nome, retorno_dado_em,
+  anexo_url, nome_anexo,
   solicitante:solicitante_id ( nome ),
   gestor:gestor_id ( nome ),
   analista:analista_id ( nome ),
@@ -6145,6 +6146,7 @@ async function comprasSolicitacoes (alvo, editavel, apenasProprio) {
           <button class="btn-secundario mini" data-ficha="${s.id}">ficha</button>
           ${['PAGA', 'RECEBIDA'].includes(s.status) && s.solicitante_id === PERFIL.pessoaId
             ? `<button class="${s.retorno_dado_em ? 'btn-secundario' : 'btn'} mini" data-retorno="${s.id}">${s.retorno_dado_em ? '✓ retorno dado' : 'retorno'}</button>` : ''}
+          ${s.anexo_url ? `<button class="btn-secundario mini" data-ver-anexo-solicitacao="${esc(s.anexo_url)}" title="${esc(s.nome_anexo || '')}">📎 anexo</button>` : ''}
           ${s.retorno_anexo_url ? `<button class="btn-secundario mini" data-ver-anexo-retorno="${esc(s.retorno_anexo_url)}" title="${esc(s.retorno_anexo_nome || '')}">📎 ver anexo</button>` : ''}
           ${podeEditarSolicitacao(s)
             ? `<button class="btn-secundario mini" data-editar="${s.id}">editar</button>` : ''}
@@ -6174,6 +6176,9 @@ async function comprasSolicitacoes (alvo, editavel, apenasProprio) {
     })
     escopo.querySelectorAll('[data-ver-anexo-retorno]').forEach(b => {
       b.onclick = () => abrirComprovante(b.dataset.verAnexoRetorno)
+    })
+    escopo.querySelectorAll('[data-ver-anexo-solicitacao]').forEach(b => {
+      b.onclick = () => abrirArquivo(b.dataset.verAnexoSolicitacao)
     })
   }
 
@@ -6847,6 +6852,12 @@ async function abrirFicha (s, editavel) {
     ${docTexto('Justificativa da coordenação', s.parecer_coordenacao, 'coord')}
     ${s.parecer_aprovacao ? docTexto('Parecer da aprovação', s.parecer_aprovacao) : ''}
 
+    ${s.anexo_url ? `
+      <div class="caixa-texto">
+        <div class="rot">Anexo da solicitação</div>
+        <button class="btn-secundario mini" id="f-ver-anexo-solicitacao" style="margin-top:2px;">📎 ${esc(s.nome_anexo || 'ver anexo')}</button>
+      </div>` : ''}
+
     ${(s.retorno_texto || s.retorno_anexo_url) ? `
       <div class="caixa-texto">
         <div class="rot">Retorno da compra${s.retorno_dado_em ? ' — ' + esc(fmtQuando(s.retorno_dado_em)) : ''}</div>
@@ -6871,6 +6882,8 @@ async function abrirFicha (s, editavel) {
   fundo.querySelector('#f-imprimir').onclick = () => window.print()
   const bVerAnexoRetorno = fundo.querySelector('#f-ver-anexo-retorno')
   if (bVerAnexoRetorno) bVerAnexoRetorno.onclick = () => abrirComprovante(s.retorno_anexo_url)
+  const bVerAnexoSolicitacao = fundo.querySelector('#f-ver-anexo-solicitacao')
+  if (bVerAnexoSolicitacao) bVerAnexoSolicitacao.onclick = () => abrirArquivo(s.anexo_url)
   const bEditar = fundo.querySelector('#f-editar')
   if (bEditar) bEditar.onclick = () => { fechar(); formSolicitacao(s) }
 }
