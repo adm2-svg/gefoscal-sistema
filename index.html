@@ -15611,6 +15611,7 @@ const CATEGORIAS_SDR_CONHECIMENTO = [
   { valor: 'CLIMATICO', rotulo: 'Climático', icone: '🌦️' },
   { valor: 'MACRO_REGIONAL', rotulo: 'Cenário macro/regional', icone: '🗺️' }
 ]
+const AGENTE_AJUSTADOR_SDR_ID = '54e79b82-ec63-4426-a67c-2c5657a8dfd4' // agente que propõe ajustes de prompt/biblioteca a partir do simulador de teste
 
 // cultura/UF em branco no cadastro = vale sempre; cultura/UF preenchida
 // só entra quando bate com a do lead — é assim que Comercial e
@@ -15638,6 +15639,7 @@ async function sdrAbaTreinar (alvo) {
     db.from('sdr_conhecimento').select('*').order('categoria').order('titulo')
   ])
   if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  SDR_CACHE.biblioteca = biblioteca || []
 
   const ativa = (versoes || []).find(v => v.ativo)
   const historico = (versoes || []).filter(v => !v.ativo)
@@ -15721,7 +15723,39 @@ async function sdrAbaTreinar (alvo) {
       <input id="sdr-preview-uf" placeholder="UF (ex: BA)" style="flex:1;max-width:100px;">
       <button class="btn-secundario mini" id="sdr-preview-gerar">Gerar</button>
     </div>
-    <pre id="sdr-preview-resultado" class="texto-dim2 oculto" style="white-space:pre-wrap;font-size:11.5px;padding:12px;background:var(--surface2);border-radius:8px;max-height:320px;overflow:auto;"></pre>`
+    <pre id="sdr-preview-resultado" class="texto-dim2 oculto" style="white-space:pre-wrap;font-size:11.5px;padding:12px;background:var(--surface2);border-radius:8px;max-height:320px;overflow:auto;"></pre>
+
+    <h4 style="font-family:var(--serif);font-size:15px;margin:28px 0 6px;">🧪 Testar com cliente simulado</h4>
+    <p class="texto-dim2" style="font-size:12.5px;margin-bottom:10px;">
+      Converse fingindo ser o cliente pra ver como a IA responde com o prompt e a biblioteca de hoje. Aponte o que ela
+      errou nessa conversa e ela propõe o ajuste no prompt ou na biblioteca — você decide o que aplicar.</p>
+    <div style="display:flex;gap:8px;margin-bottom:10px;">
+      <input id="sim-sdr-cultura" placeholder="cultura simulada (ex: Soja)" style="flex:1;">
+      <input id="sim-sdr-uf" placeholder="UF (ex: BA)" style="flex:1;max-width:90px;">
+      <button class="btn-secundario mini" id="sim-sdr-reiniciar">reiniciar teste</button>
+    </div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;">
+      <div style="flex:1.3;min-width:280px;">
+        <div id="sim-sdr-corpo" style="border:1px solid var(--line);border-radius:10px;height:360px;overflow-y:auto;
+          padding:12px;background:var(--bg);display:flex;flex-direction:column;gap:8px;">
+          <p class="texto-dim2" style="font-size:12px;">Escreva a primeira mensagem como se fosse o cliente.</p>
+        </div>
+        <div style="display:flex;gap:6px;margin-top:8px;">
+          <input id="sim-sdr-texto" placeholder="Escreva como se fosse o cliente..." style="flex:1;">
+          <button class="btn mini" id="sim-sdr-enviar">Enviar</button>
+        </div>
+      </div>
+      <div style="flex:1;min-width:260px;">
+        <label style="font-size:11px;">O que ela errou nessa conversa?</label>
+        <textarea id="sim-sdr-feedback" style="width:100%;min-height:110px;"
+          placeholder="ex: ela não perguntou a cultura antes de falar de preço; foi ríspida na objeção..."></textarea>
+        <div class="acoes" style="margin-top:8px;">
+          <button class="btn mini" id="sim-sdr-ajustar">Enviar ajustes</button>
+        </div>
+        <div class="texto-dim2" id="sim-sdr-status" style="font-size:11.5px;margin-top:6px;"></div>
+        <div id="sim-sdr-resultado" style="margin-top:12px;"></div>
+      </div>
+    </div>`
 
   $('#sdr-btn-salvar-prompt').onclick = () => salvarNovoPromptSdr(ativa)
 
@@ -15754,6 +15788,151 @@ async function sdrAbaTreinar (alvo) {
     pre.textContent = montarPromptFinalSdr(ativa?.conteudo || '(nenhum prompt ativo ainda)', biblioteca, { cultura, uf })
     pre.classList.remove('oculto')
   }
+
+  // ----- Simulador de conversa (cliente fictício) + ajuste guiado -----
+  let SIM_SDR_MENSAGENS = [] // [{role:'user'|'assistant', content, _carregando?}]
+
+  const renderSimSdr = () => {
+    const corpo = $('#sim-sdr-corpo')
+    if (!corpo) return
+    corpo.innerHTML = SIM_SDR_MENSAGENS.length ? SIM_SDR_MENSAGENS.map(m => `
+      <div class="sec-msg ${m.role === 'user' ? 'sec-user' : 'sec-ia'} ${m._carregando ? 'sec-carregando' : ''}"
+        style="align-self:${m.role === 'user' ? 'flex-end' : 'flex-start'};">${m._carregando ? 'Pensando...' : esc(m.content)}</div>
+    `).join('') : '<p class="texto-dim2" style="font-size:12px;">Escreva a primeira mensagem como se fosse o cliente.</p>'
+    corpo.scrollTop = corpo.scrollHeight
+  }
+
+  $('#sim-sdr-reiniciar').onclick = () => {
+    SIM_SDR_MENSAGENS = []
+    renderSimSdr()
+    $('#sim-sdr-resultado').innerHTML = ''
+    $('#sim-sdr-status').textContent = ''
+  }
+
+  const enviarSimSdr = async () => {
+    const campo = $('#sim-sdr-texto')
+    const texto = campo.value.trim()
+    if (!texto) return
+    campo.value = ''
+    SIM_SDR_MENSAGENS.push({ role: 'user', content: texto })
+    SIM_SDR_MENSAGENS.push({ role: 'assistant', content: '', _carregando: true })
+    renderSimSdr()
+
+    const cultura = $('#sim-sdr-cultura').value.trim()
+    const uf = $('#sim-sdr-uf').value.trim()
+    const systemPrompt = montarPromptFinalSdr(ativa?.conteudo || '', biblioteca, { cultura, uf })
+    const historicoParaIa = SIM_SDR_MENSAGENS.filter(m => !m._carregando).map(m => ({ role: m.role, content: m.content }))
+
+    const { data, error } = await db.functions.invoke('ia-agente-chat', { body: { systemPrompt, mensagens: historicoParaIa } })
+    const ultimo = SIM_SDR_MENSAGENS[SIM_SDR_MENSAGENS.length - 1]
+    ultimo.content = (!error && data?.resposta) ? data.resposta : '⚠️ erro ao gerar resposta: ' + (error?.message || data?.erro || 'desconhecido')
+    delete ultimo._carregando
+    renderSimSdr()
+  }
+  $('#sim-sdr-enviar').onclick = enviarSimSdr
+  $('#sim-sdr-texto').onkeydown = e => { if (e.key === 'Enter') enviarSimSdr() }
+
+  $('#sim-sdr-ajustar').onclick = async () => {
+    const feedback = $('#sim-sdr-feedback').value.trim()
+    const statusEl = $('#sim-sdr-status')
+    if (!feedback) { statusEl.textContent = 'Escreve o que ela errou primeiro.'; return }
+    const conversaValida = SIM_SDR_MENSAGENS.filter(m => !m._carregando)
+    if (!conversaValida.length) { statusEl.textContent = 'Simula uma conversa primeiro.'; return }
+
+    const btn = $('#sim-sdr-ajustar'); btn.disabled = true; btn.textContent = 'Analisando...'
+    statusEl.textContent = ''
+
+    const transcricao = conversaValida.map(m => `${m.role === 'user' ? 'Cliente (simulado)' : 'SDR IA'}: ${m.content}`).join('\n')
+    const listaConhecimentos = (biblioteca || []).map(e =>
+      `- id:${e.id} | categoria:${e.categoria} | título:${e.titulo} | cultura:${e.cultura || '-'} | uf:${e.uf || '-'}\n  conteúdo: ${e.conteudo}`
+    ).join('\n')
+    const prompt = `PROMPT DE ATUAÇÃO ATUAL:\n${ativa?.conteudo || '(nenhum)'}\n\nBIBLIOTECA DE CONHECIMENTO ATUAL:\n${listaConhecimentos || '(vazia)'}\n\nTRANSCRIÇÃO DA CONVERSA DE TESTE:\n${transcricao}\n\nFEEDBACK DO HUMANO SOBRE O QUE ELA ERROU:\n${feedback}`
+
+    const { data, error } = await db.functions.invoke('ia-agente-chat', {
+      body: { agenteId: AGENTE_AJUSTADOR_SDR_ID, mensagens: [{ role: 'user', content: prompt }] }
+    })
+    btn.disabled = false; btn.textContent = 'Enviar ajustes'
+    if (error || !data?.resposta) { statusEl.textContent = 'Erro: ' + (error?.message || 'sem resposta da IA'); return }
+
+    const m = data.resposta.match(/<<<AJUSTES_SDR>>>\s*([\s\S]*?)\s*<<<FIM_AJUSTES_SDR>>>/)
+    if (!m) { statusEl.textContent = 'A IA não devolveu um ajuste reconhecível — tenta reformular o feedback.'; return }
+    let ajuste = null
+    try { ajuste = JSON.parse(m[1]) } catch { statusEl.textContent = 'A IA devolveu algo mal formatado — tenta de novo.'; return }
+    renderResultadoAjusteSdr(ajuste, alvo, ativa)
+  }
+}
+
+// Mostra as mudanças de prompt/biblioteca que o Ajustador de Treinamento
+// SDR propôs, cada uma com seu próprio botão — nada é salvo sozinho, só
+// quando a pessoa clica em aplicar aquele item específico.
+function renderResultadoAjusteSdr (ajuste, alvo, promptAtivo) {
+  const cont = $('#sim-sdr-resultado')
+  const statusEl = $('#sim-sdr-status')
+  const partes = []
+
+  if (ajuste.explicacao) partes.push(`<p class="texto-dim2" style="font-size:12px;margin-bottom:8px;">💡 ${esc(ajuste.explicacao)}</p>`)
+
+  if (ajuste.prompt_revisado) {
+    partes.push(`
+      <div class="panel" style="padding:10px;margin-bottom:10px;border:1px solid var(--line2);">
+        <div style="font-size:11px;font-weight:700;margin-bottom:6px;">Novo prompt de atuação sugerido</div>
+        <pre style="white-space:pre-wrap;font-size:11px;max-height:160px;overflow:auto;background:var(--surface2);padding:8px;border-radius:6px;">${esc(ajuste.prompt_revisado)}</pre>
+        <button class="btn mini" data-aplicar-prompt-sugerido style="margin-top:6px;">Aplicar esse prompt</button>
+      </div>`)
+  }
+
+  ;(ajuste.novos_conhecimentos || []).forEach((n, i) => {
+    partes.push(`
+      <div class="panel" style="padding:10px;margin-bottom:8px;border:1px solid var(--line2);">
+        <div style="font-size:11px;font-weight:700;margin-bottom:4px;">+ novo: [${esc(n.categoria)}] ${esc(n.titulo)}
+          ${n.cultura ? `<span class="chip" style="font-size:10px;margin-left:4px;">${esc(n.cultura)}</span>` : ''}
+          ${n.uf ? `<span class="chip" style="font-size:10px;margin-left:4px;">${esc(n.uf)}</span>` : ''}</div>
+        <div class="texto-dim2" style="font-size:11.5px;margin-bottom:6px;">${esc(n.conteudo)}</div>
+        <button class="btn-secundario mini" data-aplicar-novo-conhecimento="${i}">Adicionar à biblioteca</button>
+      </div>`)
+  })
+
+  ;(ajuste.conhecimentos_editados || []).forEach((e, i) => {
+    const original = (SDR_CACHE.biblioteca || []).find(x => String(x.id) === String(e.id))
+    partes.push(`
+      <div class="panel" style="padding:10px;margin-bottom:8px;border:1px solid var(--line2);">
+        <div style="font-size:11px;font-weight:700;margin-bottom:4px;">✎ editar: ${original ? esc(original.titulo) : 'conhecimento removido'}</div>
+        <div class="texto-dim2" style="font-size:11.5px;margin-bottom:6px;">${esc(e.conteudo)}</div>
+        ${original ? `<button class="btn-secundario mini" data-aplicar-editar-conhecimento="${i}">Salvar essa mudança</button>` : '<span class="texto-dim2" style="font-size:11px;">esse conhecimento não existe mais</span>'}
+      </div>`)
+  })
+
+  if (!partes.length) partes.push('<p class="texto-dim2" style="font-size:12px;">A IA não propôs nenhuma mudança concreta dessa vez.</p>')
+  cont.innerHTML = partes.join('')
+
+  const botaoPrompt = cont.querySelector('[data-aplicar-prompt-sugerido]')
+  if (botaoPrompt) botaoPrompt.onclick = () => {
+    $('#sdr-prompt-texto').value = ajuste.prompt_revisado
+    salvarNovoPromptSdr(promptAtivo)
+  }
+
+  cont.querySelectorAll('[data-aplicar-novo-conhecimento]').forEach(btn => {
+    btn.onclick = async () => {
+      const n = ajuste.novos_conhecimentos[Number(btn.dataset.aplicarNovoConhecimento)]
+      btn.disabled = true; btn.textContent = 'Adicionando...'
+      const { error } = await db.from('sdr_conhecimento').insert({
+        categoria: n.categoria, titulo: n.titulo, conteudo: n.conteudo,
+        cultura: n.cultura || null, uf: n.uf || null, criado_por: PERFIL.pessoaId
+      })
+      if (error) { statusEl.textContent = 'Erro: ' + error.message; btn.disabled = false; btn.textContent = 'Adicionar à biblioteca'; return }
+      btn.textContent = '✓ adicionado'
+    }
+  })
+
+  cont.querySelectorAll('[data-aplicar-editar-conhecimento]').forEach(btn => {
+    btn.onclick = async () => {
+      const e = ajuste.conhecimentos_editados[Number(btn.dataset.aplicarEditarConhecimento)]
+      btn.disabled = true; btn.textContent = 'Salvando...'
+      const { error } = await db.from('sdr_conhecimento').update({ conteudo: e.conteudo, atualizado_em: new Date().toISOString() }).eq('id', e.id)
+      if (error) { statusEl.textContent = 'Erro: ' + error.message; btn.disabled = false; btn.textContent = 'Salvar essa mudança'; return }
+      btn.textContent = '✓ salvo'
+    }
+  })
 }
 
 function formConhecimentoSdr (entrada, alvoLista) {
