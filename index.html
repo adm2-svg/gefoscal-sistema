@@ -3266,7 +3266,10 @@ function detalheSolicitacao (s, aoFechar) {
 
     ${s.data_planejada ? `<div class="chip" style="margin-bottom:12px;display:inline-block;">
       📅 Planejado pra ${fmtData(s.data_planejada)}${s.hora_planejada ? ' às ' + s.hora_planejada.slice(0, 5) : ''}</div>` : ''}
-    ${editavel ? `<div class="acoes" style="margin-bottom:12px;"><button class="btn-secundario mini" id="ds-programar">📅 ${s.data_planejada ? 'Reprogramar' : 'Programar quando vou fazer'}</button></div>` : ''}
+    ${editavel ? `<div class="acoes" style="margin-bottom:12px;">
+      <button class="btn-secundario mini" id="ds-programar">📅 ${s.data_planejada ? 'Reprogramar' : 'Programar quando vou fazer'}</button>
+      ${prazo?.atrasada ? '<button class="btn-secundario mini" id="ds-prorrogar" style="color:var(--warn-text,#c8901a);">⏰ Pedir mudança de prazo</button>' : ''}
+    </div>` : ''}
 
     <div class="caixa-texto" style="margin-bottom:12px;">
       <div class="rot">${esc(s.titulo)}</div>
@@ -3326,6 +3329,8 @@ function detalheSolicitacao (s, aoFechar) {
 
   const btnProgramar = fundo.querySelector('#ds-programar')
   if (btnProgramar) btnProgramar.onclick = () => abrirProgramarSolicitacao(s, () => { fechar(); aoFechar() })
+  const btnProrrogar = fundo.querySelector('#ds-prorrogar')
+  if (btnProrrogar) btnProrrogar.onclick = () => formPedirProrrogacao(s, () => { fechar(); aoFechar() })
 
   const carregarParticipantes = async () => {
     const { data } = await db.from('solicitacao_participante').select('id,pessoa_id,pessoa:pessoa_id(nome)').eq('solicitacao_id', s.id)
@@ -3468,6 +3473,61 @@ function detalheSolicitacao (s, aoFechar) {
 // Programar quando vai fazer uma solicitação — grava na própria
 // solicitação (pra quem pediu ver) e cria/atualiza um compromisso na
 // agenda pessoal de quem está programando, pra aparecer na semana dela
+// Pedido de mudança de prazo pra uma solicitação atrasada -- quem tem a
+// tarefa em mãos explica o motivo, sugere uma data nova, e o Lúcio decide
+// depois (lá em RH → Agilidade e prazos). Se aceito, o prazo muda de
+// verdade; se recusado, a solicitação segue atrasada e conta negativo
+// na agilidade normalmente.
+const ID_LUCIO_DECISOR_PRORROGACAO = '165bf7d6-1db1-476d-bfcf-245159ad4663'
+
+function formPedirProrrogacao (s, aoFechar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:420px;">
+    <h3>⏰ Pedir mudança de prazo</h3>
+    <p class="texto-dim2" style="font-size:12px;margin:-6px 0 12px;">
+      "${esc(s.titulo)}" está atrasada. Explica o motivo e sugere uma data nova — o RH decide se aceita.
+      Se não aceitar, continua contando atraso normalmente.</p>
+    <div class="campo"><label>Nova data proposta</label><input type="date" id="pp-data" value="${hojeISO()}"></div>
+    <div class="campo"><label>Justificativa</label><textarea id="pp-justificativa" style="min-height:80px;" placeholder="Por que precisa mudar o prazo?"></textarea></div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="pp-enviar">Enviar pedido</button>
+      <button class="btn-secundario" id="pp-cancelar">Cancelar</button>
+    </div>
+    <div class="recado oculto" id="pp-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+  fundo.querySelector('#pp-cancelar').onclick = () => fundo.remove()
+
+  fundo.querySelector('#pp-enviar').onclick = async () => {
+    const el = fundo.querySelector('#pp-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto') }
+    const dataNova = fundo.querySelector('#pp-data').value
+    const justificativa = fundo.querySelector('#pp-justificativa').value.trim()
+    if (!dataNova) { aviso('Escolhe a data proposta.'); return }
+    if (!justificativa) { aviso('Escreve a justificativa.'); return }
+    const btn = fundo.querySelector('#pp-enviar'); btn.disabled = true; btn.textContent = 'Enviando...'
+
+    const { error } = await db.from('solicitacao_prorrogacao').insert({
+      solicitacao_id: s.id, solicitado_por: PERFIL.pessoaId,
+      data_atual: s.data_limite || null, data_nova_solicitada: dataNova,
+      justificativa
+    })
+    if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Enviar pedido'; return }
+
+    await db.from('notificacao_pessoal').insert({
+      destinatario_id: ID_LUCIO_DECISOR_PRORROGACAO,
+      titulo: '⏰ Pedido de mudança de prazo',
+      mensagem: `${PERFIL.nome} pediu pra mudar o prazo de "${s.titulo}" pra ${fmtData(dataNova)}. Decide em RH → Agilidade e prazos.`,
+      entidade: 'solicitacao_interna', entidade_id: s.id
+    })
+
+    fundo.remove()
+    aoFechar()
+  }
+}
+
 function abrirProgramarSolicitacao (s, aoSalvar) {
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
@@ -27735,6 +27795,111 @@ function abrirFormCandidato (area) {
 // Cruza solicitacao_interna de todos os setores pra medir quem resolve
 // rápido e quem atrasa — RH acompanha isso individualmente (por pessoa)
 // e também por setor, sem depender de módulo específico de cada área.
+// Pedidos de mudança de prazo esperando decisão -- aparece sempre no
+// topo de Agilidade e prazos, com um resumo rápido do volume de trabalho
+// de quem pediu, pra ajudar o Lúcio (ou quem estiver decidindo) sem
+// precisar ir checar em outro lugar.
+async function carregarPedidosProrrogacao () {
+  const alvoDiv = $('#ag-prorrogacoes')
+  if (!alvoDiv) return
+  const { data: pedidos } = await db.from('solicitacao_prorrogacao')
+    .select('id,data_atual,data_nova_solicitada,justificativa,criado_em,solicitado_por:solicitado_por(id,nome),solicitacao:solicitacao_id(id,codigo,titulo)')
+    .eq('status', 'PENDENTE').order('criado_em', { ascending: true })
+
+  if (!pedidos?.length) { alvoDiv.innerHTML = ''; return }
+
+  const idsPessoas = [...new Set(pedidos.map(p => p.solicitado_por?.id).filter(Boolean))]
+  const { data: todasAtivas } = await db.from('solicitacao_interna')
+    .select('id,responsavel_id,status,data_solicitacao,data_limite,urgencia')
+    .in('responsavel_id', idsPessoas).not('status', 'in', '(CONCLUIDA,CANCELADA)')
+  const resumoPorPessoa = {}
+  idsPessoas.forEach(id => {
+    const dela = (todasAtivas || []).filter(s => s.responsavel_id === id)
+    resumoPorPessoa[id] = { total: dela.length, atrasadas: dela.filter(estaAtrasadaSolicitacao).length }
+  })
+
+  alvoDiv.innerHTML = `
+    <div class="panel" style="padding:16px 18px;margin-bottom:16px;border-left:3px solid var(--warn-text,#c8901a);">
+      <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 10px;">⏰ Pedidos de mudança de prazo (${pedidos.length})</h3>
+      ${pedidos.map(p => {
+        const resumo = resumoPorPessoa[p.solicitado_por?.id] || { total: 0, atrasadas: 0 }
+        return `<div class="panel" style="padding:12px 14px;margin-bottom:8px;background:var(--surface2);">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
+            <div><b>${esc(p.solicitado_por?.nome ?? '—')}</b> · <span class="texto-dim2">${esc(p.solicitacao?.codigo ?? '')} — ${esc(p.solicitacao?.titulo ?? '')}</span></div>
+            <span class="texto-dim2" style="font-size:11px;">${fmtQuando(p.criado_em) ?? ''}</span>
+          </div>
+          <p class="texto-dim" style="font-size:12.5px;margin:0 0 6px;">"${esc(p.justificativa)}"</p>
+          <p style="font-size:12px;margin:0 0 6px;">
+            Prazo atual: ${p.data_atual ? fmtData(p.data_atual) : '—'} → proposto: <b>${fmtData(p.data_nova_solicitada)}</b></p>
+          <p class="texto-dim2" style="font-size:11.5px;margin:0 0 10px;">
+            📋 Volume de trabalho de ${esc(p.solicitado_por?.nome ?? 'quem pediu')}: <b>${resumo.total}</b> solicitação(ões) ativa(s),
+            <span class="${resumo.atrasadas ? 'badge-alerta' : ''}" style="${resumo.atrasadas ? '' : 'font-weight:600;'}">${resumo.atrasadas} atrasada(s)</span> no momento.</p>
+          <div style="display:flex;gap:8px;">
+            <button class="btn mini" data-aceitar-prorrog="${p.id}">✓ Aceitar</button>
+            <button class="btn-secundario mini" data-recusar-prorrog="${p.id}" style="color:var(--warn-text,#c8901a);">✗ Recusar</button>
+            <button class="btn-secundario mini" data-opiniao-prorrog="${p.id}" style="border-color:#8a5cf6;color:#8a5cf6;">🎯 Pedir opinião da Especialista</button>
+          </div>
+          <div class="texto-dim2" id="op-${p.id}" style="font-size:12px;margin-top:8px;"></div>
+        </div>`
+      }).join('')}
+    </div>`
+
+  alvoDiv.querySelectorAll('[data-aceitar-prorrog]').forEach(b => {
+    b.onclick = async () => {
+      const pedido = pedidos.find(p => p.id === b.dataset.aceitarProrrog)
+      if (!confirm(`Aceitar a mudança de prazo de "${pedido.solicitacao?.titulo}" pra ${fmtData(pedido.data_nova_solicitada)}?`)) return
+      await db.from('solicitacao_interna').update({ data_limite: pedido.data_nova_solicitada }).eq('id', pedido.solicitacao.id)
+      await db.from('solicitacao_prorrogacao').update({
+        status: 'ACEITO', decidido_por: PERFIL.pessoaId, decidido_em: new Date().toISOString()
+      }).eq('id', pedido.id)
+      await db.from('notificacao_pessoal').insert({
+        destinatario_id: pedido.solicitado_por.id,
+        titulo: '✓ Prazo alterado',
+        mensagem: `Seu pedido de mudança de prazo pra "${pedido.solicitacao?.titulo}" foi aceito. Novo prazo: ${fmtData(pedido.data_nova_solicitada)}.`,
+        entidade: 'solicitacao_interna', entidade_id: pedido.solicitacao.id
+      })
+      carregarPedidosProrrogacao()
+    }
+  })
+  alvoDiv.querySelectorAll('[data-recusar-prorrog]').forEach(b => {
+    b.onclick = async () => {
+      const pedido = pedidos.find(p => p.id === b.dataset.recusarProrrog)
+      const motivo = prompt('Motivo da recusa (opcional):') || null
+      await db.from('solicitacao_prorrogacao').update({
+        status: 'RECUSADO', decidido_por: PERFIL.pessoaId, decidido_em: new Date().toISOString(), parecer_decisao: motivo
+      }).eq('id', pedido.id)
+      await db.from('notificacao_pessoal').insert({
+        destinatario_id: pedido.solicitado_por.id,
+        titulo: '✗ Pedido de prazo recusado',
+        mensagem: `Seu pedido de mudança de prazo pra "${pedido.solicitacao?.titulo}" não foi aceito.${motivo ? ' Motivo: ' + motivo : ''} A solicitação continua com o prazo original.`,
+        entidade: 'solicitacao_interna', entidade_id: pedido.solicitacao.id
+      })
+      carregarPedidosProrrogacao()
+    }
+  })
+  alvoDiv.querySelectorAll('[data-opiniao-prorrog]').forEach(b => {
+    b.onclick = async () => {
+      const pedido = pedidos.find(p => p.id === b.dataset.opiniaoProrrog)
+      const resumo = resumoPorPessoa[pedido.solicitado_por?.id] || { total: 0, atrasadas: 0 }
+      const destino = $(`#op-${pedido.id}`)
+      b.disabled = true; destino.textContent = 'Analisando...'
+      const prompt = `Um pedido de mudança de prazo chegou pra você avaliar. Dê uma recomendação curta (2-4 frases): aceitar ou não, e por quê.
+
+Pessoa: ${pedido.solicitado_por?.nome}
+Solicitação atrasada: ${pedido.solicitacao?.titulo}
+Justificativa dada: "${pedido.justificativa}"
+Prazo atual: ${pedido.data_atual || 'sem prazo manual'} → prazo proposto: ${pedido.data_nova_solicitada}
+Volume de trabalho agora: ${resumo.total} solicitação(ões) ativa(s), ${resumo.atrasadas} já atrasada(s).`
+      const { data, error } = await db.functions.invoke('ia-agente-chat', {
+        body: { agenteId: AGENTE_ESPECIALISTA_RH_ID, mensagens: [{ role: 'user', content: prompt }] }
+      })
+      b.disabled = false
+      if (error || data?.erro) { destino.textContent = 'Não deu pra consultar agora.'; return }
+      destino.innerHTML = `<div style="padding:8px 10px;background:rgba(138,92,246,.08);border:1px solid rgba(138,92,246,.2);border-radius:8px;">🎯 ${esc(data.resposta)}</div>`
+    }
+  })
+}
+
 async function desempAgilidade (alvo, editavel) {
   if (!editavel) { alvo.innerHTML = `<div class="panel" style="padding:22px;">
     <p class="texto-dim">Esse indicador é sensível e só quem edita o módulo de RH enxerga
@@ -27744,12 +27909,15 @@ async function desempAgilidade (alvo, editavel) {
   const de = new Date(Date.now() - 90 * 864e5).toISOString().slice(0, 10)
 
   alvo.innerHTML = `
+    <div id="ag-prorrogacoes"></div>
     <div class="filtros" style="margin-bottom:14px;">
       <div class="campo"><label>De</label><input type="date" id="ag-de" value="${de}"></div>
       <div class="campo"><label>Até</label><input type="date" id="ag-ate" value="${hoje}"></div>
       <button class="btn" id="ag-buscar">Buscar</button>
     </div>
     <div id="ag-conteudo"><p class="texto-dim2">carregando...</p></div>`
+
+  carregarPedidosProrrogacao()
 
   const buscar = async () => {
     const { data, error } = await db.from('solicitacao_interna').select(`
