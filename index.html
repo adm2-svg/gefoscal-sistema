@@ -10050,7 +10050,7 @@ async function paginaGestaoTI () {
     SETOR_TI_ID = setorTI?.id ?? null
   }
 
-  const abas = [['orcamento', 'Orçamento'], ['solicitacoes', 'Solicitações'], ['mapa', 'Mapa (MAPA/Trimestral)']]
+  const abas = [['orcamento', 'Orçamento'], ['solicitacoes', 'Solicitações'], ['cartao', 'Cartão TI'], ['mapa', 'Mapa (MAPA/Trimestral)']]
   area.innerHTML = `
     <div style="background:linear-gradient(120deg,#0b1f1a 0%,#122e26 55%,#0b1f1a 100%);border-radius:14px;padding:22px 26px;margin-bottom:18px;position:relative;overflow:hidden;">
       <div style="position:absolute;right:-30px;top:-30px;font-size:130px;opacity:.08;line-height:1;">⚙️</div>
@@ -10078,6 +10078,7 @@ function abrirGestaoTI (sub, editavel) {
   if (sub === 'orcamento') tiOrcamento(alvo, editavel)
   if (sub === 'solicitacoes') tiSolicitacoes(alvo, editavel)
   if (sub === 'mapa') tiMapa(alvo)
+  if (sub === 'cartao') painelOnfly(alvo, { escopo: 'ti', editavel })
 }
 
 // ----- Orçamento -----
@@ -11319,7 +11320,15 @@ function abrirCrm (sub, editavel, gerencia) {
   if (sub === 'progresso') crmProgressoIndividual(alvo, editavel, gerencia)
   if (sub === 'calendario') crmMeuDia(alvo, editavel, gerencia)
   if (sub === 'atribuir') crmAtribuir(alvo)
-  if (sub === 'gestao') crmGestaoTab(alvo, editavel)
+  if (sub === 'gestao') crmGestaoTab(alvo, editavel).then(() => {
+    const caixa = document.createElement('div')
+    caixa.style.marginTop = '26px'
+    caixa.innerHTML = `<div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Cartão corporativo — equipe comercial</h3></div>`
+    const painel = document.createElement('div')
+    caixa.appendChild(painel)
+    alvo.appendChild(caixa)
+    painelOnfly(painel, { escopo: 'comercial', editavel: false })
+  })
 }
 
 const selLead = `
@@ -17470,7 +17479,7 @@ async function paginaFinanceiro () {
   const area = areaLivre()
   const abas = [['lancamentos', 'Lançamentos'], ['compras', 'Compras'], ['pagar', 'A pagar'], ['fechamento', 'Fechamento'], ['gastos', 'Gastos por setor'],
     ['orcamento', 'Orçamento'], ['contas', 'Saldo e contas'], ['planos', 'Planos e metas'],
-    ['investimentos', 'Investimentos'], ['relatorios', 'Relatórios'], ['cadastros', 'Cadastros']]
+    ['investimentos', 'Investimentos'], ['relatorios', 'Relatórios'], ['onfly', 'Onfly'], ['cadastros', 'Cadastros']]
   area.innerHTML = `
     <div class="subabas">
       ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
@@ -17508,6 +17517,7 @@ function abrirFinanceiro (sub, editavel) {
   if (sub === 'planos') finPlanos(alvo, editavel)
   if (sub === 'investimentos') finInvestimentos(alvo, editavel)
   if (sub === 'relatorios') finRelatorios(alvo, editavel)
+  if (sub === 'onfly') painelOnfly(alvo, { escopo: 'todos', editavel, comSync: true })
 }
 
 // ----- Financeiro › Lançamentos -----
@@ -31632,6 +31642,246 @@ function dpGerarPdfFicha (pessoa, docs, exames, ocorr, folhas) {
 // ---------------------------------------------------------------
 const ROTULO_STATUS_RDV = { 1: 'Rascunho', 2: 'Aguardando aprovação', 3: 'Aprovado', 4: 'Pendente de pagamento', 5: 'Pago', 6: 'Arquivado' }
 function corStatusRdv (s) { return [3, 5].includes(s) ? 'badge-bom' : s === 2 || s === 4 ? 'chip' : 'badge-alerta' }
+
+// ===============================================================
+// Painel Onfly — cartão corporativo e RDVs
+//
+// Uma função só, usada em três lugares com escopo diferente:
+//   Financeiro › Onfly      -> escopo 'todos'    (empresa inteira + sincronização)
+//   CRM Comercial › Gestão  -> escopo 'comercial'(só quem é do setor Comercial)
+//   Gestão de TI › Cartão TI-> escopo 'ti'       (só o que for classificado como TI)
+//
+// A classificação de área vive em onfly_despesa.area / onfly_rdv.area.
+// Ela nasce do setor da pessoa, mas é corrigível na mão pelo Financeiro —
+// é isso que resolve o caso "assinatura de software passou no cartão do
+// comercial mas o gasto é de TI".
+// ===============================================================
+
+const ONFLY_CORES_TIPO = ['#3568C4', '#D97706', '#00968F', '#A24BC7', '#8A6F1C', '#6B7280']
+const ONFLY_AREAS = ['COMERCIAL', 'TI', 'ADMINISTRATIVO', 'INDUSTRIA', 'FAZENDA', 'DIRECAO']
+
+function onflyPeriodoPadrao () {
+  const hoje = new Date()
+  const de = new Date(hoje.getFullYear(), hoje.getMonth(), 1)
+  return { de: de.toISOString().slice(0, 10), ate: hoje.toISOString().slice(0, 10) }
+}
+
+async function painelOnfly (alvo, opts) {
+  const { escopo = 'todos', editavel = false, comSync = false } = opts || {}
+  const per = alvo._onflyPeriodo || onflyPeriodoPadrao()
+  alvo._onflyPeriodo = per
+
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+
+  const [{ data: desp }, { data: rdvs }] = await Promise.all([
+    db.from('onfly_despesa')
+      .select('id, descricao, data, valor, tipo_despesa, reembolsavel, area, pessoa:pessoa_id ( nome, setor:setor_id ( nome ) )')
+      .gte('data', per.de).lte('data', per.ate).order('data', { ascending: false }).limit(2000),
+    db.from('onfly_rdv')
+      .select('id, protocolo, nome, motivo, valor_total, valor_reembolsavel, status, area, lancamento_financeiro_id, criado_em_onfly, pessoa:pessoa_id ( nome, setor:setor_id ( nome ) )')
+      .order('criado_em_onfly', { ascending: false }).limit(500)
+  ])
+
+  const noEscopo = r => {
+    const setor = r.pessoa?.setor?.nome ?? null
+    if (escopo === 'ti') return r.area === 'TI'
+    if (escopo === 'comercial') return setor === 'Comercial' && r.area !== 'TI'
+    return true
+  }
+
+  const despesas = (desp || []).filter(noEscopo)
+  const relatorios = (rdvs || []).filter(noEscopo)
+
+  const total = despesas.reduce((s, d) => s + Number(d.valor || 0), 0)
+  const reembolso = despesas.filter(d => d.reembolsavel).reduce((s, d) => s + Number(d.valor || 0), 0)
+  const abertos = relatorios.filter(r => !r.lancamento_financeiro_id)
+  const semArea = despesas.filter(d => !d.area).length
+
+  // ---- gasto por pessoa
+  const porPessoa = {}
+  despesas.forEach(d => {
+    const nome = d.pessoa?.nome ?? 'Sem pessoa vinculada'
+    const setor = d.pessoa?.setor?.nome ?? '—'
+    porPessoa[nome] = porPessoa[nome] || { valor: 0, setor }
+    porPessoa[nome].valor += Number(d.valor || 0)
+  })
+  const rankPessoa = Object.entries(porPessoa).sort((a, b) => b[1].valor - a[1].valor)
+  const teto = rankPessoa.length ? rankPessoa[0][1].valor : 1
+
+  // ---- por tipo
+  const porTipo = {}
+  despesas.forEach(d => {
+    const t = d.tipo_despesa ? String(d.tipo_despesa) : 'Não classificado'
+    porTipo[t] = (porTipo[t] || 0) + Number(d.valor || 0)
+  })
+  const rankTipo = Object.entries(porTipo).sort((a, b) => b[1] - a[1]).slice(0, 6)
+  const totalTipo = rankTipo.reduce((s, t) => s + t[1], 0) || 1
+
+  const vazio = !despesas.length && !relatorios.length
+
+  alvo.innerHTML = `
+    <style>
+      .onfly-barra-linha { display:grid; grid-template-columns:150px 1fr 110px; align-items:center; gap:12px; margin-bottom:11px; }
+      .onfly-barra-linha .quem { font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .onfly-barra-linha .quem small { display:block; font-size:11px; color:var(--dim2); }
+      .onfly-trilho { height:11px; background:var(--line2); border-radius:6px; overflow:hidden; }
+      .onfly-preenche { height:100%; background:var(--rust); border-radius:0 4px 4px 0; }
+      .onfly-pilha { display:flex; height:13px; border-radius:6px; overflow:hidden; gap:2px; margin-bottom:14px; }
+      .onfly-legenda div { display:grid; grid-template-columns:11px 1fr auto; align-items:center; gap:9px; font-size:13px; margin-bottom:9px; }
+      .onfly-amostra { width:11px; height:11px; border-radius:3px; }
+      @media (max-width:700px){ .onfly-barra-linha { grid-template-columns:110px 1fr 90px; } }
+    </style>
+
+    <div class="filtros" style="margin-bottom:16px;">
+      <div class="campo"><label>De</label><input type="date" id="onfly-de" value="${per.de}"></div>
+      <div class="campo"><label>Até</label><input type="date" id="onfly-ate" value="${per.ate}"></div>
+      <button class="btn" id="onfly-filtrar" style="align-self:end;">Aplicar</button>
+      ${comSync && editavel ? `<button class="btn" id="onfly-sync" style="align-self:end;">Sincronizar com a Onfly</button>` : ''}
+    </div>
+    ${comSync && editavel ? `<div class="recado oculto" id="onfly-recado" style="margin-bottom:16px;"></div>` : ''}
+
+    <div class="resumo-topo" style="margin-bottom:18px;">
+      <div class="bloco"><div class="rot">Total no período</div><div class="val">R$ ${fmtNum(total)}</div>
+        <div class="nota">${despesas.length} despesa(s)</div></div>
+      <div class="bloco"><div class="rot">A reembolsar</div><div class="val">R$ ${fmtNum(reembolso)}</div>
+        <div class="nota">gasto do próprio bolso</div></div>
+      <div class="bloco"><div class="rot">RDVs sem lançamento</div><div class="val">${abertos.length}</div>
+        <div class="nota">ainda não entraram no financeiro</div></div>
+      ${escopo === 'todos' && semArea ? `<div class="bloco alerta"><div class="rot">Sem área definida</div><div class="val">${semArea}</div>
+        <div class="nota">não aparecem em Comercial nem TI</div></div>` : ''}
+    </div>
+
+    ${vazio ? `<div class="panel" style="padding:26px;text-align:center;">
+        <p class="texto-dim">Nenhum dado da Onfly neste período.</p>
+        <p class="texto-dim2" style="font-size:12.5px;margin-top:6px;">
+          ${comSync ? 'Use o botão "Sincronizar com a Onfly" acima para buscar.' : 'O Financeiro sincroniza os dados na aba Financeiro › Onfly.'}
+        </p>
+      </div>` : `
+      <div class="grade-2" style="display:grid;grid-template-columns:1.2fr 1fr;gap:16px;align-items:start;">
+        <div class="panel" style="padding:18px;">
+          <div class="cabeca-secao" style="margin-bottom:14px;">
+            <h3 style="font-family:var(--serif);font-size:15px;">Gasto por pessoa</h3></div>
+          ${rankPessoa.length ? rankPessoa.map(([nome, o]) => `
+            <div class="onfly-barra-linha" title="${esc(nome)} — R$ ${fmtNum(o.valor)}">
+              <div class="quem">${esc(nome)}<small>${esc(o.setor)}</small></div>
+              <div class="onfly-trilho"><div class="onfly-preenche" style="width:${(o.valor / teto * 100).toFixed(1)}%"></div></div>
+              <div class="num" style="text-align:right;">R$ ${fmtNum(o.valor)}</div>
+            </div>`).join('') : '<p class="vazio">Sem despesas no período.</p>'}
+        </div>
+
+        <div class="panel" style="padding:18px;">
+          <div class="cabeca-secao" style="margin-bottom:14px;">
+            <h3 style="font-family:var(--serif);font-size:15px;">Por tipo de despesa</h3></div>
+          ${rankTipo.length ? `
+            <div class="onfly-pilha">
+              ${rankTipo.map((t, i) => `<span style="flex:${t[1]};background:${ONFLY_CORES_TIPO[i]}" title="${esc(t[0])}"></span>`).join('')}
+            </div>
+            <div class="onfly-legenda">
+              ${rankTipo.map((t, i) => `<div>
+                <span class="onfly-amostra" style="background:${ONFLY_CORES_TIPO[i]}"></span>
+                <span>${esc(t[0])}</span>
+                <span class="texto-dim2">R$ ${fmtNum(t[1])} · ${(t[1] / totalTipo * 100).toFixed(0)}%</span>
+              </div>`).join('')}
+            </div>` : '<p class="vazio">Sem despesas no período.</p>'}
+        </div>
+      </div>
+
+      <div class="cabeca-secao" style="margin-top:22px;">
+        <h3 style="font-family:var(--serif);font-size:15px;">RDVs — o que ainda precisa de ação</h3></div>
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr>
+          <th>Protocolo</th><th>Pessoa</th><th>Motivo</th>
+          <th class="num">Valor</th><th class="num">Reembolsável</th>
+          <th>Situação</th><th>Parado há</th>${escopo === 'todos' && editavel ? '<th>Área</th>' : ''}
+        </tr></thead><tbody>
+          ${abertos.length ? abertos.map(r => {
+            const dias = r.criado_em_onfly ? Math.floor((Date.now() - new Date(r.criado_em_onfly)) / 864e5) : null
+            const critico = dias != null && dias > 20
+            return `<tr>
+              <td class="texto-dim2">${esc(r.protocolo ?? '—')}</td>
+              <td>${esc(r.pessoa?.nome ?? '— sem vínculo —')}</td>
+              <td>${esc(r.nome ?? r.motivo ?? '—')}</td>
+              <td class="num">R$ ${fmtNum(r.valor_total)}</td>
+              <td class="num">${Number(r.valor_reembolsavel) ? 'R$ ' + fmtNum(r.valor_reembolsavel) : '—'}</td>
+              <td><span class="${typeof corStatusRdv === 'function' ? corStatusRdv(r.status) : 'texto-dim'}">${esc((typeof ROTULO_STATUS_RDV !== 'undefined' && ROTULO_STATUS_RDV[r.status]) || r.status || '—')}</span></td>
+              <td class="${critico ? 'badge-alerta' : 'texto-dim2'}">${dias != null ? dias + ' dias' : '—'}</td>
+              ${escopo === 'todos' && editavel ? `<td>
+                <select class="onfly-area" data-tipo="rdv" data-id="${r.id}" style="font-size:12px;padding:3px 6px;">
+                  <option value="">— definir —</option>
+                  ${ONFLY_AREAS.map(a => `<option value="${a}" ${r.area === a ? 'selected' : ''}>${a}</option>`).join('')}
+                </select></td>` : ''}
+            </tr>`
+          }).join('') : `<tr><td colspan="8" class="vazio">Nenhum RDV pendente. 🎉</td></tr>`}
+        </tbody></table>
+      </div></div>
+
+      ${escopo === 'todos' && editavel && semArea ? `
+        <div class="cabeca-secao" style="margin-top:22px;">
+          <h3 style="font-family:var(--serif);font-size:15px;">Despesas sem área definida (${semArea})</h3></div>
+        <p class="texto-dim2" style="font-size:12.5px;margin:-6px 0 12px;">
+          Enquanto a área estiver vazia, a despesa não aparece nem no painel do Comercial nem no de TI.
+          É aqui que você corrige a assinatura de software que passou no cartão do vendedor.</p>
+        <div class="panel" style="padding:0;"><div class="tabela-scroll">
+          <table><thead><tr><th>Data</th><th>Pessoa</th><th>Descrição</th><th class="num">Valor</th><th>Área</th></tr></thead><tbody>
+            ${despesas.filter(d => !d.area).slice(0, 100).map(d => `<tr>
+              <td class="texto-dim2">${d.data ? new Date(d.data + 'T12:00').toLocaleDateString('pt-BR') : '—'}</td>
+              <td>${esc(d.pessoa?.nome ?? '—')}</td>
+              <td>${esc(d.descricao ?? '—')}</td>
+              <td class="num">R$ ${fmtNum(d.valor)}</td>
+              <td><select class="onfly-area" data-tipo="despesa" data-id="${d.id}" style="font-size:12px;padding:3px 6px;">
+                <option value="">— definir —</option>
+                ${ONFLY_AREAS.map(a => `<option value="${a}">${a}</option>`).join('')}
+              </select></td>
+            </tr>`).join('')}
+          </tbody></table>
+        </div></div>` : ''}
+    `}`
+
+  // ---- período
+  $('#onfly-filtrar').onclick = () => {
+    alvo._onflyPeriodo = { de: $('#onfly-de').value, ate: $('#onfly-ate').value }
+    painelOnfly(alvo, opts)
+  }
+
+  // ---- reclassificar área
+  alvo.querySelectorAll('.onfly-area').forEach(sel => {
+    sel.onchange = async () => {
+      const tabela = sel.dataset.tipo === 'rdv' ? 'onfly_rdv' : 'onfly_despesa'
+      const { error } = await db.from(tabela).update({ area: sel.value || null }).eq('id', sel.dataset.id)
+      sel.style.borderColor = error ? 'var(--warn-text)' : 'var(--good-text)'
+      if (!error) setTimeout(() => painelOnfly(alvo, opts), 700)
+    }
+  })
+
+  // ---- sincronizar (só no Financeiro)
+  if (!(comSync && editavel)) return
+  $('#onfly-sync').onclick = async () => {
+    const el = $('#onfly-recado')
+    const aviso = (t, ok) => {
+      el.textContent = t; el.classList.remove('oculto')
+      el.style.borderColor = ok ? 'var(--good-text)' : 'var(--warn-text)'
+      el.style.color = ok ? 'var(--good-text)' : 'var(--warn-text)'
+    }
+    const btn = $('#onfly-sync'); btn.disabled = true; btn.textContent = 'Sincronizando...'
+    const corpo = { startDate: $('#onfly-de').value, endDate: $('#onfly-ate').value, gerarFinanceiro: true }
+
+    const partes = []
+    for (const fn of ['onfly-sincronizar-colaboradores', 'onfly-sincronizar-rdvs', 'onfly-sincronizar-despesas']) {
+      const { data: r, error } = await db.functions.invoke(fn, { body: fn.endsWith('colaboradores') ? {} : corpo })
+      if (error || r?.erro) {
+        let msg = r?.erro || error?.message
+        if (error?.context?.json) { try { const c = await error.context.json(); msg = c?.erro || msg } catch {} }
+        partes.push(`${fn}: ${msg}`)
+      } else if (fn.endsWith('colaboradores')) partes.push(`${r.ligados ?? 0} colaborador(es) ligado(s)`)
+      else if (fn.endsWith('rdvs')) partes.push(`${r.gravados ?? 0} RDV(s), ${r.lancamentosCriados ?? 0} lançamento(s)`)
+      else partes.push(`${r.gravados ?? 0} despesa(s)`)
+    }
+
+    btn.disabled = false; btn.textContent = 'Sincronizar com a Onfly'
+    aviso(partes.join(' · '), !partes.some(p => p.includes(':')))
+    painelOnfly(alvo, opts)
+  }
+}
 
 async function paginaOnfly () {
   const editavel = podeEditar('onfly') || ehTotal()
