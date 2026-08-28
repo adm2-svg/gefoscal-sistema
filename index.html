@@ -6177,6 +6177,7 @@ async function comprasSolicitacoes (alvo, editavel, apenasProprio) {
           ${['PAGA', 'RECEBIDA'].includes(s.status) && s.solicitante_id === PERFIL.pessoaId
             ? `<button class="${s.retorno_dado_em ? 'btn-secundario' : 'btn'} mini" data-retorno="${s.id}">${s.retorno_dado_em ? '✓ retorno dado' : 'retorno'}</button>` : ''}
           ${s._anexos?.length ? `<button class="btn-secundario mini" data-ver-anexos="${s.id}">📎 ${s._anexos.length > 1 ? s._anexos.length + ' anexos' : 'anexo'}</button>` : ''}
+          <button class="btn-secundario mini" data-lembrete="${s.id}" title="Criar lembrete futuro">🔔</button>
           ${s.retorno_anexo_url ? `<button class="btn-secundario mini" data-ver-anexo-retorno="${esc(s.retorno_anexo_url)}" title="${esc(s.retorno_anexo_nome || '')}">📎 ver anexo</button>` : ''}
           ${podeEditarSolicitacao(s)
             ? `<button class="btn-secundario mini" data-editar="${s.id}">editar</button>` : ''}
@@ -6209,6 +6210,9 @@ async function comprasSolicitacoes (alvo, editavel, apenasProprio) {
     })
     escopo.querySelectorAll('[data-ver-anexos]').forEach(b => {
       b.onclick = () => abrirListaAnexosCompra(todas.find(x => x.id === b.dataset.verAnexos)?._anexos || [])
+    })
+    escopo.querySelectorAll('[data-lembrete]').forEach(b => {
+      b.onclick = () => formLembreteCompra(todas.find(x => x.id === b.dataset.lembrete))
     })
   }
 
@@ -6909,12 +6913,14 @@ async function abrirFicha (s, editavel) {
     subtitulo: 'documento para aprovação e arquivo',
     corpo,
     acoes: `<button class="btn" id="f-imprimir">Gerar PDF do pedido</button>
+      <button class="btn-secundario" id="f-lembrete">🔔 Criar lembrete</button>
       ${editavel ? '<button class="btn-secundario" id="f-editar">Editar</button>' : ''}
       <button class="btn-secundario" id="f-fechar">Fechar</button>`
   })
 
   fundo.querySelector('#f-fechar').onclick = fechar
   fundo.querySelector('#f-imprimir').onclick = () => window.print()
+  fundo.querySelector('#f-lembrete').onclick = () => formLembreteCompra(s)
   const bVerAnexoRetorno = fundo.querySelector('#f-ver-anexo-retorno')
   if (bVerAnexoRetorno) bVerAnexoRetorno.onclick = () => abrirComprovante(s.retorno_anexo_url)
   fundo.querySelectorAll('[data-ver-anexo-ficha]').forEach(b => {
@@ -6922,6 +6928,53 @@ async function abrirFicha (s, editavel) {
   })
   const bEditar = fundo.querySelector('#f-editar')
   if (bEditar) bEditar.onclick = () => { fechar(); formSolicitacao(s) }
+}
+
+// Cria um lembrete futuro na agenda pessoal (tabela `tarefa`, a mesma que
+// já alimenta o calendário e "Próximos compromissos" da Visão Geral) --
+// pra coisas tipo "daqui a 1 ano precisa fazer manutenção de novo".
+function formLembreteCompra (s) {
+  const umAnoNaFrente = new Date(Date.now() + 365 * 864e5).toISOString().slice(0, 10)
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:420px;">
+    <h3>🔔 Criar lembrete</h3>
+    <p class="texto-dim2" style="font-size:12px;margin:-6px 0 12px;">
+      Fica na sua agenda pessoal e aparece na Visão Geral quando a data se aproximar.</p>
+    <div class="campo"><label>Título</label>
+      <input id="lb-titulo" value="${esc('Lembrete: ' + (s.produto_servico || 'compra ' + (s.numero || '')))}"></div>
+    <div class="campo"><label>Data</label><input type="date" id="lb-data" value="${umAnoNaFrente}"></div>
+    <div class="campo"><label>Observação (opcional)</label>
+      <textarea id="lb-obs" style="min-height:60px;"></textarea></div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="lb-salvar">Salvar lembrete</button>
+      <button class="btn-secundario" id="lb-cancelar">Cancelar</button>
+    </div>
+    <div class="recado oculto" id="lb-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+  fundo.querySelector('#lb-cancelar').onclick = () => fundo.remove()
+
+  fundo.querySelector('#lb-salvar').onclick = async () => {
+    const el = fundo.querySelector('#lb-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const titulo = fundo.querySelector('#lb-titulo').value.trim()
+    const data = fundo.querySelector('#lb-data').value
+    if (!titulo) { aviso('Escreve um título pro lembrete.'); return }
+    if (!data) { aviso('Escolhe a data.'); return }
+    const btn = fundo.querySelector('#lb-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const { error } = await db.from('tarefa').insert({
+      pessoa_id: PERFIL.pessoaId, titulo: '🔔 ' + titulo,
+      detalhe: [fundo.querySelector('#lb-obs').value.trim() || null, s?.numero ? 'Ref: ' + s.numero : null].filter(Boolean).join(' — ') || null,
+      prazo: data, prioridade: 'normal'
+    })
+    btn.disabled = false; btn.textContent = 'Salvar lembrete'
+    if (error) { aviso(error.message); return }
+    el.textContent = '✓ Lembrete salvo! Vai aparecer na sua agenda na Visão Geral.'
+    el.classList.remove('oculto'); el.style.borderColor = 'var(--good-text,#4caf50)'; el.style.color = 'var(--good-text,#4caf50)'
+    setTimeout(() => fundo.remove(), 1400)
+  }
 }
 
 // ----- Formulário de solicitação -----
