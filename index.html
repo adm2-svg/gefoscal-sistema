@@ -17496,6 +17496,12 @@ async function finLancamentos (alvo, editavel) {
         <div class="campo"><label>Situação</label><select id="l-sit"><option value="EFETIVADO">efetivado</option><option value="PENDENTE">pendente</option></select></div>
         <div class="campo"><label>Observação</label><input id="l-obs" placeholder="opcional"></div>
       </div>
+      <label class="linha-modulo" style="margin-top:10px;">
+        <input type="checkbox" id="l-eh-enxofre"><span class="nome">🟡 É compra de Enxofre (borra)? — já cria a entrada na aba Enxofre</span></label>
+      <div class="form-grade oculto" id="l-enxofre-campos" style="margin-top:8px;">
+        <div class="campo"><label>Fornecedor</label><input id="l-enxofre-fornecedor" placeholder="ex: Itafos Arrais Mineração"></div>
+        <div class="campo"><label>Número da NF</label><input id="l-enxofre-nf"></div>
+      </div>
       <div class="acoes">
         <button class="btn-secundario" id="l-saida">− Saída</button>
         <button class="btn" id="l-entrada">+ Entrada</button>
@@ -17540,7 +17546,7 @@ async function finLancamentos (alvo, editavel) {
     const desc = $('#l-desc').value.trim()
     const valor = Number($('#l-valor').value)
     if (!desc || !valor) { aviso('Preencha descrição e valor.'); return }
-    const { error: e2 } = await db.from('lancamento_financeiro').insert({
+    const { data: novoLanc, error: e2 } = await db.from('lancamento_financeiro').insert({
       descricao: desc, valor: Math.abs(valor), tipo,
       data_lancamento: $('#l-data').value || new Date().toISOString().slice(0, 10),
       conta_id: $('#l-conta').value || null,
@@ -17549,10 +17555,22 @@ async function finLancamentos (alvo, editavel) {
       situacao: $('#l-sit').value || 'EFETIVADO',
       observacao: $('#l-obs').value.trim() || null,
       registrado_por: PERFIL.pessoaId
-    })
+    }).select('id').single()
     if (e2) { aviso(e2.message); return }
+    if ($('#l-eh-enxofre').checked) {
+      const fornecedorEnxofre = $('#l-enxofre-fornecedor').value.trim() || 'Não informado'
+      await db.from('enxofre_compra').insert({
+        fornecedor: fornecedorEnxofre,
+        numero_nf: $('#l-enxofre-nf').value.trim() || null,
+        data_emissao: $('#l-data').value || new Date().toISOString().slice(0, 10),
+        valor_total: Math.abs(valor),
+        lancamento_financeiro_id: novoLanc.id,
+        registrado_por: PERFIL.pessoaId
+      })
+    }
     abrirFinanceiro('lancamentos', true)
   }
+  $('#l-eh-enxofre').onchange = e => { $('#l-enxofre-campos').classList.toggle('oculto', !e.target.checked) }
   $('#l-entrada').onclick = () => salvar('ENTRADA')
   $('#l-saida').onclick = () => salvar('SAIDA')
   alvo.querySelectorAll('[data-efetivar]').forEach(b => {
@@ -20412,6 +20430,7 @@ function abrirEstoque (sub, editavel) {
 }
 
 
+
 // ----- Estoque › Enxofre -----
 // Duas frentes bem diferentes: Enxofre 99% é 100% estoque parado (nenhuma
 // compra em 2026, só o saldo que já existia); Enxofre em Borra é comprado
@@ -20419,6 +20438,27 @@ function abrirEstoque (sub, editavel) {
 // variando por nota -- por isso cada compra é lançada e confirmada aos
 // poucos: preenche % ou preço/tonelada, o sistema calcula a quantidade (t)
 // sozinho, e só então lança como entrada de estoque de verdade.
+//
+// Notas "mãe/filha": uma nota grande do financeiro às vezes é, na prática,
+// composta de várias entregas menores -- por isso cada compra pode ter
+// "filhas" vinculadas (compra_mae_id), pra decompor o valor e entender o
+// que aconteceu sem perder o vínculo com o título financeiro original.
+//
+// Indicadores e Simulador replicam a calculadora de equiparação que já
+// existia numa planilha: convertem tudo pra uma base comum (S puro, preço
+// equivalente 100% enxofre) pra comparar o custo real por tonelada de
+// produto, não só o preço de compra.
+const KG_S_NECESSARIO_POR_T_PRODUTO = 30 // 3% de S puro desejado no produto, conforme a planilha original
+
+function calcEquiparacaoEnxofre (c) {
+  if (c.percentual_enxofre == null || c.preco_tonelada == null) return null
+  const sPuroT = (c.quantidade_t || 0) * c.percentual_enxofre
+  const precoEquiv100S = c.preco_tonelada / c.percentual_enxofre
+  const kgMpPorTProduto = KG_S_NECESSARIO_POR_T_PRODUTO / c.percentual_enxofre
+  const custoPorTProduto = (kgMpPorTProduto / 1000) * c.preco_tonelada
+  return { sPuroT, precoEquiv100S, kgMpPorTProduto, custoPorTProduto }
+}
+
 async function estEnxofre (alvo, editavel) {
   const [{ data: compras, error }, { data: saldos }] = await Promise.all([
     db.from('enxofre_compra').select('*').order('data_emissao', { ascending: true }),
@@ -20428,22 +20468,39 @@ async function estEnxofre (alvo, editavel) {
   ])
   if (faltaMigracao(error)) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
 
-  const lista = compras || []
+  let lista = compras || []
   const saldo99 = saldos?.find(s => s.produto_id === '6a35832f-1b8d-4877-9679-118aa65d49d0')?.saldo ?? 0
   const saldoBorra = saldos?.find(s => s.produto_id === '8260ada7-00f8-491c-b5c4-a7811d423615')?.saldo ?? 0
 
-  const totalValor = lista.reduce((s, c) => s + Number(c.valor_total || 0), 0)
-  const totalQtdConfirmada = lista.reduce((s, c) => s + Number(c.quantidade_t || 0), 0)
-  const pendentes = lista.filter(c => c.quantidade_t == null).length
-  const naoLancadas = lista.filter(c => c.quantidade_t != null && !c.movimentacao_id).length
+  let EXPANDIDAS = new Set()
 
   const desenhar = () => {
+    // raízes = sem mãe; cada raiz carrega suas filhas
+    const raizes = lista.filter(c => !c.compra_mae_id)
+    raizes.forEach(r => { r._filhas = lista.filter(c => c.compra_mae_id === r.id) })
+
+    // pra indicadores/soma, conta raiz OU filhas (nunca as duas, pra não duplicar valor)
+    const contaveis = lista.filter(c => c.compra_mae_id || !lista.some(x => x.compra_mae_id === c.id))
+
+    const totalValor = contaveis.reduce((s, c) => s + Number(c.valor_total || 0), 0)
+    const confirmadas = contaveis.filter(c => c.quantidade_t != null && c.percentual_enxofre != null)
+    const totalQtd = confirmadas.reduce((s, c) => s + Number(c.quantidade_t || 0), 0)
+    const totalSPuro = confirmadas.reduce((s, c) => s + calcEquiparacaoEnxofre(c).sPuroT, 0)
+    const precoMedioT = totalQtd ? totalValor / totalQtd : null
+    const precoMedioEquiv100S = totalSPuro ? totalValor / totalSPuro : null
+    const kgMpMedio = confirmadas.length ? confirmadas.reduce((s, c) => s + calcEquiparacaoEnxofre(c).kgMpPorTProduto, 0) / confirmadas.length : null
+    const custoMedioTProduto = kgMpMedio != null && precoMedioT != null ? (kgMpMedio / 1000) * precoMedioT : null
+    const produtoProntoT = totalSPuro ? totalSPuro / (KG_S_NECESSARIO_POR_T_PRODUTO / 1000) : null
+
+    const pendentes = contaveis.filter(c => c.quantidade_t == null).length
+    const naoLancadas = contaveis.filter(c => c.quantidade_t != null && !c.movimentacao_id).length
+
     alvo.innerHTML = `
       <div class="resumo-topo" style="margin-bottom:18px;">
         ${kpi('Enxofre 99% em estoque', fmtNum(Number(saldo99) / 1000) + ' t', 'sem compra em 2026')}
         ${kpi('Enxofre Borra em estoque', fmtNum(Number(saldoBorra) / 1000) + ' t')}
-        ${kpi('Total investido em Borra', 'R$ ' + fmtNum(totalValor), lista.length + ' notas')}
-        ${kpi('Quantidade confirmada', fmtNum(totalQtdConfirmada) + ' t', pendentes ? pendentes + ' nota(s) pendente(s)' : 'tudo confirmado')}
+        ${kpi('Total investido em Borra', 'R$ ' + fmtNum(totalValor), contaveis.length + ' notas')}
+        ${kpi('Quantidade confirmada', fmtNum(totalQtd) + ' t', pendentes ? pendentes + ' nota(s) pendente(s)' : 'tudo confirmado')}
       </div>
 
       <div class="panel" style="padding:16px 18px;margin-bottom:18px;border-left:3px solid var(--gold,#c8a11a);">
@@ -20453,40 +20510,153 @@ async function estEnxofre (alvo, editavel) {
           Movimentação normal (entradas/saídas de produção) continua sendo lançada em "Lançar", como qualquer outro produto.</p>
       </div>
 
-      <h3 style="font-family:var(--serif);font-size:16px;margin:0 0 4px;">🟤 Enxofre em Borra — Compras do ano</h3>
+      ${confirmadas.length ? `
+      <div class="cabeca-secao" style="margin-bottom:8px;"><h3 style="font-family:var(--serif);font-size:16px;">📊 Indicadores da equiparação (compras confirmadas)</h3></div>
+      <div class="panel" style="padding:0;margin-bottom:18px;"><div class="tabela-scroll">
+        <table><tbody>
+          <tr><td>Total comprado (t)</td><td class="num"><b>${fmtNum(totalQtd)}</b></td></tr>
+          <tr><td>Total S puro (t)</td><td class="num"><b>${fmtNum(totalSPuro)}</b></td></tr>
+          <tr><td>Valor total compras</td><td class="num"><b>R$ ${fmtNum(totalValor)}</b></td></tr>
+          <tr><td>Preço médio R$/t comprada</td><td class="num">R$ ${precoMedioT != null ? fmtNum(precoMedioT) : '—'}</td></tr>
+          <tr><td>Preço médio equivalente 100% S</td><td class="num">R$ ${precoMedioEquiv100S != null ? fmtNum(precoMedioEquiv100S) : '—'}</td></tr>
+          <tr><td>Kg matéria-prima/t produto médio</td><td class="num">${kgMpMedio != null ? fmtNum(kgMpMedio) : '—'} kg</td></tr>
+          <tr><td>Custo médio por t de produto</td><td class="num">R$ ${custoMedioTProduto != null ? fmtNum(custoMedioTProduto) : '—'}</td></tr>
+          <tr><td>Quantidade de produto pronto (t)</td><td class="num"><b>${produtoProntoT != null ? fmtNum(produtoProntoT) : '—'}</b></td></tr>
+        </tbody></table>
+      </div></div>` : ''}
+
+      <div class="cabeca-secao" style="margin-bottom:8px;"><h3 style="font-family:var(--serif);font-size:16px;">🧮 Simulador rápido — equiparação por teor</h3></div>
+      <div class="panel" style="padding:16px 18px;margin-bottom:18px;">
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px;">
+          <div class="campo"><label>% S puro desejado no produto</label><input type="number" step="0.1" id="sim-pct-desejado" value="3"></div>
+          <div class="campo"><label>Preço referência enxofre 99% (R$/t)</label><input type="number" step="1" id="sim-preco-99" value="2900"></div>
+          <div class="campo"><label>Preço alvo borra informado (R$/t)</label><input type="number" step="1" id="sim-preco-borra" value="1800"></div>
+        </div>
+        <div id="sim-resultado"></div>
+        <p class="texto-dim2" style="font-size:11.5px;margin-top:10px;">
+          Quanto menor o % de enxofre da borra, maior a dosagem em kg por tonelada de produto pra manter o mesmo teor de S puro.
+          Compare sempre pelo custo por tonelada de produto e pelo preço equivalente 100% S — não só pelo preço de compra.</p>
+      </div>
+
+      <div class="cabeca-secao" style="margin-bottom:4px;"><h3 style="font-family:var(--serif);font-size:16px;">🟤 Enxofre em Borra — Compras do ano</h3></div>
       <p class="texto-dim2" style="font-size:12px;margin:0 0 12px;">
         Preenche o % de enxofre <i>ou</i> o preço por tonelada de cada nota — a quantidade (t) calcula sozinha.
         ${naoLancadas ? `<b>${naoLancadas} nota(s) já confirmada(s) esperando ser lançada(s) no estoque.</b>` : ''}</p>
 
+      ${editavel ? `<div class="acoes" style="margin-bottom:12px;">
+        <button class="btn" id="ex-nova">+ Nova compra manual</button>
+        <button class="btn-secundario" id="ex-anexar-nf">📎 Anexar NF (extrai automático)</button>
+        <input type="file" id="ex-arquivo-nf" accept="application/pdf" class="oculto">
+      </div>` : ''}
+
       <div class="panel" style="padding:0;"><div class="tabela-scroll">
         <table><thead><tr>
-          <th>Fornecedor</th><th>NF</th><th>Emissão</th><th class="num">Valor</th>
+          <th></th><th>Fornecedor</th><th>NF</th><th>Emissão</th><th class="num">Valor</th>
           <th class="num">% enxofre</th><th class="num">R$/t</th><th class="num">Quantidade (t)</th><th></th>
         </tr></thead><tbody>
-          ${lista.map(c => {
-            const confirmado = c.quantidade_t != null
-            return `<tr data-linha="${c.id}">
-              <td>${esc(c.fornecedor)}</td>
-              <td class="texto-dim2">${esc(c.numero_nf || '—')}</td>
-              <td class="texto-dim2">${c.data_emissao ? fmtData(c.data_emissao) : '—'}</td>
-              <td class="num">R$ ${fmtNum(c.valor_total)}</td>
-              <td class="num"><input type="number" step="0.01" min="0" max="100" class="ex-pct" style="width:70px;text-align:right;"
-                value="${c.percentual_enxofre != null ? (c.percentual_enxofre * 100).toFixed(1) : ''}" placeholder="—" ${editavel ? '' : 'disabled'}></td>
-              <td class="num"><input type="number" step="0.01" min="0" class="ex-preco" style="width:80px;text-align:right;"
-                value="${c.preco_tonelada ?? ''}" placeholder="—" ${editavel ? '' : 'disabled'}></td>
-              <td class="num">${confirmado ? `<b>${fmtNum(c.quantidade_t)}</b>` : '<span class="texto-dim2">pendente</span>'}</td>
-              <td style="white-space:nowrap;">
-                ${editavel ? `<button class="btn-secundario mini" data-salvar-enxofre="${c.id}">salvar</button>` : ''}
-                ${confirmado && !c.movimentacao_id && editavel ? `<button class="btn mini" data-lancar-enxofre="${c.id}" style="margin-left:4px;">lançar</button>` : ''}
-                ${c.movimentacao_id ? '<span class="badge-bom" style="font-size:10px;">no estoque</span>' : ''}
-              </td>
-            </tr>`
-          }).join('') || `<tr><td colspan="8" class="vazio">Nenhuma compra registrada ainda.</td></tr>`}
+          ${raizes.map(c => linhaCompraEnxofre(c, editavel, false)).join('') || `<tr><td colspan="9" class="vazio">Nenhuma compra registrada ainda.</td></tr>`}
         </tbody></table>
       </div></div>`
 
+    recalcularSimulador()
+    $('#sim-pct-desejado').oninput = recalcularSimulador
+    $('#sim-preco-99').oninput = recalcularSimulador
+    $('#sim-preco-borra').oninput = recalcularSimulador
+
     if (!editavel) return
 
+    ligarBotoesLinhaEnxofre()
+
+    $('#ex-nova').onclick = () => formCompraEnxofreManual(null, () => { desenhar() })
+    $('#ex-anexar-nf').onclick = () => $('#ex-arquivo-nf').click()
+    $('#ex-arquivo-nf').onchange = async e => {
+      const arquivo = e.target.files[0]
+      if (!arquivo) return
+      await processarNfEnxofre(arquivo, () => desenhar())
+      e.target.value = ''
+    }
+  }
+
+  function recalcularSimulador () {
+    const pctDesejado = Number($('#sim-pct-desejado')?.value || 3) / 100
+    const preco99 = Number($('#sim-preco-99')?.value || 0)
+    const precoBorra = Number($('#sim-preco-borra')?.value || 0)
+    const kgSNec = pctDesejado * 1000
+    const materiais = [
+      { nome: 'Enxofre elementar 99%', pct: 0.99, preco: preco99 },
+      { nome: 'Borra 90%', pct: 0.90, preco: precoBorra },
+      { nome: 'Borra 80%', pct: 0.80, preco: precoBorra },
+      { nome: 'Borra 70%', pct: 0.70, preco: precoBorra },
+      { nome: 'Borra 60%', pct: 0.60, preco: precoBorra }
+    ]
+    const base = materiais[0]
+    const custoBase = (kgSNec / (base.pct * 1000) / 1000) * base.preco
+    const linhas = materiais.map(m => {
+      const pontos = m.pct * 1000
+      const kgPorT = kgSNec / pontos * 1000
+      const custoT = (kgPorT / 1000) * m.preco
+      const precoEquiv = m.preco / m.pct
+      const dif = custoT - custoBase
+      return { ...m, pontos, kgPorT, custoT, precoEquiv, dif }
+    })
+    const el = $('#sim-resultado')
+    if (!el) return
+    el.innerHTML = `<div class="tabela-scroll"><table><thead><tr>
+      <th>Material</th><th class="num">% S</th><th class="num">Pontos S/t</th><th class="num">Kg/t produto</th>
+      <th class="num">Preço R$/t</th><th class="num">Custo/t produto</th><th class="num">Preço equiv. 100% S</th><th class="num">Dif. vs enxofre 99%</th>
+    </tr></thead><tbody>
+      ${linhas.map(l => `<tr>
+        <td>${esc(l.nome)}</td>
+        <td class="num">${(l.pct * 100).toFixed(0)}%</td>
+        <td class="num">${fmtNum(l.pontos)}</td>
+        <td class="num">${fmtNum(l.kgPorT)}</td>
+        <td class="num">R$ ${fmtNum(l.preco)}</td>
+        <td class="num">R$ ${fmtNum(l.custoT)}</td>
+        <td class="num">R$ ${fmtNum(l.precoEquiv)}</td>
+        <td class="num" style="color:${l.dif > 0 ? 'var(--warn-text,#c8901a)' : l.dif < 0 ? 'var(--good-text,#4caf50)' : 'inherit'};">
+          ${l.dif > 0 ? '+' : ''}R$ ${fmtNum(l.dif)}</td>
+      </tr>`).join('')}
+    </tbody></table></div>`
+  }
+
+  function linhaCompraEnxofre (c, editavel, ehFilha) {
+    const confirmado = c.quantidade_t != null
+    const temFilhas = c._filhas?.length > 0
+    const somaFilhas = temFilhas ? c._filhas.reduce((s, f) => s + Number(f.valor_total || 0), 0) : 0
+    const expandido = EXPANDIDAS.has(c.id)
+    let html = `<tr data-linha="${c.id}" style="${ehFilha ? 'background:var(--surface2);' : ''}">
+      <td>${!ehFilha && temFilhas ? `<button class="btn-secundario mini" data-expandir="${c.id}">${expandido ? '▾' : '▸'} ${c._filhas.length}</button>` : ''}</td>
+      <td>${ehFilha ? '↳ ' : ''}${esc(c.fornecedor)}</td>
+      <td class="texto-dim2">${esc(c.numero_nf || '—')}</td>
+      <td class="texto-dim2">${c.data_emissao ? fmtData(c.data_emissao) : '—'}</td>
+      <td class="num">R$ ${fmtNum(c.valor_total)}</td>
+      <td class="num">${editavel ? `<input type="number" step="0.01" min="0" max="100" class="ex-pct" style="width:70px;text-align:right;"
+        value="${c.percentual_enxofre != null ? (c.percentual_enxofre * 100).toFixed(1) : ''}" placeholder="—">` : (c.percentual_enxofre != null ? (c.percentual_enxofre * 100).toFixed(1) + '%' : '—')}</td>
+      <td class="num">${editavel ? `<input type="number" step="0.01" min="0" class="ex-preco" style="width:80px;text-align:right;"
+        value="${c.preco_tonelada ?? ''}" placeholder="—">` : (c.preco_tonelada != null ? fmtNum(c.preco_tonelada) : '—')}</td>
+      <td class="num">${confirmado ? `<b>${fmtNum(c.quantidade_t)}</b>` : '<span class="texto-dim2">pendente</span>'}</td>
+      <td style="white-space:nowrap;">
+        ${editavel ? `<button class="btn-secundario mini" data-salvar-enxofre="${c.id}">salvar</button>` : ''}
+        ${confirmado && !c.movimentacao_id && editavel ? `<button class="btn mini" data-lancar-enxofre="${c.id}" style="margin-left:4px;">lançar</button>` : ''}
+        ${c.movimentacao_id ? '<span class="badge-bom" style="font-size:10px;">no estoque</span>' : ''}
+        ${!ehFilha && editavel ? `<button class="btn-secundario mini" data-add-filha="${c.id}" style="margin-left:4px;" title="Detalhar em notas menores">+ filha</button>` : ''}
+      </td>
+    </tr>`
+    if (!ehFilha && temFilhas && expandido) {
+      html += c._filhas.map(f => linhaCompraEnxofre(f, editavel, true)).join('')
+      html += `<tr style="background:var(--surface2);"><td></td><td colspan="3" class="texto-dim2" style="font-size:11px;">Soma das filhas: R$ ${fmtNum(somaFilhas)} ${Math.abs(somaFilhas - c.valor_total) < 0.5 ? '✓ bate com a mãe' : `(falta R$ ${fmtNum(c.valor_total - somaFilhas)} pra bater)`}</td><td colspan="5"></td></tr>`
+    }
+    return html
+  }
+
+  function ligarBotoesLinhaEnxofre () {
+    alvo.querySelectorAll('[data-expandir]').forEach(b => {
+      b.onclick = () => {
+        const id = b.dataset.expandir
+        EXPANDIDAS.has(id) ? EXPANDIDAS.delete(id) : EXPANDIDAS.add(id)
+        desenhar()
+      }
+    })
     alvo.querySelectorAll('[data-salvar-enxofre]').forEach(b => {
       b.onclick = async () => {
         const tr = b.closest('tr')
@@ -20504,11 +20674,10 @@ async function estEnxofre (alvo, editavel) {
         if (erroSalvar) { alert(erroSalvar.message); b.disabled = false; b.textContent = 'salvar'; return }
 
         const { data: comprasNovas } = await db.from('enxofre_compra').select('*').order('data_emissao', { ascending: true })
-        lista.length = 0; lista.push(...(comprasNovas || []))
+        lista = comprasNovas || []
         desenhar()
       }
     })
-
     alvo.querySelectorAll('[data-lancar-enxofre]').forEach(b => {
       b.onclick = async () => {
         const compra = lista.find(c => c.id === b.dataset.lancarEnxofre)
@@ -20523,11 +20692,139 @@ async function estEnxofre (alvo, editavel) {
         }).select('id').single()
         if (erroMov) { alert(erroMov.message); b.disabled = false; b.textContent = 'lançar'; return }
         await db.from('enxofre_compra').update({ movimentacao_id: mov.id }).eq('id', compra.id)
-        estEnxofre(alvo, editavel)
+        const { data: comprasNovas } = await db.from('enxofre_compra').select('*').order('data_emissao', { ascending: true })
+        lista = comprasNovas || []
+        desenhar()
+      }
+    })
+    alvo.querySelectorAll('[data-add-filha]').forEach(b => {
+      b.onclick = () => {
+        const mae = lista.find(c => c.id === b.dataset.addFilha)
+        formCompraEnxofreManual(mae, () => { EXPANDIDAS.add(mae.id); desenhar() })
       }
     })
   }
+
   desenhar()
+}
+
+function formCompraEnxofreManual (mae, aoSalvar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>${mae ? `Nova nota filha de "${esc(mae.fornecedor)}"` : 'Nova compra de Enxofre em Borra'}</h3>
+    ${mae ? `<p class="texto-dim2" style="font-size:12px;margin:-6px 0 12px;">Valor da mãe: R$ ${fmtNum(mae.valor_total)}</p>` : ''}
+    <div class="campo"><label>Fornecedor</label><input id="cem-fornecedor" value="${esc(mae?.fornecedor || '')}"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      <div class="campo"><label>Número da NF</label><input id="cem-nf"></div>
+      <div class="campo"><label>Data de emissão</label><input type="date" id="cem-data" value="${mae?.data_emissao || hojeISO()}"></div>
+    </div>
+    <div class="campo"><label>Valor total (R$)</label><input type="number" step="0.01" id="cem-valor"></div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="cem-salvar">Salvar</button>
+      <button class="btn-secundario" id="cem-cancelar">Cancelar</button>
+    </div>
+    <div class="recado oculto" id="cem-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+  fundo.querySelector('#cem-cancelar').onclick = () => fundo.remove()
+
+  fundo.querySelector('#cem-salvar').onclick = async () => {
+    const el = fundo.querySelector('#cem-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto') }
+    const fornecedor = fundo.querySelector('#cem-fornecedor').value.trim()
+    const valor = Number(fundo.querySelector('#cem-valor').value)
+    if (!fornecedor || !valor) { aviso('Preenche fornecedor e valor.'); return }
+    const btn = fundo.querySelector('#cem-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const { error } = await db.from('enxofre_compra').insert({
+      fornecedor, numero_nf: fundo.querySelector('#cem-nf').value.trim() || null,
+      data_emissao: fundo.querySelector('#cem-data').value || null,
+      valor_total: valor, compra_mae_id: mae?.id || null,
+      registrado_por: PERFIL.pessoaId
+    })
+    if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Salvar'; return }
+    fundo.remove()
+    aoSalvar()
+  }
+}
+
+async function processarNfEnxofre (arquivo, aoTerminar) {
+  const status = document.createElement('div')
+  status.className = 'modal-fundo'
+  status.innerHTML = `<div class="modal" style="max-width:340px;text-align:center;"><p class="texto-dim2">Lendo a nota fiscal com IA...</p></div>`
+  document.body.appendChild(status)
+
+  try {
+    const base64 = await new Promise((res, rej) => {
+      const r = new FileReader()
+      r.onload = () => res(r.result.split(',')[1])
+      r.onerror = () => rej(new Error('Falha ao ler o arquivo.'))
+      r.readAsDataURL(arquivo)
+    })
+    const { data, error } = await db.functions.invoke('extrair-nf-enxofre', { body: { pdfBase64: base64 } })
+    status.remove()
+    if (error || data?.erro) {
+      let msg = data?.erro || error?.message || 'Erro ao extrair dados.'
+      if (error?.context?.json) { try { const corpo = await error.context.json(); msg = corpo?.erro || msg } catch { /* segue com msg padrão */ } }
+      alert('Não deu pra ler a nota: ' + msg)
+      return
+    }
+
+    const enviado = await enviarArquivo(arquivo, 'enxofre-notas')
+
+    const fundo = document.createElement('div')
+    fundo.className = 'modal-fundo'
+    fundo.innerHTML = `<div class="modal">
+      <h3>Confere os dados extraídos</h3>
+      <p class="texto-dim2" style="font-size:12px;margin:-6px 0 12px;">A IA leu o PDF — confirma se está certo antes de salvar.</p>
+      <div class="campo"><label>Fornecedor</label><input id="pnf-fornecedor" value="${esc(data.fornecedor || '')}"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div class="campo"><label>Número da NF</label><input id="pnf-nf" value="${esc(data.numero_nf || '')}"></div>
+        <div class="campo"><label>Data de emissão</label><input type="date" id="pnf-data" value="${data.data_emissao || ''}"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+        <div class="campo"><label>Valor total (R$)</label><input type="number" step="0.01" id="pnf-valor" value="${data.valor_total ?? ''}"></div>
+        <div class="campo"><label>Quantidade (t)</label><input type="number" step="0.001" id="pnf-qtd" value="${data.quantidade_t ?? ''}" placeholder="se souber"></div>
+        <div class="campo"><label>% enxofre</label><input type="number" step="0.1" id="pnf-pct" value="${data.percentual_enxofre != null ? (data.percentual_enxofre * 100).toFixed(1) : ''}" placeholder="se souber"></div>
+      </div>
+      <div class="acoes" style="margin-top:14px;">
+        <button class="btn" id="pnf-salvar">Salvar</button>
+        <button class="btn-secundario" id="pnf-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="pnf-recado"></div>
+    </div>`
+    document.body.appendChild(fundo)
+    fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+    fundo.querySelector('#pnf-cancelar').onclick = () => fundo.remove()
+
+    fundo.querySelector('#pnf-salvar').onclick = async () => {
+      const el = fundo.querySelector('#pnf-recado')
+      const aviso = t => { el.textContent = t; el.classList.remove('oculto') }
+      const fornecedor = fundo.querySelector('#pnf-fornecedor').value.trim()
+      const valor = Number(fundo.querySelector('#pnf-valor').value)
+      if (!fornecedor || !valor) { aviso('Preenche fornecedor e valor.'); return }
+      const btn = fundo.querySelector('#pnf-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+      const pctInput = fundo.querySelector('#pnf-pct').value.trim()
+      const qtdInput = fundo.querySelector('#pnf-qtd').value.trim()
+      const percentual_enxofre = pctInput ? Number(pctInput) / 100 : null
+      const quantidade_t = qtdInput ? Number(qtdInput) : null
+      const preco_tonelada = quantidade_t ? Number((valor / quantidade_t).toFixed(2)) : null
+      const { error: erroIns } = await db.from('enxofre_compra').insert({
+        fornecedor, numero_nf: fundo.querySelector('#pnf-nf').value.trim() || null,
+        data_emissao: fundo.querySelector('#pnf-data').value || null,
+        valor_total: valor, quantidade_t, percentual_enxofre, preco_tonelada,
+        anexo_caminho: enviado.caminho, anexo_nome: enviado.nome,
+        registrado_por: PERFIL.pessoaId
+      })
+      if (erroIns) { aviso(erroIns.message); btn.disabled = false; btn.textContent = 'Salvar'; return }
+      fundo.remove()
+      aoTerminar()
+    }
+  } catch (erro) {
+    status.remove()
+    alert('Erro: ' + erro.message)
+  }
 }
 
 // ----- Estoque atual -----
