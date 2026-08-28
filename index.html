@@ -31660,6 +31660,24 @@ function corStatusRdv (s) { return [3, 5].includes(s) ? 'badge-bom' : s === 2 ||
 const ONFLY_CORES_TIPO = ['#3568C4', '#D97706', '#00968F', '#A24BC7', '#8A6F1C', '#6B7280']
 const ONFLY_AREAS = ['COMERCIAL', 'TI', 'ADMINISTRATIVO', 'INDUSTRIA', 'FAZENDA', 'DIRECAO']
 
+// Nome de exibição no relatório (Excel/PDF) para cada área — o valor
+// técnico salvo no banco (usado nos filtros e no dropdown de
+// classificação manual) continua sendo a sigla curta. Pedido do
+// Financeiro: mostrar "Gestão Tecnologia" no lugar de "TI" no
+// relatório, mantendo "TI" como o centro de custo (código curto).
+const ONFLY_AREA_ROTULO = {
+  COMERCIAL: 'Comercial',
+  TI: 'Gestão Tecnologia',
+  ADMINISTRATIVO: 'Administrativo',
+  INDUSTRIA: 'Indústria',
+  FAZENDA: 'Fazenda',
+  DIRECAO: 'Direção',
+}
+function onflyAreaExibicao (area) {
+  if (!area || area === '(sem área)') return { rotulo: 'Sem área', centro: '—' }
+  return { rotulo: ONFLY_AREA_ROTULO[area] || area, centro: area }
+}
+
 function onflyPeriodoPadrao () {
   const hoje = new Date()
   const de = new Date(hoje.getFullYear(), hoje.getMonth(), 1)
@@ -31953,27 +31971,36 @@ function exportarOnflyExcel (despesas, relatorios, opts, per) {
     ['Grupo Gefoscal — Cartão Corporativo (Onfly)'],
     [`Escopo: ${onflyEscopoTexto(opts.escopo)}`, `Período: ${fmtData(per.de)} a ${fmtData(per.ate)}`],
     [],
-    ['Área', 'Nº despesas', 'Total despesas (R$)', 'Nº RDVs', 'Total RDVs (R$)', 'Total geral (R$)'],
-    ...resumo.map(l => [l.area, l.nDespesas, l.totalDespesas, l.nRdv, l.totalRdv, l.totalGeral]),
+    ['Área', 'Centro de custo', 'Nº despesas', 'Total despesas (R$)', 'Nº RDVs', 'Total RDVs (R$)', 'Total geral (R$)'],
+    ...resumo.map(l => {
+      const { rotulo, centro } = onflyAreaExibicao(l.area === '(sem área)' ? null : l.area)
+      return [rotulo, centro, l.nDespesas, l.totalDespesas, l.nRdv, l.totalRdv, l.totalGeral]
+    }),
     [],
-    ['TOTAL', totais.nDespesas, totais.totalDespesas, totais.nRdv, totais.totalRdv, totais.totalGeral],
+    ['TOTAL', '', totais.nDespesas, totais.totalDespesas, totais.nRdv, totais.totalRdv, totais.totalGeral],
   ]
 
   const linhasDespesas = [
-    ['Data', 'Pessoa', 'Área', 'Descrição', 'Categoria (código Onfly)', 'Valor (R$)', 'Reembolsável'],
-    ...despesas.map(d => [
-      d.data ? fmtData(d.data) : '', d.pessoa?.nome ?? '— sem vínculo —', d.area ?? '— sem área —',
-      d.descricao ?? '', d.tipo_despesa ?? '', Number(d.valor || 0), d.reembolsavel ? 'Sim' : 'Não'
-    ])
+    ['Data', 'Pessoa', 'Área', 'Centro de custo', 'Descrição', 'Categoria (código Onfly)', 'Valor (R$)', 'Reembolsável'],
+    ...despesas.map(d => {
+      const { rotulo, centro } = onflyAreaExibicao(d.area)
+      return [
+        d.data ? fmtData(d.data) : '', d.pessoa?.nome ?? '— sem vínculo —', rotulo, centro,
+        d.descricao ?? '', d.tipo_despesa ?? '', Number(d.valor || 0), d.reembolsavel ? 'Sim' : 'Não'
+      ]
+    })
   ]
 
   const linhasRdvs = [
-    ['Protocolo', 'Pessoa', 'Área', 'Motivo', 'Valor total (R$)', 'Valor reembolsável (R$)', 'Situação'],
-    ...relatorios.map(r => [
-      r.protocolo ?? '', r.pessoa?.nome ?? '— sem vínculo —', r.area ?? '— sem área —',
-      r.nome ?? r.motivo ?? '', Number(r.valor_total || 0), Number(r.valor_reembolsavel || 0),
-      (typeof ROTULO_STATUS_RDV !== 'undefined' && ROTULO_STATUS_RDV[r.status]) || r.status || '—'
-    ])
+    ['Protocolo', 'Pessoa', 'Área', 'Centro de custo', 'Motivo', 'Valor total (R$)', 'Valor reembolsável (R$)', 'Situação'],
+    ...relatorios.map(r => {
+      const { rotulo, centro } = onflyAreaExibicao(r.area)
+      return [
+        r.protocolo ?? '', r.pessoa?.nome ?? '— sem vínculo —', rotulo, centro,
+        r.nome ?? r.motivo ?? '', Number(r.valor_total || 0), Number(r.valor_reembolsavel || 0),
+        (typeof ROTULO_STATUS_RDV !== 'undefined' && ROTULO_STATUS_RDV[r.status]) || r.status || '—'
+      ]
+    })
   ]
 
   const wb = XLSX.utils.book_new()
@@ -31993,20 +32020,25 @@ function abrirPdfOnflyResumo (despesas, relatorios, opts, per) {
   const tabela = `
     <table style="width:100%;border-collapse:collapse;">
       <thead><tr>
-        <th style="text-align:left;">Área</th><th class="num">Nº despesas</th><th class="num">Total despesas</th>
+        <th style="text-align:left;">Área</th><th style="text-align:left;">Centro de custo</th>
+        <th class="num">Nº despesas</th><th class="num">Total despesas</th>
         <th class="num">Nº RDVs</th><th class="num">Total RDVs</th><th class="num">Total geral</th>
       </tr></thead>
       <tbody>
-        ${resumo.map(l => `<tr>
-          <td>${esc(l.area)}</td>
+        ${resumo.map(l => {
+          const { rotulo, centro } = onflyAreaExibicao(l.area === '(sem área)' ? null : l.area)
+          return `<tr>
+          <td>${esc(rotulo)}</td>
+          <td class="texto-dim2">${esc(centro)}</td>
           <td class="num">${l.nDespesas}</td>
           <td class="num">R$ ${fmtNum(l.totalDespesas)}</td>
           <td class="num">${l.nRdv}</td>
           <td class="num">R$ ${fmtNum(l.totalRdv)}</td>
           <td class="num"><b>R$ ${fmtNum(l.totalGeral)}</b></td>
-        </tr>`).join('')}
+        </tr>`}).join('')}
         <tr style="font-weight:bold;border-top:2px solid #333;">
           <td>TOTAL</td>
+          <td></td>
           <td class="num">${totais.nDespesas}</td>
           <td class="num">R$ ${fmtNum(totais.totalDespesas)}</td>
           <td class="num">${totais.nRdv}</td>
