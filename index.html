@@ -4980,14 +4980,21 @@ async function renderPainelChat () {
       corpo.style.padding = '14px'
       corpo.style.gap = '10px'
       const msgs = CHAT_MENSAGENS[CHAT_ATIVA] || []
-      corpo.innerHTML = msgs.length ? msgs.map(m => `
+      const sugestaoPendente = CHAT_SUGESTOES[CHAT_ATIVA]
+      let htmlSugestao = ''
+      if (sugestaoPendente) {
+        const { setores, pessoas } = await carregarSetoresPessoasChat()
+        htmlSugestao = cartaoSugestaoSolicitacaoHtml(sugestaoPendente, setores, pessoas)
+      }
+      corpo.innerHTML = (msgs.length ? msgs.map(m => `
         <div style="display:flex;flex-direction:column;align-items:${m.remetente_id === PERFIL.pessoaId ? 'flex-end' : 'flex-start'};">
           ${bolhaConteudoChat(m)}
           <div style="font-size:10px;opacity:.55;margin-top:3px;">${new Date(m.criado_em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</div>
-        </div>`).join('') : '<p class="texto-dim2" style="font-size:12px;">Nenhuma mensagem ainda — diga oi.</p>'
+        </div>`).join('') : '<p class="texto-dim2" style="font-size:12px;">Nenhuma mensagem ainda — diga oi.</p>') + htmlSugestao
       corpo.scrollTop = corpo.scrollHeight
       carregarMidiasChat(corpo)
       wireArquivoClicksChat(corpo)
+      if (sugestaoPendente) wireCartaoSugestaoSolicitacao(CHAT_ATIVA)
       return
     }
 
@@ -5084,6 +5091,128 @@ async function enviarMensagemChat () {
   if (!error && data) {
     CHAT_MENSAGENS[CHAT_ATIVA] = CHAT_MENSAGENS[CHAT_ATIVA].map(m => m.id === otimista.id ? data : m)
     renderPainelChat()
+    // detecção de possível solicitação roda em segundo plano — não trava o
+    // envio da mensagem; só mexe em mensagem "de peso" (evita gastar IA
+    // com "oi"/"blz" e reduz falso positivo)
+    if (texto.length >= 25) analisarPossivelSolicitacao(CHAT_ATIVA)
+  }
+}
+
+// ---------------------------------------------------------------
+// Detector de solicitação no Chat Interno — depois de mandar uma
+// mensagem de algum tamanho, roda uma classificação silenciosa
+// (agente próprio em ia_agente, motor genérico ia-agente-chat) pra
+// ver se a conversa virou um pedido de serviço. Se achar que sim,
+// mostra um cartão de sugestão SÓ pra quem escreveu a mensagem —
+// nunca manda nada pro colega do outro lado — com os campos já
+// preenchidos e editáveis; só grava em solicitacao_interna quando a
+// pessoa clicar em confirmar.
+// ---------------------------------------------------------------
+const AGENTE_DETECTOR_SOLICITACAO_ID = '94bfc7e6-9351-43fc-8c44-9af6043ddd64'
+let CHAT_SUGESTOES = {}     // pessoa_id -> sugestão pendente (campos editáveis) ou undefined
+let CHAT_SETORES_CACHE = null
+let CHAT_PESSOAS_CACHE = null
+
+async function carregarSetoresPessoasChat () {
+  if (!CHAT_SETORES_CACHE) {
+    const { data } = await db.from('setor').select('id,nome,gestor_id').order('nome')
+    CHAT_SETORES_CACHE = data || []
+  }
+  if (!CHAT_PESSOAS_CACHE) {
+    const { data } = await db.from('pessoa').select('id,nome,setor_id,email').eq('status', 'ATIVO').order('nome')
+    CHAT_PESSOAS_CACHE = (data || []).filter(p => p.email)
+  }
+  return { setores: CHAT_SETORES_CACHE, pessoas: CHAT_PESSOAS_CACHE }
+}
+
+async function analisarPossivelSolicitacao (pessoaId) {
+  try {
+    if (CHAT_SUGESTOES[pessoaId]) return // já tem sugestão pendente pra essa conversa
+    const { setores } = await carregarSetoresPessoasChat()
+    const contatos = await carregarContatosChat()
+    const nomeOutro = contatos.find(c => c.pessoa_id === pessoaId)?.nome || 'colega'
+    const recentes = (CHAT_MENSAGENS[pessoaId] || []).filter(m => m.tipo === 'texto').slice(-10)
+    if (!recentes.length) return
+    const transcricao = recentes.map(m => `${m.remetente_id === PERFIL.pessoaId ? PERFIL.nome : nomeOutro}: ${m.texto}`).join('\n')
+    const prompt = `SETORES DISPONÍVEIS: ${setores.map(s => s.nome).join(', ')}\n\nCONVERSA (mais recente por último):\n${transcricao}`
+
+    const { data, error } = await db.functions.invoke('ia-agente-chat', {
+      body: { agenteId: AGENTE_DETECTOR_SOLICITACAO_ID, mensagens: [{ role: 'user', content: prompt }] }
+    })
+    if (error || !data?.resposta) return
+    const m = data.resposta.match(/<<<SOLICITACAO_DETECTADA>>>\s*([\s\S]*?)\s*<<<FIM_SOLICITACAO_DETECTADA>>>/)
+    if (!m) return
+    let extraido = null
+    try { extraido = JSON.parse(m[1]) } catch { return }
+    if (!extraido?.titulo) return
+
+    const setorAchado = setores.find(s => s.nome.toLowerCase() === String(extraido.setor_sugerido || '').toLowerCase())
+    CHAT_SUGESTOES[pessoaId] = {
+      titulo: extraido.titulo, descricao: extraido.descricao || '',
+      urgencia: URGENCIAS_SOLICITACAO.includes(extraido.urgencia) ? extraido.urgencia : 'MEDIA',
+      setorId: setorAchado?.id || '', responsavelId: setorAchado?.gestor_id || ''
+    }
+    if (CHAT_ATIVA === pessoaId && CHAT_ABERTO) renderPainelChat()
+  } catch { /* falha na detecção não deve incomodar quem só quer mandar mensagem */ }
+}
+
+function cartaoSugestaoSolicitacaoHtml (sugestao, setores, pessoas) {
+  return `
+    <div class="panel" id="css-cartao" style="padding:12px;margin-top:10px;border:1px solid rgba(var(--rust-rgb),.35);background:rgba(var(--rust-rgb),.06);">
+      <div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--rust);font-weight:700;margin-bottom:8px;">🎫 Isso parece um chamado — abrir solicitação?</div>
+      <div class="campo" style="margin-bottom:8px;"><label style="font-size:11px;">Título</label>
+        <input id="css-titulo" value="${esc(sugestao.titulo)}" style="font-size:12.5px;"></div>
+      <div class="campo" style="margin-bottom:8px;"><label style="font-size:11px;">Descrição</label>
+        <textarea id="css-descricao" style="font-size:12px;min-height:60px;">${esc(sugestao.descricao)}</textarea></div>
+      <div style="display:flex;gap:8px;margin-bottom:8px;">
+        <div class="campo" style="flex:1;"><label style="font-size:11px;">Urgência</label>
+          <select id="css-urgencia">${URGENCIAS_SOLICITACAO.map(u => `<option value="${u}" ${u === sugestao.urgencia ? 'selected' : ''}>${ROTULO_URGENCIA_SOLICITACAO[u]}</option>`).join('')}</select></div>
+        <div class="campo" style="flex:1;"><label style="font-size:11px;">Setor</label>
+          <select id="css-setor"><option value="">selecione...</option>${setores.map(s => `<option value="${s.id}" ${s.id === sugestao.setorId ? 'selected' : ''}>${esc(s.nome)}</option>`).join('')}</select></div>
+      </div>
+      <div class="campo" style="margin-bottom:10px;"><label style="font-size:11px;">Responsável (opcional)</label>
+        <select id="css-responsavel"><option value="">sem responsável definido</option>${pessoas.map(p => `<option value="${p.id}" ${p.id === sugestao.responsavelId ? 'selected' : ''}>${esc(p.nome)}</option>`).join('')}</select></div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn mini" id="css-confirmar">✓ Abrir solicitação</button>
+        <button class="btn-secundario mini" id="css-dispensar">Dispensar</button>
+      </div>
+      <div class="texto-dim2" id="css-status" style="font-size:11px;margin-top:6px;"></div>
+    </div>`
+}
+
+function wireCartaoSugestaoSolicitacao (pessoaId) {
+  const cartao = $('#css-cartao')
+  if (!cartao) return
+  $('#css-dispensar').onclick = () => { delete CHAT_SUGESTOES[pessoaId]; renderPainelChat() }
+  $('#css-confirmar').onclick = async () => {
+    const btn = $('#css-confirmar'); btn.disabled = true; btn.textContent = 'Abrindo...'
+    const titulo = $('#css-titulo').value.trim()
+    const setorId = $('#css-setor').value || null
+    const responsavelId = $('#css-responsavel').value || null
+    if (!titulo) { $('#css-status').textContent = 'Escreva um título.'; btn.disabled = false; btn.textContent = '✓ Abrir solicitação'; return }
+
+    const { data: nova, error } = await db.from('solicitacao_interna').insert({
+      solicitante_id: PERFIL.pessoaId,
+      setor_destino_id: setorId,
+      responsavel_id: responsavelId,
+      status: responsavelId ? 'EM_ANDAMENTO' : 'ABERTA',
+      titulo, descricao: $('#css-descricao').value.trim() || null,
+      urgencia: $('#css-urgencia').value
+    }).select('id,codigo').single()
+
+    if (error) { $('#css-status').textContent = error.message; btn.disabled = false; btn.textContent = '✓ Abrir solicitação'; return }
+
+    if (responsavelId && responsavelId !== PERFIL.pessoaId) {
+      await db.from('notificacao_pessoal').insert({
+        destinatario_id: responsavelId,
+        titulo: 'Nova solicitação pra você',
+        mensagem: `"${titulo}" — aberta por ${PERFIL.nome} a partir do Chat Interno.`,
+        entidade: 'solicitacao_interna', entidade_id: nova.id
+      })
+    }
+
+    delete CHAT_SUGESTOES[pessoaId]
+    cartao.outerHTML = `<div class="texto-dim2" style="font-size:11.5px;padding:8px 4px;">✓ Solicitação <b>${esc(nova.codigo)}</b> aberta.</div>`
   }
 }
 
@@ -15471,11 +15600,43 @@ function renderTabelaRegioes () {
 }
 
 
-// ----- Aba Treinar IA: editar o SYSTEM_PROMPT do bot, com histórico -----
+// ----- Aba Treinar IA: editar o SYSTEM_PROMPT do bot, com histórico,
+// mais as bibliotecas de conhecimento (categoria + cultura/UF) que
+// entram automaticamente no prompt conforme o lead -----
+const CATEGORIAS_SDR_CONHECIMENTO = [
+  { valor: 'COMERCIAL', rotulo: 'Comercial', icone: '🤝' },
+  { valor: 'PSICOLOGICO', rotulo: 'Psicológico', icone: '🧠' },
+  { valor: 'TECNICO', rotulo: 'Técnico (por cultura)', icone: '🌱' },
+  { valor: 'ECONOMICO', rotulo: 'Econômico', icone: '💰' },
+  { valor: 'CLIMATICO', rotulo: 'Climático', icone: '🌦️' },
+  { valor: 'MACRO_REGIONAL', rotulo: 'Cenário macro/regional', icone: '🗺️' }
+]
+
+// cultura/UF em branco no cadastro = vale sempre; cultura/UF preenchida
+// só entra quando bate com a do lead — é assim que Comercial e
+// Psicológico (sem tag) acabam valendo pra qualquer conversa, e Técnico
+// de uma cultura específica só aparece quando for daquela cultura.
+function filtrarBibliotecaSdr (biblioteca, { cultura, uf } = {}) {
+  return (biblioteca || []).filter(e => {
+    if (!e.ativo) return false
+    if (e.cultura && (!cultura || e.cultura.toLowerCase() !== cultura.toLowerCase())) return false
+    if (e.uf && (!uf || e.uf.toLowerCase() !== uf.toLowerCase())) return false
+    return true
+  })
+}
+
+function montarPromptFinalSdr (promptBase, biblioteca, filtro) {
+  const blocos = filtrarBibliotecaSdr(biblioteca, filtro)
+    .map(e => `### [${CATEGORIAS_SDR_CONHECIMENTO.find(c => c.valor === e.categoria)?.rotulo || e.categoria}] ${e.titulo}\n${e.conteudo}`)
+    .join('\n\n')
+  return blocos ? `${promptBase}\n\n${blocos}` : promptBase
+}
+
 async function sdrAbaTreinar (alvo) {
-  const { data: versoes, error } = await db.from('sdr_prompt')
-    .select('id,conteudo,ativo,criado_em,atualizado_por:atualizado_por(nome)')
-    .order('criado_em', { ascending: false })
+  const [{ data: versoes, error }, { data: biblioteca }] = await Promise.all([
+    db.from('sdr_prompt').select('id,conteudo,ativo,criado_em,atualizado_por:atualizado_por(nome)').order('criado_em', { ascending: false }),
+    db.from('sdr_conhecimento').select('*').order('categoria').order('titulo')
+  ])
   if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
 
   const ativa = (versoes || []).find(v => v.ativo)
@@ -15516,7 +15677,51 @@ async function sdrAbaTreinar (alvo) {
             <button class="btn-secundario mini" data-reverter-prompt="${v.id}">reverter</button>
           </div>
         </div>`).join('') : '<p class="texto-dim2">Nenhuma versão anterior ainda.</p>'}
-    </div>`
+    </div>
+
+    <h4 style="font-family:var(--serif);font-size:15px;margin:28px 0 6px;">Bibliotecas de conhecimento</h4>
+    <p class="texto-dim2" style="font-size:12.5px;margin-bottom:12px;">
+      Blocos separados do prompt principal, organizados por categoria. Entram na conversa automaticamente
+      conforme a cultura e a UF do lead — deixe cultura/UF em branco pra um bloco valer sempre
+      (é o caso normal de Comercial e Psicológico; Técnico/Climático costumam ter cultura ou UF).
+    </p>
+    <div class="acoes" style="margin-bottom:14px;"><button class="btn-secundario mini" id="sdr-novo-conhecimento">+ novo conhecimento</button></div>
+    <div id="sdr-lista-conhecimento">
+      ${CATEGORIAS_SDR_CONHECIMENTO.map(cat => {
+        const entradas = (biblioteca || []).filter(e => e.categoria === cat.valor)
+        if (!entradas.length) return ''
+        return `
+          <div style="margin-bottom:16px;">
+            <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">${cat.icone} ${cat.rotulo}</div>
+            ${entradas.map(e => `
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 12px;
+                border:1px solid var(--line2);border-radius:8px;margin-bottom:6px;${e.ativo ? '' : 'opacity:.5;'}">
+                <div style="min-width:0;">
+                  <div style="font-size:12.5px;font-weight:600;">${esc(e.titulo)}
+                    ${e.cultura ? `<span class="chip" style="font-size:10px;margin-left:6px;">${esc(e.cultura)}</span>` : ''}
+                    ${e.uf ? `<span class="chip" style="font-size:10px;margin-left:4px;">${esc(e.uf)}</span>` : ''}
+                    ${!e.ativo ? '<span class="chip" style="font-size:10px;margin-left:4px;">inativo</span>' : ''}</div>
+                  <div class="texto-dim2" style="font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:480px;">
+                    ${esc((e.conteudo || '').replace(/\s+/g, ' ').trim().slice(0, 120))}...</div>
+                </div>
+                <div style="display:flex;gap:6px;flex:none;">
+                  <button class="btn-secundario mini" data-editar-conhecimento="${e.id}">editar</button>
+                  <button class="btn-secundario mini" data-excluir-conhecimento="${e.id}">excluir</button>
+                </div>
+              </div>`).join('')}
+          </div>`
+      }).join('') || '<p class="texto-dim2">Nenhum conhecimento cadastrado ainda.</p>'}
+    </div>
+
+    <h4 style="font-family:var(--serif);font-size:15px;margin:28px 0 6px;">Pré-visualizar prompt final</h4>
+    <p class="texto-dim2" style="font-size:12.5px;margin-bottom:10px;">
+      Simula, pra uma cultura/UF de exemplo, o texto completo que a IA veria numa conversa — sem precisar de lead de verdade.</p>
+    <div style="display:flex;gap:8px;margin-bottom:10px;">
+      <input id="sdr-preview-cultura" placeholder="cultura (ex: Soja)" style="flex:1;">
+      <input id="sdr-preview-uf" placeholder="UF (ex: BA)" style="flex:1;max-width:100px;">
+      <button class="btn-secundario mini" id="sdr-preview-gerar">Gerar</button>
+    </div>
+    <pre id="sdr-preview-resultado" class="texto-dim2 oculto" style="white-space:pre-wrap;font-size:11.5px;padding:12px;background:var(--surface2);border-radius:8px;max-height:320px;overflow:auto;"></pre>`
 
   $('#sdr-btn-salvar-prompt').onclick = () => salvarNovoPromptSdr(ativa)
 
@@ -15530,6 +15735,86 @@ async function sdrAbaTreinar (alvo) {
   alvo.querySelectorAll('[data-reverter-prompt]').forEach(btn => {
     btn.onclick = () => reverterPromptSdr(btn.dataset.reverterPrompt, alvo)
   })
+
+  $('#sdr-novo-conhecimento').onclick = () => formConhecimentoSdr(null, alvo)
+  alvo.querySelectorAll('[data-editar-conhecimento]').forEach(btn => {
+    btn.onclick = () => {
+      const e = (biblioteca || []).find(x => String(x.id) === btn.dataset.editarConhecimento)
+      if (e) formConhecimentoSdr(e, alvo)
+    }
+  })
+  alvo.querySelectorAll('[data-excluir-conhecimento]').forEach(btn => {
+    btn.onclick = () => excluirConhecimentoSdr(btn.dataset.excluirConhecimento, alvo)
+  })
+
+  $('#sdr-preview-gerar').onclick = () => {
+    const cultura = $('#sdr-preview-cultura').value.trim()
+    const uf = $('#sdr-preview-uf').value.trim()
+    const pre = $('#sdr-preview-resultado')
+    pre.textContent = montarPromptFinalSdr(ativa?.conteudo || '(nenhum prompt ativo ainda)', biblioteca, { cultura, uf })
+    pre.classList.remove('oculto')
+  }
+}
+
+function formConhecimentoSdr (entrada, alvoLista) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:540px;">
+    <h3>${entrada ? 'Editar conhecimento' : 'Novo conhecimento'}</h3>
+    <div class="campo"><label>Categoria</label>
+      <select id="sc-categoria">${CATEGORIAS_SDR_CONHECIMENTO.map(c => `<option value="${c.valor}" ${entrada?.categoria === c.valor ? 'selected' : ''}>${c.icone} ${c.rotulo}</option>`).join('')}</select></div>
+    <div class="campo"><label>Título</label><input id="sc-titulo" value="${esc(entrada?.titulo || '')}"></div>
+    <div class="campo"><label>Conteúdo</label><textarea id="sc-conteudo" style="min-height:140px;">${esc(entrada?.conteudo || '')}</textarea></div>
+    <div style="display:flex;gap:10px;">
+      <div class="campo" style="flex:1;"><label>Cultura (opcional)</label>
+        <input id="sc-cultura" placeholder="ex: Soja — vazio vale pra todas" value="${esc(entrada?.cultura || '')}"></div>
+      <div class="campo" style="flex:1;"><label>UF (opcional)</label>
+        <input id="sc-uf" placeholder="ex: BA — vazio vale pra todas" value="${esc(entrada?.uf || '')}"></div>
+    </div>
+    ${entrada ? `<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;margin-top:4px;">
+      <input type="checkbox" id="sc-ativo" ${entrada.ativo ? 'checked' : ''}> ativo</label>` : ''}
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="sc-salvar">${entrada ? 'Salvar alterações' : 'Criar'}</button>
+      <button class="btn-secundario" id="sc-cancelar">Cancelar</button>
+    </div>
+    <div class="recado oculto" id="sc-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+  fundo.querySelector('#sc-cancelar').onclick = () => fundo.remove()
+  fundo.querySelector('#sc-salvar').onclick = async () => {
+    const el = fundo.querySelector('#sc-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto') }
+    const titulo = fundo.querySelector('#sc-titulo').value.trim()
+    const conteudo = fundo.querySelector('#sc-conteudo').value.trim()
+    if (!titulo || !conteudo) { aviso('Preenche título e conteúdo.'); return }
+    const corpo = {
+      categoria: fundo.querySelector('#sc-categoria').value,
+      titulo, conteudo,
+      cultura: fundo.querySelector('#sc-cultura').value.trim() || null,
+      uf: fundo.querySelector('#sc-uf').value.trim().toUpperCase() || null,
+      atualizado_em: new Date().toISOString()
+    }
+    const btn = fundo.querySelector('#sc-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    let error
+    if (entrada) {
+      corpo.ativo = fundo.querySelector('#sc-ativo').checked
+      ;({ error } = await db.from('sdr_conhecimento').update(corpo).eq('id', entrada.id))
+    } else {
+      ;({ error } = await db.from('sdr_conhecimento').insert({ ...corpo, criado_por: PERFIL.pessoaId }))
+    }
+    btn.disabled = false; btn.textContent = entrada ? 'Salvar alterações' : 'Criar'
+    if (error) { aviso(error.message); return }
+    fundo.remove()
+    if (alvoLista) sdrAbaTreinar(alvoLista)
+  }
+}
+
+async function excluirConhecimentoSdr (id, alvo) {
+  if (!confirm('Excluir esse conhecimento? Não tem como desfazer.')) return
+  const { error } = await db.from('sdr_conhecimento').delete().eq('id', id)
+  if (error) { alert(error.message); return }
+  sdrAbaTreinar(alvo)
 }
 
 async function salvarNovoPromptSdr (versaoAtual) {
