@@ -31736,6 +31736,8 @@ async function painelOnfly (alvo, opts) {
       <div class="campo"><label>De</label><input type="date" id="onfly-de" value="${per.de}"></div>
       <div class="campo"><label>Até</label><input type="date" id="onfly-ate" value="${per.ate}"></div>
       <button class="btn" id="onfly-filtrar" style="align-self:end;">Aplicar</button>
+      <button class="btn-secundario" id="onfly-excel" style="align-self:end;">Exportar Excel</button>
+      <button class="btn-secundario" id="onfly-pdf" style="align-self:end;">Gerar PDF</button>
       ${comSync && editavel ? `<button class="btn" id="onfly-sync" style="align-self:end;">Sincronizar com a Onfly</button>` : ''}
     </div>
     ${comSync && editavel ? `<div class="recado oculto" id="onfly-recado" style="margin-bottom:16px;"></div>` : ''}
@@ -31843,6 +31845,10 @@ async function painelOnfly (alvo, opts) {
     painelOnfly(alvo, opts)
   }
 
+  // ---- exportar (resumo por área — mesmos dados já filtrados pelo escopo da tela)
+  $('#onfly-excel').onclick = () => exportarOnflyExcel(despesas, relatorios, opts, per)
+  $('#onfly-pdf').onclick = () => abrirPdfOnflyResumo(despesas, relatorios, opts, per)
+
   // ---- reclassificar área
   alvo.querySelectorAll('.onfly-area').forEach(sel => {
     sel.onchange = async () => {
@@ -31881,6 +31887,118 @@ async function painelOnfly (alvo, opts) {
     aviso(partes.join(' · '), !partes.some(p => p.includes(':')))
     painelOnfly(alvo, opts)
   }
+}
+
+// ---------------------------------------------------------------
+// Exportação do painel Onfly (Resumo por área) — Excel e PDF.
+// Usa os mesmos `despesas` e `relatorios` já carregados e filtrados
+// pelo escopo da tela (todos/comercial/ti) e pelo período escolhido —
+// não faz uma consulta nova ao banco.
+// ---------------------------------------------------------------
+
+function onflyResumoPorArea (despesas, relatorios) {
+  const areas = [...ONFLY_AREAS, '(sem área)']
+  return areas.map(area => {
+    const chave = area === '(sem área)' ? null : area
+    const dArea = despesas.filter(d => (d.area ?? null) === chave)
+    const rArea = relatorios.filter(r => (r.area ?? null) === chave)
+    const totalDespesas = dArea.reduce((s, d) => s + Number(d.valor || 0), 0)
+    const totalRdv = rArea.reduce((s, r) => s + Number(r.valor_total || 0), 0)
+    return { area, nDespesas: dArea.length, totalDespesas, nRdv: rArea.length, totalRdv, totalGeral: totalDespesas + totalRdv }
+  }).filter(l => l.nDespesas || l.nRdv)
+}
+
+function onflyEscopoTexto (escopo) {
+  return escopo === 'comercial' ? 'Comercial' : escopo === 'ti' ? 'TI' : 'Empresa inteira'
+}
+
+function exportarOnflyExcel (despesas, relatorios, opts, per) {
+  const resumo = onflyResumoPorArea(despesas, relatorios)
+  const totais = resumo.reduce((s, l) => ({
+    nDespesas: s.nDespesas + l.nDespesas, totalDespesas: s.totalDespesas + l.totalDespesas,
+    nRdv: s.nRdv + l.nRdv, totalRdv: s.totalRdv + l.totalRdv, totalGeral: s.totalGeral + l.totalGeral
+  }), { nDespesas: 0, totalDespesas: 0, nRdv: 0, totalRdv: 0, totalGeral: 0 })
+
+  const linhasResumo = [
+    ['Grupo Gefoscal — Cartão Corporativo (Onfly)'],
+    [`Escopo: ${onflyEscopoTexto(opts.escopo)}`, `Período: ${fmtData(per.de)} a ${fmtData(per.ate)}`],
+    [],
+    ['Área', 'Nº despesas', 'Total despesas (R$)', 'Nº RDVs', 'Total RDVs (R$)', 'Total geral (R$)'],
+    ...resumo.map(l => [l.area, l.nDespesas, l.totalDespesas, l.nRdv, l.totalRdv, l.totalGeral]),
+    [],
+    ['TOTAL', totais.nDespesas, totais.totalDespesas, totais.nRdv, totais.totalRdv, totais.totalGeral],
+  ]
+
+  const linhasDespesas = [
+    ['Data', 'Pessoa', 'Área', 'Descrição', 'Categoria (código Onfly)', 'Valor (R$)', 'Reembolsável'],
+    ...despesas.map(d => [
+      d.data ? fmtData(d.data) : '', d.pessoa?.nome ?? '— sem vínculo —', d.area ?? '— sem área —',
+      d.descricao ?? '', d.tipo_despesa ?? '', Number(d.valor || 0), d.reembolsavel ? 'Sim' : 'Não'
+    ])
+  ]
+
+  const linhasRdvs = [
+    ['Protocolo', 'Pessoa', 'Área', 'Motivo', 'Valor total (R$)', 'Valor reembolsável (R$)', 'Situação'],
+    ...relatorios.map(r => [
+      r.protocolo ?? '', r.pessoa?.nome ?? '— sem vínculo —', r.area ?? '— sem área —',
+      r.nome ?? r.motivo ?? '', Number(r.valor_total || 0), Number(r.valor_reembolsavel || 0),
+      (typeof ROTULO_STATUS_RDV !== 'undefined' && ROTULO_STATUS_RDV[r.status]) || r.status || '—'
+    ])
+  ]
+
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(linhasResumo), 'Resumo')
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(linhasDespesas), 'Despesas')
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(linhasRdvs), 'RDVs')
+  XLSX.writeFile(wb, `onfly_${opts.escopo}_${per.de}_a_${per.ate}.xlsx`)
+}
+
+function abrirPdfOnflyResumo (despesas, relatorios, opts, per) {
+  const resumo = onflyResumoPorArea(despesas, relatorios)
+  const totais = resumo.reduce((s, l) => ({
+    nDespesas: s.nDespesas + l.nDespesas, totalDespesas: s.totalDespesas + l.totalDespesas,
+    nRdv: s.nRdv + l.nRdv, totalRdv: s.totalRdv + l.totalRdv, totalGeral: s.totalGeral + l.totalGeral
+  }), { nDespesas: 0, totalDespesas: 0, nRdv: 0, totalRdv: 0, totalGeral: 0 })
+
+  const tabela = `
+    <table style="width:100%;border-collapse:collapse;">
+      <thead><tr>
+        <th style="text-align:left;">Área</th><th class="num">Nº despesas</th><th class="num">Total despesas</th>
+        <th class="num">Nº RDVs</th><th class="num">Total RDVs</th><th class="num">Total geral</th>
+      </tr></thead>
+      <tbody>
+        ${resumo.map(l => `<tr>
+          <td>${esc(l.area)}</td>
+          <td class="num">${l.nDespesas}</td>
+          <td class="num">R$ ${fmtNum(l.totalDespesas)}</td>
+          <td class="num">${l.nRdv}</td>
+          <td class="num">R$ ${fmtNum(l.totalRdv)}</td>
+          <td class="num"><b>R$ ${fmtNum(l.totalGeral)}</b></td>
+        </tr>`).join('')}
+        <tr style="font-weight:bold;border-top:2px solid #333;">
+          <td>TOTAL</td>
+          <td class="num">${totais.nDespesas}</td>
+          <td class="num">R$ ${fmtNum(totais.totalDespesas)}</td>
+          <td class="num">${totais.nRdv}</td>
+          <td class="num">R$ ${fmtNum(totais.totalRdv)}</td>
+          <td class="num">R$ ${fmtNum(totais.totalGeral)}</td>
+        </tr>
+      </tbody>
+    </table>`
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = documentoPDF({
+    titulo: 'Cartão Corporativo — Resumo Onfly',
+    subtitulo: `${onflyEscopoTexto(opts.escopo)} · ${fmtData(per.de)} a ${fmtData(per.ate)}`,
+    corpo: docBloco('Resumo por área', tabela),
+    acoes: `<button class="btn" id="pf-imprimir">Baixar / imprimir PDF</button>
+            <button class="btn-secundario" id="pf-fechar">Fechar</button>`
+  })
+  document.body.appendChild(fundo)
+  fundo.querySelector('#pf-fechar').onclick = () => fundo.remove()
+  fundo.querySelector('#pf-imprimir').onclick = () => window.print()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
 }
 
 async function paginaOnfly () {
