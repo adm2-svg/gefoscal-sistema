@@ -6060,6 +6060,26 @@ const selSolicitacao = `
   veiculo:veiculo_id ( placa, descricao )`
 
 // ----- Compras › Solicitações -----
+function abrirListaAnexosCompra (anexos) {
+  if (!anexos.length) return
+  if (anexos.length === 1) { abrirArquivo(anexos[0].storage_path); return }
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:420px;">
+    <h3>Anexos (${anexos.length})</h3>
+    <div style="display:flex;flex-direction:column;gap:6px;margin:10px 0;">
+      ${anexos.map(a => `<div class="passo"><span><a href="#" data-abrir="${esc(a.storage_path)}">📎 ${esc(a.nome_arquivo ?? 'arquivo')}</a></span></div>`).join('')}
+    </div>
+    <div class="acoes" style="text-align:right;"><button class="btn-secundario" id="la-fechar">Fechar</button></div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+  fundo.querySelector('#la-fechar').onclick = () => fundo.remove()
+  fundo.querySelectorAll('[data-abrir]').forEach(a => {
+    a.onclick = e => { e.preventDefault(); abrirArquivo(a.dataset.abrir) }
+  })
+}
+
 async function comprasSolicitacoes (alvo, editavel, apenasProprio) {
   let q = db.from('solicitacao_compra').select(selSolicitacao).order('data_solicitacao', { ascending: false }).limit(600)
   // sem edição/coordenação/cotação/aprovação, só enxerga as próprias —
@@ -6075,6 +6095,16 @@ async function comprasSolicitacoes (alvo, editavel, apenasProprio) {
   const ENCERRADA = ['APROVADA', 'REPROVADA', 'DEVOLVIDA', 'PAGA', 'RECEBIDA', 'CANCELADA']
 
   const todas = data || []
+  if (todas.length) {
+    const { data: anexosTodos } = await db.from('anexo').select('registro_id,id,nome_arquivo,storage_path')
+      .eq('entidade', 'SOLICITACAO_COMPRA').in('registro_id', todas.map(s => s.id))
+    const porSolicitacao = {}
+    ;(anexosTodos || []).forEach(a => {
+      porSolicitacao[a.registro_id] = porSolicitacao[a.registro_id] || []
+      porSolicitacao[a.registro_id].push(a)
+    })
+    todas.forEach(s => { s._anexos = porSolicitacao[s.id] || [] })
+  }
   const analise = todas.filter(s => ANDANDO.includes(s.status))
   const encerradas = todas.filter(s => ENCERRADA.includes(s.status))
   const aprovadas = encerradas.filter(s => ['APROVADA', 'PAGA', 'RECEBIDA'].includes(s.status))
@@ -6146,7 +6176,7 @@ async function comprasSolicitacoes (alvo, editavel, apenasProprio) {
           <button class="btn-secundario mini" data-ficha="${s.id}">ficha</button>
           ${['PAGA', 'RECEBIDA'].includes(s.status) && s.solicitante_id === PERFIL.pessoaId
             ? `<button class="${s.retorno_dado_em ? 'btn-secundario' : 'btn'} mini" data-retorno="${s.id}">${s.retorno_dado_em ? '✓ retorno dado' : 'retorno'}</button>` : ''}
-          ${s.anexo_url ? `<button class="btn-secundario mini" data-ver-anexo-solicitacao="${esc(s.anexo_url)}" title="${esc(s.nome_anexo || '')}">📎 anexo</button>` : ''}
+          ${s._anexos?.length ? `<button class="btn-secundario mini" data-ver-anexos="${s.id}">📎 ${s._anexos.length > 1 ? s._anexos.length + ' anexos' : 'anexo'}</button>` : ''}
           ${s.retorno_anexo_url ? `<button class="btn-secundario mini" data-ver-anexo-retorno="${esc(s.retorno_anexo_url)}" title="${esc(s.retorno_anexo_nome || '')}">📎 ver anexo</button>` : ''}
           ${podeEditarSolicitacao(s)
             ? `<button class="btn-secundario mini" data-editar="${s.id}">editar</button>` : ''}
@@ -6177,8 +6207,8 @@ async function comprasSolicitacoes (alvo, editavel, apenasProprio) {
     escopo.querySelectorAll('[data-ver-anexo-retorno]').forEach(b => {
       b.onclick = () => abrirComprovante(b.dataset.verAnexoRetorno)
     })
-    escopo.querySelectorAll('[data-ver-anexo-solicitacao]').forEach(b => {
-      b.onclick = () => abrirArquivo(b.dataset.verAnexoSolicitacao)
+    escopo.querySelectorAll('[data-ver-anexos]').forEach(b => {
+      b.onclick = () => abrirListaAnexosCompra(todas.find(x => x.id === b.dataset.verAnexos)?._anexos || [])
     })
   }
 
@@ -6779,6 +6809,9 @@ async function abrirFicha (s, editavel) {
     .select('valor,prazo_entrega,forma_pagamento,condicao_pagamento,link_proposta,escolhido,fornecedor_avulso,fornecedor:fornecedor_id(nome)')
     .eq('solicitacao_id', s.id).order('valor')
 
+  const anexosFicha = s._anexos ?? (await db.from('anexo').select('id,nome_arquivo,storage_path')
+    .eq('entidade', 'SOLICITACAO_COMPRA').eq('registro_id', s.id).order('criado_em')).data ?? []
+
   const lista = orcs || []
   const escolhido = lista.find(o => o.escolhido)
   const menor = lista.length ? Math.min(...lista.map(o => Number(o.valor))) : null
@@ -6852,10 +6885,12 @@ async function abrirFicha (s, editavel) {
     ${docTexto('Justificativa da coordenação', s.parecer_coordenacao, 'coord')}
     ${s.parecer_aprovacao ? docTexto('Parecer da aprovação', s.parecer_aprovacao) : ''}
 
-    ${s.anexo_url ? `
+    ${anexosFicha.length ? `
       <div class="caixa-texto">
-        <div class="rot">Anexo da solicitação</div>
-        <button class="btn-secundario mini" id="f-ver-anexo-solicitacao" style="margin-top:2px;">📎 ${esc(s.nome_anexo || 'ver anexo')}</button>
+        <div class="rot">Anexos da solicitação (${anexosFicha.length})</div>
+        <div style="display:flex;flex-direction:column;gap:6px;margin-top:4px;">
+          ${anexosFicha.map(a => `<button class="btn-secundario mini" data-ver-anexo-ficha="${esc(a.storage_path)}" style="align-self:flex-start;">📎 ${esc(a.nome_arquivo || 'ver anexo')}</button>`).join('')}
+        </div>
       </div>` : ''}
 
     ${(s.retorno_texto || s.retorno_anexo_url) ? `
@@ -6882,8 +6917,9 @@ async function abrirFicha (s, editavel) {
   fundo.querySelector('#f-imprimir').onclick = () => window.print()
   const bVerAnexoRetorno = fundo.querySelector('#f-ver-anexo-retorno')
   if (bVerAnexoRetorno) bVerAnexoRetorno.onclick = () => abrirComprovante(s.retorno_anexo_url)
-  const bVerAnexoSolicitacao = fundo.querySelector('#f-ver-anexo-solicitacao')
-  if (bVerAnexoSolicitacao) bVerAnexoSolicitacao.onclick = () => abrirArquivo(s.anexo_url)
+  fundo.querySelectorAll('[data-ver-anexo-ficha]').forEach(b => {
+    b.onclick = () => abrirArquivo(b.dataset.verAnexoFicha)
+  })
   const bEditar = fundo.querySelector('#f-editar')
   if (bEditar) bEditar.onclick = () => { fechar(); formSolicitacao(s) }
 }
@@ -6959,9 +6995,10 @@ function formSolicitacao (s = null) {
         <label>Qual o risco</label>
         <textarea id="s-descrisco" style="min-height:60px;">${esc(s?.descricao_risco ?? '')}</textarea></div>
 
-      <div class="campo" style="margin-top:10px;"><label>Anexo (cotação, ficha técnica, print...)</label>
-        <input type="file" id="s-anexo">
-        ${s?.anexo_url ? `<span class="texto-dim2" style="font-size:11.5px;">já tem: ${esc(s.nome_anexo || 'arquivo')} — escolher outro substitui</span>` : ''}</div>
+      <div class="cabeca-secao" style="margin-top:14px;"><h3 style="font-family:var(--serif);font-size:15px;">Anexos (cotação, ficha técnica, print...)</h3></div>
+      <div id="s-anexos"><p class="texto-dim2" style="font-size:12px;">${s ? 'carregando...' : 'salve a solicitação primeiro pra poder anexar arquivos.'}</p></div>
+      ${s ? `<div class="campo" style="margin:8px 0 14px;"><input type="file" id="s-arquivos" multiple accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx"></div>
+      <div class="acoes" style="margin-bottom:14px;"><button class="btn-secundario" id="s-anexar" type="button">Anexar arquivo(s)</button></div>` : ''}
 
       <div class="acoes">
         <button class="btn" id="s-salvar">${s ? 'Salvar alterações' : 'Enviar solicitação'}</button>
@@ -7004,6 +7041,35 @@ function formSolicitacao (s = null) {
       if (itensExistentes?.length) itensExistentes.forEach(it => addItem(it.produto_servico, it.quantidade, it.unidade))
       else addItem(s.produto_servico, s.quantidade, s.unidade)
     })
+
+    const carregarAnexosCompra = async () => {
+      const { data: anexos } = await db.from('anexo').select('id,nome_arquivo,storage_path')
+        .eq('entidade', 'SOLICITACAO_COMPRA').eq('registro_id', s.id).order('criado_em')
+      fundo.querySelector('#s-anexos').innerHTML = (anexos || []).length
+        ? `<div style="display:flex;flex-direction:column;gap:6px;">
+          ${anexos.map(a => `<div class="passo"><span><a href="#" data-abrir-anexo-compra="${esc(a.storage_path)}">📎 ${esc(a.nome_arquivo ?? 'arquivo')}</a></span></div>`).join('')}
+          </div>`
+        : `<p class="texto-dim2" style="font-size:12px;">Nenhum anexo ainda.</p>`
+      fundo.querySelectorAll('[data-abrir-anexo-compra]').forEach(a => {
+        a.onclick = e => { e.preventDefault(); abrirArquivo(a.dataset.abrirAnexoCompra) }
+      })
+    }
+    carregarAnexosCompra()
+
+    fundo.querySelector('#s-anexar').onclick = async () => {
+      const arquivos = [...fundo.querySelector('#s-arquivos').files]
+      if (!arquivos.length) { aviso('Escolha pelo menos um arquivo.'); return }
+      const btnAnexar = fundo.querySelector('#s-anexar'); btnAnexar.disabled = true; btnAnexar.textContent = 'Enviando...'
+      try {
+        for (const arquivo of arquivos) {
+          const { caminho, nome } = await enviarArquivo(arquivo, 'compras-anexos')
+          await db.from('anexo').insert({ entidade: 'SOLICITACAO_COMPRA', registro_id: s.id, tipo: 'anexo', nome_arquivo: nome, storage_path: caminho })
+        }
+      } catch (e) { aviso('Falha ao enviar: ' + e.message, true); btnAnexar.disabled = false; btnAnexar.textContent = 'Anexar arquivo(s)'; return }
+      btnAnexar.disabled = false; btnAnexar.textContent = 'Anexar arquivo(s)'
+      fundo.querySelector('#s-arquivos').value = ''
+      carregarAnexosCompra()
+    }
   } else {
     addItem()
   }
@@ -7028,15 +7094,6 @@ function formSolicitacao (s = null) {
 
     const btn = q('#s-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
 
-    let anexoUrl = s?.anexo_url ?? null, nomeAnexo = s?.nome_anexo ?? null
-    const arquivoAnexo = q('#s-anexo').files[0]
-    if (arquivoAnexo) {
-      try {
-        const enviado = await enviarArquivo(arquivoAnexo, 'compras-anexos')
-        anexoUrl = enviado.caminho; nomeAnexo = enviado.nome
-      } catch (e) { aviso('Não deu pra enviar o anexo: ' + e.message, true); btn.disabled = false; btn.textContent = s ? 'Salvar alterações' : 'Enviar solicitação'; return }
-    }
-
     // produto_servico/quantidade/unidade continuam existindo (resumo dos
     // itens), pra não quebrar telas antigas que ainda leem direto daqui
     const resumo = itens.length === 1 ? itens[0].produto_servico : `${itens.length} itens: ${itens.map(i => i.produto_servico).join(', ')}`
@@ -7044,7 +7101,6 @@ function formSolicitacao (s = null) {
       produto_servico: resumo.slice(0, 500),
       quantidade: itens.length === 1 ? itens[0].quantidade : null,
       unidade: itens.length === 1 ? itens[0].unidade : null,
-      anexo_url: anexoUrl, nome_anexo: nomeAnexo,
       urgencia: q('#s-urg').value,
       tipo_solicitacao: q('#s-tipo').value || null,
       veiculo_id: q('#s-tipo').value === 'Peça de reposição' ? (q('#s-veiculo').value || null) : null,
