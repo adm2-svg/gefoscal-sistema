@@ -31675,7 +31675,7 @@ async function painelOnfly (alvo, opts) {
 
   const [{ data: desp }, { data: rdvs }] = await Promise.all([
     db.from('onfly_despesa')
-      .select('id, descricao, data, valor, tipo_despesa, reembolsavel, area, pessoa:pessoa_id ( nome, setor:setor_id ( nome ) )')
+      .select('id, descricao, data, valor, tipo_despesa, reembolsavel, area, pessoa:pessoa_id ( nome, foto_url, setor:setor_id ( nome ) )')
       .gte('data', per.de).lte('data', per.ate).order('data', { ascending: false }).limit(2000),
     db.from('onfly_rdv')
       .select('id, protocolo, nome, motivo, valor_total, valor_reembolsavel, status, area, lancamento_financeiro_id, criado_em_onfly, pessoa:pessoa_id ( nome, setor:setor_id ( nome ) )')
@@ -31702,11 +31702,13 @@ async function painelOnfly (alvo, opts) {
   despesas.forEach(d => {
     const nome = d.pessoa?.nome ?? 'Sem pessoa vinculada'
     const setor = d.pessoa?.setor?.nome ?? '—'
-    porPessoa[nome] = porPessoa[nome] || { valor: 0, setor }
+    const foto = d.pessoa?.foto_url ?? null
+    porPessoa[nome] = porPessoa[nome] || { valor: 0, setor, foto }
     porPessoa[nome].valor += Number(d.valor || 0)
   })
   const rankPessoa = Object.entries(porPessoa).sort((a, b) => b[1].valor - a[1].valor)
   const teto = rankPessoa.length ? rankPessoa[0][1].valor : 1
+  const MEDALHAS = ['🥇', '🥈', '🥉']
 
   // ---- por tipo
   const porTipo = {}
@@ -31721,15 +31723,29 @@ async function painelOnfly (alvo, opts) {
 
   alvo.innerHTML = `
     <style>
-      .onfly-barra-linha { display:grid; grid-template-columns:150px 1fr 110px; align-items:center; gap:12px; margin-bottom:11px; }
-      .onfly-barra-linha .quem { font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-      .onfly-barra-linha .quem small { display:block; font-size:11px; color:var(--dim2); }
-      .onfly-trilho { height:11px; background:var(--line2); border-radius:6px; overflow:hidden; }
-      .onfly-preenche { height:100%; background:var(--rust); border-radius:0 4px 4px 0; }
-      .onfly-pilha { display:flex; height:13px; border-radius:6px; overflow:hidden; gap:2px; margin-bottom:14px; }
-      .onfly-legenda div { display:grid; grid-template-columns:11px 1fr auto; align-items:center; gap:9px; font-size:13px; margin-bottom:9px; }
-      .onfly-amostra { width:11px; height:11px; border-radius:3px; }
-      @media (max-width:700px){ .onfly-barra-linha { grid-template-columns:110px 1fr 90px; } }
+      .onfly-rank-linha { display:flex; align-items:center; gap:12px; padding:10px 0; border-bottom:1px solid var(--line2); }
+      .onfly-rank-linha:last-child { border-bottom:none; }
+      .onfly-rank-pos { width:24px; text-align:center; font-size:13px; font-weight:700; color:var(--dim2); flex:none; }
+      .onfly-rank-info { flex:1; min-width:0; }
+      .onfly-rank-nome { font-size:13.5px; font-weight:600; margin-bottom:6px; display:flex; align-items:center; gap:7px; }
+      .onfly-rank-nome span.nome-texto { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .onfly-rank-trilho { height:7px; background:var(--line2); border-radius:5px; overflow:hidden; }
+      .onfly-rank-preenche { height:100%; border-radius:5px; background:linear-gradient(90deg,var(--rust),var(--gold)); }
+      .onfly-rank-valores { text-align:right; flex:none; min-width:96px; }
+      .onfly-rank-num { font-size:13.5px; font-weight:700; font-variant-numeric:tabular-nums; }
+      .onfly-rank-pct { font-size:11px; color:var(--dim2); margin-top:2px; }
+      .onfly-pilha { display:flex; height:16px; border-radius:8px; overflow:hidden; gap:2px; margin-bottom:18px;
+                     box-shadow:0 1px 2px rgba(0,0,0,.15); }
+      .onfly-legenda-linha { margin-bottom:13px; }
+      .onfly-legenda-linha:last-child { margin-bottom:0; }
+      .onfly-legenda-cab { display:flex; align-items:center; gap:8px; font-size:13px; margin-bottom:6px; }
+      .onfly-legenda-nome { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .onfly-legenda-valor { font-weight:700; font-variant-numeric:tabular-nums; }
+      .onfly-legenda-pct { color:var(--dim2); font-size:11.5px; margin-left:4px; }
+      .onfly-legenda-trilho { height:6px; background:var(--line2); border-radius:5px; overflow:hidden; margin-left:19px; }
+      .onfly-legenda-preenche { height:100%; border-radius:5px; }
+      .onfly-amostra { width:11px; height:11px; border-radius:3px; flex:none; }
+      @media (max-width:700px){ .onfly-rank-valores { min-width:76px; } }
     </style>
 
     <div class="filtros" style="margin-bottom:16px;">
@@ -31763,11 +31779,21 @@ async function painelOnfly (alvo, opts) {
         <div class="panel" style="padding:18px;">
           <div class="cabeca-secao" style="margin-bottom:14px;">
             <h3 style="font-family:var(--serif);font-size:15px;">Gasto por pessoa</h3></div>
-          ${rankPessoa.length ? rankPessoa.map(([nome, o]) => `
-            <div class="onfly-barra-linha" title="${esc(nome)} — R$ ${fmtNum(o.valor)}">
-              <div class="quem">${esc(nome)}<small>${esc(o.setor)}</small></div>
-              <div class="onfly-trilho"><div class="onfly-preenche" style="width:${(o.valor / teto * 100).toFixed(1)}%"></div></div>
-              <div class="num" style="text-align:right;">R$ ${fmtNum(o.valor)}</div>
+          ${rankPessoa.length ? rankPessoa.map(([nome, o], i) => `
+            <div class="onfly-rank-linha" title="${esc(nome)} — R$ ${fmtNum(o.valor)}">
+              <div class="onfly-rank-pos">${MEDALHAS[i] || (i + 1)}</div>
+              ${avatarHtml(o.foto, nome, 32)}
+              <div class="onfly-rank-info">
+                <div class="onfly-rank-nome">
+                  <span class="nome-texto">${esc(nome)}</span>
+                  <span class="chip">${esc(o.setor)}</span>
+                </div>
+                <div class="onfly-rank-trilho"><div class="onfly-rank-preenche" style="width:${(o.valor / teto * 100).toFixed(1)}%"></div></div>
+              </div>
+              <div class="onfly-rank-valores">
+                <div class="onfly-rank-num">R$ ${fmtNum(o.valor)}</div>
+                <div class="onfly-rank-pct">${total ? (o.valor / total * 100).toFixed(0) : 0}% do total</div>
+              </div>
             </div>`).join('') : '<p class="vazio">Sem despesas no período.</p>'}
         </div>
 
@@ -31778,13 +31804,17 @@ async function painelOnfly (alvo, opts) {
             <div class="onfly-pilha">
               ${rankTipo.map((t, i) => `<span style="flex:${t[1]};background:${ONFLY_CORES_TIPO[i]}" title="${esc(t[0])}"></span>`).join('')}
             </div>
-            <div class="onfly-legenda">
-              ${rankTipo.map((t, i) => `<div>
-                <span class="onfly-amostra" style="background:${ONFLY_CORES_TIPO[i]}"></span>
-                <span>${esc(t[0])}</span>
-                <span class="texto-dim2">R$ ${fmtNum(t[1])} · ${(t[1] / totalTipo * 100).toFixed(0)}%</span>
+            ${rankTipo.map((t, i) => `
+              <div class="onfly-legenda-linha">
+                <div class="onfly-legenda-cab">
+                  <span class="onfly-amostra" style="background:${ONFLY_CORES_TIPO[i]}"></span>
+                  <span class="onfly-legenda-nome">${esc(t[0])}</span>
+                  <span class="onfly-legenda-valor">R$ ${fmtNum(t[1])}</span>
+                  <span class="onfly-legenda-pct">${(t[1] / totalTipo * 100).toFixed(0)}%</span>
+                </div>
+                <div class="onfly-legenda-trilho"><div class="onfly-legenda-preenche" style="width:${(t[1] / totalTipo * 100).toFixed(1)}%;background:${ONFLY_CORES_TIPO[i]}"></div></div>
               </div>`).join('')}
-            </div>` : '<p class="vazio">Sem despesas no período.</p>'}
+            ` : '<p class="vazio">Sem despesas no período.</p>'}
         </div>
       </div>
 
