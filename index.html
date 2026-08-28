@@ -20381,7 +20381,7 @@ async function paginaEstoque () {
   EST_CACHE = { produtos: prods || [], locais: locais || [] }
 
   const abas = [['atual','Estoque atual'], ['lancar','Lançar'], ['lancamentos','Lançamentos'],
-                ['mensal','Resumo mensal'], ['relatorio','Relatório'], ['produtos','Produtos']]
+                ['mensal','Resumo mensal'], ['relatorio','Relatório'], ['produtos','Produtos'], ['enxofre','🟡 Enxofre']]
 
   area.innerHTML = `
     <div class="subabas">
@@ -20408,6 +20408,126 @@ function abrirEstoque (sub, editavel) {
   if (sub === 'mensal') estMensal(alvo)
   if (sub === 'relatorio') estRelatorio(alvo)
   if (sub === 'produtos') estProdutos(alvo, editavel)
+  if (sub === 'enxofre') estEnxofre(alvo, editavel)
+}
+
+
+// ----- Estoque › Enxofre -----
+// Duas frentes bem diferentes: Enxofre 99% é 100% estoque parado (nenhuma
+// compra em 2026, só o saldo que já existia); Enxofre em Borra é comprado
+// ao longo do ano de vários fornecedores, com pureza (%) e preço/tonelada
+// variando por nota -- por isso cada compra é lançada e confirmada aos
+// poucos: preenche % ou preço/tonelada, o sistema calcula a quantidade (t)
+// sozinho, e só então lança como entrada de estoque de verdade.
+async function estEnxofre (alvo, editavel) {
+  const [{ data: compras, error }, { data: saldos }] = await Promise.all([
+    db.from('enxofre_compra').select('*').order('data_emissao', { ascending: true }),
+    db.from('saldo_estoque').select('produto_id,nome,unidade,saldo').in('produto_id', [
+      '6a35832f-1b8d-4877-9679-118aa65d49d0', '8260ada7-00f8-491c-b5c4-a7811d423615'
+    ])
+  ])
+  if (faltaMigracao(error)) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  const lista = compras || []
+  const saldo99 = saldos?.find(s => s.produto_id === '6a35832f-1b8d-4877-9679-118aa65d49d0')?.saldo ?? 0
+  const saldoBorra = saldos?.find(s => s.produto_id === '8260ada7-00f8-491c-b5c4-a7811d423615')?.saldo ?? 0
+
+  const totalValor = lista.reduce((s, c) => s + Number(c.valor_total || 0), 0)
+  const totalQtdConfirmada = lista.reduce((s, c) => s + Number(c.quantidade_t || 0), 0)
+  const pendentes = lista.filter(c => c.quantidade_t == null).length
+  const naoLancadas = lista.filter(c => c.quantidade_t != null && !c.movimentacao_id).length
+
+  const desenhar = () => {
+    alvo.innerHTML = `
+      <div class="resumo-topo" style="margin-bottom:18px;">
+        ${kpi('Enxofre 99% em estoque', fmtNum(Number(saldo99) / 1000) + ' t', 'sem compra em 2026')}
+        ${kpi('Enxofre Borra em estoque', fmtNum(Number(saldoBorra) / 1000) + ' t')}
+        ${kpi('Total investido em Borra', 'R$ ' + fmtNum(totalValor), lista.length + ' notas')}
+        ${kpi('Quantidade confirmada', fmtNum(totalQtdConfirmada) + ' t', pendentes ? pendentes + ' nota(s) pendente(s)' : 'tudo confirmado')}
+      </div>
+
+      <div class="panel" style="padding:16px 18px;margin-bottom:18px;border-left:3px solid var(--gold,#c8a11a);">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 6px;">🟡 Enxofre elementar 99%</h3>
+        <p class="texto-dim2" style="font-size:12.5px;margin:0;">
+          100% estoque parado — nenhuma compra nova em 2026. Saldo atual: <b>${fmtNum(Number(saldo99) / 1000)} t</b> (${fmtNum(saldo99)} kg).
+          Movimentação normal (entradas/saídas de produção) continua sendo lançada em "Lançar", como qualquer outro produto.</p>
+      </div>
+
+      <h3 style="font-family:var(--serif);font-size:16px;margin:0 0 4px;">🟤 Enxofre em Borra — Compras do ano</h3>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 12px;">
+        Preenche o % de enxofre <i>ou</i> o preço por tonelada de cada nota — a quantidade (t) calcula sozinha.
+        ${naoLancadas ? `<b>${naoLancadas} nota(s) já confirmada(s) esperando ser lançada(s) no estoque.</b>` : ''}</p>
+
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr>
+          <th>Fornecedor</th><th>NF</th><th>Emissão</th><th class="num">Valor</th>
+          <th class="num">% enxofre</th><th class="num">R$/t</th><th class="num">Quantidade (t)</th><th></th>
+        </tr></thead><tbody>
+          ${lista.map(c => {
+            const confirmado = c.quantidade_t != null
+            return `<tr data-linha="${c.id}">
+              <td>${esc(c.fornecedor)}</td>
+              <td class="texto-dim2">${esc(c.numero_nf || '—')}</td>
+              <td class="texto-dim2">${c.data_emissao ? fmtData(c.data_emissao) : '—'}</td>
+              <td class="num">R$ ${fmtNum(c.valor_total)}</td>
+              <td class="num"><input type="number" step="0.01" min="0" max="100" class="ex-pct" style="width:70px;text-align:right;"
+                value="${c.percentual_enxofre != null ? (c.percentual_enxofre * 100).toFixed(1) : ''}" placeholder="—" ${editavel ? '' : 'disabled'}></td>
+              <td class="num"><input type="number" step="0.01" min="0" class="ex-preco" style="width:80px;text-align:right;"
+                value="${c.preco_tonelada ?? ''}" placeholder="—" ${editavel ? '' : 'disabled'}></td>
+              <td class="num">${confirmado ? `<b>${fmtNum(c.quantidade_t)}</b>` : '<span class="texto-dim2">pendente</span>'}</td>
+              <td style="white-space:nowrap;">
+                ${editavel ? `<button class="btn-secundario mini" data-salvar-enxofre="${c.id}">salvar</button>` : ''}
+                ${confirmado && !c.movimentacao_id && editavel ? `<button class="btn mini" data-lancar-enxofre="${c.id}" style="margin-left:4px;">lançar</button>` : ''}
+                ${c.movimentacao_id ? '<span class="badge-bom" style="font-size:10px;">no estoque</span>' : ''}
+              </td>
+            </tr>`
+          }).join('') || `<tr><td colspan="8" class="vazio">Nenhuma compra registrada ainda.</td></tr>`}
+        </tbody></table>
+      </div></div>`
+
+    if (!editavel) return
+
+    alvo.querySelectorAll('[data-salvar-enxofre]').forEach(b => {
+      b.onclick = async () => {
+        const tr = b.closest('tr')
+        const compra = lista.find(c => c.id === b.dataset.salvarEnxofre)
+        const pctInput = tr.querySelector('.ex-pct').value.trim()
+        const precoInput = tr.querySelector('.ex-preco').value.trim()
+        const percentual_enxofre = pctInput ? Number(pctInput) / 100 : null
+        const preco_tonelada = precoInput ? Number(precoInput) : null
+        const quantidade_t = preco_tonelada ? Number((compra.valor_total / preco_tonelada).toFixed(3)) : null
+
+        b.disabled = true; b.textContent = '...'
+        const { error: erroSalvar } = await db.from('enxofre_compra').update({
+          percentual_enxofre, preco_tonelada, quantidade_t
+        }).eq('id', compra.id)
+        if (erroSalvar) { alert(erroSalvar.message); b.disabled = false; b.textContent = 'salvar'; return }
+
+        const { data: comprasNovas } = await db.from('enxofre_compra').select('*').order('data_emissao', { ascending: true })
+        lista.length = 0; lista.push(...(comprasNovas || []))
+        desenhar()
+      }
+    })
+
+    alvo.querySelectorAll('[data-lancar-enxofre]').forEach(b => {
+      b.onclick = async () => {
+        const compra = lista.find(c => c.id === b.dataset.lancarEnxofre)
+        if (!confirm(`Lançar ${fmtNum(compra.quantidade_t)} t (${fmtNum(compra.quantidade_t * 1000)} kg) de Enxofre Borra no estoque, referente à nota ${compra.numero_nf || '—'}?`)) return
+        b.disabled = true; b.textContent = '...'
+        const { data: mov, error: erroMov } = await db.from('movimentacao_estoque').insert({
+          produto_id: '8260ada7-00f8-491c-b5c4-a7811d423615',
+          tipo: 'ENTRADA', quantidade: compra.quantidade_t * 1000, unidade: 'kg',
+          data_mov: compra.data_emissao || hojeISO(),
+          observacoes: `Compra ${compra.fornecedor} — NF ${compra.numero_nf || '—'} — R$ ${fmtNum(compra.valor_total)}`,
+          registrado_por: PERFIL.pessoaId
+        }).select('id').single()
+        if (erroMov) { alert(erroMov.message); b.disabled = false; b.textContent = 'lançar'; return }
+        await db.from('enxofre_compra').update({ movimentacao_id: mov.id }).eq('id', compra.id)
+        estEnxofre(alvo, editavel)
+      }
+    })
+  }
+  desenhar()
 }
 
 // ----- Estoque atual -----
