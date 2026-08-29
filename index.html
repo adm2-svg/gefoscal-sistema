@@ -1317,6 +1317,7 @@ window.trocarSkin = s => {
   document.documentElement.setAttribute('data-skin', s)
   localStorage.setItem('gefoscal-skin', s)
   pintarIconeSkin()
+  window.dispatchEvent(new CustomEvent('skin:mudou', { detail: { skin: s } }))
 }
 function alternarSkin () {
   const atual = document.documentElement.getAttribute('data-skin')
@@ -31657,7 +31658,37 @@ function corStatusRdv (s) { return [3, 5].includes(s) ? 'badge-bom' : s === 2 ||
 // comercial mas o gasto é de TI".
 // ===============================================================
 
-const ONFLY_CORES_TIPO = ['#3568C4', '#D97706', '#00968F', '#A24BC7', '#8A6F1C', '#6B7280']
+// Paleta categórica dos gráficos do Onfly — duas versões (clara/escura)
+// porque a mesma cor lê diferente em fundo branco e em fundo escuro.
+// Ordem fixa (nunca sorteada/ciclada) e validada: cada matiz separado do
+// vizinho por contraste suficiente mesmo para quem tem daltonismo
+// (protanopia/deuteranopia/tritanopia), então duas categorias nunca ficam
+// visualmente parecidas no gráfico. Escolhe a versão certa sozinha, olhando
+// o tema (skin) que a pessoa tem selecionado no momento.
+const ONFLY_PALETA_CATEGORICA = {
+  clara:  ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#4a3aa7', '#e34948'],
+  escura: ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9', '#e66767'],
+}
+const ONFLY_SKINS_CLAROS = new Set(['daylight', 'plataforma-claro'])
+function onflyTemaClaro () {
+  return ONFLY_SKINS_CLAROS.has(document.documentElement.getAttribute('data-skin') || '')
+}
+function onflyCoresCategoricas () {
+  return onflyTemaClaro() ? ONFLY_PALETA_CATEGORICA.clara : ONFLY_PALETA_CATEGORICA.escura
+}
+// mantido pelo nome antigo por compatibilidade — sempre resolve para a
+// paleta do tema atual no momento em que é lido
+const ONFLY_CORES_TIPO = new Proxy([], { get: (_, prop) => onflyCoresCategoricas()[prop] })
+
+function onflyFmtCompacto (v) {
+  const n = Number(v || 0)
+  const sinal = n < 0 ? '-' : ''
+  const a = Math.abs(n)
+  if (a >= 1000000) return sinal + (a / 1000000).toFixed(1).replace('.', ',') + 'M'
+  if (a >= 1000) return sinal + (a / 1000).toFixed(1).replace('.', ',') + 'mil'
+  return sinal + fmtNum(a, 0)
+}
+
 const ONFLY_AREAS = ['COMERCIAL', 'TI', 'ADMINISTRATIVO', 'INDUSTRIA', 'FAZENDA', 'DIRECAO']
 
 // Nome de exibição no relatório (Excel/PDF) para cada área — o valor
@@ -31684,6 +31715,53 @@ function onflyPeriodoPadrao () {
   return { de: de.toISOString().slice(0, 10), ate: hoje.toISOString().slice(0, 10) }
 }
 
+// ---- gráfico "Volume de despesas por mês" (barras, SVG inline) ----
+// Uma única grandeza (R$ gasto) por mês -> um único eixo, uma única cor
+// (a cor de tema); nada de eixo duplo. As cores estruturais (grade, texto,
+// eixo) usam as variáveis de CSS do próprio skin, então acompanham o tema
+// mesmo sem recalcular nada.
+function svgOnflyVolumeMensal (despesas) {
+  const porMes = {}
+  despesas.forEach(d => {
+    if (!d.data) return
+    const mes = String(d.data).slice(0, 7)
+    porMes[mes] = (porMes[mes] || 0) + Number(d.valor || 0)
+  })
+  const meses = Object.keys(porMes).sort()
+  if (!meses.length) return '<p class="vazio">Sem despesas no período.</p>'
+
+  const cor = onflyCoresCategoricas()[0]
+  const teto = Math.max(...meses.map(m => porMes[m])) || 1
+  const W = 680, H = 200, padL = 10, padR = 10, padTop = 30, padBottom = 24
+  const areaAlt = H - padTop - padBottom
+  const n = meses.length
+  const gap = n > 8 ? 6 : 12
+  const bw = Math.max(10, (W - padL - padR - gap * (n - 1)) / n)
+  const nomeMes = m => {
+    const [ano, mm] = m.split('-')
+    return (MESES_MKT[Number(mm) - 1] || '').slice(0, 3) + '/' + ano.slice(2)
+  }
+
+  let x = padL
+  const partes = meses.map(m => {
+    const v = porMes[m]
+    const alt = Math.max(2, (v / teto) * areaAlt)
+    const bx = x
+    const by = H - padBottom - alt
+    x += bw + gap
+    return `<rect x="${bx.toFixed(1)}" y="${by.toFixed(1)}" width="${bw.toFixed(1)}" height="${alt.toFixed(1)}" rx="4" ry="4" style="fill:${cor}">
+        <title>${nomeMes(m)}: R$ ${fmtNum(v)}</title>
+      </rect>
+      ${bw >= 24 ? `<text x="${(bx + bw / 2).toFixed(1)}" y="${(by - 7).toFixed(1)}" text-anchor="middle" style="font-size:10.5px;fill:var(--dim);font-variant-numeric:tabular-nums;">${onflyFmtCompacto(v)}</text>` : ''}
+      <text x="${(bx + bw / 2).toFixed(1)}" y="${H - 6}" text-anchor="middle" style="font-size:10.5px;fill:var(--dim2);">${nomeMes(m)}</text>`
+  }).join('')
+
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;max-height:210px;display:block;" role="img" aria-label="Volume de despesas por mês">
+    <line x1="${padL}" y1="${H - padBottom}" x2="${W - padR}" y2="${H - padBottom}" style="stroke:var(--line2);stroke-width:1;"></line>
+    ${partes}
+  </svg>`
+}
+
 async function painelOnfly (alvo, opts) {
   const { escopo = 'todos', editavel = false, comSync = false } = opts || {}
   const per = alvo._onflyPeriodo || onflyPeriodoPadrao()
@@ -31707,8 +31785,17 @@ async function painelOnfly (alvo, opts) {
     return true
   }
 
-  const despesas = (desp || []).filter(noEscopo)
-  const relatorios = (rdvs || []).filter(noEscopo)
+  const busca = (alvo._onflyBusca || '').trim().toLowerCase()
+  const bateBusca = r => {
+    if (!busca) return true
+    const nome = (r.pessoa?.nome || '').toLowerCase()
+    const setor = (r.pessoa?.setor?.nome || '').toLowerCase()
+    return nome.includes(busca) || setor.includes(busca)
+  }
+
+  const despesas = (desp || []).filter(noEscopo).filter(bateBusca)
+  const relatorios = (rdvs || []).filter(noEscopo).filter(bateBusca)
+  const coresCat = onflyCoresCategoricas()
 
   const total = despesas.reduce((s, d) => s + Number(d.valor || 0), 0)
   const reembolso = despesas.filter(d => d.reembolsavel).reduce((s, d) => s + Number(d.valor || 0), 0)
@@ -31734,8 +31821,18 @@ async function painelOnfly (alvo, opts) {
     const t = d.tipo_despesa ? String(d.tipo_despesa) : 'Não classificado'
     porTipo[t] = (porTipo[t] || 0) + Number(d.valor || 0)
   })
-  const rankTipo = Object.entries(porTipo).sort((a, b) => b[1] - a[1]).slice(0, 6)
+  const rankTipo = Object.entries(porTipo).sort((a, b) => b[1] - a[1]).slice(0, 8)
   const totalTipo = rankTipo.reduce((s, t) => s + t[1], 0) || 1
+
+  // ---- por centro de custo (área) — só faz sentido em "Empresa inteira";
+  // no painel do Comercial ou do TI todo mundo já é a mesma área.
+  const rankArea = escopo === 'todos'
+    ? onflyResumoPorArea(despesas, relatorios)
+        .map(l => ({ ...onflyAreaExibicao(l.area === '(sem área)' ? null : l.area), valor: l.totalGeral }))
+        .filter(l => l.valor > 0)
+        .sort((a, b) => b.valor - a.valor)
+    : []
+  const totalArea = rankArea.reduce((s, a) => s + a.valor, 0) || 1
 
   const vazio = !despesas.length && !relatorios.length
 
@@ -31769,6 +31866,7 @@ async function painelOnfly (alvo, opts) {
     <div class="filtros" style="margin-bottom:16px;">
       <div class="campo"><label>De</label><input type="date" id="onfly-de" value="${per.de}"></div>
       <div class="campo"><label>Até</label><input type="date" id="onfly-ate" value="${per.ate}"></div>
+      <div class="campo"><label>Nome ou setor</label><input type="text" id="onfly-busca" placeholder="ex.: Rayssa, Comercial..." value="${esc(alvo._onflyBusca || '')}" style="min-width:180px;"></div>
       <button class="btn" id="onfly-filtrar" style="align-self:end;">Aplicar</button>
       <button class="btn-secundario" id="onfly-excel" style="align-self:end;">Exportar Excel</button>
       <button class="btn-secundario" id="onfly-pdf" style="align-self:end;">Gerar PDF</button>
@@ -31793,7 +31891,13 @@ async function painelOnfly (alvo, opts) {
           ${comSync ? 'Use o botão "Sincronizar com a Onfly" acima para buscar.' : 'O Financeiro sincroniza os dados na aba Financeiro › Onfly.'}
         </p>
       </div>` : `
-      <div class="grade-2" style="display:grid;grid-template-columns:1.2fr 1fr;gap:16px;align-items:start;">
+      <div class="panel" style="padding:18px;margin-bottom:16px;">
+        <div class="cabeca-secao" style="margin-bottom:6px;">
+          <h3 style="font-family:var(--serif);font-size:15px;">Volume de despesas por mês</h3></div>
+        ${svgOnflyVolumeMensal(despesas)}
+      </div>
+
+      <div class="grade-2" style="display:grid;grid-template-columns:1.2fr 1fr;gap:16px;align-items:start;margin-bottom:16px;">
         <div class="panel" style="padding:18px;">
           <div class="cabeca-secao" style="margin-bottom:14px;">
             <h3 style="font-family:var(--serif);font-size:15px;">Gasto por pessoa</h3></div>
@@ -31835,6 +31939,23 @@ async function painelOnfly (alvo, opts) {
             ` : '<p class="vazio">Sem despesas no período.</p>'}
         </div>
       </div>
+
+      ${rankArea.length ? `
+      <div class="panel" style="padding:18px;margin-bottom:16px;">
+        <div class="cabeca-secao" style="margin-bottom:14px;">
+          <h3 style="font-family:var(--serif);font-size:15px;">Despesas por centro de custo</h3></div>
+        ${rankArea.map((a, i) => `
+          <div class="onfly-legenda-linha">
+            <div class="onfly-legenda-cab">
+              <span class="onfly-amostra" style="background:${coresCat[i % coresCat.length]}"></span>
+              <span class="onfly-legenda-nome">${esc(a.rotulo)}</span>
+              <span class="chip" style="margin-left:4px;">${esc(a.centro)}</span>
+              <span class="onfly-legenda-valor" style="margin-left:auto;">R$ ${fmtNum(a.valor)}</span>
+              <span class="onfly-legenda-pct">${(a.valor / totalArea * 100).toFixed(0)}%</span>
+            </div>
+            <div class="onfly-legenda-trilho"><div class="onfly-legenda-preenche" style="width:${(a.valor / totalArea * 100).toFixed(1)}%;background:${coresCat[i % coresCat.length]}"></div></div>
+          </div>`).join('')}
+      </div>` : ''}
 
       <div class="cabeca-secao" style="margin-top:22px;">
         <h3 style="font-family:var(--serif);font-size:15px;">RDVs — o que ainda precisa de ação</h3></div>
@@ -31887,11 +32008,19 @@ async function painelOnfly (alvo, opts) {
         </div></div>` : ''}
     `}`
 
-  // ---- período
+  // ---- período + busca (nome ou setor)
   $('#onfly-filtrar').onclick = () => {
     alvo._onflyPeriodo = { de: $('#onfly-de').value, ate: $('#onfly-ate').value }
+    alvo._onflyBusca = $('#onfly-busca').value
     painelOnfly(alvo, opts)
   }
+  $('#onfly-busca').onkeydown = e => { if (e.key === 'Enter') $('#onfly-filtrar').click() }
+
+  // ---- repinta com as cores do novo tema assim que a pessoa troca o skin,
+  // sem precisar sair e voltar na aba (só enquanto este painel estiver na tela)
+  if (alvo._onflySkinListener) window.removeEventListener('skin:mudou', alvo._onflySkinListener)
+  alvo._onflySkinListener = () => { if (document.body.contains(alvo)) painelOnfly(alvo, opts) }
+  window.addEventListener('skin:mudou', alvo._onflySkinListener)
 
   // ---- exportar (resumo por área — mesmos dados já filtrados pelo escopo da tela)
   $('#onfly-excel').onclick = () => exportarOnflyExcel(despesas, relatorios, opts, per)
