@@ -31329,6 +31329,46 @@ function abrirDp (sub, editavel) {
 // ----- Funcionários -----
 const ROTULO_VINCULO = { CLT: 'CLT', PJ: 'PJ', SOCIO: 'Sócio(a)/Diretor(a)', ESTAGIARIO: 'Estagiário(a)', OUTRO: 'Outro' }
 
+// pega a listinha de pessoas pro dropdown dos formulários de documento/
+// exame/ocorrência mesmo quando a aba de Funcionários nunca foi aberta
+// nessa sessão (cada sub-aba de DP e Segurança carrega independente)
+async function garantirDpPessoas () {
+  if (window.__DP_PESSOAS && window.__DP_PESSOAS.length) return
+  const { data } = await db.from('pessoa').select('id,nome')
+    .or('data_admissao.not.is.null,cpf.not.is.null,tipo.eq.INTERNO').order('nome')
+  window.__DP_PESSOAS = data || []
+}
+
+// exclui um lançamento de documento/exame/folha/ocorrência (essas tabelas
+// não têm nada dependurado nelas, então é exclusão direta mesmo)
+async function excluirRegistroDp (tabela, id, aoExcluir, nomeItem = 'este registro') {
+  if (!confirm(`Excluir ${nomeItem}? Essa ação não pode ser desfeita.`)) return
+  const { error } = await db.from(tabela).delete().eq('id', id)
+  if (error) { alert('Não deu pra excluir: ' + error.message); return }
+  aoExcluir()
+}
+
+// excluir funcionário é mais delicado: a pessoa costuma estar referenciada
+// em dezenas de outras tabelas do sistema (folha, financeiro, tarefas,
+// permissões...). Tenta excluir de vez; se o banco recusar por causa de
+// vínculo (o normal pra quem já tem histórico), oferece marcar como
+// Inativo/Desligado em vez de apagar
+async function excluirFuncionario (pessoa, aoExcluir) {
+  if (!confirm(`Tem certeza que quer excluir ${pessoa.nome}? Essa ação não pode ser desfeita.`)) return
+  const { error } = await db.from('pessoa').delete().eq('id', pessoa.id)
+  if (!error) { aoExcluir(); return }
+  const bloqueadoPorVinculo = error.code === '23503' || /foreign key|violates/i.test(error.message || '')
+  if (bloqueadoPorVinculo) {
+    if (confirm(`Não dá pra excluir ${pessoa.nome} de vez porque tem registros vinculados no sistema (folha, documentos, financeiro etc.). Quer marcar como Inativo/Desligado em vez disso?`)) {
+      const { error: e2 } = await db.from('pessoa').update({ status: 'INATIVO' }).eq('id', pessoa.id)
+      if (e2) { alert('Não deu: ' + e2.message); return }
+      aoExcluir()
+    }
+    return
+  }
+  alert('Não deu pra excluir: ' + error.message)
+}
+
 // apenasClt=true (usado pela aba DP e Segurança) só mostra quem tem
 // vínculo CLT -- PJ, sócio, estagiário etc. (mesmo sendo equipe interna)
 // ficam de fora do DP e só aparecem no Cadastro > Funcionários (apenasClt=false),
@@ -31390,10 +31430,14 @@ async function dpFuncionarios (alvo, editavel, apenasClt = false) {
         ${!apenasClt ? `<td class="texto-dim2">${p.vinculo ? esc(ROTULO_VINCULO[p.vinculo] ?? p.vinculo) : '<span style="color:var(--warn-text);">— definir</span>'}</td>` : ''}
         <td class="texto-dim2">${p.data_admissao ? fmtData(p.data_admissao) : '—'}</td>
         <td>${p.status === 'ATIVO' ? '<span class="badge-bom">ativo</span>' : `<span class="chip">${esc(p.status ?? '—')}</span>`}</td>
-        <td><button class="btn-secundario mini" data-ver-pessoa="${p.id}">ver ficha</button></td>
+        <td style="white-space:nowrap;"><button class="btn-secundario mini" data-ver-pessoa="${p.id}">ver ficha</button>
+          ${editavel ? `<button class="btn-secundario mini" data-excluir-pessoa="${p.id}" style="color:var(--warn-text);">excluir</button>` : ''}</td>
       </tr>`).join('') || `<tr><td colspan="${apenasClt ? 8 : 9}" class="vazio">Nenhum funcionário encontrado.</td></tr>`
     $('#dp-func-corpo').querySelectorAll('[data-ver-pessoa]').forEach(b => {
-      b.onclick = () => dpFichaPessoa(lista.find(p => p.id === b.dataset.verPessoa), editavel)
+      b.onclick = () => dpFichaPessoa(lista.find(p => p.id === b.dataset.verPessoa), editavel, () => dpFuncionarios(alvo, editavel, apenasClt))
+    })
+    $('#dp-func-corpo').querySelectorAll('[data-excluir-pessoa]').forEach(b => {
+      b.onclick = () => excluirFuncionario(lista.find(p => p.id === b.dataset.excluirPessoa), () => dpFuncionarios(alvo, editavel, apenasClt))
     })
   }
   render()
@@ -31547,7 +31591,8 @@ function dpImprimirChecklist (pessoa, checklist) {
   fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
 }
 
-async function dpFichaPessoa (pessoa, editavel) {
+async function dpFichaPessoa (pessoa, editavel, aoAtualizar = () => {}) {
+  await garantirDpPessoas()
   const [{ data: docs }, { data: exames }, { data: ocorr }, { data: folhas }] = await Promise.all([
     db.from('dp_documento').select('*').eq('pessoa_id', pessoa.id).order('criado_em', { ascending: false }),
     db.from('dp_exame').select('*').eq('pessoa_id', pessoa.id).order('criado_em', { ascending: false }),
@@ -31559,6 +31604,14 @@ async function dpFichaPessoa (pessoa, editavel) {
 
   const checklist = dpChecklistDocumentos(pessoa, docs || [])
   const checklistFaltando = checklist.filter(i => !i.ok).length
+
+  // reabre a mesma ficha (com os dados atualizados) depois de qualquer
+  // ação de editar/excluir feita aqui dentro, sem perder o refresh da
+  // lista por trás (funcionários, documentos, exames...)
+  const recarregar = () => { fundo.remove(); dpFichaPessoa(pessoa, editavel, aoAtualizar) }
+  const acoesLinha = (editar, excluir) => editavel
+    ? `<td style="white-space:nowrap;"><button class="btn-secundario mini" data-acao-editar="${editar}">editar</button>
+        <button class="btn-secundario mini" data-acao-excluir="${excluir}" style="color:var(--warn-text);">excluir</button></td>` : ''
 
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
@@ -31582,19 +31635,23 @@ async function dpFichaPessoa (pessoa, editavel) {
       </div>
     </div>
 
-    <h4 style="font-family:var(--serif);font-size:14px;margin:14px 0 8px;">Documentos (${(docs || []).length})</h4>
+    <h4 style="font-family:var(--serif);font-size:14px;margin:14px 0 8px;">Documentos (${(docs || []).length})
+      ${editavel ? `<button class="btn-secundario mini" id="dpf-novo-doc" style="float:right;">+ novo</button>` : ''}</h4>
     <div class="tabela-scroll" style="max-height:180px;"><table><tbody>
       ${(docs || []).map(d => `<tr><td>${esc(d.tipo_documento)}</td>
         <td><span class="${corStatusDp(d.status, d.data_validade)}">${esc(ROTULO_STATUS_DP[d.status] ?? d.status ?? '—')}</span></td>
-        <td>${d.link_arquivo ? `<a href="${esc(d.link_arquivo)}" target="_blank">abrir</a>` : '—'}</td></tr>`).join('') || '<tr><td class="vazio">Nenhum documento.</td></tr>'}
+        <td>${d.link_arquivo ? `<a href="${esc(d.link_arquivo)}" target="_blank">abrir</a>` : '—'}</td>
+        ${acoesLinha(`doc:${d.id}`, `doc:${d.id}`)}</tr>`).join('') || '<tr><td class="vazio">Nenhum documento.</td></tr>'}
     </tbody></table></div>
 
-    <h4 style="font-family:var(--serif);font-size:14px;margin:14px 0 8px;">Exames (${(exames || []).length})</h4>
+    <h4 style="font-family:var(--serif);font-size:14px;margin:14px 0 8px;">Exames (${(exames || []).length})
+      ${editavel ? `<button class="btn-secundario mini" id="dpf-novo-exame" style="float:right;">+ novo</button>` : ''}</h4>
     <div class="tabela-scroll" style="max-height:180px;"><table><tbody>
       ${(exames || []).map(e => `<tr><td>${esc(e.tipo_exame)}</td>
         <td class="texto-dim2">${e.data_validade ? fmtData(e.data_validade) : '—'}</td>
         <td><span class="${corStatusDp(e.status, e.data_validade)}">${esc(ROTULO_STATUS_DP[e.status] ?? e.status ?? '—')}</span></td>
-        <td>${e.link_arquivo ? `<a href="${esc(e.link_arquivo)}" target="_blank">abrir</a>` : '—'}</td></tr>`).join('') || '<tr><td class="vazio">Nenhum exame.</td></tr>'}
+        <td>${e.link_arquivo ? `<a href="${esc(e.link_arquivo)}" target="_blank">abrir</a>` : '—'}</td>
+        ${acoesLinha(`exame:${e.id}`, `exame:${e.id}`)}</tr>`).join('') || '<tr><td class="vazio">Nenhum exame.</td></tr>'}
     </tbody></table></div>
 
     <h4 style="font-family:var(--serif);font-size:14px;margin:14px 0 8px;">Folha (${(folhas || []).length})
@@ -31603,34 +31660,63 @@ async function dpFichaPessoa (pessoa, editavel) {
       ${(folhas || []).map(f => `<tr><td class="texto-dim2">${esc(f.competencia)}</td>
         <td class="num">R$ ${fmtNum(valorLiquido(f))}</td>
         <td><span class="${f.status === 'PAGO' ? 'badge-bom' : 'chip'}">${esc(f.status)}</span></td>
-        <td>${f.link_arquivo ? `<a href="${esc(f.link_arquivo)}" target="_blank">recibo</a>` : '—'}</td></tr>`).join('') || '<tr><td class="vazio">Nenhum lançamento de folha.</td></tr>'}
+        <td>${f.link_arquivo ? `<a href="${esc(f.link_arquivo)}" target="_blank">recibo</a>` : '—'}</td>
+        ${acoesLinha(`folha:${f.id}`, `folha:${f.id}`)}</tr>`).join('') || '<tr><td class="vazio">Nenhum lançamento de folha.</td></tr>'}
     </tbody></table></div>
 
-    <h4 style="font-family:var(--serif);font-size:14px;margin:14px 0 8px;">Ocorrências (${(ocorr || []).length})</h4>
+    <h4 style="font-family:var(--serif);font-size:14px;margin:14px 0 8px;">Ocorrências (${(ocorr || []).length})
+      ${editavel ? `<button class="btn-secundario mini" id="dpf-nova-ocorr" style="float:right;">+ nova</button>` : ''}</h4>
     <div class="tabela-scroll" style="max-height:180px;"><table><tbody>
       ${(ocorr || []).map(o => `<tr><td class="texto-dim2">${fmtData(o.data_ocorrencia)}</td><td>${esc(o.tipo)}</td>
-        <td><span class="${o.status === 'ENCERRADA' ? 'badge-bom' : 'badge-alerta'}">${esc(o.status)}</span></td></tr>`).join('') || '<tr><td class="vazio">Nenhuma ocorrência.</td></tr>'}
+        <td><span class="${o.status === 'ENCERRADA' ? 'badge-bom' : 'badge-alerta'}">${esc(o.status)}</span></td>
+        ${acoesLinha(`ocorr:${o.id}`, `ocorr:${o.id}`)}</tr>`).join('') || '<tr><td class="vazio">Nenhuma ocorrência.</td></tr>'}
     </tbody></table></div>
 
     <div class="acoes" style="margin-top:16px;">
       ${editavel ? `<button class="btn-secundario" id="dpf-editar">Editar cadastro</button>` : ''}
+      ${editavel ? `<button class="btn-secundario" id="dpf-excluir" style="color:var(--warn-text);">Excluir funcionário</button>` : ''}
       <button class="btn-secundario" id="dpf-pdf">Gerar PDF</button>
       <button class="btn-secundario" id="dpf-fechar">Fechar</button>
     </div>
   </div>`
   document.body.appendChild(fundo)
-  fundo.querySelector('#dpf-fechar').onclick = () => fundo.remove()
-  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+  fundo.querySelector('#dpf-fechar').onclick = () => { fundo.remove(); aoAtualizar() }
+  fundo.onclick = e => { if (e.target === fundo) { fundo.remove(); aoAtualizar() } }
   fundo.querySelector('#dpf-pdf').onclick = () => dpGerarPdfFicha(pessoa, docs || [], exames || [], ocorr || [], folhas || [])
   fundo.querySelector('#dpf-imprimir-checklist').onclick = () => dpImprimirChecklist(pessoa, checklist)
+
+  // editar/excluir por linha (documentos, exames, folha, ocorrências)
+  fundo.querySelectorAll('[data-acao-editar]').forEach(b => {
+    b.onclick = () => {
+      const [tipo, id] = b.dataset.acaoEditar.split(':')
+      if (tipo === 'doc') formDpRegistro('documento', (docs || []).find(x => x.id === id), recarregar)
+      if (tipo === 'exame') formDpRegistro('exame', (exames || []).find(x => x.id === id), recarregar)
+      if (tipo === 'folha') formDpFolha(pessoa, (folhas || []).find(x => x.id === id), recarregar)
+      if (tipo === 'ocorr') formDpOcorrencia((ocorr || []).find(x => x.id === id), recarregar)
+    }
+  })
+  fundo.querySelectorAll('[data-acao-excluir]').forEach(b => {
+    b.onclick = () => {
+      const [tipo, id] = b.dataset.acaoExcluir.split(':')
+      const tabela = { doc: 'dp_documento', exame: 'dp_exame', folha: 'dp_folha', ocorr: 'dp_ocorrencia' }[tipo]
+      const nome = { doc: 'este documento', exame: 'este exame', folha: 'este lançamento de folha', ocorr: 'esta ocorrência' }[tipo]
+      excluirRegistroDp(tabela, id, recarregar, nome)
+    }
+  })
+
   if (editavel) {
-    fundo.querySelector('#dpf-editar').onclick = () => { fundo.remove(); formDpFuncionario(pessoa, () => {}) }
-    fundo.querySelector('#dpf-nova-folha').onclick = () => formDpFolha(pessoa, null, () => { fundo.remove(); dpFichaPessoa(pessoa, editavel) })
+    fundo.querySelector('#dpf-editar').onclick = () => { fundo.remove(); formDpFuncionario(pessoa, aoAtualizar) }
+    fundo.querySelector('#dpf-excluir').onclick = () => excluirFuncionario(pessoa, () => { fundo.remove(); aoAtualizar() })
+    fundo.querySelector('#dpf-novo-doc').onclick = () => formDpRegistro('documento', null, recarregar)
+    fundo.querySelector('#dpf-novo-exame').onclick = () => formDpRegistro('exame', null, recarregar)
+    fundo.querySelector('#dpf-nova-folha').onclick = () => formDpFolha(pessoa, null, recarregar)
+    fundo.querySelector('#dpf-nova-ocorr').onclick = () => formDpOcorrencia({ pessoa_id: pessoa.id }, recarregar)
   }
 }
 
 // ----- Documentos -----
 async function dpDocumentos (alvo, editavel) {
+  await garantirDpPessoas()
   const { data } = await db.from('dp_documento').select('*, pessoa:pessoa_id(nome)').order('data_validade', { ascending: true, nullsFirst: false })
   const lista = data || []
   const vencidos = lista.filter(d => d.data_validade && d.data_validade < hojeISO())
@@ -31639,16 +31725,26 @@ async function dpDocumentos (alvo, editavel) {
     ${vencidos.length ? `<div class="aviso-bloqueio" style="margin-bottom:16px;">${vencidos.length} documento(s) vencido(s) — confira abaixo.</div>` : ''}
     ${editavel ? `<div class="acoes" style="margin-bottom:16px;"><button class="btn" id="dpd-novo">+ Novo documento</button></div>` : ''}
     <div class="panel" style="padding:0;"><div class="tabela-scroll">
-      <table><thead><tr><th>Funcionário</th><th>Tipo</th><th>Validade</th><th>Status</th><th></th></tr></thead><tbody>
+      <table><thead><tr><th>Funcionário</th><th>Tipo</th><th>Validade</th><th>Status</th><th></th>${editavel ? '<th></th>' : ''}</tr></thead><tbody>
         ${lista.map(d => `<tr>
           <td>${esc(d.pessoa?.nome ?? '—')}</td><td class="texto-dim">${esc(d.tipo_documento)}</td>
           <td class="texto-dim2">${d.data_validade ? fmtData(d.data_validade) : '—'}</td>
           <td><span class="${corStatusDp(d.status, d.data_validade)}">${esc(ROTULO_STATUS_DP[d.status] ?? d.status ?? '—')}</span></td>
           <td>${d.link_arquivo ? `<a href="${esc(d.link_arquivo)}" target="_blank">abrir</a>` : '—'}</td>
-        </tr>`).join('') || `<tr><td colspan="5" class="vazio">Nenhum documento cadastrado.</td></tr>`}
+          ${editavel ? `<td style="white-space:nowrap;"><button class="btn-secundario mini" data-editar-doc="${d.id}">editar</button>
+            <button class="btn-secundario mini" data-excluir-doc="${d.id}" style="color:var(--warn-text);">excluir</button></td>` : ''}
+        </tr>`).join('') || `<tr><td colspan="${editavel ? 6 : 5}" class="vazio">Nenhum documento cadastrado.</td></tr>`}
       </tbody></table>
     </div></div>`
-  if (editavel) $('#dpd-novo').onclick = () => formDpRegistro('documento', null, () => dpDocumentos(alvo, editavel))
+  if (editavel) {
+    $('#dpd-novo').onclick = () => formDpRegistro('documento', null, () => dpDocumentos(alvo, editavel))
+    alvo.querySelectorAll('[data-editar-doc]').forEach(b => {
+      b.onclick = () => formDpRegistro('documento', lista.find(d => d.id === b.dataset.editarDoc), () => dpDocumentos(alvo, editavel))
+    })
+    alvo.querySelectorAll('[data-excluir-doc]').forEach(b => {
+      b.onclick = () => excluirRegistroDp('dp_documento', b.dataset.excluirDoc, () => dpDocumentos(alvo, editavel), 'este documento')
+    })
+  }
 }
 
 // ----- Exames -----
@@ -31656,6 +31752,7 @@ async function dpDocumentos (alvo, editavel) {
 // pendência no Financeiro) -> pago (o gatilho do banco marca sozinho
 // quando o Financeiro efetiva) -> registrado (DP lança o resultado novo)
 async function dpExames (alvo, editavel) {
+  await garantirDpPessoas()
   const { data } = await db.from('dp_exame').select('*, pessoa:pessoa_id(nome)').order('data_validade', { ascending: true, nullsFirst: false })
   const lista = data || []
   const hoje = hojeISO()
@@ -31675,7 +31772,7 @@ async function dpExames (alvo, editavel) {
     ${vencidos.length ? `<div class="aviso-bloqueio" style="margin-bottom:16px;">${vencidos.length} exame(s) vencido(s) — confira abaixo.</div>` : ''}
     ${editavel ? `<div class="acoes" style="margin-bottom:16px;"><button class="btn" id="dpe-novo">+ Novo exame</button></div>` : ''}
     <div class="panel" style="padding:0;"><div class="tabela-scroll">
-      <table><thead><tr><th>Funcionário</th><th>Tipo</th><th>Clínica</th><th>Validade</th><th>Status</th><th>Acompanhamento</th><th></th></tr></thead><tbody>
+      <table><thead><tr><th>Funcionário</th><th>Tipo</th><th>Clínica</th><th>Validade</th><th>Status</th><th>Acompanhamento</th><th></th>${editavel ? '<th></th>' : ''}</tr></thead><tbody>
         ${lista.map(e => `<tr>
           <td>${esc(e.pessoa?.nome ?? '—')}</td><td class="texto-dim">${esc(e.tipo_exame)}</td>
           <td class="texto-dim2">${esc(e.clinica ?? '—')}</td>
@@ -31683,7 +31780,9 @@ async function dpExames (alvo, editavel) {
           <td><span class="${corStatusDp(e.status, e.data_validade)}">${esc(ROTULO_STATUS_DP[e.status] ?? e.status ?? '—')}</span></td>
           <td>${acompanhamento(e)}</td>
           <td>${e.link_arquivo ? `<a href="${esc(e.link_arquivo)}" target="_blank">abrir</a>` : '—'}</td>
-        </tr>`).join('') || `<tr><td colspan="7" class="vazio">Nenhum exame cadastrado.</td></tr>`}
+          ${editavel ? `<td style="white-space:nowrap;"><button class="btn-secundario mini" data-editar-exame="${e.id}">editar</button>
+            <button class="btn-secundario mini" data-excluir-exame="${e.id}" style="color:var(--warn-text);">excluir</button></td>` : ''}
+        </tr>`).join('') || `<tr><td colspan="${editavel ? 8 : 7}" class="vazio">Nenhum exame cadastrado.</td></tr>`}
       </tbody></table>
     </div></div>`
   if (editavel) $('#dpe-novo').onclick = () => formDpRegistro('exame', null, () => dpExames(alvo, editavel))
@@ -31693,6 +31792,14 @@ async function dpExames (alvo, editavel) {
   alvo.querySelectorAll('[data-registrar]').forEach(b => {
     b.onclick = () => dpRegistrarExameRealizado(lista.find(e => e.id === b.dataset.registrar), () => dpExames(alvo, editavel))
   })
+  if (editavel) {
+    alvo.querySelectorAll('[data-editar-exame]').forEach(b => {
+      b.onclick = () => formDpRegistro('exame', lista.find(e => e.id === b.dataset.editarExame), () => dpExames(alvo, editavel))
+    })
+    alvo.querySelectorAll('[data-excluir-exame]').forEach(b => {
+      b.onclick = () => excluirRegistroDp('dp_exame', b.dataset.excluirExame, () => dpExames(alvo, editavel), 'este exame')
+    })
+  }
 }
 
 // encaminhar pro exame: marca ENCAMINHADO e já cria a pendência (situacao
@@ -31805,6 +31912,7 @@ const COR_TIPO_OCORRENCIA = {
 }
 
 async function dpOcorrencias (alvo, editavel) {
+  await garantirDpPessoas()
   const { data } = await db.from('dp_ocorrencia').select('*, pessoa:pessoa_id(nome,cargo)').order('data_ocorrencia', { ascending: false })
   const lista = data || []
   const corStatusOcorr = s => s === 'ENCERRADA' ? 'badge-bom' : s === 'EM_ANDAMENTO' ? 'chip' : 'badge-alerta'
@@ -31836,6 +31944,7 @@ async function dpOcorrencias (alvo, editavel) {
       ${o.acao_tomada ? `<p class="texto-dim2" style="font-size:12.5px;white-space:pre-wrap;line-height:1.5;background:var(--surface2);padding:10px 12px;border-radius:8px;"><b style="color:var(--txt);">Ação tomada:</b> ${esc(o.acao_tomada)}</p>` : ''}
       <div class="acoes" style="margin-top:12px;">
         ${editavel ? `<button class="btn-secundario mini" data-editar-ocorr="${o.id}">editar</button>` : ''}
+        ${editavel ? `<button class="btn-secundario mini" data-excluir-ocorr="${o.id}" style="color:var(--warn-text);">excluir</button>` : ''}
         ${editavel && o.status !== 'ENCERRADA' ? `<button class="btn-secundario mini" data-concluir-ocorr="${o.id}">✓ concluir</button>` : ''}
         <button class="btn-secundario mini" data-pdf-ocorr="${o.id}">📄 gerar PDF pra assinatura</button>
       </div>
@@ -31848,6 +31957,9 @@ async function dpOcorrencias (alvo, editavel) {
     $('#dpo-novo').onclick = () => formDpOcorrencia(null, () => dpOcorrencias(alvo, editavel))
     alvo.querySelectorAll('[data-editar-ocorr]').forEach(b => {
       b.onclick = () => formDpOcorrencia(lista.find(o => o.id === b.dataset.editarOcorr), () => dpOcorrencias(alvo, editavel))
+    })
+    alvo.querySelectorAll('[data-excluir-ocorr]').forEach(b => {
+      b.onclick = () => excluirRegistroDp('dp_ocorrencia', b.dataset.excluirOcorr, () => dpOcorrencias(alvo, editavel), 'esta ocorrência')
     })
     alvo.querySelectorAll('[data-concluir-ocorr]').forEach(b => {
       b.onclick = async () => {
@@ -31862,26 +31974,29 @@ async function dpOcorrencias (alvo, editavel) {
 function formDpRegistro (tipo, registro, aoSalvar) {
   const pessoas = window.__DP_PESSOAS || []
   const tabela = tipo === 'documento' ? 'dp_documento' : 'dp_exame'
+  const tipoAtual = registro?.tipo_documento ?? registro?.tipo_exame ?? ''
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
   fundo.innerHTML = `<div class="modal">
-    <h3>Novo ${tipo}</h3>
+    <h3>${registro ? 'Editar' : 'Novo'} ${tipo}</h3>
     <div class="form-grade">
       <div class="campo" style="grid-column:1/-1;"><label>Funcionário *</label>
-        <select id="dpr-pessoa"><option value="">selecione...</option>${pessoas.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')}</select></div>
-      <div class="campo"><label>Tipo ${tipo === 'documento' ? 'de documento' : 'de exame'} *</label><input id="dpr-tipo" placeholder="${tipo === 'documento' ? 'ex: Carteira de Trabalho' : 'ex: Periódico'}"></div>
-      ${tipo === 'exame' ? `<div class="campo"><label>Clínica</label><input id="dpr-clinica"></div>` : `<div class="campo"><label>Número</label><input id="dpr-numero"></div>`}
-      <div class="campo"><label>Validade</label><input type="date" id="dpr-validade"></div>
+        <select id="dpr-pessoa"><option value="">selecione...</option>${pessoas.map(p => `<option value="${p.id}" ${p.id === registro?.pessoa_id ? 'selected' : ''}>${esc(p.nome)}</option>`).join('')}</select></div>
+      <div class="campo"><label>Tipo ${tipo === 'documento' ? 'de documento' : 'de exame'} *</label><input id="dpr-tipo" placeholder="${tipo === 'documento' ? 'ex: Carteira de Trabalho' : 'ex: Periódico'}" value="${esc(tipoAtual)}"></div>
+      ${tipo === 'exame' ? `<div class="campo"><label>Clínica</label><input id="dpr-clinica" value="${esc(registro?.clinica ?? '')}"></div>` : `<div class="campo"><label>Número</label><input id="dpr-numero" value="${esc(registro?.numero_documento ?? '')}"></div>`}
+      <div class="campo"><label>Validade</label><input type="date" id="dpr-validade" value="${registro?.data_validade ?? ''}"></div>
       <div class="campo"><label>Status</label><select id="dpr-status">
-        <option value="OK">OK</option><option value="SEM VALIDADE">Sem validade</option>
-        <option value="PENDENTE">Pendente</option><option value="VENCIDO">Vencido</option>
+        <option value="OK" ${(!registro || registro.status === 'OK') ? 'selected' : ''}>OK</option>
+        <option value="SEM VALIDADE" ${registro?.status === 'SEM VALIDADE' ? 'selected' : ''}>Sem validade</option>
+        <option value="PENDENTE" ${registro?.status === 'PENDENTE' ? 'selected' : ''}>Pendente</option>
+        <option value="VENCIDO" ${registro?.status === 'VENCIDO' ? 'selected' : ''}>Vencido</option>
       </select></div>
     </div>
     <div class="campo" style="margin-top:10px;"><label>Anexar arquivo</label>
       <input type="file" id="dpr-arquivo" accept="image/*,application/pdf,.doc,.docx">
       <span class="texto-dim2" style="font-size:10.5px;">ou, se preferir, cola um link do Drive abaixo</span></div>
-    <div class="campo" style="margin-top:6px;"><label>Link do arquivo (opcional)</label><input id="dpr-link" placeholder="link do Drive, se tiver"></div>
-    <div class="campo" style="margin-top:10px;"><label>Observações</label><textarea id="dpr-obs" style="min-height:56px;"></textarea></div>
+    <div class="campo" style="margin-top:6px;"><label>Link do arquivo (opcional)</label><input id="dpr-link" value="${esc(registro?.link_arquivo ?? '')}" placeholder="link do Drive, se tiver"></div>
+    <div class="campo" style="margin-top:10px;"><label>Observações</label><textarea id="dpr-obs" style="min-height:56px;">${esc(registro?.observacoes ?? '')}</textarea></div>
     <div class="acoes" style="margin-top:14px;"><button class="btn" id="dpr-salvar">Salvar</button>
       <button class="btn-secundario" id="dpr-fechar">Fechar</button></div>
     <div class="recado oculto" id="dpr-recado"></div>
@@ -31900,7 +32015,7 @@ function formDpRegistro (tipo, registro, aoSalvar) {
     if (!tipoVal) { aviso('Informe o tipo.'); return }
     const btn = fundo.querySelector('#dpr-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
 
-    let linkArquivo = fundo.querySelector('#dpr-link').value.trim() || null
+    let linkArquivo = fundo.querySelector('#dpr-link').value.trim() || registro?.link_arquivo || null
     const arquivo = fundo.querySelector('#dpr-arquivo').files[0]
     if (arquivo) {
       try {
@@ -31917,7 +32032,9 @@ function formDpRegistro (tipo, registro, aoSalvar) {
       : { pessoa_id: pessoaId, tipo_exame: tipoVal, clinica: fundo.querySelector('#dpr-clinica').value.trim() || null,
           data_validade: fundo.querySelector('#dpr-validade').value || null, status: fundo.querySelector('#dpr-status').value,
           link_arquivo: linkArquivo, observacoes: fundo.querySelector('#dpr-obs').value.trim() || null }
-    const { error } = await db.from(tabela).insert(corpo)
+    let error
+    if (registro?.id) { ({ error } = await db.from(tabela).update(corpo).eq('id', registro.id)) }
+    else { ({ error } = await db.from(tabela).insert(corpo)) }
     btn.disabled = false; btn.textContent = 'Salvar'
     if (error) { aviso(error.message); return }
     fechar(); aoSalvar()
@@ -31929,7 +32046,7 @@ function formDpOcorrencia (registro, aoSalvar) {
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
   fundo.innerHTML = `<div class="modal">
-    <h3>${registro ? 'Editar' : 'Registrar'} ocorrência</h3>
+    <h3>${registro?.id ? 'Editar' : 'Registrar'} ocorrência</h3>
     <div class="form-grade">
       <div class="campo" style="grid-column:1/-1;"><label>Funcionário</label>
         <select id="dpo-pessoa"><option value="">—</option>${pessoas.map(p => `<option value="${p.id}" ${p.id === registro?.pessoa_id ? 'selected' : ''}>${esc(p.nome)}</option>`).join('')}</select></div>
@@ -31965,7 +32082,7 @@ function formDpOcorrencia (registro, aoSalvar) {
       descricao, acao_tomada: fundo.querySelector('#dpo-acao').value.trim() || null
     }
     let error
-    if (registro) { ({ error } = await db.from('dp_ocorrencia').update(corpo).eq('id', registro.id)) }
+    if (registro?.id) { ({ error } = await db.from('dp_ocorrencia').update(corpo).eq('id', registro.id)) }
     else { ({ error } = await db.from('dp_ocorrencia').insert({ ...corpo, criado_por: PERFIL.pessoaId })) }
     btn.disabled = false; btn.textContent = 'Salvar'
     if (error) { aviso(error.message); return }
@@ -31978,7 +32095,7 @@ function formDpFolha (pessoa, registro, aoSalvar) {
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
   fundo.innerHTML = `<div class="modal">
-    <h3>Lançar folha — ${esc(pessoa.nome)}</h3>
+    <h3>${registro ? 'Editar lançamento de folha' : 'Lançar folha'} — ${esc(pessoa.nome)}</h3>
     <div class="form-grade">
       <div class="campo"><label>Competência *</label><input id="dpfl-comp" placeholder="ex: 04/2026" value="${esc(registro?.competencia ?? '')}"></div>
       <div class="campo"><label>Status</label><select id="dpfl-status">
