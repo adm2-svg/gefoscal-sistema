@@ -31249,8 +31249,17 @@ async function dashDiretorFazenda (alvo) {
 // três tabelas novas: documentos, exames e ocorrências, todas ligadas
 // em pessoa_id.
 // ---------------------------------------------------------------
-const ROTULO_STATUS_DP = { OK: 'ok', VENCIDO: 'vencido', PENDENTE: 'pendente', 'SEM VALIDADE': 'sem validade', 'VENCE EM BREVE': 'vence em breve' }
+const ROTULO_STATUS_DP = {
+  OK: 'ok', VENCIDO: 'vencido', PENDENTE: 'pendente', 'SEM VALIDADE': 'sem validade', 'VENCE EM BREVE': 'vence em breve',
+  ENCAMINHADO: '🚶 encaminhado p/ exame', PAGO_AGUARDANDO_EXAME: '💳 pago — aguardando resultado'
+}
 function corStatusDp (status, validade) {
+  // esses dois status contam a história do acompanhamento (já foi
+  // encaminhado, já foi pago) — precisam aparecer com a cor própria
+  // deles mesmo que a validade antiga (vencida) ainda esteja gravada,
+  // senão o exame continuaria parecendo "vencido" depois de já resolvido
+  if (status === 'ENCAMINHADO') return 'chip'
+  if (status === 'PAGO_AGUARDANDO_EXAME') return 'badge-bom'
   if (validade) {
     const hoje = hojeISO()
     if (validade < hoje) return 'badge-alerta'
@@ -31274,7 +31283,7 @@ async function paginaDpSeguranca () {
   const [{ count: totalPessoas }, { data: docs }, { data: exames }, { count: totalOcorrAbertas }] = await Promise.all([
     db.from('pessoa').select('id', { count: 'exact', head: true }).or('data_admissao.not.is.null,cpf.not.is.null'),
     db.from('dp_documento').select('data_validade').lt('data_validade', hoje),
-    db.from('dp_exame').select('data_validade').lt('data_validade', hoje),
+    db.from('dp_exame').select('data_validade').lt('data_validade', hoje).not('status', 'in', '(ENCAMINHADO,PAGO_AGUARDANDO_EXAME)'),
     db.from('dp_ocorrencia').select('id', { count: 'exact', head: true }).neq('status', 'ENCERRADA')
   ])
 
@@ -31315,10 +31324,10 @@ function abrirDp (sub, editavel) {
 // ----- Funcionários -----
 async function dpFuncionarios (alvo, editavel) {
   const [{ data: pessoas }, { data: comCpf }, { data: empresas }, { data: setores }] = await Promise.all([
-    db.from('pessoa').select('id,nome,cpf,rg,telefone,email,cargo,data_admissao,data_nascimento,status,foto_url,setor_id,empresa_id,setor:setor_id(nome),empresa:empresa_id(nome)').not('data_admissao', 'is', null).order('nome'),
+    db.from('pessoa').select('id,nome,cpf,rg,telefone,email,cargo,data_admissao,data_nascimento,status,foto_url,setor_id,empresa_id,estado_civil,banco,agencia,conta,chave_pix,setor:setor_id(nome),empresa:empresa_id(nome)').not('data_admissao', 'is', null).order('nome'),
     // quem não tem data_admissao pode não ser "funcionário CLT" (ex: fornecedor cadastrado por engano) —
     // mas se a pessoa tem cpf preenchido, também é considerado funcionário de DP
-    db.from('pessoa').select('id,nome,cpf,rg,telefone,email,cargo,data_admissao,data_nascimento,status,foto_url,setor_id,empresa_id,setor:setor_id(nome),empresa:empresa_id(nome)').is('data_admissao', null).not('cpf', 'is', null).order('nome'),
+    db.from('pessoa').select('id,nome,cpf,rg,telefone,email,cargo,data_admissao,data_nascimento,status,foto_url,setor_id,empresa_id,estado_civil,banco,agencia,conta,chave_pix,setor:setor_id(nome),empresa:empresa_id(nome)').is('data_admissao', null).not('cpf', 'is', null).order('nome'),
     db.from('empresa').select('id,nome').eq('status', 'ATIVO').order('nome'),
     db.from('setor').select('id,nome').order('nome')
   ])
@@ -31382,12 +31391,27 @@ function formDpFuncionario (pessoa, aoSalvar) {
         <option value="AFASTADO" ${pessoa?.status === 'AFASTADO' ? 'selected' : ''}>Afastado</option>
         <option value="INATIVO" ${pessoa?.status === 'INATIVO' ? 'selected' : ''}>Inativo</option>
       </select></div>
+      <div class="campo"><label>Estado civil</label><select id="fdp-estado-civil">
+        <option value="">—</option>
+        <option value="SOLTEIRO" ${pessoa?.estado_civil === 'SOLTEIRO' ? 'selected' : ''}>Solteiro(a)</option>
+        <option value="CASADO" ${pessoa?.estado_civil === 'CASADO' ? 'selected' : ''}>Casado(a)</option>
+        <option value="UNIAO_ESTAVEL" ${pessoa?.estado_civil === 'UNIAO_ESTAVEL' ? 'selected' : ''}>União estável</option>
+        <option value="DIVORCIADO" ${pessoa?.estado_civil === 'DIVORCIADO' ? 'selected' : ''}>Divorciado(a)</option>
+        <option value="VIUVO" ${pessoa?.estado_civil === 'VIUVO' ? 'selected' : ''}>Viúvo(a)</option>
+      </select></div>
     </div>
     <div class="campo" style="margin-top:10px;"><label>Foto</label>
       <div style="display:flex;gap:10px;align-items:center;">
         ${pessoa?.foto_url ? `<img src="${esc(pessoa.foto_url)}" style="width:56px;height:56px;border-radius:10px;object-fit:cover;">` : ''}
         <input type="file" id="fdp-foto" accept="image/*" style="flex:1;">
       </div></div>
+    <h4 style="font-family:var(--serif);font-size:14px;margin:16px 0 8px;">Dados bancários (pra pagamento)</h4>
+    <div class="form-grade">
+      <div class="campo"><label>Banco</label><input id="fdp-banco" value="${esc(pessoa?.banco ?? '')}" placeholder="ex: Banco do Brasil"></div>
+      <div class="campo"><label>Agência</label><input id="fdp-agencia" value="${esc(pessoa?.agencia ?? '')}"></div>
+      <div class="campo"><label>Conta</label><input id="fdp-conta" value="${esc(pessoa?.conta ?? '')}"></div>
+      <div class="campo"><label>Chave PIX</label><input id="fdp-pix" value="${esc(pessoa?.chave_pix ?? '')}"></div>
+    </div>
     <div class="acoes" style="margin-top:14px;"><button class="btn" id="fdp-salvar">Salvar</button>
       <button class="btn-secundario" id="fdp-fechar">Fechar</button></div>
     <div class="recado oculto" id="fdp-recado"></div>
@@ -31420,15 +31444,61 @@ function formDpFuncionario (pessoa, aoSalvar) {
       email: fundo.querySelector('#fdp-email').value.trim() || null, cargo: fundo.querySelector('#fdp-cargo').value.trim() || null,
       setor_id: fundo.querySelector('#fdp-setor').value || null, empresa_id: fundo.querySelector('#fdp-empresa').value || null,
       data_admissao: fundo.querySelector('#fdp-admissao').value || null, status: fundo.querySelector('#fdp-status').value,
+      estado_civil: fundo.querySelector('#fdp-estado-civil').value || null,
+      banco: fundo.querySelector('#fdp-banco').value.trim() || null, agencia: fundo.querySelector('#fdp-agencia').value.trim() || null,
+      conta: fundo.querySelector('#fdp-conta').value.trim() || null, chave_pix: fundo.querySelector('#fdp-pix').value.trim() || null,
       foto_url: fotoUrl
     }
-    let error
+    const eraNovo = !pessoa
+    let error, novaPessoa
     if (pessoa) { ({ error } = await db.from('pessoa').update(corpo).eq('id', pessoa.id)) }
-    else { ({ error } = await db.from('pessoa').insert(corpo)) }
+    else { ({ data: novaPessoa, error } = await db.from('pessoa').insert(corpo).select().single()) }
     btn.disabled = false; btn.textContent = 'Salvar'
     if (error) { aviso(error.message); return }
     fechar(); aoSalvar()
+    if (eraNovo && novaPessoa) dpFichaPessoa(novaPessoa, true)
   }
+}
+
+// checklist dos documentos obrigatórios de admissão — cruza campos do
+// próprio cadastro (cpf, rg, foto, dados bancários) com os documentos
+// anexados em dp_documento (pis/pasep, certidões), pra mostrar de cara
+// o que já foi entregue e o que ainda falta pedir pro funcionário
+function dpChecklistDocumentos (pessoa, docs) {
+  const temDoc = termo => (docs || []).some(d => (d.tipo_documento || '').toLowerCase().includes(termo))
+  const itens = [
+    { rotulo: 'CPF', ok: !!pessoa.cpf },
+    { rotulo: 'RG', ok: !!pessoa.rg },
+    { rotulo: 'PIS/PASEP', ok: temDoc('pis') || temDoc('pasep') },
+    { rotulo: 'Certidão de nascimento', ok: temDoc('nascimento') },
+    { rotulo: 'Foto', ok: !!pessoa.foto_url },
+    { rotulo: 'Dados bancários (conta pra pagamento)', ok: !!(pessoa.banco && (pessoa.conta || pessoa.chave_pix)) }
+  ]
+  if (pessoa.estado_civil === 'CASADO') itens.splice(4, 0, { rotulo: 'Certidão de casamento', ok: temDoc('casamento') })
+  return itens
+}
+
+function dpImprimirChecklist (pessoa, checklist) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = documentoPDF({
+    titulo: 'Checklist de documentação',
+    subtitulo: pessoa.nome,
+    corpo: `
+      <p style="font-size:13px;margin-bottom:14px;">Documentos necessários para o cadastro de <b>${esc(pessoa.nome)}</b>:</p>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        ${checklist.map(i => `<div style="display:flex;align-items:center;gap:10px;font-size:14px;padding:8px 0;border-bottom:1px solid #ddd;">
+          <span style="font-size:18px;">${i.ok ? '☑' : '☐'}</span> ${esc(i.rotulo)}
+          ${i.ok ? '<span style="color:#2f7a4f;font-size:11px;">(já entregue)</span>' : '<span style="color:#8a5a12;font-size:11px;">(pendente)</span>'}
+        </div>`).join('')}
+      </div>`,
+    acoes: `<button class="btn" id="dpc-imprimir">Baixar / imprimir PDF</button>
+            <button class="btn-secundario" id="dpc-fechar">Fechar</button>`
+  })
+  document.body.appendChild(fundo)
+  fundo.querySelector('#dpc-fechar').onclick = () => fundo.remove()
+  fundo.querySelector('#dpc-imprimir').onclick = () => window.print()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
 }
 
 async function dpFichaPessoa (pessoa, editavel) {
@@ -31441,6 +31511,9 @@ async function dpFichaPessoa (pessoa, editavel) {
   const valorLiquido = f => f.valor_liquido != null ? Number(f.valor_liquido)
     : Number(f.salario_base || 0) + Number(f.horas_extras || 0) + Number(f.beneficios || 0) - Number(f.descontos || 0)
 
+  const checklist = dpChecklistDocumentos(pessoa, docs || [])
+  const checklistFaltando = checklist.filter(i => !i.ok).length
+
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
   fundo.innerHTML = `<div class="modal" style="max-width:760px;">
@@ -31451,6 +31524,17 @@ async function dpFichaPessoa (pessoa, editavel) {
     <p class="texto-dim2" style="font-size:12.5px;margin:-6px 0 14px;">
       CPF: ${esc(pessoa.cpf ?? '—')} · RG: ${esc(pessoa.rg ?? '—')} · Telefone: ${esc(pessoa.telefone ?? '—')} ·
       Admissão: ${pessoa.data_admissao ? fmtData(pessoa.data_admissao) : '—'}</p>
+
+    <div class="panel" style="padding:14px 16px;margin-bottom:14px;${checklistFaltando ? 'border-left:4px solid var(--warn-text);' : 'border-left:4px solid var(--good-text);'}">
+      <div class="cabeca-secao" style="margin-bottom:8px;">
+        <h4 style="font-family:var(--serif);font-size:14px;margin:0;">Checklist de documentação</h4>
+        <button class="btn-secundario mini" id="dpf-imprimir-checklist">🖨️ imprimir checklist</button>
+      </div>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 8px;">${checklistFaltando ? `Faltam ${checklistFaltando} documento(s).` : 'Documentação completa.'}</p>
+      <div style="display:flex;flex-wrap:wrap;gap:6px 16px;">
+        ${checklist.map(i => `<span style="font-size:12.5px;display:flex;align-items:center;gap:5px;">${i.ok ? '✅' : '⬜'} ${esc(i.rotulo)}</span>`).join('')}
+      </div>
+    </div>
 
     <h4 style="font-family:var(--serif);font-size:14px;margin:14px 0 8px;">Documentos (${(docs || []).length})</h4>
     <div class="tabela-scroll" style="max-height:180px;"><table><tbody>
@@ -31491,6 +31575,7 @@ async function dpFichaPessoa (pessoa, editavel) {
   fundo.querySelector('#dpf-fechar').onclick = () => fundo.remove()
   fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
   fundo.querySelector('#dpf-pdf').onclick = () => dpGerarPdfFicha(pessoa, docs || [], exames || [], ocorr || [], folhas || [])
+  fundo.querySelector('#dpf-imprimir-checklist').onclick = () => dpImprimirChecklist(pessoa, checklist)
   if (editavel) {
     fundo.querySelector('#dpf-editar').onclick = () => { fundo.remove(); formDpFuncionario(pessoa, () => {}) }
     fundo.querySelector('#dpf-nova-folha').onclick = () => formDpFolha(pessoa, null, () => { fundo.remove(); dpFichaPessoa(pessoa, editavel) })
@@ -31520,26 +31605,147 @@ async function dpDocumentos (alvo, editavel) {
 }
 
 // ----- Exames -----
+// coluna "Acompanhamento": fecha o ciclo vencido -> encaminhado (gera
+// pendência no Financeiro) -> pago (o gatilho do banco marca sozinho
+// quando o Financeiro efetiva) -> registrado (DP lança o resultado novo)
 async function dpExames (alvo, editavel) {
   const { data } = await db.from('dp_exame').select('*, pessoa:pessoa_id(nome)').order('data_validade', { ascending: true, nullsFirst: false })
   const lista = data || []
-  const vencidos = lista.filter(e => e.data_validade && e.data_validade < hojeISO())
+  const hoje = hojeISO()
+  const vencidos = lista.filter(e => e.data_validade && e.data_validade < hoje && !['ENCAMINHADO', 'PAGO_AGUARDANDO_EXAME'].includes(e.status))
+
+  const acompanhamento = e => {
+    const estaVencido = e.data_validade && e.data_validade < hoje
+    if (e.status === 'ENCAMINHADO') return `<span class="chip">aguardando pagamento no Financeiro</span>`
+    if (e.status === 'PAGO_AGUARDANDO_EXAME') {
+      return editavel ? `<button class="btn-secundario mini" data-registrar="${e.id}">registrar exame feito</button>` : `<span class="badge-bom">pago — aguardando resultado</span>`
+    }
+    if (estaVencido) return editavel ? `<button class="btn-secundario mini" data-encaminhar="${e.id}">encaminhar p/ exame</button>` : '—'
+    return '—'
+  }
 
   alvo.innerHTML = `
     ${vencidos.length ? `<div class="aviso-bloqueio" style="margin-bottom:16px;">${vencidos.length} exame(s) vencido(s) — confira abaixo.</div>` : ''}
     ${editavel ? `<div class="acoes" style="margin-bottom:16px;"><button class="btn" id="dpe-novo">+ Novo exame</button></div>` : ''}
     <div class="panel" style="padding:0;"><div class="tabela-scroll">
-      <table><thead><tr><th>Funcionário</th><th>Tipo</th><th>Clínica</th><th>Validade</th><th>Status</th><th></th></tr></thead><tbody>
+      <table><thead><tr><th>Funcionário</th><th>Tipo</th><th>Clínica</th><th>Validade</th><th>Status</th><th>Acompanhamento</th><th></th></tr></thead><tbody>
         ${lista.map(e => `<tr>
           <td>${esc(e.pessoa?.nome ?? '—')}</td><td class="texto-dim">${esc(e.tipo_exame)}</td>
           <td class="texto-dim2">${esc(e.clinica ?? '—')}</td>
           <td class="texto-dim2">${e.data_validade ? fmtData(e.data_validade) : '—'}</td>
           <td><span class="${corStatusDp(e.status, e.data_validade)}">${esc(ROTULO_STATUS_DP[e.status] ?? e.status ?? '—')}</span></td>
+          <td>${acompanhamento(e)}</td>
           <td>${e.link_arquivo ? `<a href="${esc(e.link_arquivo)}" target="_blank">abrir</a>` : '—'}</td>
-        </tr>`).join('') || `<tr><td colspan="6" class="vazio">Nenhum exame cadastrado.</td></tr>`}
+        </tr>`).join('') || `<tr><td colspan="7" class="vazio">Nenhum exame cadastrado.</td></tr>`}
       </tbody></table>
     </div></div>`
   if (editavel) $('#dpe-novo').onclick = () => formDpRegistro('exame', null, () => dpExames(alvo, editavel))
+  alvo.querySelectorAll('[data-encaminhar]').forEach(b => {
+    b.onclick = () => dpEncaminharExame(lista.find(e => e.id === b.dataset.encaminhar), () => dpExames(alvo, editavel))
+  })
+  alvo.querySelectorAll('[data-registrar]').forEach(b => {
+    b.onclick = () => dpRegistrarExameRealizado(lista.find(e => e.id === b.dataset.registrar), () => dpExames(alvo, editavel))
+  })
+}
+
+// encaminhar pro exame: marca ENCAMINHADO e já cria a pendência (situacao
+// PENDENTE) no Financeiro, ligada pelo lancamento_financeiro_id — quando o
+// Financeiro efetivar esse lançamento, um gatilho no banco marca sozinho
+// o exame como PAGO_AGUARDANDO_EXAME (ver migration dp_exame_encaminhamento_financeiro)
+async function dpEncaminharExame (exame, aoSalvar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>Encaminhar exame pro financeiro</h3>
+    <p class="texto-dim2" style="font-size:12.5px;margin-top:-6px;">
+      ${esc(exame.pessoa?.nome ?? '')} · ${esc(exame.tipo_exame)}<br>
+      Isso cria uma pendência no Financeiro. Quando o Financeiro der baixa no pagamento, o exame
+      volta pra cá automaticamente como "pago — aguardando resultado".</p>
+    <div class="campo"><label>Valor estimado do exame (R$)</label><input id="dpef-valor" placeholder="ex: 120,00"></div>
+    <div class="campo" style="margin-top:8px;"><label>Observação (opcional)</label><textarea id="dpef-obs" style="min-height:56px;"></textarea></div>
+    <div class="acoes" style="margin-top:14px;"><button class="btn" id="dpef-salvar">Encaminhar</button>
+      <button class="btn-secundario" id="dpef-fechar">Fechar</button></div>
+    <div class="recado oculto" id="dpef-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#dpef-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  fundo.querySelector('#dpef-salvar').onclick = async () => {
+    const el = fundo.querySelector('#dpef-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const valor = numeroBR(fundo.querySelector('#dpef-valor').value)
+    if (!valor) { aviso('Informe o valor estimado do exame.'); return }
+    const btn = fundo.querySelector('#dpef-salvar'); btn.disabled = true; btn.textContent = 'Encaminhando...'
+
+    const { data: cat } = await db.from('categoria_financeira').select('id').eq('nome', 'Saúde ocupacional').maybeSingle()
+    const { data: novoLanc, error: eLanc } = await db.from('lancamento_financeiro').insert({
+      descricao: `Exame ${exame.tipo_exame} — ${exame.pessoa?.nome ?? 'funcionário'}`,
+      valor, tipo: 'SAIDA', data_lancamento: hojeISO(), categoria_id: cat?.id || null,
+      situacao: 'PENDENTE',
+      observacao: fundo.querySelector('#dpef-obs').value.trim() || 'Gerado automaticamente pelo módulo DP e Segurança ao encaminhar funcionário pra exame.',
+      registrado_por: PERFIL.pessoaId
+    }).select('id').single()
+    if (eLanc) { aviso(eLanc.message); btn.disabled = false; btn.textContent = 'Encaminhar'; return }
+
+    const { error: eExame } = await db.from('dp_exame').update({
+      status: 'ENCAMINHADO', lancamento_financeiro_id: novoLanc.id, encaminhado_em: new Date().toISOString()
+    }).eq('id', exame.id)
+    btn.disabled = false; btn.textContent = 'Encaminhar'
+    if (eExame) { aviso(eExame.message); return }
+    fechar(); aoSalvar()
+  }
+}
+
+// depois que o Financeiro já pagou (status virou PAGO_AGUARDANDO_EXAME
+// sozinho, via gatilho), a DP registra aqui o resultado: nova validade
+// e, se quiser, o anexo do laudo
+async function dpRegistrarExameRealizado (exame, aoSalvar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>Registrar exame realizado</h3>
+    <p class="texto-dim2" style="font-size:12.5px;margin-top:-6px;">
+      ${esc(exame.pessoa?.nome ?? '')} · ${esc(exame.tipo_exame)} — pagamento já confirmado no Financeiro.</p>
+    <div class="campo"><label>Clínica</label><input id="dper-clinica" value="${esc(exame.clinica ?? '')}"></div>
+    <div class="campo" style="margin-top:8px;"><label>Nova validade *</label><input type="date" id="dper-validade"></div>
+    <div class="campo" style="margin-top:8px;"><label>Anexar resultado</label>
+      <input type="file" id="dper-arquivo" accept="image/*,application/pdf,.doc,.docx"></div>
+    <div class="acoes" style="margin-top:14px;"><button class="btn" id="dper-salvar">Registrar</button>
+      <button class="btn-secundario" id="dper-fechar">Fechar</button></div>
+    <div class="recado oculto" id="dper-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#dper-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  fundo.querySelector('#dper-salvar').onclick = async () => {
+    const el = fundo.querySelector('#dper-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const validade = fundo.querySelector('#dper-validade').value
+    if (!validade) { aviso('Informe a nova validade do exame.'); return }
+    const btn = fundo.querySelector('#dper-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+
+    let linkArquivo = exame.link_arquivo ?? null
+    const arquivo = fundo.querySelector('#dper-arquivo').files[0]
+    if (arquivo) {
+      try {
+        const enviado = await enviarArquivo(arquivo, `dp-exames/${exame.pessoa_id}`)
+        const { data: signed } = await db.storage.from('documentos').createSignedUrl(enviado.caminho, 60 * 60 * 24 * 365 * 5)
+        linkArquivo = signed?.signedUrl || enviado.caminho
+      } catch (e) { aviso('Não deu pra enviar o arquivo: ' + e.message); btn.disabled = false; btn.textContent = 'Registrar'; return }
+    }
+
+    const { error } = await db.from('dp_exame').update({
+      status: 'OK', data_validade: validade, clinica: fundo.querySelector('#dper-clinica').value.trim() || null,
+      link_arquivo: linkArquivo
+    }).eq('id', exame.id)
+    btn.disabled = false; btn.textContent = 'Registrar'
+    if (error) { aviso(error.message); return }
+    fechar(); aoSalvar()
+  }
 }
 
 // ----- Ocorrências -----
