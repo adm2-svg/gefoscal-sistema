@@ -1023,7 +1023,7 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
     </div>
     <div id="menu"></div>
     <div class="linha-divisoria" style="margin:18px 0 12px;"></div>
-    <button class="btn-secundario oculto" id="btn-instalar" style="width:100%;margin-bottom:8px;">
+    <button class="btn-secundario" id="btn-instalar" style="width:100%;margin-bottom:8px;">
       <span class="rotulo">📲 Instalar app</span>
     </button>
     <button class="btn-secundario" id="btn-sair" style="width:100%;" onclick="sair()">
@@ -32437,24 +32437,39 @@ new MutationObserver(() => avisarRolagemTabelas()).observe(document.body, { chil
 window.addEventListener('resize', avisarRolagemTabelas)
 window.addEventListener('orientationchange', avisarRolagemTabelas)
 
-// botão "Instalar app" — só aparece quando o navegador (Chrome/Android,
-// Edge etc.) sinaliza que dá pra instalar. No iPhone/Safari não existe
-// esse evento — lá é "Compartilhar → Adicionar à Tela de Início".
+// botão "Instalar app" — fica sempre visível (só se esconde se o app já
+// estiver instalado). No Chrome/Android/Edge, quando o navegador libera
+// a instalação automática de verdade (evento beforeinstallprompt), o
+// clique abre a instalação nativa. Só que esse evento tem critério
+// próprio do navegador pra disparar (manifest válido, já ter entrado no
+// site mais de uma vez, etc.) e no iPhone/Safari ele NUNCA existe — por
+// isso o botão não pode depender só dele: se ainda não disparou, o
+// clique explica o passo a passo manual, pra nunca ficar sem opção.
 let promptInstalacao = null
+const btnInstalar = document.getElementById('btn-instalar')
+const appJaInstalado = () =>
+  window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true
+
+if (appJaInstalado()) btnInstalar?.classList.add('oculto')
+
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault()
   promptInstalacao = e
-  document.getElementById('btn-instalar')?.classList.remove('oculto')
 })
-document.getElementById('btn-instalar')?.addEventListener('click', async () => {
-  if (!promptInstalacao) return
-  promptInstalacao.prompt()
-  await promptInstalacao.userChoice
-  promptInstalacao = null
-  document.getElementById('btn-instalar')?.classList.add('oculto')
+btnInstalar?.addEventListener('click', async () => {
+  if (promptInstalacao) {
+    promptInstalacao.prompt()
+    await promptInstalacao.userChoice
+    promptInstalacao = null
+    return
+  }
+  const ehIOS = /iphone|ipad|ipod/i.test(navigator.userAgent)
+  alert(ehIOS
+    ? 'Pra instalar no iPhone/iPad:\n\n1. Toque no ícone de Compartilhar (o quadrado com a seta pra cima), na barra do Safari.\n2. Escolha "Adicionar à Tela de Início".\n3. Toque em "Adicionar".'
+    : 'Seu navegador ainda não liberou a instalação automática — às vezes ele só oferece depois de visitar o site mais de uma vez.\n\nEnquanto isso, dá pra instalar pelo menu do navegador:\n\n1. Toque nos três pontinhos (⋮), no canto superior direito da tela.\n2. Escolha "Instalar aplicativo" ou "Adicionar à tela inicial".')
 })
 window.addEventListener('appinstalled', () => {
-  document.getElementById('btn-instalar')?.classList.add('oculto')
+  btnInstalar?.classList.add('oculto')
 })
 </script>
 </body>
