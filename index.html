@@ -7609,12 +7609,15 @@ async function telaCotacao (s) {
 
         <div class="secao">
           <h3 style="font-size:15px;">Novo orçamento</h3>
-          <div class="campo"><label>Arquivo da cotação (PDF, foto ou print)</label>
-            <input type="file" id="o-arquivo" accept=".pdf,.jpg,.jpeg,.png,.webp">
-            <div class="acoes" style="margin-top:6px;">
-              <button class="btn-secundario mini" id="o-extrair" type="button">extrair dados do arquivo</button>
-              <span class="texto-dim2" style="font-size:11.5px;" id="o-extrair-status"></span>
-            </div>
+          <div class="form-grade">
+            <div class="campo"><label>Arquivo da cotação (PDF, foto ou print)</label>
+              <input type="file" id="o-arquivo" accept=".pdf,.jpg,.jpeg,.png,.webp"></div>
+            <div class="campo"><label>ou link de onde comprar (loja, site do fornecedor, proposta online)</label>
+              <input id="o-link" placeholder="https://..."></div>
+          </div>
+          <div class="acoes" style="margin-top:6px;">
+            <button class="btn-secundario mini" id="o-extrair" type="button">extrair dados (do arquivo ou do link)</button>
+            <span class="texto-dim2" style="font-size:11.5px;" id="o-extrair-status"></span>
           </div>
           <div class="form-grade" style="margin-top:10px;">
             <div class="campo"><label>Fornecedor</label>
@@ -7626,7 +7629,6 @@ async function telaCotacao (s) {
             <div class="campo"><label>Prazo de entrega</label><input id="o-prazo" placeholder="5 dias úteis"></div>
             <div class="campo"><label>Forma de pagamento</label><input id="o-forma" placeholder="boleto, PIX, cartão"></div>
             <div class="campo"><label>Condição</label><input id="o-cond" placeholder="à vista, 30/60"></div>
-            <div class="campo"><label>Link da proposta</label><input id="o-link" placeholder="https://..."></div>
           </div>
           <div class="acoes"><button class="btn mini" id="o-add">Adicionar orçamento</button></div>
         </div>
@@ -7699,17 +7701,18 @@ async function telaCotacao (s) {
 
     q('#o-extrair').onclick = async () => {
       const arquivo = q('#o-arquivo').files[0]
+      const link = q('#o-link').value.trim()
       const status = q('#o-extrair-status')
-      if (!arquivo) { status.textContent = 'Escolha um arquivo primeiro.'; return }
+      if (!arquivo && !link) { status.textContent = 'Escolha um arquivo ou cole um link primeiro.'; return }
       const btn = q('#o-extrair'); btn.disabled = true
-      status.textContent = 'Lendo o documento...'
+      status.textContent = arquivo ? 'Lendo o documento...' : 'Abrindo o link...'
       try {
-        const dadosB64 = await arquivoParaBase64(arquivo)
-        const { data, error } = await db.functions.invoke('compras-cotacao-extrair', {
-          body: { arquivo: { data: dadosB64, media_type: arquivo.type || 'application/pdf' } }
-        })
+        const corpo = arquivo
+          ? { arquivo: { data: await arquivoParaBase64(arquivo), media_type: arquivo.type || 'application/pdf' } }
+          : { url: link }
+        const { data, error } = await db.functions.invoke('compras-cotacao-extrair', { body: corpo })
         if (error || !data?.ok) {
-          status.textContent = data?.erro || error?.message || 'Não consegui ler o arquivo.'
+          status.textContent = data?.erro || error?.message || (arquivo ? 'Não consegui ler o arquivo.' : 'Não consegui ler o link.')
           return
         }
         const ex = data.extraido || {}
@@ -7723,8 +7726,8 @@ async function telaCotacao (s) {
         if (ex.forma_pagamento) q('#o-forma').value = ex.forma_pagamento
         if (ex.condicao_pagamento) q('#o-cond').value = ex.condicao_pagamento
         status.textContent = ex.confianca === 'baixa'
-          ? 'Preenchido — confira com atenção, o documento estava difícil de ler.'
-          : 'Preenchido a partir do arquivo — confira antes de adicionar.'
+          ? `Preenchido — confira com atenção, ${arquivo ? 'o documento estava difícil de ler' : 'a página não trouxe tudo com clareza'}.`
+          : `Preenchido a partir ${arquivo ? 'do arquivo' : 'do link'} — confira antes de adicionar.`
       } catch (e) {
         status.textContent = e.message
       } finally {
