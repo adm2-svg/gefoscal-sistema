@@ -25934,8 +25934,11 @@ function formLicenca (l) {
           <select id="lc-resp">${opcoesFin(JUR_CACHE.pessoas, 'sem responsável', l?.responsavel_id)}</select></div>
         <div class="campo"><label>Empresa</label>
           <select id="lc-empresa">${opcoesFin(JUR_CACHE.empresas, '—', l?.empresa_id)}</select></div>
-        <div class="campo" style="grid-column:1/-1;"><label>Link do anexo</label>
-          <input id="lc-anexo" value="${v('anexo_link')}" placeholder="link do Drive"></div>
+        <div class="campo" style="grid-column:1/-1;"><label>Anexar arquivo</label>
+          <input type="file" id="lc-arquivo" accept="application/pdf,image/*,.doc,.docx">
+          ${l?.anexo_link ? `<span class="texto-dim2" style="font-size:11px;">já tem um anexo — escolher outro arquivo substitui</span>` : ''}</div>
+        <div class="campo" style="grid-column:1/-1;"><label>Ou link do anexo (opcional)</label>
+          <input id="lc-anexo" value="${v('anexo_link')}" placeholder="link do Drive, se preferir"></div>
       </div>
       <div class="campo" style="margin-top:12px;"><label>Observações</label>
         <textarea id="lc-obs" style="min-height:64px;">${v('observacoes')}</textarea></div>
@@ -25960,6 +25963,18 @@ function formLicenca (l) {
   q('#lc-salvar').onclick = async () => {
     const nome = q('#lc-nome').value.trim()
     if (!nome) { aviso('Escreva o nome da licença ou certidão.'); return }
+    const btnSalvar = q('#lc-salvar'); btnSalvar.disabled = true; btnSalvar.textContent = 'Salvando...'
+
+    let anexoLink = q('#lc-anexo').value.trim() || null
+    const arquivo = q('#lc-arquivo').files[0]
+    if (arquivo) {
+      try {
+        const enviado = await enviarArquivo(arquivo, `juridico-licencas/${l?.id ?? 'novo'}`)
+        const { data: signed } = await db.storage.from('documentos').createSignedUrl(enviado.caminho, 60 * 60 * 24 * 365 * 5)
+        anexoLink = signed?.signedUrl || enviado.caminho
+      } catch (e) { aviso('Não deu pra enviar o arquivo: ' + e.message); btnSalvar.disabled = false; btnSalvar.textContent = 'Salvar'; return }
+    }
+
     const corpo = {
       nome,
       categoria: q('#lc-cat').value,
@@ -25970,7 +25985,7 @@ function formLicenca (l) {
       status: q('#lc-status').value,
       responsavel_id: q('#lc-resp').value || null,
       empresa_id: q('#lc-empresa').value || null,
-      anexo_link: q('#lc-anexo').value.trim() || null,
+      anexo_link: anexoLink,
       observacoes: q('#lc-obs').value.trim() || null
     }
     let error
@@ -25981,6 +25996,7 @@ function formLicenca (l) {
       corpo.criado_por = PERFIL.pessoaId
       ;({ error } = await db.from('juridico_licenca').insert(corpo))
     }
+    btnSalvar.disabled = false; btnSalvar.textContent = 'Salvar'
     if (error) { aviso(error.message); return }
     fechar(); abrirJuridico('licencas', true)
   }
@@ -26334,7 +26350,10 @@ function formDocumentoJuridico (d) {
         <select id="dc-cat">${CATEGORIAS_DOC.map(x => `<option ${d?.categoria === x ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
       <div class="campo"><label>Responsável</label><select id="dc-resp">${opcoesFin(JUR_CACHE.pessoas, 'sem responsável', d?.responsavel_id)}</select></div>
       <div class="campo"><label>Empresa</label><select id="dc-empresa">${opcoesFin(JUR_CACHE.empresas, '—', d?.empresa_id)}</select></div>
-      <div class="campo" style="grid-column:1/-1;"><label>Link (Drive)</label><input id="dc-link" value="${v('link')}"></div>
+      <div class="campo" style="grid-column:1/-1;"><label>Anexar arquivo</label>
+        <input type="file" id="dc-arquivo" accept="application/pdf,image/*,.doc,.docx">
+        ${d?.link ? `<span class="texto-dim2" style="font-size:11px;">já tem um anexo — escolher outro arquivo substitui</span>` : ''}</div>
+      <div class="campo" style="grid-column:1/-1;"><label>Ou link (Drive), se preferir</label><input id="dc-link" value="${v('link')}"></div>
     </div>
     <div class="campo" style="margin-top:10px;"><label>Observações</label><textarea id="dc-obs" style="min-height:64px;">${v('observacoes')}</textarea></div>
     <div class="acoes">
@@ -26357,10 +26376,22 @@ function formDocumentoJuridico (d) {
   q('#dc-salvar').onclick = async () => {
     const nome = q('#dc-nome').value.trim()
     if (!nome) { aviso('Escreva o nome do documento.'); return }
+    const btnSalvar = q('#dc-salvar'); btnSalvar.disabled = true; btnSalvar.textContent = 'Salvando...'
+
+    let link = q('#dc-link').value.trim() || null
+    const arquivo = q('#dc-arquivo').files[0]
+    if (arquivo) {
+      try {
+        const enviado = await enviarArquivo(arquivo, `juridico-documentos/${d?.id ?? 'novo'}`)
+        const { data: signed } = await db.storage.from('documentos').createSignedUrl(enviado.caminho, 60 * 60 * 24 * 365 * 5)
+        link = signed?.signedUrl || enviado.caminho
+      } catch (e) { aviso('Não deu pra enviar o arquivo: ' + e.message); btnSalvar.disabled = false; btnSalvar.textContent = 'Salvar'; return }
+    }
+
     const corpo = {
       nome, categoria: q('#dc-cat').value, responsavel_id: q('#dc-resp').value || null,
       empresa_id: q('#dc-empresa').value || null,
-      link: q('#dc-link').value.trim() || null, observacoes: q('#dc-obs').value.trim() || null,
+      link, observacoes: q('#dc-obs').value.trim() || null,
       atualizado_em: new Date().toISOString()
     }
     let error
@@ -26370,6 +26401,7 @@ function formDocumentoJuridico (d) {
       corpo.criado_por = PERFIL.pessoaId
       ;({ error } = await db.from('juridico_documento').insert(corpo))
     }
+    btnSalvar.disabled = false; btnSalvar.textContent = 'Salvar'
     if (error) { aviso(error.message); return }
     fechar(); abrirJuridico('documentos', true)
   }
