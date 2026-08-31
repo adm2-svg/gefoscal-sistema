@@ -151,6 +151,16 @@ td { padding:9px 10px; border-bottom:1px solid var(--line); }
 tbody tr:hover { background: var(--hover-bg); }
 .num { text-align:right; font-variant-numeric: tabular-nums; }
 .tabela-scroll { max-height: 62vh; overflow:auto; }
+/* aviso "arraste pro lado" — a tabela já rola sozinha quando as colunas
+   não cabem (é o .tabela-scroll acima), o que faltava era deixar isso
+   claro pra quem não conhece o gesto e tenta resolver dando zoom na
+   página inteira. Só aparece no celular, e só quando a tabela em questão
+   realmente não coube (função avisarRolagemTabelas, no fim do script). */
+.dica-rolagem-tabela { display:none; }
+@media (max-width:860px) {
+  .dica-rolagem-tabela { display:block; font-size:11px; color:var(--dim2); text-align:center;
+    padding:7px 10px; background:var(--surface2); border-bottom:1px solid var(--line); }
+}
 .chip { display:inline-block; font-size:11px; padding:2px 8px; border-radius:20px;
         border:1px solid var(--line2); color:var(--dim); background:var(--surface2); }
 .anexo-link { color:var(--rust); text-decoration:none; font-size:12px; margin-right:6px; }
@@ -32403,6 +32413,29 @@ if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./serviceworker.js').catch(() => {})
   })
 }
+
+// aviso "arraste pro lado" nas tabelas largas — roda sozinho toda vez que
+// a tela muda (o sistema troca o conteúdo sem recarregar a página, então
+// não dá pra "ouvir" só uma vez no carregamento). Em vez de a pessoa
+// precisar dar zoom pra encaixar as colunas que faltam, a tabela já rola
+// de lado (.tabela-scroll no CSS); isso só deixa claro que dá pra arrastar.
+function avisarRolagemTabelas () {
+  document.querySelectorAll('.tabela-scroll').forEach(el => {
+    const precisaRolar = el.scrollWidth > el.clientWidth + 4
+    const jaTemDica = el.previousElementSibling?.classList?.contains('dica-rolagem-tabela')
+    if (precisaRolar && !jaTemDica) {
+      const dica = document.createElement('div')
+      dica.className = 'dica-rolagem-tabela'
+      dica.textContent = '↔ arraste a tabela pro lado pra ver as outras colunas'
+      el.parentNode.insertBefore(dica, el)
+    } else if (!precisaRolar && jaTemDica) {
+      el.previousElementSibling.remove()
+    }
+  })
+}
+new MutationObserver(() => avisarRolagemTabelas()).observe(document.body, { childList: true, subtree: true })
+window.addEventListener('resize', avisarRolagemTabelas)
+window.addEventListener('orientationchange', avisarRolagemTabelas)
 
 // botão "Instalar app" — só aparece quando o navegador (Chrome/Android,
 // Edge etc.) sinaliza que dá pra instalar. No iPhone/Safari não existe
