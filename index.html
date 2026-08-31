@@ -31281,7 +31281,7 @@ async function paginaDpSeguranca () {
 
   const hoje = hojeISO()
   const [{ count: totalPessoas }, { data: docs }, { data: exames }, { count: totalOcorrAbertas }] = await Promise.all([
-    db.from('pessoa').select('id', { count: 'exact', head: true }).or('data_admissao.not.is.null,cpf.not.is.null'),
+    db.from('pessoa').select('id', { count: 'exact', head: true }).or('data_admissao.not.is.null,cpf.not.is.null,tipo.eq.INTERNO'),
     db.from('dp_documento').select('data_validade').lt('data_validade', hoje),
     db.from('dp_exame').select('data_validade').lt('data_validade', hoje).not('status', 'in', '(ENCAMINHADO,PAGO_AGUARDANDO_EXAME)'),
     db.from('dp_ocorrencia').select('id', { count: 'exact', head: true }).neq('status', 'ENCERRADA')
@@ -31323,46 +31323,64 @@ function abrirDp (sub, editavel) {
 
 // ----- Funcionários -----
 async function dpFuncionarios (alvo, editavel) {
-  const [{ data: pessoas }, { data: comCpf }, { data: empresas }, { data: setores }] = await Promise.all([
-    db.from('pessoa').select('id,nome,cpf,rg,telefone,email,cargo,data_admissao,data_nascimento,status,foto_url,setor_id,empresa_id,estado_civil,banco,agencia,conta,chave_pix,setor:setor_id(nome),empresa:empresa_id(nome)').not('data_admissao', 'is', null).order('nome'),
-    // quem não tem data_admissao pode não ser "funcionário CLT" (ex: fornecedor cadastrado por engano) —
-    // mas se a pessoa tem cpf preenchido, também é considerado funcionário de DP
-    db.from('pessoa').select('id,nome,cpf,rg,telefone,email,cargo,data_admissao,data_nascimento,status,foto_url,setor_id,empresa_id,estado_civil,banco,agencia,conta,chave_pix,setor:setor_id(nome),empresa:empresa_id(nome)').is('data_admissao', null).not('cpf', 'is', null).order('nome'),
+  // "funcionário de DP" = tem data de admissão, tem CPF cadastrado, ou é
+  // marcado como pessoa INTERNA (equipe própria) — assim ninguém que seja
+  // CLT fica de fora só porque esqueceram de preencher admissão/CPF
+  const [{ data: pessoas }, { data: empresas }, { data: setores }] = await Promise.all([
+    db.from('pessoa').select('id,nome,cpf,rg,telefone,email,cargo,data_admissao,data_nascimento,status,foto_url,setor_id,empresa_id,estado_civil,banco,agencia,conta,chave_pix,tipo,setor:setor_id(nome),empresa:empresa_id(nome)')
+      .or('data_admissao.not.is.null,cpf.not.is.null,tipo.eq.INTERNO').order('nome'),
     db.from('empresa').select('id,nome').eq('status', 'ATIVO').order('nome'),
     db.from('setor').select('id,nome').order('nome')
   ])
-  const lista = [...(pessoas || []), ...(comCpf || [])]
+  const lista = pessoas || []
   window.__DP_PESSOAS = lista
   window.__DP_EMPRESAS = empresas || []
   window.__DP_SETORES = setores || []
+  const semEmpresa = lista.filter(p => !p.empresa_id).length
 
   alvo.innerHTML = `
+    <div class="resumo-topo" style="margin-bottom:14px;">
+      ${(empresas || []).map(e => kpiDp('🏢', e.nome, lista.filter(p => p.empresa_id === e.id).length)).join('')}
+      ${kpiDp('❓', 'Sem empresa definida', semEmpresa, semEmpresa ? 'alerta' : '')}
+    </div>
     <div class="filtros" style="margin-bottom:14px;">
       <input id="dp-busca" placeholder="buscar por nome, CPF, cargo..." style="flex:1;min-width:220px;">
+      <select id="dp-filtro-empresa"><option value="">Todas as empresas</option>
+        ${(empresas || []).map(e => `<option value="${e.id}">${esc(e.nome)}</option>`).join('')}
+        <option value="SEM_EMPRESA">Sem empresa definida</option>
+      </select>
       ${editavel ? `<button class="btn" id="dp-novo-func">+ Novo funcionário</button>` : ''}
     </div>
     <div class="panel" style="padding:0;"><div class="tabela-scroll">
-      <table><thead><tr><th></th><th>Nome</th><th>CPF</th><th>Cargo</th><th>Setor</th><th>Admissão</th><th>Status</th><th></th></tr></thead>
+      <table><thead><tr><th></th><th>Nome</th><th>CPF</th><th>Cargo</th><th>Empresa</th><th>Setor</th><th>Admissão</th><th>Status</th><th></th></tr></thead>
       <tbody id="dp-func-corpo"></tbody></table>
     </div></div>`
 
-  const render = filtro => {
-    const termo = filtro.trim().toLowerCase()
-    const filtrada = !termo ? lista : lista.filter(p => [p.nome, p.cpf, p.cargo].some(c => (c || '').toLowerCase().includes(termo)))
+  const render = () => {
+    const termo = $('#dp-busca').value.trim().toLowerCase()
+    const empresaFiltro = $('#dp-filtro-empresa').value
+    const filtrada = lista.filter(p => {
+      const bateBusca = !termo || [p.nome, p.cpf, p.cargo].some(c => (c || '').toLowerCase().includes(termo))
+      const bateEmpresa = !empresaFiltro || (empresaFiltro === 'SEM_EMPRESA' ? !p.empresa_id : p.empresa_id === empresaFiltro)
+      return bateBusca && bateEmpresa
+    })
     $('#dp-func-corpo').innerHTML = filtrada.map(p => `<tr>
         <td>${p.foto_url ? `<img src="${esc(p.foto_url)}" style="width:34px;height:34px;border-radius:8px;object-fit:cover;">` : `<div style="width:34px;height:34px;border-radius:8px;background:var(--surface2);"></div>`}</td>
         <td><b>${esc(p.nome)}</b></td><td class="texto-dim2">${esc(p.cpf ?? '—')}</td>
-        <td class="texto-dim">${esc(p.cargo ?? '—')}</td><td class="texto-dim2">${esc(p.setor?.nome ?? '—')}</td>
+        <td class="texto-dim">${esc(p.cargo ?? '—')}</td>
+        <td class="texto-dim2">${p.empresa?.nome ? esc(p.empresa.nome) : '<span style="color:var(--warn-text);">— definir</span>'}</td>
+        <td class="texto-dim2">${esc(p.setor?.nome ?? '—')}</td>
         <td class="texto-dim2">${p.data_admissao ? fmtData(p.data_admissao) : '—'}</td>
         <td>${p.status === 'ATIVO' ? '<span class="badge-bom">ativo</span>' : `<span class="chip">${esc(p.status ?? '—')}</span>`}</td>
         <td><button class="btn-secundario mini" data-ver-pessoa="${p.id}">ver ficha</button></td>
-      </tr>`).join('') || `<tr><td colspan="8" class="vazio">Nenhum funcionário encontrado.</td></tr>`
+      </tr>`).join('') || `<tr><td colspan="9" class="vazio">Nenhum funcionário encontrado.</td></tr>`
     $('#dp-func-corpo').querySelectorAll('[data-ver-pessoa]').forEach(b => {
       b.onclick = () => dpFichaPessoa(lista.find(p => p.id === b.dataset.verPessoa), editavel)
     })
   }
-  render('')
-  $('#dp-busca').oninput = () => render($('#dp-busca').value)
+  render()
+  $('#dp-busca').oninput = render
+  $('#dp-filtro-empresa').onchange = render
   if (editavel) $('#dp-novo-func').onclick = () => formDpFuncionario(null, () => dpFuncionarios(alvo, editavel))
 }
 
