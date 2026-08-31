@@ -24411,14 +24411,15 @@ async function paginaFrota () {
   const area = areaLivre()
   area.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
-  const [{ data: pessoas }, { data: processos }, { data: fornecedores }] = await Promise.all([
+  const [{ data: pessoas }, { data: processos }, { data: fornecedores }, { data: setores }] = await Promise.all([
     db.from('pessoa').select('id,nome').eq('status', 'ATIVO').order('nome'),
     db.from('juridico_processo').select('id,assunto,parte_contraria').order('assunto'),
-    db.from('fornecedor').select('id,nome').eq('status', 'ATIVO').order('nome')
+    db.from('fornecedor').select('id,nome').eq('status', 'ATIVO').order('nome'),
+    db.from('setor').select('id,nome').order('nome')
   ])
-  FROTA_CACHE = { pessoas: pessoas || [], processos: processos || [], fornecedores: fornecedores || [] }
+  FROTA_CACHE = { pessoas: pessoas || [], processos: processos || [], fornecedores: fornecedores || [], setores: setores || [] }
 
-  const abas = [['painel', 'Painel'], ['itens', 'Itens'], ['transicao', 'Veículos em transição'], ['acoes', 'Ações'], ['calc', 'Calculadora de ágio/deságio'], ['zapay', 'Débitos (Zapay)']]
+  const abas = [['painel', 'Painel'], ['itens', 'Itens'], ['equipamentos', 'Equipamentos'], ['transicao', 'Veículos em transição'], ['acoes', 'Ações'], ['calc', 'Calculadora de ágio/deságio'], ['zapay', 'Débitos (Zapay)']]
   area.innerHTML = `
     <div class="subabas">
       ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
@@ -24439,6 +24440,7 @@ function abrirFrota (sub, editavel) {
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
   if (sub === 'painel') frotaPainel(alvo, editavel)
   if (sub === 'itens') frotaItens(alvo, editavel)
+  if (sub === 'equipamentos') frotaEquipamentos(alvo, editavel)
   if (sub === 'acoes') frotaAcoes(alvo, editavel)
   if (sub === 'calc') frotaCalculadora(alvo)
   if (sub === 'zapay') frotaZapay(alvo, editavel)
@@ -24799,7 +24801,8 @@ async function frotaItens (alvo, editavel) {
   const [{ data, error }, { data: custosDoc }, { data: custosManut }, custosComb, custosPecas] = await Promise.all([
     db.from('veiculo').select(`id,placa,descricao,eh_proprio,ano_modelo,renavam,chassi,contraparte,
       valor_entrada,data_entrada,status_frota,valor_venda,data_venda,comprador,processo_id,observacoes,responsavel_id,
-      ipva_vencimento, responsavel:responsavel_id ( nome )`).order('data_entrada', { ascending: false, nullsFirst: false }),
+      ipva_vencimento, setor_id, condutor_principal_id, responsavel:responsavel_id ( nome ),
+      setor:setor_id ( nome ), condutor:condutor_principal_id ( nome )`).order('data_entrada', { ascending: false, nullsFirst: false }),
     db.from('veiculo_custo').select('veiculo_id,valor'),
     db.from('ordem_servico').select('veiculo_id,valor_total').not('veiculo_id', 'is', null),
     custosCombustivelPorVeiculo(),
@@ -24890,6 +24893,7 @@ async function frotaItens (alvo, editavel) {
                 <div>
                   <div style="font-family:var(--serif);font-size:15px;">${esc(i.descricao)}</div>
                   <div class="texto-dim2" style="font-size:11.5px;">${esc(i.ano_modelo || '')}${i.placa ? (i.ano_modelo ? ' · ' : '') + esc(i.placa) : ''}</div>
+                  ${i.setor?.nome || i.condutor?.nome ? `<div class="texto-dim2" style="font-size:11px;margin-top:2px;">${i.setor?.nome ? '🏷️ ' + esc(i.setor.nome) : ''}${i.setor?.nome && i.condutor?.nome ? ' · ' : ''}${i.condutor?.nome ? '👤 ' + esc(i.condutor.nome) : ''}</div>` : ''}
                 </div>
                 ${i.status_frota === 'VENDIDO' ? '<span class="badge-bom">vendido</span>'
                   : i.status_frota === 'DISPONIVEL_VENDA' ? '<span class="badge-alerta">à venda</span>'
@@ -24935,7 +24939,7 @@ async function frotaItens (alvo, editavel) {
       <table><thead><tr>
         <th>Item</th><th>Tipo</th><th>Origem / contraparte</th>
         <th class="num">Valor recebido</th><th>Status</th><th class="num">Valor final</th><th>Resultado</th>
-        <th>Vínculo jurídico</th><th>Responsável</th>${editavel ? '<th></th>' : ''}
+        <th>Vínculo jurídico</th><th>Responsável</th><th>Setor</th><th>Condutor principal</th>${editavel ? '<th></th>' : ''}
       </tr></thead><tbody>
       ${lista.map(i => {
         const proc = FROTA_CACHE.processos.find(p => p.id === i.processo_id)
@@ -24955,12 +24959,14 @@ async function frotaItens (alvo, editavel) {
           ${r.custos ? `<div class="texto-dim2" style="font-size:10.5px;margin-top:2px;">líquido R$ ${fmtNum(r.liquido)}</div>` : ''}` : '<span class="texto-dim2">—</span>'}</td>
         <td class="texto-dim" style="font-size:12px;">${proc ? esc(nomeProcessoFrota(proc)) : '<span class="texto-dim2">—</span>'}</td>
         <td class="texto-dim">${esc(i.responsavel?.nome || '—')}</td>
+        <td class="texto-dim">${esc(i.setor?.nome || '—')}</td>
+        <td class="texto-dim">${esc(i.condutor?.nome || '—')}</td>
         ${editavel ? `<td style="text-align:right;white-space:nowrap;">
           <button class="btn-secundario mini" data-custos="${i.id}">custos</button>
           <button class="btn-secundario mini" data-editar="${i.id}">editar</button>
           ${i.status_frota !== 'VENDIDO' ? `<button class="btn-secundario mini" data-vender="${i.id}">vender</button>` : ''}
         </td>` : ''}
-      </tr>`}).join('') || `<tr><td colspan="${editavel ? 10 : 9}" class="vazio">Nenhum item cadastrado ainda.</td></tr>`}
+      </tr>`}).join('') || `<tr><td colspan="${editavel ? 12 : 11}" class="vazio">Nenhum item cadastrado ainda.</td></tr>`}
       </tbody></table>
     </div></div>`
 
@@ -25011,6 +25017,13 @@ function formFrotaItem (item) {
           <input id="fr-data-ent" type="date" value="${item?.data_entrada ?? new Date().toISOString().slice(0, 10)}"></div>
         <div class="campo"><label>Responsável</label>
           <select id="fr-resp">${opcoesFin(FROTA_CACHE.pessoas, 'sem responsável', item?.responsavel_id)}</select></div>
+        <div class="campo"><label>Condutor principal</label>
+          <select id="fr-condutor">${opcoesFin(FROTA_CACHE.pessoas, 'sem condutor definido', item?.condutor_principal_id)}</select></div>
+        <div class="campo"><label>Setor responsável</label>
+          <div style="display:flex;gap:6px;">
+            <select id="fr-setor" style="flex:1;">${opcoesFin(FROTA_CACHE.setores, 'sem setor definido', item?.setor_id)}</select>
+            <button type="button" class="btn-secundario mini" id="fr-setor-novo" title="Cadastrar novo setor">+ novo</button>
+          </div></div>
         <div class="campo" style="grid-column:1/-1;"><label>Vínculo jurídico (dação em pagamento, cobrança...)</label>
           <select id="fr-processo">${opcoesProcesso}</select></div>
         <div class="campo"><label>Status</label>
@@ -25064,6 +25077,16 @@ function formFrotaItem (item) {
     el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
   }
 
+  q('#fr-setor-novo').onclick = async () => {
+    const nome = prompt('Nome do novo setor responsável:')
+    if (!nome || !nome.trim()) return
+    const { data: novo, error } = await db.from('setor').insert({ nome: nome.trim() }).select().single()
+    if (error) { aviso(error.message); return }
+    FROTA_CACHE.setores.push(novo)
+    FROTA_CACHE.setores.sort((a, b) => a.nome.localeCompare(b.nome))
+    q('#fr-setor').innerHTML = opcoesFin(FROTA_CACHE.setores, 'sem setor definido', novo.id)
+  }
+
   q('#fr-salvar').onclick = async () => {
     const desc = q('#fr-desc').value.trim()
     if (!desc) { aviso('Escreva a descrição do item.'); return }
@@ -25080,6 +25103,8 @@ function formFrotaItem (item) {
       valor_entrada: q('#fr-valor-ent').value ? Number(q('#fr-valor-ent').value) : null,
       data_entrada: q('#fr-data-ent').value || null,
       responsavel_id: q('#fr-resp').value || null,
+      condutor_principal_id: q('#fr-condutor').value || null,
+      setor_id: q('#fr-setor').value || null,
       processo_id: q('#fr-processo').value || null,
       status_frota: q('#fr-status').value,
       observacoes: q('#fr-obs').value.trim() || null
@@ -25305,6 +25330,133 @@ function formCustosVeiculo (item, custosManut, editavel, custosComb, custosPecas
 }
 
 // ----- Frota › Ações (acompanhamento com lembrar-me) -----
+// ----- Equipamentos (máquinas): ficha técnica separada dos veículos com
+// placa — usa a mesma tabela `equipamento` que Combustível/Manutenção já
+// usam pra apontar destino/ativo, só que agora com marca/modelo/chassi
+// ou série/cor/ano/linha, e setor responsável -----
+async function frotaEquipamentos (alvo, editavel) {
+  const { data, error } = await db.from('equipamento')
+    .select('id,tag,descricao,marca,modelo,chassi_serie,cor,ano,linha,status,setor_id,setor:setor_id(nome)')
+    .order('tag')
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  const lista = data || []
+
+  alvo.innerHTML = `
+    <div class="cabeca-secao" style="margin-bottom:14px;">
+      <p class="texto-dim2" style="font-size:12.5px;margin:0;">Máquinas e equipamentos — inclusive os que hoje só existem como
+        destino de combustível/manutenção. Preencha a ficha técnica conforme for conferindo cada um.</p>
+      ${editavel ? `<button class="btn" id="eq-novo">+ Novo equipamento</button>` : ''}
+    </div>
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>Tag</th><th>Descrição</th><th>Marca / Modelo</th><th>Chassi / Série</th>
+        <th>Cor</th><th>Ano</th><th>Linha</th><th>Setor</th><th>Status</th>${editavel ? '<th></th>' : ''}
+      </tr></thead><tbody>
+      ${lista.map(e => `<tr>
+        <td><b>${esc(e.tag)}</b></td>
+        <td class="texto-dim">${esc(e.descricao || '—')}</td>
+        <td class="texto-dim">${[e.marca, e.modelo].filter(Boolean).map(esc).join(' / ') || '—'}</td>
+        <td class="texto-dim" style="font-size:11.5px;">${esc(e.chassi_serie || '—')}</td>
+        <td class="texto-dim">${esc(e.cor || '—')}</td>
+        <td class="texto-dim">${esc(e.ano || '—')}</td>
+        <td>${e.linha ? `<span class="chip">${e.linha === 'AMARELA' ? 'Linha amarela' : e.linha === 'IMPLEMENTO' ? 'Implemento' : esc(e.linha)}</span>` : '<span class="texto-dim2">—</span>'}</td>
+        <td class="texto-dim">${esc(e.setor?.nome || '—')}</td>
+        <td>${e.status === 'ATIVO' ? '<span class="badge-bom">ativo</span>' : '<span class="chip">inativo</span>'}</td>
+        ${editavel ? `<td style="text-align:right;"><button class="btn-secundario mini" data-editar-eq="${e.id}">editar</button></td>` : ''}
+      </tr>`).join('') || `<tr><td colspan="${editavel ? 10 : 9}" class="vazio">Nenhum equipamento cadastrado ainda.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+
+  if (editavel) {
+    $('#eq-novo').onclick = () => formEquipamentoItem(null, alvo, editavel)
+    alvo.querySelectorAll('[data-editar-eq]').forEach(b => {
+      b.onclick = () => formEquipamentoItem(lista.find(x => x.id === b.dataset.editarEq), alvo, editavel)
+    })
+  }
+}
+
+function formEquipamentoItem (item, alvoLista, editavel) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  const v = k => esc(item?.[k] ?? '')
+  fundo.innerHTML = `
+    <div class="modal" style="max-width:640px;">
+      <h3>${item ? 'Editar equipamento' : 'Novo equipamento'}</h3>
+      <div class="form-grade">
+        <div class="campo"><label>Tag *</label><input id="eq-tag" value="${v('tag')}" placeholder="Ex.: PC 017"></div>
+        <div class="campo"><label>Descrição</label><input id="eq-desc" value="${v('descricao')}" placeholder="Ex.: Pá Carregadeira 017"></div>
+        <div class="campo"><label>Marca</label><input id="eq-marca" value="${v('marca')}"></div>
+        <div class="campo"><label>Modelo</label><input id="eq-modelo" value="${v('modelo')}"></div>
+        <div class="campo"><label>Chassi / Série</label><input id="eq-chassi" value="${v('chassi_serie')}"></div>
+        <div class="campo"><label>Cor</label><input id="eq-cor" value="${v('cor')}"></div>
+        <div class="campo"><label>Ano</label><input id="eq-ano" value="${v('ano')}" placeholder="Ex.: 2015"></div>
+        <div class="campo"><label>Linha</label>
+          <select id="eq-linha">
+            <option value="" ${!item?.linha ? 'selected' : ''}>—</option>
+            <option value="AMARELA" ${item?.linha === 'AMARELA' ? 'selected' : ''}>Linha amarela</option>
+            <option value="IMPLEMENTO" ${item?.linha === 'IMPLEMENTO' ? 'selected' : ''}>Implemento</option>
+          </select></div>
+        <div class="campo"><label>Setor responsável</label>
+          <div style="display:flex;gap:6px;">
+            <select id="eq-setor" style="flex:1;">${opcoesFin(FROTA_CACHE.setores, 'sem setor definido', item?.setor_id)}</select>
+            <button type="button" class="btn-secundario mini" id="eq-setor-novo" title="Cadastrar novo setor">+ novo</button>
+          </div></div>
+        <div class="campo"><label>Status</label>
+          <select id="eq-status">
+            <option value="ATIVO" ${!item || item.status === 'ATIVO' ? 'selected' : ''}>Ativo</option>
+            <option value="INATIVO" ${item?.status === 'INATIVO' ? 'selected' : ''}>Inativo</option>
+          </select></div>
+      </div>
+      <div class="acoes" style="margin-top:14px;">
+        <button class="btn" id="eq-salvar">Salvar</button>
+        <button class="btn-secundario" id="eq-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="eq-recado"></div>
+    </div>`
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#eq-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  const aviso = t => {
+    const el = q('#eq-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  q('#eq-setor-novo').onclick = async () => {
+    const nome = prompt('Nome do novo setor responsável:')
+    if (!nome || !nome.trim()) return
+    const { data: novo, error } = await db.from('setor').insert({ nome: nome.trim() }).select().single()
+    if (error) { aviso(error.message); return }
+    FROTA_CACHE.setores.push(novo)
+    FROTA_CACHE.setores.sort((a, b) => a.nome.localeCompare(b.nome))
+    q('#eq-setor').innerHTML = opcoesFin(FROTA_CACHE.setores, 'sem setor definido', novo.id)
+  }
+
+  q('#eq-salvar').onclick = async () => {
+    const tag = q('#eq-tag').value.trim()
+    if (!tag) { aviso('Preenche a tag do equipamento.'); return }
+    const corpo = {
+      tag,
+      descricao: q('#eq-desc').value.trim() || null,
+      marca: q('#eq-marca').value.trim() || null,
+      modelo: q('#eq-modelo').value.trim() || null,
+      chassi_serie: q('#eq-chassi').value.trim() || null,
+      cor: q('#eq-cor').value.trim() || null,
+      ano: q('#eq-ano').value.trim() || null,
+      linha: q('#eq-linha').value || null,
+      setor_id: q('#eq-setor').value || null,
+      status: q('#eq-status').value
+    }
+    let error
+    if (item) { ({ error } = await db.from('equipamento').update(corpo).eq('id', item.id)) }
+    else { ({ error } = await db.from('equipamento').insert(corpo)) }
+    if (error) { aviso(error.message); return }
+    fechar()
+    frotaEquipamentos(alvoLista, editavel)
+  }
+}
+
 async function frotaAcoes (alvo, editavel) {
   const [{ data: acoes, error }, { data: veiculos }] = await Promise.all([
     db.from('frota_acao').select(`id,categoria,descricao,sla_prazo,lembrete_data,lembrete_visto,status,ordem_servico_id,
