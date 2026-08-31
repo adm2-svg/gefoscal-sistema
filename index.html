@@ -1418,7 +1418,6 @@ const PAPEIS_TOTAIS = ['ADMIN', 'DIRETORIA']   // enxergam tudo, por tem_modulo(
 // calendário+planner, secretária, resumo de solicitações/projetos) só pra
 // ele; todo mundo continua vendo a Visão Geral padrão de sempre.
 const PESSOA_PAINEL_DIRETOR = 'b22d848d-8b11-4cb7-b6c8-4dc8f2ca8c62'
-const PESSOA_PAINEL_MIKAEL = '69f85bf3-f405-4340-ab9f-8dd7133828a7' // responde por Jurídico + Frota de Escritório/Comercial/Sócios (ver pessoa_frota_setor)
 
 let PERFIL = {
   userId: '', email: '', nome: '',
@@ -2704,185 +2703,6 @@ async function blocoSecretaria (area) {
 }
 
 // ---------------------------------------------------------------
-// Painel de pendências do Mikael (ou de quem mais vier a acumular esse
-// papel) — Jurídico (processos onde é responsável interno) + Frota e
-// Manutenção dos setores que ele cobre (tabela pessoa_frota_setor,
-// editável sem mexer em código). Puramente informativo, cada card leva
-// pro módulo de verdade — quem grava algo é lá, ou pela secretária.
-// ---------------------------------------------------------------
-async function painelPendenciasJuridicoFrota (area) {
-  const bloco = document.createElement('div')
-  bloco.className = 'panel'
-  bloco.style.cssText = 'padding:18px;margin-bottom:16px;'
-  bloco.innerHTML = `<p class="texto-dim2">carregando pendências...</p>`
-  area.appendChild(bloco)
-
-  const { data: linhasSetor } = await db.from('pessoa_frota_setor').select('setor_id,setor:setor_id(nome)').eq('pessoa_id', PERFIL.pessoaId)
-  const setorIds = (linhasSetor || []).map(l => l.setor_id)
-  const nomesSetores = (linhasSetor || []).map(l => l.setor?.nome).filter(Boolean).join(', ')
-
-  const hoje = hojeISO()
-  const daqui30 = new Date(); daqui30.setDate(daqui30.getDate() + 30)
-  const daqui30ISO = daqui30.toISOString().slice(0, 10)
-
-  const [{ data: processos }, { data: veiculos }, { data: os }] = await Promise.all([
-    db.from('juridico_processo').select('id,assunto,tipo,proxima_data,status')
-      .eq('responsavel_id', PERFIL.pessoaId).eq('status', 'ATIVO')
-      .order('proxima_data', { ascending: true, nullsFirst: false }).limit(8),
-    setorIds.length
-      ? db.from('veiculo').select('id,placa,descricao,ipva_vencimento').in('setor_id', setorIds)
-          .not('ipva_vencimento', 'is', null).lte('ipva_vencimento', daqui30ISO).order('ipva_vencimento').limit(8)
-      : Promise.resolve({ data: [] }),
-    setorIds.length
-      ? db.from('veiculo').select('id').in('setor_id', setorIds).then(async ({ data: vs }) => {
-          const ids = (vs || []).map(v => v.id)
-          if (!ids.length) return { data: [] }
-          return db.from('ordem_servico').select('id,codigo,descricao_problema,urgencia,status,data_limite,veiculo:veiculo_id(placa,descricao)')
-            .in('veiculo_id', ids).not('status', 'in', '(CONCLUIDA,CANCELADA)')
-            .order('data_limite', { ascending: true, nullsFirst: false }).limit(8)
-        })
-      : Promise.resolve({ data: [] })
-  ])
-
-  const cartaoLista = (titulo, subtitulo, itens, vazio, irParaChave) => `
-    <div class="panel" style="padding:16px;">
-      <div class="cabeca-secao">
-        <div><h3 style="font-family:var(--serif);font-size:16px;">${titulo}</h3>
-          ${subtitulo ? `<p class="texto-dim2" style="font-size:11px;margin:2px 0 0;">${esc(subtitulo)}</p>` : ''}</div>
-        <button class="btn-secundario mini" data-ir="${irParaChave}">abrir</button>
-      </div>
-      ${itens.length ? itens.join('') : `<p class="texto-dim2" style="font-size:12.5px;padding:6px 0;">${vazio}</p>`}
-    </div>`
-
-  const diasAte = data => Math.ceil((new Date(data + 'T00:00:00') - new Date(hoje + 'T00:00:00')) / 86400000)
-
-  const itensProcessos = (processos || []).map(p => {
-    const dias = p.proxima_data ? diasAte(p.proxima_data) : null
-    return `<div class="passo">
-      <span class="quando">${p.proxima_data ? fmtData(p.proxima_data) : '—'}</span>
-      <span><b>${esc(p.assunto)}</b>${dias !== null && dias <= 7 ? ` <span class="${dias < 0 ? 'badge-alerta' : 'chip'}" style="font-size:10px;">${dias < 0 ? `atrasado ${Math.abs(dias)}d` : dias === 0 ? 'hoje' : `${dias}d`}</span>` : ''}</span>
-    </div>`
-  })
-
-  const itensVeiculos = (veiculos || []).map(v => {
-    const dias = diasAte(v.ipva_vencimento)
-    return `<div class="passo">
-      <span class="quando">${fmtData(v.ipva_vencimento)}</span>
-      <span><b>${esc(v.descricao || v.placa)}</b> ${v.placa ? `<span class="texto-dim2" style="font-size:11px;">${esc(v.placa)}</span>` : ''}
-        <span class="${dias < 0 ? 'badge-alerta' : 'chip'}" style="font-size:10px;">${dias < 0 ? `vencido há ${Math.abs(dias)}d` : dias === 0 ? 'vence hoje' : `vence em ${dias}d`}</span></span>
-    </div>`
-  })
-
-  const itensOs = (Array.isArray(os) ? os : []).map(o => `<div class="passo">
-    <span class="quando">${o.data_limite ? fmtData(o.data_limite) : '—'}</span>
-    <span><b>${esc(o.veiculo?.descricao || o.veiculo?.placa || '—')}</b> — ${esc(o.descricao_problema || '')}
-      <span class="chip" style="font-size:10px;">${esc((o.status || '').replaceAll('_', ' ').toLowerCase())}</span></span>
-  </div>`)
-
-  bloco.innerHTML = `
-    <div class="cabeca-secao" style="margin-bottom:10px;">
-      <h3 style="font-family:var(--serif);font-size:17px;">Pendências — Jurídico & Frota</h3>
-      ${nomesSetores ? `<span class="texto-dim2" style="font-size:11.5px;">setores: ${esc(nomesSetores)}</span>` : ''}
-    </div>
-    <div class="form-grade" style="grid-template-columns:repeat(3,1fr);gap:14px;">
-      ${cartaoLista('Prazos jurídicos', 'processos ativos sob sua responsabilidade', itensProcessos, 'Nenhum prazo próximo.', 'juridico')}
-      ${cartaoLista('Documentação de frota', 'IPVA/licenciamento vencendo em 30 dias', itensVeiculos, 'Nada vencendo nos próximos 30 dias.', 'frota')}
-      ${cartaoLista('Manutenções pendentes', 'ordens de serviço em aberto', itensOs, 'Nenhuma manutenção pendente.', 'frota')}
-    </div>`
-  bloco.querySelectorAll('[data-ir]').forEach(b => { b.onclick = () => irPara(b.dataset.ir) })
-}
-
-// ---------------------------------------------------------------
-// Secretária do Mikael (secretaria-juridico-frota) — mesmo molde de
-// segurança da secretaria-vendedor: só ferramentas fixas, escopo
-// travado no processo/veículo da própria pessoa, escrita só com
-// confirmação.
-// ---------------------------------------------------------------
-async function blocoSecretariaJuridicoFrota (area) {
-  const bloco = document.createElement('div')
-  bloco.className = 'panel'
-  bloco.style.cssText = 'padding:18px;margin-bottom:16px;'
-  area.appendChild(bloco)
-  await montarSecretariaJuridicoFrota(bloco)
-}
-
-async function montarSecretariaJuridicoFrota (container) {
-  container.innerHTML = `
-    <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Secretária</h3></div>
-    <p class="texto-dim2" style="font-size:12px;margin:-6px 0 14px;">
-      Fala ou escreve sobre seus processos, os veículos dos seus setores e as manutenções deles.
-      Ela nunca grava nada sem você confirmar, e não mexe em outra área do sistema.</p>
-    <div id="sjf-chat" class="sec-chat"></div>
-    <div class="linha-add">
-      <input id="sjf-pergunta" placeholder="Ex.: o que vence essa semana? abre uma OS pra Hilux RCE7D80, freio fazendo barulho...">
-      <button class="btn mini" id="sjf-enviar">Enviar</button>
-    </div>`
-
-  let historico = []
-  const chat = $('#sjf-chat')
-  const renderMsg = (autor, texto) => {
-    const div = document.createElement('div')
-    div.className = 'sec-msg ' + (autor === 'user' ? 'sec-user' : 'sec-ia')
-    div.textContent = texto
-    chat.appendChild(div)
-    chat.scrollTop = chat.scrollHeight
-    return div
-  }
-  const renderConfirmacao = ({ acao_id, descricao }) => {
-    const div = document.createElement('div')
-    div.className = 'sec-msg sec-ia'
-    div.style.maxWidth = '94%'
-    div.innerHTML = `
-      <b>Confirma essa ação?</b>
-      <p style="margin:6px 0;">${esc(descricao)}</p>
-      <div style="display:flex;gap:8px;">
-        <button class="btn mini" data-confirmar="${acao_id}">Confirmar</button>
-        <button class="btn-secundario mini" data-cancelar="1">Cancelar</button>
-      </div>`
-    chat.appendChild(div)
-    chat.scrollTop = chat.scrollHeight
-    div.querySelector('[data-confirmar]').onclick = async () => {
-      div.querySelectorAll('button').forEach(b => { b.disabled = true })
-      const { data, error } = await db.functions.invoke('secretaria-juridico-frota', { body: { confirmar_acao_id: acao_id } })
-      if (error || data?.erro) {
-        let detalhe = data?.erro || error?.message || 'Não consegui executar agora.'
-        if (error?.context?.json) { try { const c = await error.context.json(); detalhe = c?.erro || detalhe } catch {} }
-        renderMsg('assistant', detalhe)
-        return
-      }
-      renderMsg('assistant', data.texto)
-    }
-    div.querySelector('[data-cancelar]').onclick = () => { div.remove(); renderMsg('assistant', 'Ok, não fiz nada.') }
-  }
-  renderMsg('assistant', 'Oi! Pode perguntar sobre seus processos, os veículos dos seus setores ou as manutenções deles — ou pedir pra eu atualizar algo/abrir uma OS.')
-
-  const enviar = async () => {
-    const texto = $('#sjf-pergunta').value.trim()
-    if (!texto) return
-    renderMsg('user', texto)
-    $('#sjf-pergunta').value = ''
-    historico.push({ role: 'user', content: texto })
-    const carregando = renderMsg('assistant', '')
-    carregando.classList.add('sec-carregando')
-    carregando.textContent = 'Pensando...'
-    const { data, error } = await db.functions.invoke('secretaria-juridico-frota', { body: { mensagens: historico } })
-    carregando.remove()
-    if (error || data?.erro) {
-      let detalhe = data?.erro || error?.message || 'Não consegui responder agora.'
-      if (error?.context?.json) { try { const c = await error.context.json(); detalhe = c?.erro || detalhe } catch {} }
-      renderMsg('assistant', detalhe)
-      historico.pop()
-      return
-    }
-    if (data.tipo === 'confirmacao') { renderConfirmacao(data); return }
-    historico = data.mensagens || historico
-    renderMsg('assistant', data.texto)
-  }
-  $('#sjf-enviar').onclick = enviar
-  $('#sjf-pergunta').onkeydown = e => { if (e.key === 'Enter') enviar() }
-}
-
-// ---------------------------------------------------------------
 // Resumo de Solicitações (minhas compras + solicitações internas) e
 // resumo de Projetos (progresso/etapa/SLA), lado a lado.
 // ---------------------------------------------------------------
@@ -3010,17 +2830,6 @@ async function paginaVisaoGeral () {
     await painelExecutivoDiretor(area)
     await blocoCalendarioPlanner(area)
     await blocoSecretaria(area)
-    await blocoResumoSolicitacoesProjetos(area)
-    return
-  }
-
-  // Visão Geral personalizada do Mikael — Jurídico + Frota/Manutenção
-  // dos setores que ele cobre (ver pessoa_frota_setor)
-  if (PERFIL.pessoaId === PESSOA_PAINEL_MIKAEL) {
-    $('#subtitulo-pagina').textContent = ''
-    await painelPendenciasJuridicoFrota(area)
-    await blocoCalendarioPlanner(area)
-    await blocoSecretariaJuridicoFrota(area)
     await blocoResumoSolicitacoesProjetos(area)
     return
   }
@@ -8431,7 +8240,9 @@ function abrirCadastro (sub) {
   if (sub === 'clientes') cobClientes(alvo, podeEditar('cadastro') || podeEditar('cobranca'))
   if (sub === 'fornecedores') comprasFornecedores(alvo, podeEditar('cadastro') || podeEditar('compras'))
   if (sub === 'produtos') estProdutos(alvo, podeEditar('cadastro') || podeEditar('estoque'))
-  if (sub === 'funcionarios') dpFuncionarios(alvo, podeEditar('cadastro') || podeEditar('dp'))
+  // aqui em Cadastro mostra todo mundo da equipe interna (CLT, PJ, sócio...);
+  // só a aba de DP e Segurança filtra pra mostrar apenas quem é CLT
+  if (sub === 'funcionarios') dpFuncionarios(alvo, podeEditar('cadastro') || podeEditar('dp'), false)
 }
 
 // ---------------------------------------------------------------
@@ -26392,7 +26203,7 @@ let JUR_FILTRO_TIPO = ''
 async function juridicoProcessos (alvo, editavel) {
   const [{ data, error }, { data: itensFrota }] = await Promise.all([
     db.from('juridico_processo')
-      .select('id,numero_processo,orgao,assunto,tipo,parte_contraria,posicao,valor_causa,responsavel,responsavel_id,responsavel_pessoa:responsavel_id(nome),status,proxima_data,observacoes')
+      .select('id,numero_processo,orgao,assunto,tipo,parte_contraria,posicao,valor_causa,responsavel,status,proxima_data,observacoes')
       .order('proxima_data', { ascending: true, nullsFirst: false }),
     db.from('veiculo').select('id,descricao,processo_id').not('processo_id', 'is', null)
   ])
@@ -26424,7 +26235,7 @@ async function juridicoProcessos (alvo, editavel) {
         <td class="texto-dim">${esc(p.parte_contraria || '—')}</td>
         <td>${p.posicao ? `<span class="chip">${p.posicao === 'AUTORA' ? 'autora' : 'ré'}</span>` : '—'}</td>
         <td class="num">${p.valor_causa != null ? 'R$ ' + fmtNum(p.valor_causa) : '<span class="texto-dim2">—</span>'}</td>
-        <td class="texto-dim">${esc(p.responsavel_pessoa?.nome || p.responsavel || '—')}</td>
+        <td class="texto-dim">${esc(p.responsavel || '—')}</td>
         <td>${p.proxima_data ? fmtData(p.proxima_data) : '<span class="texto-dim2">—</span>'}</td>
         <td>${{ ATIVO: '<span class="badge-alerta">ativo</span>', SUSPENSO: '<span class="chip">suspenso</span>', ENCERRADO: '<span class="badge-bom">encerrado</span>' }[p.status] || esc(p.status)}</td>
         <td class="texto-dim" style="font-size:12px;">${vinc.length ? vinc.map(i => esc(i.descricao)).join(', ') : '<span class="texto-dim2">nenhum</span>'}</td>
@@ -26470,10 +26281,8 @@ function formProcesso (p) {
             <option value="RE" ${p?.posicao === 'RE' ? 'selected' : ''}>ré</option>
           </select></div>
         <div class="campo"><label>Valor da causa</label><input id="pr-valor" type="number" step="0.01" value="${p?.valor_causa ?? ''}"></div>
-        <div class="campo"><label>Responsável interno (acompanhamento)</label>
-          <select id="pr-resp-id">${opcoesFin(JUR_CACHE.pessoas, 'sem responsável definido', p?.responsavel_id)}</select></div>
-        <div class="campo"><label>Advogado / escritório externo (opcional)</label>
-          <input id="pr-resp" value="${v('responsavel')}" placeholder="se a causa for levada por fora"></div>
+        <div class="campo"><label>Responsável (advogado)</label>
+          <input id="pr-resp" value="${v('responsavel')}" placeholder="interno ou escritório externo"></div>
         <div class="campo"><label>Próxima data / prazo</label><input id="pr-prox" type="date" value="${p?.proxima_data ?? ''}"></div>
         <div class="campo"><label>Status</label>
           <select id="pr-status">
@@ -26516,7 +26325,6 @@ function formProcesso (p) {
       posicao: q('#pr-posicao').value || null,
       valor_causa: q('#pr-valor').value ? Number(q('#pr-valor').value) : null,
       responsavel: q('#pr-resp').value.trim() || null,
-      responsavel_id: q('#pr-resp-id').value || null,
       proxima_data: q('#pr-prox').value || null,
       status: q('#pr-status').value,
       empresa_id: q('#pr-empresa').value || null,
@@ -31509,33 +31317,48 @@ function kpiDp (icone, rot, val, classe = '') {
 function abrirDp (sub, editavel) {
   const alvo = $('#sub-dp')
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
-  if (sub === 'funcionarios') dpFuncionarios(alvo, editavel)
+  // aqui em DP e Segurança só mostra quem é CLT de verdade — quem for PJ,
+  // sócio, estagiário etc. (mesmo sendo equipe interna) fica só no
+  // Cadastro > Funcionários, que mostra todo mundo
+  if (sub === 'funcionarios') dpFuncionarios(alvo, editavel, true)
   if (sub === 'documentos') dpDocumentos(alvo, editavel)
   if (sub === 'exames') dpExames(alvo, editavel)
   if (sub === 'ocorrencias') dpOcorrencias(alvo, editavel)
 }
 
 // ----- Funcionários -----
-async function dpFuncionarios (alvo, editavel) {
-  // "funcionário de DP" = tem data de admissão, tem CPF cadastrado, ou é
-  // marcado como pessoa INTERNA (equipe própria) — assim ninguém que seja
-  // CLT fica de fora só porque esqueceram de preencher admissão/CPF
+const ROTULO_VINCULO = { CLT: 'CLT', PJ: 'PJ', SOCIO: 'Sócio(a)/Diretor(a)', ESTAGIARIO: 'Estagiário(a)', OUTRO: 'Outro' }
+
+// apenasClt=true (usado pela aba DP e Segurança) só mostra quem tem
+// vínculo CLT -- PJ, sócio, estagiário etc. (mesmo sendo equipe interna)
+// ficam de fora do DP e só aparecem no Cadastro > Funcionários (apenasClt=false),
+// que sempre mostra todo mundo
+async function dpFuncionarios (alvo, editavel, apenasClt = false) {
+  // "funcionário" (de um jeito ou de outro) = tem data de admissão, tem CPF
+  // cadastrado, ou é marcado como pessoa INTERNA (equipe própria) — assim
+  // ninguém da equipe fica de fora só porque esqueceram de preencher
+  // admissão/CPF. O recorte de quem é CLT de verdade é feito depois, pelo
+  // campo "vínculo".
   const [{ data: pessoas }, { data: empresas }, { data: setores }] = await Promise.all([
-    db.from('pessoa').select('id,nome,cpf,rg,telefone,email,cargo,data_admissao,data_nascimento,status,foto_url,setor_id,empresa_id,estado_civil,banco,agencia,conta,chave_pix,tipo,setor:setor_id(nome),empresa:empresa_id(nome)')
+    db.from('pessoa').select('id,nome,cpf,rg,telefone,email,cargo,data_admissao,data_nascimento,status,foto_url,setor_id,empresa_id,estado_civil,banco,agencia,conta,chave_pix,tipo,vinculo,setor:setor_id(nome),empresa:empresa_id(nome)')
       .or('data_admissao.not.is.null,cpf.not.is.null,tipo.eq.INTERNO').order('nome'),
     db.from('empresa').select('id,nome').eq('status', 'ATIVO').order('nome'),
     db.from('setor').select('id,nome').order('nome')
   ])
-  const lista = pessoas || []
+  const todos = pessoas || []
+  const lista = apenasClt ? todos.filter(p => p.vinculo === 'CLT') : todos
   window.__DP_PESSOAS = lista
   window.__DP_EMPRESAS = empresas || []
   window.__DP_SETORES = setores || []
   const semEmpresa = lista.filter(p => !p.empresa_id).length
+  const semVinculo = todos.filter(p => !p.vinculo).length
 
   alvo.innerHTML = `
+    ${apenasClt ? `<p class="texto-dim2" style="font-size:12px;margin:-4px 0 12px;">Mostrando só quem tem vínculo CLT. PJ, sócios, estagiários e outros aparecem em Cadastro &gt; Funcionários.</p>` : ''}
     <div class="resumo-topo" style="margin-bottom:14px;">
       ${(empresas || []).map(e => kpiDp('🏢', e.nome, lista.filter(p => p.empresa_id === e.id).length)).join('')}
       ${kpiDp('❓', 'Sem empresa definida', semEmpresa, semEmpresa ? 'alerta' : '')}
+      ${!apenasClt ? kpiDp('❓', 'Sem vínculo definido', semVinculo, semVinculo ? 'alerta' : '') : ''}
     </div>
     <div class="filtros" style="margin-bottom:14px;">
       <input id="dp-busca" placeholder="buscar por nome, CPF, cargo..." style="flex:1;min-width:220px;">
@@ -31546,7 +31369,7 @@ async function dpFuncionarios (alvo, editavel) {
       ${editavel ? `<button class="btn" id="dp-novo-func">+ Novo funcionário</button>` : ''}
     </div>
     <div class="panel" style="padding:0;"><div class="tabela-scroll">
-      <table><thead><tr><th></th><th>Nome</th><th>CPF</th><th>Cargo</th><th>Empresa</th><th>Setor</th><th>Admissão</th><th>Status</th><th></th></tr></thead>
+      <table><thead><tr><th></th><th>Nome</th><th>CPF</th><th>Cargo</th><th>Empresa</th><th>Setor</th>${!apenasClt ? '<th>Vínculo</th>' : ''}<th>Admissão</th><th>Status</th><th></th></tr></thead>
       <tbody id="dp-func-corpo"></tbody></table>
     </div></div>`
 
@@ -31564,10 +31387,11 @@ async function dpFuncionarios (alvo, editavel) {
         <td class="texto-dim">${esc(p.cargo ?? '—')}</td>
         <td class="texto-dim2">${p.empresa?.nome ? esc(p.empresa.nome) : '<span style="color:var(--warn-text);">— definir</span>'}</td>
         <td class="texto-dim2">${esc(p.setor?.nome ?? '—')}</td>
+        ${!apenasClt ? `<td class="texto-dim2">${p.vinculo ? esc(ROTULO_VINCULO[p.vinculo] ?? p.vinculo) : '<span style="color:var(--warn-text);">— definir</span>'}</td>` : ''}
         <td class="texto-dim2">${p.data_admissao ? fmtData(p.data_admissao) : '—'}</td>
         <td>${p.status === 'ATIVO' ? '<span class="badge-bom">ativo</span>' : `<span class="chip">${esc(p.status ?? '—')}</span>`}</td>
         <td><button class="btn-secundario mini" data-ver-pessoa="${p.id}">ver ficha</button></td>
-      </tr>`).join('') || `<tr><td colspan="9" class="vazio">Nenhum funcionário encontrado.</td></tr>`
+      </tr>`).join('') || `<tr><td colspan="${apenasClt ? 8 : 9}" class="vazio">Nenhum funcionário encontrado.</td></tr>`
     $('#dp-func-corpo').querySelectorAll('[data-ver-pessoa]').forEach(b => {
       b.onclick = () => dpFichaPessoa(lista.find(p => p.id === b.dataset.verPessoa), editavel)
     })
@@ -31575,7 +31399,7 @@ async function dpFuncionarios (alvo, editavel) {
   render()
   $('#dp-busca').oninput = render
   $('#dp-filtro-empresa').onchange = render
-  if (editavel) $('#dp-novo-func').onclick = () => formDpFuncionario(null, () => dpFuncionarios(alvo, editavel))
+  if (editavel) $('#dp-novo-func').onclick = () => formDpFuncionario(null, () => dpFuncionarios(alvo, editavel, apenasClt))
 }
 
 function formDpFuncionario (pessoa, aoSalvar) {
@@ -31603,6 +31427,15 @@ function formDpFuncionario (pessoa, aoSalvar) {
         <option value="AFASTADO" ${pessoa?.status === 'AFASTADO' ? 'selected' : ''}>Afastado</option>
         <option value="INATIVO" ${pessoa?.status === 'INATIVO' ? 'selected' : ''}>Inativo</option>
       </select></div>
+      <div class="campo"><label>Vínculo</label><select id="fdp-vinculo">
+        <option value="">— definir</option>
+        <option value="CLT" ${pessoa?.vinculo === 'CLT' ? 'selected' : ''}>CLT</option>
+        <option value="PJ" ${pessoa?.vinculo === 'PJ' ? 'selected' : ''}>PJ</option>
+        <option value="SOCIO" ${pessoa?.vinculo === 'SOCIO' ? 'selected' : ''}>Sócio(a)/Diretor(a)</option>
+        <option value="ESTAGIARIO" ${pessoa?.vinculo === 'ESTAGIARIO' ? 'selected' : ''}>Estagiário(a)</option>
+        <option value="OUTRO" ${pessoa?.vinculo === 'OUTRO' ? 'selected' : ''}>Outro</option>
+      </select>
+      <p class="texto-dim2" style="font-size:10.5px;margin:4px 0 0;">Só quem for CLT aparece na aba DP e Segurança — os demais ficam só aqui em Cadastro &gt; Funcionários.</p></div>
       <div class="campo"><label>Estado civil</label><select id="fdp-estado-civil">
         <option value="">—</option>
         <option value="SOLTEIRO" ${pessoa?.estado_civil === 'SOLTEIRO' ? 'selected' : ''}>Solteiro(a)</option>
@@ -31656,6 +31489,7 @@ function formDpFuncionario (pessoa, aoSalvar) {
       email: fundo.querySelector('#fdp-email').value.trim() || null, cargo: fundo.querySelector('#fdp-cargo').value.trim() || null,
       setor_id: fundo.querySelector('#fdp-setor').value || null, empresa_id: fundo.querySelector('#fdp-empresa').value || null,
       data_admissao: fundo.querySelector('#fdp-admissao').value || null, status: fundo.querySelector('#fdp-status').value,
+      vinculo: fundo.querySelector('#fdp-vinculo').value || null,
       estado_civil: fundo.querySelector('#fdp-estado-civil').value || null,
       banco: fundo.querySelector('#fdp-banco').value.trim() || null, agencia: fundo.querySelector('#fdp-agencia').value.trim() || null,
       conta: fundo.querySelector('#fdp-conta').value.trim() || null, chave_pix: fundo.querySelector('#fdp-pix').value.trim() || null,
@@ -31768,7 +31602,8 @@ async function dpFichaPessoa (pessoa, editavel) {
     <div class="tabela-scroll" style="max-height:180px;"><table><tbody>
       ${(folhas || []).map(f => `<tr><td class="texto-dim2">${esc(f.competencia)}</td>
         <td class="num">R$ ${fmtNum(valorLiquido(f))}</td>
-        <td><span class="${f.status === 'PAGO' ? 'badge-bom' : 'chip'}">${esc(f.status)}</span></td></tr>`).join('') || '<tr><td class="vazio">Nenhum lançamento de folha.</td></tr>'}
+        <td><span class="${f.status === 'PAGO' ? 'badge-bom' : 'chip'}">${esc(f.status)}</span></td>
+        <td>${f.link_arquivo ? `<a href="${esc(f.link_arquivo)}" target="_blank">recibo</a>` : '—'}</td></tr>`).join('') || '<tr><td class="vazio">Nenhum lançamento de folha.</td></tr>'}
     </tbody></table></div>
 
     <h4 style="font-family:var(--serif);font-size:14px;margin:14px 0 8px;">Ocorrências (${(ocorr || []).length})</h4>
@@ -32159,6 +31994,10 @@ function formDpFolha (pessoa, registro, aoSalvar) {
     <p class="texto-dim2" style="font-size:11.5px;margin-top:8px;">Valor líquido é calculado sozinho (salário + extras + benefícios − descontos) — só preenche na mão se quiser sobrescrever.</p>
     <div class="campo"><label>Valor líquido (opcional, sobrescreve o cálculo)</label><input id="dpfl-liq" type="number" step="0.01" value="${registro?.valor_liquido ?? ''}"></div>
     <div class="campo" style="margin-top:10px;"><label>Observações</label><textarea id="dpfl-obs" style="min-height:56px;">${esc(registro?.observacoes ?? '')}</textarea></div>
+    <div class="campo" style="margin-top:10px;"><label>Anexar recibo</label>
+      <input type="file" id="dpfl-arquivo" accept="image/*,application/pdf">
+      <span class="texto-dim2" style="font-size:10.5px;">ou cola um link abaixo</span></div>
+    <div class="campo" style="margin-top:6px;"><label>Link do recibo (opcional)</label><input id="dpfl-link" value="${esc(registro?.link_arquivo ?? '')}" placeholder="link do recibo, se já tiver"></div>
     <div class="acoes" style="margin-top:14px;"><button class="btn" id="dpfl-salvar">Salvar</button>
       <button class="btn-secundario" id="dpfl-fechar">Fechar</button></div>
     <div class="recado oculto" id="dpfl-recado"></div>
@@ -32174,11 +32013,23 @@ function formDpFolha (pessoa, registro, aoSalvar) {
     const comp = fundo.querySelector('#dpfl-comp').value.trim()
     if (!comp) { aviso('Informe a competência (ex: 04/2026).'); return }
     const btn = fundo.querySelector('#dpfl-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+
+    let linkArquivo = fundo.querySelector('#dpfl-link').value.trim() || registro?.link_arquivo || null
+    const arquivo = fundo.querySelector('#dpfl-arquivo').files[0]
+    if (arquivo) {
+      try {
+        const enviado = await enviarArquivo(arquivo, `dp-folha/${pessoa.id}`)
+        const { data: signed } = await db.storage.from('documentos').createSignedUrl(enviado.caminho, 60 * 60 * 24 * 365 * 5)
+        linkArquivo = signed?.signedUrl || enviado.caminho
+      } catch (e) { aviso('Não deu pra enviar o recibo: ' + e.message); btn.disabled = false; btn.textContent = 'Salvar'; return }
+    }
+
     const corpo = {
       pessoa_id: pessoa.id, competencia: comp, status: fundo.querySelector('#dpfl-status').value,
       salario_base: fundo.querySelector('#dpfl-sal').value || 0, horas_extras: fundo.querySelector('#dpfl-he').value || 0,
       descontos: fundo.querySelector('#dpfl-desc').value || 0, beneficios: fundo.querySelector('#dpfl-benef').value || 0,
-      valor_liquido: fundo.querySelector('#dpfl-liq').value || null, observacoes: fundo.querySelector('#dpfl-obs').value.trim() || null
+      valor_liquido: fundo.querySelector('#dpfl-liq').value || null, observacoes: fundo.querySelector('#dpfl-obs').value.trim() || null,
+      link_arquivo: linkArquivo
     }
     let error
     if (registro) { ({ error } = await db.from('dp_folha').update(corpo).eq('id', registro.id)) }
