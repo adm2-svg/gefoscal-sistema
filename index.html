@@ -2960,6 +2960,27 @@ function corAgilidade (pts) {
   return 'badge-alerta'
 }
 
+// Bônus por volume: a nota de agilidade acima só mede pontualidade (quem
+// tem 1 solicitação no prazo tira nota igual a quem tem 20 no prazo). Pra
+// contar a quantidade de solicitações ligadas à pessoa na nota, soma um
+// bônus (até um teto) pra quem concluiu mais que a média do grupo
+// comparado (setor/mês/período) -- sem tirar ponto de quem entrega pouco
+// mas sempre no prazo, só premia quem entrega mais que a média.
+const TETO_BONUS_VOLUME = 15
+function bonusPorVolume (quantidade, mediaGrupo) {
+  if (!mediaGrupo) return 0
+  const excedente = Math.max(0, (quantidade || 0) - mediaGrupo)
+  return Math.min(TETO_BONUS_VOLUME, Math.round(excedente * 1.5))
+}
+function notaComVolume (notaBase, quantidade, mediaGrupo) {
+  if (notaBase == null) return null
+  return Math.min(100, notaBase + bonusPorVolume(quantidade, mediaGrupo))
+}
+function mediaDeQuantidade (itens, campoQtd) {
+  const comQtd = itens.filter(i => (i[campoQtd] || 0) > 0)
+  return comQtd.length ? comQtd.reduce((s, i) => s + (i[campoQtd] || 0), 0) / comQtd.length : 0
+}
+
 // Quem pode atualizar progresso/status/resposta de uma solicitação:
 // o responsável marcado, qualquer pessoa do setor de destino (o setor
 // "dono" da tarefa), ou quem enxerga tudo. A RLS do banco deve espelhar
@@ -16398,7 +16419,11 @@ function renderCobranca (area) {
       quantidade_t: ton, preco_unitario: preco, valor_total: ton * preco,
       vencimento: $('#np-venc').value || null,
       observacao_cobranca: $('#np-obs').value.trim() || null,
-      data_pedido: new Date().toISOString().slice(0, 10)
+      data_pedido: new Date().toISOString().slice(0, 10),
+      // sem isso o pedido fica com status NULL e some da Expedição > Ordem de
+      // Carregamento: a tela filtra com .not('status','in','(CANCELADO,CONCLUIDO)'),
+      // e "NULL not in (...)" dá NULL em SQL (não aparece nem cancelado nem não-cancelado)
+      status: 'EMITIDO'
     }).select('id,numero').single()
     if (error) { aviso(error.message); return }
 
@@ -26730,7 +26755,8 @@ async function coletarContextoRH () {
   let texto = `PANORAMA ATUAL DO RH — ${nomeMes(new Date())}\n\n`
   texto += `AGILIDADE E PRAZOS:\n`
   texto += resumoAgil.media != null ? `- Agilidade média geral do mês: ${resumoAgil.media} pts (escala 0-100)\n` : `- Sem dados de agilidade lançados ainda esse mês\n`
-  if (resumoAgil.top3.length) texto += `- Top 3 do mês: ${resumoAgil.top3.map(t => `${t.nome} (${t.pontos} pts)`).join(', ')}\n`
+  if (resumoAgil.top3.length) texto += `- Top 3 do mês: ${resumoAgil.top3.map(t => `${t.nome} (${t.pontos} pts, ${t.qtd} solicitações concluídas${t.bonus > 0 ? `, +${t.bonus} pts de bônus por volume` : ''})`).join(', ')}\n`
+  texto += `- Metodologia da nota de agilidade: pontualidade (0-100, cai conforme atrasa) + bônus de até ${TETO_BONUS_VOLUME} pts pra quem conclui mais solicitações que a média do time no mês. Isso evita que quem resolve muitas demandas fique com nota igual ou pior que quem resolve poucas — a quantidade de solicitações ligadas à pessoa conta na nota, não só a pontualidade.\n`
 
   texto += `\nAVALIAÇÃO 360:\n`
   texto += cicloAtivo ? `- Ciclo aberto agora: "${cicloAtivo.nome}"\n` : `- Nenhum ciclo 360 aberto no momento\n`
@@ -27285,10 +27311,11 @@ async function desempPainel (alvo, editavel) {
           <div style="text-align:center;"><div style="font-family:var(--serif);font-size:26px;">${resumoMensal.media}</div>
             <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;">média geral do mês</div></div>
           <div style="flex:1;min-width:200px;">
-            ${resumoMensal.top3.map((t, i) => `<div style="display:flex;justify-content:space-between;font-size:12.5px;padding:3px 0;">
-              <span>${i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉'} ${esc(t.nome)}</span><b class="${corAgilidade(t.pontos)}">${t.pontos}</b></div>`).join('')}
+            ${resumoMensal.top3.map((t, i) => `<div style="display:flex;justify-content:space-between;align-items:center;font-size:12.5px;padding:3px 0;">
+              <span>${i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉'} ${esc(t.nome)} <span class="texto-dim2" style="font-size:10.5px;">(${t.qtd} concluídas${t.bonus > 0 ? `, +${t.bonus} por volume` : ''})</span></span><b class="${corAgilidade(t.pontos)}">${t.pontos}</b></div>`).join('')}
           </div>
         </div>
+        <p class="texto-dim2" style="font-size:11px;margin-top:10px;">Nota = pontualidade (0-100) + bônus de até ${TETO_BONUS_VOLUME} pts pra quem conclui mais solicitações que a média do time no mês.</p>
       </div>` : ''}
     ${editavel && rankingBonus.length ? `
       <div class="panel" style="padding:18px;margin-top:16px;">
@@ -27360,14 +27387,26 @@ async function recalcularAgilidadeMensal () {
 }
 
 // Resumo pra usar no Painel: agilidade média geral do mês + top 3 do mês.
+// A nota de cada pessoa já sai com o bônus por volume somado (ver
+// bonusPorVolume) -- quem concluiu mais solicitações que a média do
+// time no mês sobe na nota, sem penalizar quem entrega pouco mas no prazo.
 async function resumoAgilidadeIndividual () {
   const anoMesStr = isoMes(new Date())
   const { data: registros } = await db.from('agilidade_mensal')
-    .select('pontuacao_media,ajuste_manual_pontos,pessoa:pessoa_id(nome)')
+    .select('pontuacao_media,ajuste_manual_pontos,concluidas,pessoa:pessoa_id(nome)')
     .eq('ano_mes', anoMesStr)
-  const linhas = (registros || []).map(r => ({
-    nome: r.pessoa?.nome ?? '—', pontos: r.ajuste_manual_pontos ?? r.pontuacao_media
-  })).filter(l => l.pontos != null).sort((a, b) => b.pontos - a.pontos)
+  const listaRegistros = registros || []
+  const mediaGrupo = mediaDeQuantidade(listaRegistros, 'concluidas')
+  const linhas = listaRegistros.map(r => {
+    const notaBase = r.ajuste_manual_pontos ?? r.pontuacao_media
+    if (notaBase == null) return null
+    return {
+      nome: r.pessoa?.nome ?? '—',
+      pontos: notaComVolume(notaBase, r.concluidas, mediaGrupo),
+      qtd: r.concluidas || 0,
+      bonus: bonusPorVolume(r.concluidas, mediaGrupo)
+    }
+  }).filter(Boolean).sort((a, b) => b.pontos - a.pontos)
   const media = linhas.length ? Math.round(linhas.reduce((s, l) => s + l.pontos, 0) / linhas.length) : null
   return { media, top3: linhas.slice(0, 3) }
 }
@@ -27403,14 +27442,19 @@ async function desenharDesempIndividual (alvo, editavel) {
   const qtdAnexosPorPessoa = {}
   ;(anexosTodos || []).forEach(a => { qtdAnexosPorPessoa[a.pessoa_id] = (qtdAnexosPorPessoa[a.pessoa_id] || 0) + 1 })
 
+  // média de concluídas do time nesse mês -- base do bônus por volume
+  const mediaGrupoMes = mediaDeQuantidade(registros || [], 'concluidas')
+
   const linhas = (pessoas || []).map(p => {
     const r = porPessoa[p.id]
-    const pontuacaoFinal = r?.ajuste_manual_pontos ?? r?.pontuacao_media ?? null
+    const notaBase = r?.ajuste_manual_pontos ?? r?.pontuacao_media ?? null
+    const bonusVolume = bonusPorVolume(r?.concluidas, mediaGrupoMes)
+    const pontuacaoFinal = notaComVolume(notaBase, r?.concluidas, mediaGrupoMes)
     return {
       pessoa: p, nome: p.nome, setor: p.setor?.nome ?? '—',
       total: r?.total_solicitacoes ?? 0, concluidas: r?.concluidas ?? 0,
       pctNoPrazo: r?.concluidas ? Math.round(r.concluidas_no_prazo / r.concluidas * 100) : null,
-      pontuacao: pontuacaoFinal, temAjuste: r?.ajuste_manual_pontos != null,
+      pontuacao: pontuacaoFinal, notaBase, bonusVolume, temAjuste: r?.ajuste_manual_pontos != null,
       observacao: r?.observacao_rh ?? '', qtdAnexos: qtdAnexosPorPessoa[p.id] || 0
     }
   }).sort((a, b) => (b.pontuacao ?? -1) - (a.pontuacao ?? -1))
@@ -27431,7 +27475,8 @@ async function desenharDesempIndividual (alvo, editavel) {
     </div>
     <p class="texto-dim2" style="font-size:12px;margin:0 0 16px;">
       Puxa todo mundo com cadastro ativo (usuários do sistema + DP). Clica num card pra ver o histórico completo, ajustar manualmente e anexar arquivo.
-      <span style="opacity:.8;">✎ ajustado pelo RH</span> · <span style="opacity:.8;">📎 tem anexo</span> · <span style="opacity:.8;">📝 tem observação</span></p>
+      Nota = pontualidade + bônus de até ${TETO_BONUS_VOLUME} pts pra quem conclui mais solicitações que a média do time no mês (média deste mês: ${Math.round(mediaGrupoMes * 10) / 10}).
+      <span style="opacity:.8;">✎ ajustado pelo RH</span> · <span style="opacity:.8;">📎 tem anexo</span> · <span style="opacity:.8;">📝 tem observação</span> · <span style="opacity:.8;">🚀 ganhou bônus por volume</span></p>
 
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px;">
       ${linhas.map(l => `
@@ -27455,6 +27500,7 @@ async function desenharDesempIndividual (alvo, editavel) {
           </div>
           <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--line2);display:flex;gap:8px;font-size:11px;">
             ${l.temAjuste ? '<span title="Pontuação ajustada pelo RH">✎</span>' : ''}
+            ${l.bonusVolume > 0 ? `<span title="Ganhou +${l.bonusVolume} pts por concluir mais solicitações que a média do time">🚀 +${l.bonusVolume}</span>` : ''}
             ${l.qtdAnexos ? `<span title="${l.qtdAnexos} anexo(s)">📎 ${l.qtdAnexos}</span>` : ''}
             ${l.observacao ? '<span title="Tem observação">📝</span>' : ''}
           </div>
@@ -27484,6 +27530,15 @@ async function abrirDetalheIndividualRh (pessoa, editavel, alvoLista) {
   const mesAtualStr = isoMes(new Date())
   const registroMesAtual = linhas.find(l => l.ano_mes === mesAtualStr)
 
+  // pra cada mês do histórico, busca a média de concluídas do time inteiro
+  // naquele mês -- é a base do bônus por volume (ver bonusPorVolume)
+  const mesesHistorico = linhas.map(l => l.ano_mes)
+  const { data: timeNosMeses } = mesesHistorico.length
+    ? await db.from('agilidade_mensal').select('ano_mes,concluidas').in('ano_mes', mesesHistorico)
+    : { data: [] }
+  const mediaPorMes = {}
+  ;(mesesHistorico || []).forEach(m => { mediaPorMes[m] = mediaDeQuantidade((timeNosMeses || []).filter(r => r.ano_mes === m), 'concluidas') })
+
   const desenharModal = (listaAnexos) => {
     const modalNovo = document.createElement('div')
     modalNovo.className = 'modal'
@@ -27499,13 +27554,15 @@ async function abrirDetalheIndividualRh (pessoa, editavel, alvoLista) {
         <table><thead><tr><th>Mês</th><th class="num">Solicitações</th><th class="num">Concluídas</th><th class="num">% no prazo</th><th class="num">Agilidade</th></tr></thead><tbody>
           ${linhas.map(l => {
             const pct = l.concluidas ? Math.round(l.concluidas_no_prazo / l.concluidas * 100) : null
-            const pontosFinal = l.ajuste_manual_pontos ?? l.pontuacao_media
+            const notaBase = l.ajuste_manual_pontos ?? l.pontuacao_media
+            const bonus = bonusPorVolume(l.concluidas, mediaPorMes[l.ano_mes])
+            const pontosFinal = notaComVolume(notaBase, l.concluidas, mediaPorMes[l.ano_mes])
             return `<tr>
               <td>${nomeMes(new Date(l.ano_mes + 'T00:00:00'))}</td>
               <td class="num">${l.total_solicitacoes}</td>
               <td class="num">${l.concluidas}</td>
               <td class="num">${pct != null ? pct + '%' : '—'}</td>
-              <td class="num">${pontosFinal != null ? `<span class="${corAgilidade(pontosFinal)}">${pontosFinal}${l.ajuste_manual_pontos != null ? ' ✎' : ''}</span>` : '—'}</td>
+              <td class="num">${pontosFinal != null ? `<span class="${corAgilidade(pontosFinal)}">${pontosFinal}${l.ajuste_manual_pontos != null ? ' ✎' : ''}${bonus > 0 ? ` <span class="texto-dim2" style="font-size:10px;">(+${bonus} vol.)</span>` : ''}</span>` : '—'}</td>
             </tr>`
           }).join('') || `<tr><td colspan="5" class="vazio">Sem solicitações registradas ainda.</td></tr>`}
         </tbody></table>
@@ -27537,9 +27594,10 @@ async function abrirDetalheIndividualRh (pessoa, editavel, alvoLista) {
 
       ${editavel ? `
         <h4 style="font-family:var(--serif);font-size:14px;margin:0 0 8px;">✏️ Ajustar mês atual (${nomeMes(new Date())})</h4>
+        <p class="texto-dim2" style="font-size:11px;margin:0 0 8px;">O bônus por volume (até ${TETO_BONUS_VOLUME} pts, por concluir mais que a média do time) é somado automaticamente depois — o valor abaixo é só a pontualidade.</p>
         <div style="display:grid;grid-template-columns:1fr 2fr;gap:10px;margin-bottom:10px;">
           <div class="campo">
-            <label>Pontuação ajustada ${registroMesAtual?.pontuacao_media != null ? '(calculada: ' + registroMesAtual.pontuacao_media + ')' : ''}</label>
+            <label>Pontualidade ajustada ${registroMesAtual?.pontuacao_media != null ? '(calculada: ' + registroMesAtual.pontuacao_media + ')' : ''}</label>
             <input type="number" id="dsi-ajuste" min="0" max="100" value="${registroMesAtual?.ajuste_manual_pontos ?? ''}" placeholder="em branco usa a calculada">
           </div>
           <div class="campo">
@@ -28194,10 +28252,15 @@ async function desempAgilidade (alvo, editavel) {
       porPessoa[nome].total++
       if (!estaAtrasadaConcluida(s)) porPessoa[nome].noPrazo++
     })
-    const rankingPessoa = Object.entries(porPessoa).map(([nome, v]) => ({
-      rotulo: nome, valor: Math.round(media(v.pontos)), total: v.total,
-      pctNoPrazo: Math.round((v.noPrazo / v.total) * 100), setor: v.setor
-    })).sort((a, b) => a.valor - b.valor)
+    const mediaGrupoPeriodo = mediaDeQuantidade(Object.values(porPessoa), 'total')
+    const rankingPessoa = Object.entries(porPessoa).map(([nome, v]) => {
+      const notaBase = Math.round(media(v.pontos))
+      const bonusVolume = bonusPorVolume(v.total, mediaGrupoPeriodo)
+      return {
+        rotulo: nome, valor: notaComVolume(notaBase, v.total, mediaGrupoPeriodo), notaBase, bonusVolume, total: v.total,
+        pctNoPrazo: Math.round((v.noPrazo / v.total) * 100), setor: v.setor
+      }
+    }).sort((a, b) => a.valor - b.valor)
 
     // agrupa por setor de destino, pra RH comparar áreas entre si
     const porSetor = {}
@@ -28237,12 +28300,13 @@ async function desempAgilidade (alvo, editavel) {
             <td>${esc(p.rotulo)}</td><td class="texto-dim2">${esc(p.setor)}</td>
             <td class="num">${p.total}</td>
             <td class="num"><span class="${p.pctNoPrazo >= 80 ? 'badge-bom' : p.pctNoPrazo >= 50 ? 'chip' : 'badge-alerta'}">${p.pctNoPrazo}%</span></td>
-            <td class="num"><span class="${corAgilidade(p.valor)}">${p.valor}</span></td>
+            <td class="num"><span class="${corAgilidade(p.valor)}">${p.valor}</span>${p.bonusVolume > 0 ? ` <span class="texto-dim2" style="font-size:10px;">(+${p.bonusVolume} vol.)</span>` : ''}</td>
           </tr>`).join('') || `<tr><td colspan="5" class="vazio">Nenhuma solicitação concluída com responsável definido no período.</td></tr>`}
         </tbody></table>
       </div></div>
       <p class="texto-dim2" style="font-size:11px;margin-top:8px;">
         Agilidade: 100 pts = concluiu dentro do prazo/SLA da urgência; cai conforme atrasa.
+        Quem conclui mais solicitações que a média do grupo no período ganha um bônus de até ${TETO_BONUS_VOLUME} pts na nota (coluna "vol.") — sem penalizar quem entrega pouco mas sempre no prazo.
         Baseado nas solicitações internas (helpdesk entre setores) com responsável definido.</p>`
   }
 
