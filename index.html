@@ -72,35 +72,45 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 /* deixa qualquer tabela larga rolar de lado no celular, em vez de estourar a tela */
 @media (max-width: 860px) { .conteudo { padding: 16px 14px; } }
 @media (max-width: 760px) { .grade-painel-comb { grid-template-columns: 1fr !important; } }
-.nav { background: var(--panel); border-right: 1px solid var(--line); padding: 18px 12px;
+.nav { background: var(--panel); border-right: 1px solid var(--line); padding: 20px 13px;
        overflow-y: auto; overflow-x: hidden; }
 .nav h1 { font-family: var(--serif); font-size: 19px; margin: 0 0 2px; }
 .nav .sub { color: var(--dim2); font-size: 11px; margin-bottom: 22px; white-space: nowrap; }
+.nav .grupo-cabecalho { display:flex; align-items:center; justify-content:space-between; gap:8px;
+       padding:8px 9px; margin:6px 0 1px; cursor:pointer; user-select:none; border-radius:6px; }
+.nav .grupo-cabecalho:hover { background: var(--hover-bg); }
+.nav .grupo-cabecalho:first-child { margin-top: 0; }
 .nav .grupo-titulo { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--dim2);
-       margin: 16px 11px 6px; opacity: .65; white-space: nowrap; }
-.nav .grupo-titulo:first-child { margin-top: 0; }
-.nav .grupo-divisor { height: 1px; background: var(--line); margin: 10px 8px 12px; }
-.nav a { display:flex; align-items:center; gap:11px; padding:9px 11px; border-radius:6px; color:var(--dim);
-         text-decoration:none; font-size:14px; margin-bottom:2px; cursor:pointer; white-space:nowrap; }
-.nav a svg { width:18px; height:18px; flex:none; }
+       opacity: .6; white-space: nowrap; }
+.nav .grupo-cabecalho svg.seta-expandir { width:12px; height:12px; flex:none; opacity:.45; transition:transform .15s ease; }
+.nav .grupo-cabecalho.expandido svg.seta-expandir { transform:rotate(90deg); }
+.nav .grupo-corpo { overflow:hidden; max-height:0; transition:max-height .22s ease; }
+.nav .grupo-corpo.expandido { max-height:900px; }
+.nav .grupo-divisor { height: 1px; background: var(--line); margin: 12px 8px 12px; }
+.nav a { display:flex; align-items:center; gap:11px; padding:9px 12px; border-radius:8px; color:var(--dim);
+         text-decoration:none; font-size:13.5px; margin-bottom:1px; cursor:pointer; white-space:nowrap; }
+.nav a svg { width:18px; height:18px; flex:none; opacity:.85; }
 .nav a:hover { background: var(--hover-bg); color: var(--txt); }
-.nav a.ativo { background: var(--hover-bg); color: var(--txt); border-left:3px solid var(--rust); }
+.nav a.ativo { background: var(--hover-bg); color: var(--txt); box-shadow: inset 3px 0 0 var(--rust); }
+.nav a.ativo svg { opacity:1; }
 .nav a.bloqueado { opacity:.35; cursor:not-allowed; }
-.nav .item-pai { display:flex; align-items:center; gap:11px; padding:9px 11px; border-radius:6px;
-         color:var(--dim); font-size:14px; margin-bottom:2px; cursor:pointer; white-space:nowrap;
+.nav .item-pai { display:flex; align-items:center; gap:11px; padding:9px 12px; border-radius:8px;
+         color:var(--dim); font-size:13.5px; margin-bottom:1px; cursor:pointer; white-space:nowrap;
          justify-content:space-between; user-select:none; }
 .nav .item-pai:hover { background: var(--hover-bg); color: var(--txt); }
 .nav .item-pai .rotulo-grupo { display:flex; align-items:center; gap:11px; }
-.nav .item-pai .rotulo-grupo svg { width:18px; height:18px; flex:none; }
-.nav .item-pai svg.seta-expandir { width:14px; height:14px; flex:none; transition:transform .15s ease; opacity:.6; }
+.nav .item-pai .rotulo-grupo svg { width:18px; height:18px; flex:none; opacity:.85; }
+.nav .item-pai svg.seta-expandir { width:14px; height:14px; flex:none; transition:transform .15s ease; opacity:.5; }
 .nav .item-pai.expandido .seta-expandir { transform:rotate(90deg); }
 .nav .item-pai.tem-ativo { color:var(--txt); }
 .nav .submenu { overflow:hidden; max-height:0; transition:max-height .18s ease; }
 .nav .submenu.expandido { max-height:220px; }
 .nav .submenu[data-submenu="relatorios"].expandido { max-height:60vh; overflow-y:auto; }
-.nav .submenu a { padding-left:34px; font-size:13.5px; }
-.app.nav-colapsada .nav .grupo-titulo,
+.nav .submenu a { padding-left:36px; font-size:13px; }
+.app.nav-colapsada .nav .grupo-cabecalho .grupo-titulo,
+.app.nav-colapsada .nav .grupo-cabecalho svg.seta-expandir,
 .app.nav-colapsada .nav .grupo-divisor { display:none; }
+.app.nav-colapsada .nav .grupo-corpo { max-height:none !important; overflow:visible; }
 .app.nav-colapsada .nav .item-pai .seta-expandir,
 .app.nav-colapsada .nav .item-pai .rotulo { display:none; }
 .app.nav-colapsada .nav .submenu { display:none; }
@@ -186,16 +196,22 @@ tbody tr:hover { background: var(--hover-bg); }
 
 /* ---- Marca ---- */
 .logo-login { display:block; height:64px; width:auto; margin:0 auto 14px; }
-.logo-nav { display:block; height:52px; width:auto; margin-bottom:20px; }
-.perfil-nav { display:flex; align-items:center; gap:10px; margin-bottom:20px;
+.logo-nav { display:block; height:64px; width:auto; margin:0 auto 22px; }
+.perfil-nav { display:flex; align-items:center; gap:9px; margin-bottom:18px;
               padding-bottom:16px; border-bottom:1px solid var(--line); }
 .perfil-nav .inicial { width:36px; height:36px; font-size:13px; }
-.perfil-nav-dados { min-width:0; }
+.perfil-nav-dados { min-width:0; flex:1; }
 .perfil-nav-dados .nome { font-size:13.5px; color:var(--txt); font-weight:600;
                            white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .perfil-nav-dados .papeis { display:flex; gap:4px; flex-wrap:wrap; margin-top:5px; }
+.botao-meu-perfil { background:none; border:none; color:var(--dim2); cursor:pointer; padding:5px;
+                     flex:none; border-radius:6px; display:flex; align-items:center; justify-content:center;
+                     transition:background .15s ease, color .15s ease; }
+.botao-meu-perfil:hover { background:var(--hover-bg); color:var(--txt); }
+.botao-meu-perfil svg { width:17px; height:17px; }
 .app.nav-colapsada .perfil-nav { justify-content:center; }
-.app.nav-colapsada .perfil-nav-dados { display:none; }
+.app.nav-colapsada .perfil-nav-dados,
+.app.nav-colapsada .botao-meu-perfil { display:none; }
 /* ---- Documento do pedido: cores fixas da marca, para sair igual no papel ---- */
 .doc { --verde:#1c5632; --verde-claro:#eef5f0; --ouro:#c8a11a; --borda:#d7e3da;
        background:#fff; color:#1b1b1b; border-radius:10px; overflow:hidden; }
@@ -1037,6 +1053,9 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
         <div class="nome" id="quem-sou-nome"></div>
         <div class="papeis" id="quem-sou-papeis"></div>
       </div>
+      <button id="btn-meu-perfil" class="botao-meu-perfil" title="Meu perfil">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
       <button id="notif-bell" title="Notificações" style="position:relative;background:none;border:none;color:inherit;font-size:18px;cursor:pointer;padding:4px;flex:none;">🔔
         <span id="notif-badge" class="oculto" style="position:absolute;top:-2px;right:-2px;background:var(--warn-text);color:#1a1a1a;border-radius:20px;font-size:10px;font-weight:700;min-width:16px;height:16px;display:flex;align-items:center;justify-content:center;padding:0 3px;"></span></button>
     </div>
@@ -1440,7 +1459,7 @@ const PESSOA_PAINEL_DIRETOR = 'b22d848d-8b11-4cb7-b6c8-4dc8f2ca8c62'
 const PESSOA_PAINEL_MIKAEL = '69f85bf3-f405-4340-ab9f-8dd7133828a7' // responde por Jurídico + Frota de Escritório/Comercial/Sócios (ver pessoa_frota_setor)
 
 let PERFIL = {
-  userId: '', email: '', nome: '',
+  userId: '', email: '', nome: '', fotoUrl: null,
   pessoaId: null, setorId: null,
   papeis: [], modulos: [], permissoes: [], setoresGeridos: [], souGestorComercial: false
 }
@@ -1455,7 +1474,7 @@ async function abrirApp () {
     db.from('usuario_papel').select('papel').eq('user_id', user.id),
     db.from('modulo').select('id,chave,nome,ordem').order('ordem'),
     db.from('usuario_perfil')
-      .select('pessoa_id,setor_id,ativo,pessoa:pessoa_id(nome,setor_id)')
+      .select('pessoa_id,setor_id,ativo,pessoa:pessoa_id(nome,setor_id,foto_url,telefone)')
       .eq('user_id', user.id).maybeSingle()
   ])
 
@@ -1467,6 +1486,8 @@ async function abrirApp () {
   // pra não sumir solicitação/painel de ninguém por um campo esquecido
   PERFIL.setorId = perfil?.setor_id ?? perfil?.pessoa?.setor_id ?? null
   PERFIL.nome = perfil?.pessoa?.nome || user.email
+  PERFIL.fotoUrl = perfil?.pessoa?.foto_url ?? null
+  PERFIL.telefone = perfil?.pessoa?.telefone ?? null
 
   if (PERFIL.papeis.length === 0 || perfil?.ativo === false) {
     $('#erro-login').textContent =
@@ -1491,10 +1512,11 @@ async function abrirApp () {
     PERFIL.souGestorComercial = (setoresGeridos || []).some(s => (s.nome || '').trim().toLowerCase() === 'comercial')
   }
 
-  $('#quem-sou-avatar').textContent = iniciais(PERFIL.nome)
+  $('#quem-sou-avatar').innerHTML = avatarHtml(PERFIL.fotoUrl, PERFIL.nome, 36)
   $('#quem-sou-nome').textContent = PERFIL.nome
   $('#quem-sou-papeis').innerHTML = PERFIL.papeis
     .map((p, i) => `<span class="selo ${i === 0 ? 'forte' : ''}">${esc(p)}</span>`).join('')
+  $('#btn-meu-perfil').onclick = abrirMeuPerfil
   montarMenu()
   $('#tela-login').classList.add('oculto')
   $('#tela-app').classList.remove('oculto')
@@ -1965,7 +1987,12 @@ function montarMenu () {
       return linkModulo(m)
     }).join('')
     if (!blocoGrupo.trim()) return
-    doBanco += `<div class="grupo-titulo">${esc(titulo)}</div>` + blocoGrupo
+    const slug = titulo.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, '-')
+    doBanco += `<div class="grupo-cabecalho" data-grupo-cab="${slug}">
+        <span class="grupo-titulo">${esc(titulo)}</span>
+        ${SVG_SETA_EXPANDIR}
+      </div>
+      <div class="grupo-corpo" data-grupo-corpo="${slug}">${blocoGrupo}</div>`
   })
   const resto = disponiveis.filter(m => !usados.has(m.chave))
   if (resto.length) doBanco += `<div class="grupo-titulo">Outros</div>` + resto.map(linkModulo).join('')
@@ -1979,6 +2006,15 @@ function montarMenu () {
       const submenu = $('#menu').querySelector(`.submenu[data-submenu="${pai.dataset.pai}"]`)
       pai.classList.toggle('expandido')
       submenu?.classList.toggle('expandido')
+    }
+  })
+  // grupos por setor (Comercial, Operações, Gestão...) começam recolhidos —
+  // deixa o menu bem mais enxuto de cara; a pessoa abre só o setor que precisa
+  $('#menu').querySelectorAll('.grupo-cabecalho').forEach(cab => {
+    cab.onclick = () => {
+      const corpo = $('#menu').querySelector(`.grupo-corpo[data-grupo-corpo="${cab.dataset.grupoCab}"]`)
+      cab.classList.toggle('expandido')
+      corpo?.classList.toggle('expandido')
     }
   })
 }
@@ -5088,6 +5124,142 @@ async function abrirAcessoPessoaMa (p, pc, vinculos, aoFechar) {
     fundo.querySelector('#ap-senha').value = ''
     setTimeout(() => { fundo.remove(); aoFechar() }, 1400)
   })
+}
+
+// ----- "Meu perfil" — o próprio usuário edita foto/telefone e troca a
+// senha (com confirmação por e-mail), sem precisar de um admin -----------
+async function abrirMeuPerfil () {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:440px;">
+    <div class="cabeca-secao"><h3>${icDp('editar')} Meu perfil</h3></div>
+
+    <div style="display:flex;gap:14px;align-items:center;margin-bottom:18px;">
+      <div id="mp-avatar-preview">${avatarHtml(PERFIL.fotoUrl, PERFIL.nome, 56)}</div>
+      <div style="flex:1;">
+        <div class="campo" style="margin:0;"><label>Trocar foto</label>
+          <input type="file" id="mp-foto" accept="image/*"></div>
+      </div>
+    </div>
+
+    <div class="campo" style="margin-bottom:10px;"><label>Nome</label>
+      <input value="${esc(PERFIL.nome)}" disabled style="opacity:.65;"></div>
+    <div class="campo" style="margin-bottom:10px;"><label>E-mail de acesso</label>
+      <input value="${esc(PERFIL.email)}" disabled style="opacity:.65;"></div>
+    <div class="campo" style="margin-bottom:16px;"><label>Telefone</label>
+      <input id="mp-telefone" value="${esc(PERFIL.telefone || '')}" placeholder="(00) 00000-0000"></div>
+
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
+      ${PERFIL.papeis.map((p, i) => `<span class="selo ${i === 0 ? 'forte' : ''}">${esc(p)}</span>`).join('')}
+    </div>
+
+    <div class="acoes" style="margin-bottom:8px;">
+      <button class="btn" id="mp-salvar">${icDp('salvar')}Salvar alterações</button>
+    </div>
+    <div class="recado oculto" id="mp-recado"></div>
+
+    <div style="height:1px;background:var(--line);margin:18px 0;"></div>
+
+    <div class="cabeca-secao" style="margin-bottom:8px;"><h3 style="font-size:14px;">Senha de acesso</h3></div>
+    <p class="texto-dim2" style="font-size:12.5px;margin-bottom:10px;">
+      Por segurança, a troca de senha é confirmada pelo seu e-mail — clique
+      abaixo e você recebe um link pra escolher a nova senha.</p>
+    <div class="acoes" style="margin-bottom:8px;">
+      <button class="btn-secundario" id="mp-trocar-senha">${icDp('acesso')}Enviar link de confirmação por e-mail</button>
+    </div>
+    <div class="recado oculto" id="mp-recado-senha"></div>
+
+    <div class="acoes" style="margin-top:18px;"><button class="btn-secundario" id="mp-fechar">${icDp('fechar')}Fechar</button></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  fundo.querySelector('#mp-fechar').onclick = fechar
+
+  fundo.querySelector('#mp-foto').addEventListener('change', () => {
+    const arq = fundo.querySelector('#mp-foto').files[0]
+    if (arq) {
+      fundo.querySelector('#mp-avatar-preview').innerHTML =
+        `<img src="${URL.createObjectURL(arq)}" style="width:56px;height:56px;border-radius:50%;object-fit:cover;">`
+    }
+  })
+
+  fundo.querySelector('#mp-salvar').onclick = async () => {
+    const el = fundo.querySelector('#mp-recado')
+    const avisoEl = (t, alerta) => { el.textContent = t; el.classList.remove('oculto'); el.style.color = alerta ? 'var(--warn-text)' : 'var(--dim)' }
+    if (!PERFIL.pessoaId) { avisoEl('Seu usuário não está vinculado a um cadastro de pessoa — fale com o administrador.', true); return }
+    const btn = fundo.querySelector('#mp-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+
+    let fotoUrl = PERFIL.fotoUrl
+    const arquivoFoto = fundo.querySelector('#mp-foto').files[0]
+    if (arquivoFoto) {
+      try {
+        const enviado = await enviarArquivo(arquivoFoto, 'fotos-perfil')
+        const { data: signed } = await db.storage.from('documentos').createSignedUrl(enviado.caminho, 60 * 60 * 24 * 365 * 5)
+        fotoUrl = signed?.signedUrl || enviado.caminho
+      } catch (e) {
+        avisoEl('Não deu pra enviar a foto: ' + e.message, true)
+        btn.disabled = false; btn.innerHTML = `${icDp('salvar')}Salvar alterações`
+        return
+      }
+    }
+
+    const telefone = fundo.querySelector('#mp-telefone').value.trim() || null
+    const { error } = await db.from('pessoa').update({ foto_url: fotoUrl, telefone }).eq('id', PERFIL.pessoaId)
+    btn.disabled = false; btn.innerHTML = `${icDp('salvar')}Salvar alterações`
+    if (error) { avisoEl('Não deu certo: ' + error.message, true); return }
+
+    PERFIL.fotoUrl = fotoUrl
+    PERFIL.telefone = telefone
+    $('#quem-sou-avatar').innerHTML = avatarHtml(PERFIL.fotoUrl, PERFIL.nome, 36)
+    avisoEl('Perfil atualizado!')
+  }
+
+  fundo.querySelector('#mp-trocar-senha').onclick = async () => {
+    const el = fundo.querySelector('#mp-recado-senha')
+    const avisoEl = (t, alerta) => { el.textContent = t; el.classList.remove('oculto'); el.style.color = alerta ? 'var(--warn-text)' : 'var(--dim)' }
+    const btn = fundo.querySelector('#mp-trocar-senha'); btn.disabled = true; btn.textContent = 'Enviando...'
+    const { error } = await db.auth.resetPasswordForEmail(PERFIL.email, { redirectTo: location.origin + location.pathname })
+    btn.disabled = false; btn.innerHTML = `${icDp('acesso')}Enviar link de confirmação por e-mail`
+    if (error) { avisoEl('Não deu pra enviar o e-mail: ' + error.message, true); return }
+    avisoEl(`Enviamos um link pro seu e-mail (${PERFIL.email}). Abra ele nesse mesmo navegador pra escolher a nova senha.`)
+  }
+}
+
+// Chega aqui quando a pessoa clica no link que recebeu por e-mail pra
+// trocar a senha — o Supabase detecta o token da URL sozinho e dispara
+// o evento PASSWORD_RECOVERY (ver o onAuthStateChange lá no final do arquivo)
+async function abrirDefinirNovaSenha () {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:380px;">
+    <div class="cabeca-secao"><h3>${icDp('acesso')} Defina sua nova senha</h3></div>
+    <p class="texto-dim2" style="font-size:12.5px;margin-bottom:14px;">
+      Confirmado pelo seu e-mail — escolha a nova senha de acesso abaixo.</p>
+    <div class="campo" style="margin-bottom:14px;">
+      <input id="dns-senha" type="password" autocomplete="new-password" placeholder="nova senha (mín. 8 caracteres)">
+    </div>
+    <div class="acoes">
+      <button class="btn" id="dns-salvar">${icDp('salvar')}Salvar nova senha</button>
+      <button class="btn-secundario" id="dns-depois">Agora não</button>
+    </div>
+    <div class="recado oculto" id="dns-recado" style="margin-top:12px;"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.querySelector('#dns-depois').onclick = () => fundo.remove()
+
+  fundo.querySelector('#dns-salvar').onclick = async () => {
+    const el = fundo.querySelector('#dns-recado')
+    const avisoEl = (t, alerta) => { el.textContent = t; el.classList.remove('oculto'); el.style.color = alerta ? 'var(--warn-text)' : 'var(--dim)' }
+    const nova = fundo.querySelector('#dns-senha').value.trim()
+    if (nova.length < 8) { avisoEl('A senha precisa de pelo menos 8 caracteres.', true); return }
+    const btn = fundo.querySelector('#dns-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const { error } = await db.auth.updateUser({ password: nova })
+    btn.disabled = false; btn.innerHTML = `${icDp('salvar')}Salvar nova senha`
+    if (error) { avisoEl('Não deu certo: ' + error.message, true); return }
+    avisoEl('Senha atualizada!')
+    setTimeout(() => fundo.remove(), 1400)
+  }
 }
 
 // ----- Gerir vínculos: escolhe pessoa, adiciona/edita/revoga -----
@@ -36747,6 +36919,12 @@ document.addEventListener('click', e => {
 // ---------------------------------------------------------------
 const { data: { session } } = await db.auth.getSession()
 if (session) await abrirApp()
+
+// Link de "trocar senha" (enviado por e-mail em "Meu perfil") volta pra cá
+// com um token na URL — o Supabase detecta sozinho e dispara esse evento
+db.auth.onAuthStateChange((event) => {
+  if (event === 'PASSWORD_RECOVERY') abrirDefinirNovaSenha()
+})
 
 // PWA: registra o service worker (silencioso — se falhar, o sistema
 // continua funcionando normal, só não vira "app instalável")
