@@ -19,6 +19,8 @@
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400..700&family=Roboto:wght@300;400;500;700;900&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="skins_gefoscal.css">
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
 <style>
 /* Trava o "boost" automático de fonte que alguns navegadores de celular
    (principalmente Android/WebView, incluindo o do WhatsApp) aplicam sozinhos
@@ -1843,6 +1845,7 @@ const PAGINAS = {
   onfly:       { nome: 'Viagens (Onfly)', render: paginaOnfly },
   dp:          { nome: 'DP e Segurança', render: paginaDpSeguranca },
   laboratorio: { nome: 'Laboratório', render: paginaLaboratorio },
+  relatorios:  { nome: 'Relatórios', render: paginaRelatorios, sempre: true },
   ti:          { nome: 'Administração Sistema', render: paginaAdministracao },
   gestao_ti:   { nome: 'Gestão de TI', render: paginaGestaoTI },
   ia_treinamento: { nome: 'Treinamento IA', render: paginaTreinamentoIA }
@@ -1881,6 +1884,7 @@ const ICONES_MODULO = {
   gestao_ti: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
   ia_treinamento: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 0-4 4c0 1.2.5 2 1 2.5C7.5 9.5 6 11 6 13a4 4 0 0 0 4 4v3h4v-3a4 4 0 0 0 4-4c0-2-1.5-3.5-3-4.5.5-.5 1-1.3 1-2.5a4 4 0 0 0-4-4Z"/></svg>',
   laboratorio: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6"/><path d="M10 3v6l-5.5 9.5A1.5 1.5 0 0 0 5.8 21h12.4a1.5 1.5 0 0 0 1.3-2.5L14 9V3"/><path d="M7.5 14.5h9"/></svg>',
+  relatorios: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="12" width="3" height="6"/><rect x="12" y="8" width="3" height="10"/><rect x="17" y="5" width="3" height="13"/></svg>',
   _padrao: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/></svg>'
 }
 
@@ -1901,6 +1905,7 @@ const GRUPOS_MENU = [
   ['Comercial', ['crm_pai', 'cadastro', 'expedicao', 'cobranca', 'marketing']],
   ['Operações', ['estoque', 'combustivel', 'manutencao', 'frota', 'laboratorio']],
   ['Gestão', ['financeiro', 'desempenho', 'dp', 'onfly', 'juridico', 'ferramentas', 'banco', 'gestao_ti', 'ia_treinamento', 'dashboard_diretor']],
+  ['Relatórios', ['relatorios']],
   ['Administração Sistema', ['ti']]
 ]
 
@@ -34446,6 +34451,849 @@ async function onflyColaboradores (alvo, editavel) {
     }
     onflyColaboradores(alvo, editavel)
   }
+}
+
+// ---------------------------------------------------------------
+// Página: Relatórios — um lugar só pra puxar relatório de cada área
+// do sistema, separado por setor/departamento em sub-abas, com
+// exportação em Excel ou PDF (a pessoa escolhe). Cada sub-relatório
+// respeita a mesma permissão (podeVer) que já existe pro módulo dele
+// — quem não tem acesso àquela área na Administração não vê o
+// relatório dela aqui também. Vai crescendo aos poucos: por enquanto
+// só Solicitações; os próximos setores entram do mesmo jeito, cada
+// um só somando um item nesta lista.
+// ---------------------------------------------------------------
+const RELATORIOS_DISPONIVEIS = [
+  { id: 'solicitacoes', nome: 'Solicitações', podeVer: () => podeVer('desempenho'), render: relSolicitacoes },
+  { id: 'compras', nome: 'Compras', podeVer: () => podeVer('compras'), render: relCompras },
+  { id: 'projetos', nome: 'Projetos', podeVer: () => podeVer('projetos'), render: relProjetos },
+  { id: 'rh', nome: 'RH', podeVer: () => podeVer('desempenho'), render: relRH },
+  { id: 'crm', nome: 'CRM Comercial', podeVer: () => podeVer('crm'), render: relCrmComercial },
+  { id: 'sdr_whatsapp', nome: 'SDR WhatsApp', podeVer: () => podeVer('sdr_whatsapp'), render: relSdrWhatsapp },
+  { id: 'crm_tecnico', nome: 'CRM Técnico', podeVer: () => podeVer('crm_tecnico'), render: relCrmTecnico },
+  { id: 'expedicao', nome: 'Faturamento', podeVer: () => podeVer('expedicao'), render: relFaturamento },
+  { id: 'cadastro', nome: 'Cadastro de Funcionários', podeVer: () => podeVer('cadastro'), render: relCadastroFuncionarios }
+]
+
+async function paginaRelatorios () {
+  const area = areaLivre()
+  $('#subtitulo-pagina').textContent = 'Escolha a área, ajuste o período e exporte em Excel ou PDF'
+  const disponiveis = RELATORIOS_DISPONIVEIS.filter(r => r.podeVer())
+
+  if (!disponiveis.length) {
+    area.innerHTML = `<div class="panel" style="padding:22px;"><p class="texto-dim">
+      Ainda não há nenhum relatório liberado pro seu acesso — só aparecem aqui os
+      relatórios das áreas que você já acessa no sistema.</p></div>`
+    return
+  }
+
+  area.innerHTML = `
+    <div class="subabas">
+      ${disponiveis.map((r, i) => `<button data-rel="${r.id}" class="${i === 0 ? 'ativo' : ''}">${esc(r.nome)}</button>`).join('')}
+    </div>
+    <div id="rel-conteudo"></div>`
+
+  area.querySelectorAll('.subabas button').forEach(b => {
+    b.onclick = () => {
+      area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
+      const rel = disponiveis.find(r => r.id === b.dataset.rel)
+      $('#rel-conteudo').innerHTML = `<p class="texto-dim2">carregando...</p>`
+      rel.render($('#rel-conteudo'))
+    }
+  })
+  disponiveis[0].render($('#rel-conteudo'))
+}
+
+// ----- Exportação genérica de relatório — qualquer sub-relatório novo
+// (Compras, Projetos, RH, CRM, Faturamento, Cadastro...) chama essas duas
+// funções passando só o título/nome do arquivo, as colunas e as linhas já
+// formatadas pra exibição, sem precisar reimplementar exportação. Excel
+// reaproveita o SheetJS que já vem no sistema; PDF usa jsPDF + autotable
+// (bibliotecas novas, carregadas via CDN junto com o xlsx). -----
+function exportarRelatorioExcel (nomeArquivo, colunas, linhas) {
+  const wb = XLSX.utils.book_new()
+  const ws = XLSX.utils.aoa_to_sheet([colunas, ...linhas])
+  XLSX.utils.book_append_sheet(wb, ws, 'Relatório')
+  XLSX.writeFile(wb, `${nomeArquivo}_${new Date().toISOString().slice(0, 10)}.xlsx`)
+}
+
+function exportarRelatorioPDF (titulo, colunas, linhas) {
+  const { jsPDF } = window.jspdf
+  const doc = new jsPDF({ orientation: 'landscape' })
+  doc.setFontSize(13)
+  doc.text(titulo, 14, 14)
+  doc.setFontSize(9)
+  doc.text(`Gerado em ${new Date().toLocaleString('pt-BR')}`, 14, 20)
+  doc.autoTable({ head: [colunas], body: linhas, startY: 26, styles: { fontSize: 8 }, headStyles: { fillColor: [40, 60, 90] } })
+  doc.save(`${titulo.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}.pdf`)
+}
+
+// ----- Relatório: Solicitações -----
+const COLUNAS_REL_SOLICITACOES = ['Código', 'Título', 'Setor', 'Solicitante', 'Responsável', 'Urgência', 'Status', 'Aberta em', 'Prazo', 'Concluída em', 'Agilidade']
+function linhaRelSolicitacao (s) {
+  const nota = pontuacaoAgilidadeSolicitacao(s)
+  return [
+    s.codigo, s.titulo, s.setor?.nome ?? '—', s.solicitante?.nome ?? '—', s.responsavel?.nome ?? '—',
+    ROTULO_URGENCIA_SOLICITACAO[s.urgencia] ?? s.urgencia, ROTULO_STATUS_SOLICITACAO[s.status] ?? s.status,
+    fmtData(s.data_solicitacao), s.data_limite ? fmtData(s.data_limite) : '—',
+    s.data_conclusao ? fmtData(s.data_conclusao) : '—', nota != null ? nota : '—'
+  ]
+}
+
+async function relSolicitacoes (alvo) {
+  const hoje = new Date().toISOString().slice(0, 10)
+  const de = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10)
+
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>De</label><input type="date" id="rl-de" value="${de}"></div>
+      <div class="campo"><label>Até</label><input type="date" id="rl-ate" value="${hoje}"></div>
+      <div class="campo"><label>Status</label>
+        <select id="rl-status"><option value="">Todos</option>${STATUS_SOLICITACAO.map(s => `<option value="${s}">${ROTULO_STATUS_SOLICITACAO[s]}</option>`).join('')}</select></div>
+      <button class="btn" id="rl-buscar">Buscar</button>
+    </div>
+    <div id="rl-resultado"></div>`
+
+  let ultimaLista = []
+
+  const buscar = async () => {
+    const deVal = $('#rl-de').value
+    const ateVal = $('#rl-ate').value
+    const statusVal = $('#rl-status').value
+    $('#rl-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
+
+    let q = db.from('solicitacao_interna').select(`
+      id, codigo, titulo, urgencia, status, data_solicitacao, data_limite, data_conclusao, pontuacao_agilidade,
+      setor:setor_destino_id ( nome ), solicitante:solicitante_id ( nome ), responsavel:responsavel_id ( nome )
+    `).gte('data_solicitacao', deVal).lte('data_solicitacao', ateVal + 'T23:59:59').order('data_solicitacao', { ascending: false }).limit(3000)
+    if (statusVal) q = q.eq('status', statusVal)
+
+    const { data, error } = await q
+    if (faltaMigracao(error) || error) { $('#rl-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+    ultimaLista = data || []
+    if (!ultimaLista.length) { $('#rl-resultado').innerHTML = `<p class="vazio">Nenhuma solicitação nesse período.</p>`; return }
+
+    $('#rl-resultado').innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+        <p class="texto-dim2" style="margin:0;">${ultimaLista.length} solicitaç${ultimaLista.length > 1 ? 'ões' : 'ão'} encontrada${ultimaLista.length > 1 ? 's' : ''}</p>
+        <div style="display:flex;gap:8px;">
+          <button class="btn-secundario mini" id="rl-excel">⬇ Exportar Excel</button>
+          <button class="btn-secundario mini" id="rl-pdf">⬇ Exportar PDF</button>
+        </div>
+      </div>
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr>
+          <th>Código</th><th>Título</th><th>Setor</th><th>Solicitante</th><th>Responsável</th>
+          <th>Urgência</th><th>Status</th><th>Aberta em</th><th>Prazo</th><th>Concluída em</th><th>Agilidade</th>
+        </tr></thead><tbody>
+          ${ultimaLista.map(s => `<tr>
+            <td>${esc(s.codigo)}</td>
+            <td>${esc(s.titulo)}</td>
+            <td>${esc(s.setor?.nome ?? '—')}</td>
+            <td>${esc(s.solicitante?.nome ?? '—')}</td>
+            <td>${esc(s.responsavel?.nome ?? '—')}</td>
+            <td><span class="${corUrgenciaSolicitacao(s.urgencia)}">${esc(ROTULO_URGENCIA_SOLICITACAO[s.urgencia] ?? s.urgencia)}</span></td>
+            <td><span class="${corStatusSolicitacao(s.status)}">${esc(ROTULO_STATUS_SOLICITACAO[s.status] ?? s.status)}</span>${estaAtrasadaSolicitacao(s) ? ' <span class="badge-alerta" style="font-size:10px;">atrasada</span>' : ''}</td>
+            <td>${fmtData(s.data_solicitacao)}</td>
+            <td>${s.data_limite ? fmtData(s.data_limite) : '—'}</td>
+            <td>${s.data_conclusao ? fmtData(s.data_conclusao) : '—'}</td>
+            <td>${(() => { const n = pontuacaoAgilidadeSolicitacao(s); return n != null ? `<span class="${corAgilidade(n)}">${n}</span>` : '—' })()}</td>
+          </tr>`).join('')}
+        </tbody></table>
+      </div></div>`
+
+    $('#rl-excel').onclick = () => exportarRelatorioExcel('relatorio_solicitacoes', COLUNAS_REL_SOLICITACOES, ultimaLista.map(linhaRelSolicitacao))
+    $('#rl-pdf').onclick = () => exportarRelatorioPDF('Relatório de Solicitações', COLUNAS_REL_SOLICITACOES, ultimaLista.map(linhaRelSolicitacao))
+  }
+
+  $('#rl-buscar').onclick = buscar
+  buscar()
+}
+
+// ----- Relatório: Compras -----
+const COLUNAS_REL_COMPRAS = ['Número', 'Produto/Serviço', 'Setor', 'Solicitante', 'Urgência', 'Status', 'Fornecedor', 'Valor estimado', 'Valor aprovado', 'Data solicitação']
+function linhaRelCompra (c) {
+  return [
+    c.numero ?? '—', c.produto_servico ?? '—', c.setor?.nome ?? '—', c.solicitante?.nome ?? '—',
+    URGENCIA[c.urgencia] ?? c.urgencia ?? '—', STATUS_COMPRA[c.status]?.rotulo ?? c.status ?? '—',
+    c.fornecedor?.nome ?? '—', c.valor_estimado != null ? `R$ ${fmtNum(c.valor_estimado)}` : '—',
+    c.valor_aprovado != null ? `R$ ${fmtNum(c.valor_aprovado)}` : '—', fmtData((c.data_solicitacao || '').slice(0, 10))
+  ]
+}
+
+async function relCompras (alvo) {
+  const hoje = new Date().toISOString().slice(0, 10)
+  const de = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10)
+
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>De</label><input type="date" id="rc-de" value="${de}"></div>
+      <div class="campo"><label>Até</label><input type="date" id="rc-ate" value="${hoje}"></div>
+      <div class="campo"><label>Status</label>
+        <select id="rc-status"><option value="">Todos</option>${Object.entries(STATUS_COMPRA).map(([k, v]) => `<option value="${k}">${esc(v.rotulo)}</option>`).join('')}</select></div>
+      <button class="btn" id="rc-buscar">Buscar</button>
+    </div>
+    <div id="rc-resultado"></div>`
+
+  let ultimaLista = []
+  const buscar = async () => {
+    const deVal = $('#rc-de').value
+    const ateVal = $('#rc-ate').value
+    const statusVal = $('#rc-status').value
+    $('#rc-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
+
+    let q = db.from('solicitacao_compra').select(`
+      id, numero, status, urgencia, produto_servico, valor_estimado, valor_aprovado, data_solicitacao,
+      setor:setor_id ( nome ), solicitante:solicitante_id ( nome ), fornecedor:fornecedor_id ( nome )
+    `).gte('data_solicitacao', deVal).lte('data_solicitacao', ateVal + 'T23:59:59').order('data_solicitacao', { ascending: false }).limit(3000)
+    if (statusVal) q = q.eq('status', statusVal)
+
+    const { data, error } = await q
+    if (faltaMigracao(error) || error) { $('#rc-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+    ultimaLista = data || []
+    if (!ultimaLista.length) { $('#rc-resultado').innerHTML = `<p class="vazio">Nenhuma solicitação de compra nesse período.</p>`; return }
+
+    $('#rc-resultado').innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+        <p class="texto-dim2" style="margin:0;">${ultimaLista.length} solicitaç${ultimaLista.length > 1 ? 'ões' : 'ão'} encontrada${ultimaLista.length > 1 ? 's' : ''}</p>
+        <div style="display:flex;gap:8px;">
+          <button class="btn-secundario mini" id="rc-excel">⬇ Exportar Excel</button>
+          <button class="btn-secundario mini" id="rc-pdf">⬇ Exportar PDF</button>
+        </div>
+      </div>
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr>
+          <th>Número</th><th>Produto/Serviço</th><th>Setor</th><th>Solicitante</th><th>Urgência</th>
+          <th>Status</th><th>Fornecedor</th><th>Valor estimado</th><th>Valor aprovado</th><th>Data solicitação</th>
+        </tr></thead><tbody>
+          ${ultimaLista.map(c => `<tr>
+            <td>${esc(c.numero ?? '—')}</td>
+            <td>${esc(c.produto_servico ?? '—')}</td>
+            <td>${esc(c.setor?.nome ?? '—')}</td>
+            <td>${esc(c.solicitante?.nome ?? '—')}</td>
+            <td>${esc(URGENCIA[c.urgencia] ?? c.urgencia ?? '—')}</td>
+            <td>${selo(c.status)}</td>
+            <td>${esc(c.fornecedor?.nome ?? '—')}</td>
+            <td>${c.valor_estimado != null ? `R$ ${fmtNum(c.valor_estimado)}` : '—'}</td>
+            <td>${c.valor_aprovado != null ? `R$ ${fmtNum(c.valor_aprovado)}` : '—'}</td>
+            <td>${fmtData((c.data_solicitacao || '').slice(0, 10))}</td>
+          </tr>`).join('')}
+        </tbody></table>
+      </div></div>`
+
+    $('#rc-excel').onclick = () => exportarRelatorioExcel('relatorio_compras', COLUNAS_REL_COMPRAS, ultimaLista.map(linhaRelCompra))
+    $('#rc-pdf').onclick = () => exportarRelatorioPDF('Relatório de Compras', COLUNAS_REL_COMPRAS, ultimaLista.map(linhaRelCompra))
+  }
+
+  $('#rc-buscar').onclick = buscar
+  buscar()
+}
+
+// ----- Relatório: Projetos -----
+const COLUNAS_REL_PROJETOS = ['Nome', 'Setor', 'Criado por', 'Progresso (%)', 'Situação', 'Prazo (SLA)', 'Criado em']
+function situacaoProjeto (p) {
+  if (p.arquivado) return 'Arquivado'
+  if (p.pausado) return 'Pausado'
+  return 'Ativo'
+}
+function linhaRelProjeto (p) {
+  return [p.nome, p.setor?.nome ?? '—', p.criadoPor?.nome ?? '—', p.progresso ?? 0, situacaoProjeto(p),
+    p.sla ? fmtData(p.sla) : '—', fmtData((p.criado_em || '').slice(0, 10))]
+}
+
+async function relProjetos (alvo) {
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>Situação</label>
+        <select id="rp-situacao"><option value="">Todas</option><option value="Ativo">Ativo</option><option value="Pausado">Pausado</option><option value="Arquivado">Arquivado</option></select></div>
+      <button class="btn" id="rp-buscar">Buscar</button>
+    </div>
+    <div id="rp-resultado"></div>`
+
+  let ultimaLista = []
+  const buscar = async () => {
+    const situacaoVal = $('#rp-situacao').value
+    $('#rp-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
+
+    const { data, error } = await db.from('projeto').select(`
+      id, nome, progresso, pausado, arquivado, sla, criado_em,
+      setor:setor_id ( nome ), criadoPor:criado_por_id ( nome )
+    `).order('criado_em', { ascending: false }).limit(1000)
+
+    if (faltaMigracao(error) || error) { $('#rp-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+    ultimaLista = (data || []).filter(p => !situacaoVal || situacaoProjeto(p) === situacaoVal)
+    if (!ultimaLista.length) { $('#rp-resultado').innerHTML = `<p class="vazio">Nenhum projeto encontrado.</p>`; return }
+
+    $('#rp-resultado').innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+        <p class="texto-dim2" style="margin:0;">${ultimaLista.length} projeto${ultimaLista.length > 1 ? 's' : ''} encontrado${ultimaLista.length > 1 ? 's' : ''}</p>
+        <div style="display:flex;gap:8px;">
+          <button class="btn-secundario mini" id="rp-excel">⬇ Exportar Excel</button>
+          <button class="btn-secundario mini" id="rp-pdf">⬇ Exportar PDF</button>
+        </div>
+      </div>
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr><th>Nome</th><th>Setor</th><th>Criado por</th><th>Progresso</th><th>Situação</th><th>Prazo</th><th>Criado em</th></tr></thead><tbody>
+          ${ultimaLista.map(p => `<tr>
+            <td>${esc(p.nome)}</td>
+            <td>${esc(p.setor?.nome ?? '—')}</td>
+            <td>${esc(p.criadoPor?.nome ?? '—')}</td>
+            <td>${p.progresso ?? 0}%</td>
+            <td><span class="chip">${situacaoProjeto(p)}</span></td>
+            <td>${p.sla ? fmtData(p.sla) : '—'}</td>
+            <td>${fmtData((p.criado_em || '').slice(0, 10))}</td>
+          </tr>`).join('')}
+        </tbody></table>
+      </div></div>`
+
+    $('#rp-excel').onclick = () => exportarRelatorioExcel('relatorio_projetos', COLUNAS_REL_PROJETOS, ultimaLista.map(linhaRelProjeto))
+    $('#rp-pdf').onclick = () => exportarRelatorioPDF('Relatório de Projetos', COLUNAS_REL_PROJETOS, ultimaLista.map(linhaRelProjeto))
+  }
+
+  $('#rp-buscar').onclick = buscar
+  buscar()
+}
+
+// ----- Relatório: RH (Vagas, PDI, Avaliação 360) -----
+async function relRH (alvo) {
+  alvo.innerHTML = `
+    <div class="subabas">
+      <button data-rh="vagas" class="ativo">Vagas</button>
+      <button data-rh="pdi">PDI</button>
+      <button data-rh="360">Avaliação 360</button>
+    </div>
+    <div id="rh-conteudo"></div>`
+
+  alvo.querySelectorAll('.subabas button').forEach(b => {
+    b.onclick = () => {
+      alvo.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
+      abrirRelRH(b.dataset.rh)
+    }
+  })
+  abrirRelRH('vagas')
+}
+
+function abrirRelRH (sub) {
+  const alvo = $('#rh-conteudo')
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  if (sub === 'vagas') relVagas(alvo)
+  if (sub === 'pdi') relPDI(alvo)
+  if (sub === '360') relAvaliacao360(alvo)
+}
+
+const COLUNAS_REL_VAGAS = ['Cargo', 'Setor', 'Tipo de contratação', 'Etapa', 'Status', 'Aberta em', 'Fechada em', 'Selecionado']
+function linhaRelVaga (v) {
+  return [v.cargo, v.setor?.nome ?? '—', v.tipo_contratacao ?? '—', ROTULO_ETAPA_VAGA[v.etapa] ?? v.etapa ?? '—',
+    v.status ?? '—', v.aberta_em ? fmtData(v.aberta_em.slice(0, 10)) : '—', v.fechada_em ? fmtData(v.fechada_em.slice(0, 10)) : '—',
+    v.selecionado?.nome ?? '—']
+}
+
+async function relVagas (alvo) {
+  const hoje = new Date().toISOString().slice(0, 10)
+  const de = new Date(Date.now() - 180 * 864e5).toISOString().slice(0, 10)
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>Abertas de</label><input type="date" id="rv-de" value="${de}"></div>
+      <div class="campo"><label>até</label><input type="date" id="rv-ate" value="${hoje}"></div>
+      <button class="btn" id="rv-buscar">Buscar</button>
+    </div>
+    <div id="rv-resultado"></div>`
+
+  let ultimaLista = []
+  const buscar = async () => {
+    const deVal = $('#rv-de').value, ateVal = $('#rv-ate').value
+    $('#rv-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
+    const { data, error } = await db.from('vaga').select(`
+      id, cargo, tipo_contratacao, etapa, status, aberta_em, fechada_em,
+      setor:setor_id ( nome ), selecionado:candidato_selecionado_id ( nome )
+    `).gte('aberta_em', deVal).lte('aberta_em', ateVal + 'T23:59:59').order('aberta_em', { ascending: false }).limit(1000)
+
+    if (faltaMigracao(error) || error) { $('#rv-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+    ultimaLista = data || []
+    if (!ultimaLista.length) { $('#rv-resultado').innerHTML = `<p class="vazio">Nenhuma vaga nesse período.</p>`; return }
+
+    $('#rv-resultado').innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+        <p class="texto-dim2" style="margin:0;">${ultimaLista.length} vaga${ultimaLista.length > 1 ? 's' : ''} encontrada${ultimaLista.length > 1 ? 's' : ''}</p>
+        <div style="display:flex;gap:8px;">
+          <button class="btn-secundario mini" id="rv-excel">⬇ Exportar Excel</button>
+          <button class="btn-secundario mini" id="rv-pdf">⬇ Exportar PDF</button>
+        </div>
+      </div>
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr><th>Cargo</th><th>Setor</th><th>Tipo</th><th>Etapa</th><th>Status</th><th>Aberta em</th><th>Fechada em</th><th>Selecionado</th></tr></thead><tbody>
+          ${ultimaLista.map(v => `<tr>
+            <td>${esc(v.cargo)}</td><td>${esc(v.setor?.nome ?? '—')}</td><td>${esc(v.tipo_contratacao ?? '—')}</td>
+            <td><span class="chip">${esc(ROTULO_ETAPA_VAGA[v.etapa] ?? v.etapa ?? '—')}</span></td>
+            <td>${esc(v.status ?? '—')}</td>
+            <td>${v.aberta_em ? fmtData(v.aberta_em.slice(0, 10)) : '—'}</td>
+            <td>${v.fechada_em ? fmtData(v.fechada_em.slice(0, 10)) : '—'}</td>
+            <td>${esc(v.selecionado?.nome ?? '—')}</td>
+          </tr>`).join('')}
+        </tbody></table>
+      </div></div>`
+
+    $('#rv-excel').onclick = () => exportarRelatorioExcel('relatorio_vagas', COLUNAS_REL_VAGAS, ultimaLista.map(linhaRelVaga))
+    $('#rv-pdf').onclick = () => exportarRelatorioPDF('Relatório de Vagas', COLUNAS_REL_VAGAS, ultimaLista.map(linhaRelVaga))
+  }
+  $('#rv-buscar').onclick = buscar
+  buscar()
+}
+
+const COLUNAS_REL_PDI = ['Pessoa', 'Objetivo', 'Responsável', 'Prazo', 'Status', 'Criado em', 'Concluído em']
+function linhaRelPDI (p) {
+  return [p.pessoa?.nome ?? '—', p.objetivo ?? '—', p.responsavel?.nome ?? '—', p.prazo ? fmtData(p.prazo) : '—',
+    ROTULO_STATUS_PDI[p.status] ?? p.status, fmtData((p.criado_em || '').slice(0, 10)), p.concluido_em ? fmtData(p.concluido_em.slice(0, 10)) : '—']
+}
+
+async function relPDI (alvo) {
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>Status</label>
+        <select id="rd-status"><option value="">Todos</option>${Object.entries(ROTULO_STATUS_PDI).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div>
+      <button class="btn" id="rd-buscar">Buscar</button>
+    </div>
+    <div id="rd-resultado"></div>`
+
+  let ultimaLista = []
+  const buscar = async () => {
+    const statusVal = $('#rd-status').value
+    $('#rd-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
+    let q = db.from('plano_desenvolvimento').select(`
+      id, objetivo, prazo, status, criado_em, concluido_em,
+      pessoa:pessoa_id ( nome ), responsavel:responsavel_acompanhamento_id ( nome )
+    `).order('criado_em', { ascending: false }).limit(1000)
+    if (statusVal) q = q.eq('status', statusVal)
+
+    const { data, error } = await q
+    if (faltaMigracao(error) || error) { $('#rd-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+    ultimaLista = data || []
+    if (!ultimaLista.length) { $('#rd-resultado').innerHTML = `<p class="vazio">Nenhum PDI encontrado.</p>`; return }
+
+    $('#rd-resultado').innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+        <p class="texto-dim2" style="margin:0;">${ultimaLista.length} PDI${ultimaLista.length > 1 ? 's' : ''} encontrado${ultimaLista.length > 1 ? 's' : ''}</p>
+        <div style="display:flex;gap:8px;">
+          <button class="btn-secundario mini" id="rd-excel">⬇ Exportar Excel</button>
+          <button class="btn-secundario mini" id="rd-pdf">⬇ Exportar PDF</button>
+        </div>
+      </div>
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr><th>Pessoa</th><th>Objetivo</th><th>Responsável</th><th>Prazo</th><th>Status</th><th>Criado em</th><th>Concluído em</th></tr></thead><tbody>
+          ${ultimaLista.map(p => `<tr>
+            <td>${esc(p.pessoa?.nome ?? '—')}</td><td>${esc(p.objetivo ?? '—')}</td><td>${esc(p.responsavel?.nome ?? '—')}</td>
+            <td>${p.prazo ? fmtData(p.prazo) : '—'}</td>
+            <td><span class="${p.status === 'CONCLUIDO' ? 'badge-bom' : p.status === 'ATRASADO' ? 'badge-alerta' : 'chip'}">${esc(ROTULO_STATUS_PDI[p.status] ?? p.status)}</span></td>
+            <td>${fmtData((p.criado_em || '').slice(0, 10))}</td>
+            <td>${p.concluido_em ? fmtData(p.concluido_em.slice(0, 10)) : '—'}</td>
+          </tr>`).join('')}
+        </tbody></table>
+      </div></div>`
+
+    $('#rd-excel').onclick = () => exportarRelatorioExcel('relatorio_pdi', COLUNAS_REL_PDI, ultimaLista.map(linhaRelPDI))
+    $('#rd-pdf').onclick = () => exportarRelatorioPDF('Relatório de PDI', COLUNAS_REL_PDI, ultimaLista.map(linhaRelPDI))
+  }
+  $('#rd-buscar').onclick = buscar
+  buscar()
+}
+
+const ROTULO_STATUS_360_RESPOSTA = { PENDENTE: 'Pendente', RESPONDIDO: 'Respondido' }
+const COLUNAS_REL_360 = ['Ciclo', 'Avaliado', 'Avaliador', 'Tipo', 'Status', 'Nota técnica', 'Nota equipe', 'Nota comunicação', 'Nota liderança', 'Nota proatividade', 'Respondido em']
+function linhaRel360 (r) {
+  return [r.ciclo?.nome ?? '—', r.avaliado?.nome ?? '—', r.avaliador?.nome ?? '—', ROTULO_TIPO_360[r.tipo] ?? r.tipo,
+    ROTULO_STATUS_360_RESPOSTA[r.status] ?? r.status ?? '—', r.nota_competencia_tecnica ?? '—', r.nota_trabalho_equipe ?? '—',
+    r.nota_comunicacao ?? '—', r.nota_lideranca ?? '—', r.nota_proatividade ?? '—',
+    r.respondido_em ? fmtQuando(r.respondido_em) : '—']
+}
+
+async function relAvaliacao360 (alvo) {
+  const { data: ciclos } = await db.from('avaliacao_360_ciclo').select('id,nome').order('criado_em', { ascending: false }).limit(50)
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>Ciclo</label>
+        <select id="r360-ciclo"><option value="">Todos</option>${(ciclos || []).map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('')}</select></div>
+      <div class="campo"><label>Tipo</label>
+        <select id="r360-tipo"><option value="">Todos</option>${Object.entries(ROTULO_TIPO_360).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div>
+      <button class="btn" id="r360-buscar">Buscar</button>
+    </div>
+    <div id="r360-resultado"></div>`
+
+  let ultimaLista = []
+  const buscar = async () => {
+    const cicloVal = $('#r360-ciclo').value, tipoVal = $('#r360-tipo').value
+    $('#r360-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
+    let q = db.from('avaliacao_360_resposta').select(`
+      id, tipo, status, respondido_em, criado_em,
+      nota_competencia_tecnica, nota_trabalho_equipe, nota_comunicacao, nota_lideranca, nota_proatividade,
+      ciclo:ciclo_id ( nome ), avaliado:avaliado_id ( nome ), avaliador:avaliador_id ( nome )
+    `).order('criado_em', { ascending: false }).limit(2000)
+    if (cicloVal) q = q.eq('ciclo_id', cicloVal)
+    if (tipoVal) q = q.eq('tipo', tipoVal)
+
+    const { data, error } = await q
+    if (faltaMigracao(error) || error) { $('#r360-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+    ultimaLista = data || []
+    if (!ultimaLista.length) { $('#r360-resultado').innerHTML = `<p class="vazio">Nenhuma avaliação encontrada.</p>`; return }
+
+    $('#r360-resultado').innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+        <p class="texto-dim2" style="margin:0;">${ultimaLista.length} avalia${ultimaLista.length > 1 ? 'ções' : 'ção'} encontrada${ultimaLista.length > 1 ? 's' : ''}</p>
+        <div style="display:flex;gap:8px;">
+          <button class="btn-secundario mini" id="r360-excel">⬇ Exportar Excel</button>
+          <button class="btn-secundario mini" id="r360-pdf">⬇ Exportar PDF</button>
+        </div>
+      </div>
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr><th>Ciclo</th><th>Avaliado</th><th>Avaliador</th><th>Tipo</th><th>Status</th>
+          <th>Técnica</th><th>Equipe</th><th>Comunicação</th><th>Liderança</th><th>Proatividade</th><th>Respondido em</th>
+        </tr></thead><tbody>
+          ${ultimaLista.map(r => `<tr>
+            <td>${esc(r.ciclo?.nome ?? '—')}</td><td>${esc(r.avaliado?.nome ?? '—')}</td><td>${esc(r.avaliador?.nome ?? '—')}</td>
+            <td><span class="chip">${esc(ROTULO_TIPO_360[r.tipo] ?? r.tipo)}</span></td>
+            <td>${esc(ROTULO_STATUS_360_RESPOSTA[r.status] ?? r.status ?? '—')}</td>
+            <td>${r.nota_competencia_tecnica ?? '—'}</td><td>${r.nota_trabalho_equipe ?? '—'}</td>
+            <td>${r.nota_comunicacao ?? '—'}</td><td>${r.nota_lideranca ?? '—'}</td><td>${r.nota_proatividade ?? '—'}</td>
+            <td>${r.respondido_em ? fmtQuando(r.respondido_em) : '—'}</td>
+          </tr>`).join('')}
+        </tbody></table>
+      </div></div>`
+
+    $('#r360-excel').onclick = () => exportarRelatorioExcel('relatorio_avaliacao_360', COLUNAS_REL_360, ultimaLista.map(linhaRel360))
+    $('#r360-pdf').onclick = () => exportarRelatorioPDF('Relatório de Avaliação 360', COLUNAS_REL_360, ultimaLista.map(linhaRel360))
+  }
+  $('#r360-buscar').onclick = buscar
+  buscar()
+}
+
+// ----- Relatório: CRM Comercial -----
+const COLUNAS_REL_CRM = ['Nome', 'Cliente', 'Vendedor', 'Origem', 'UF/Município', 'Etapa', 'Valor estimado', 'Criado em']
+function linhaRelCrm (l) {
+  return [l.nome ?? '—', l.cliente?.nome_fantasia || l.cliente?.razao_social || '—', l.vendedor?.nome ?? '—',
+    l.origem ?? '—', [l.uf, l.municipio].filter(Boolean).join('/') || '—',
+    ROTULO_ETAPA_LEAD[l.etapa] ?? l.etapa, l.valor_estimado != null ? `R$ ${fmtNum(l.valor_estimado)}` : '—',
+    fmtData((l.criado_em || '').slice(0, 10))]
+}
+
+async function relCrmComercial (alvo) {
+  const hoje = new Date().toISOString().slice(0, 10)
+  const de = new Date(Date.now() - 90 * 864e5).toISOString().slice(0, 10)
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>De</label><input type="date" id="rcm-de" value="${de}"></div>
+      <div class="campo"><label>Até</label><input type="date" id="rcm-ate" value="${hoje}"></div>
+      <div class="campo"><label>Etapa</label>
+        <select id="rcm-etapa"><option value="">Todas</option>${ETAPAS_LEAD.map(e => `<option value="${e}">${ROTULO_ETAPA_LEAD[e]}</option>`).join('')}</select></div>
+      <button class="btn" id="rcm-buscar">Buscar</button>
+    </div>
+    <div id="rcm-resultado"></div>`
+
+  let ultimaLista = []
+  const buscar = async () => {
+    const deVal = $('#rcm-de').value, ateVal = $('#rcm-ate').value, etapaVal = $('#rcm-etapa').value
+    $('#rcm-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
+    let q = db.from('lead').select(`
+      id, nome, origem, uf, municipio, etapa, valor_estimado, criado_em,
+      cliente:cliente_id ( razao_social, nome_fantasia ), vendedor:vendedor_id ( nome )
+    `).gte('criado_em', deVal).lte('criado_em', ateVal + 'T23:59:59').order('criado_em', { ascending: false }).limit(3000)
+    if (etapaVal) q = q.eq('etapa', etapaVal)
+
+    const { data, error } = await q
+    if (faltaMigracao(error) || error) { $('#rcm-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+    ultimaLista = data || []
+    if (!ultimaLista.length) { $('#rcm-resultado').innerHTML = `<p class="vazio">Nenhum lead nesse período.</p>`; return }
+
+    $('#rcm-resultado').innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+        <p class="texto-dim2" style="margin:0;">${ultimaLista.length} lead${ultimaLista.length > 1 ? 's' : ''} encontrado${ultimaLista.length > 1 ? 's' : ''}</p>
+        <div style="display:flex;gap:8px;">
+          <button class="btn-secundario mini" id="rcm-excel">⬇ Exportar Excel</button>
+          <button class="btn-secundario mini" id="rcm-pdf">⬇ Exportar PDF</button>
+        </div>
+      </div>
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr><th>Nome</th><th>Cliente</th><th>Vendedor</th><th>Origem</th><th>UF/Município</th><th>Etapa</th><th>Valor estimado</th><th>Criado em</th></tr></thead><tbody>
+          ${ultimaLista.map(l => `<tr>
+            <td>${esc(l.nome ?? '—')}</td>
+            <td>${esc(l.cliente?.nome_fantasia || l.cliente?.razao_social || '—')}</td>
+            <td>${esc(l.vendedor?.nome ?? '—')}</td>
+            <td>${esc(l.origem ?? '—')}</td>
+            <td>${esc([l.uf, l.municipio].filter(Boolean).join('/') || '—')}</td>
+            <td><span class="${corEtapaLead(l.etapa)}">${esc(ROTULO_ETAPA_LEAD[l.etapa] ?? l.etapa)}</span></td>
+            <td>${l.valor_estimado != null ? `R$ ${fmtNum(l.valor_estimado)}` : '—'}</td>
+            <td>${fmtData((l.criado_em || '').slice(0, 10))}</td>
+          </tr>`).join('')}
+        </tbody></table>
+      </div></div>`
+
+    $('#rcm-excel').onclick = () => exportarRelatorioExcel('relatorio_crm_comercial', COLUNAS_REL_CRM, ultimaLista.map(linhaRelCrm))
+    $('#rcm-pdf').onclick = () => exportarRelatorioPDF('Relatório de CRM Comercial', COLUNAS_REL_CRM, ultimaLista.map(linhaRelCrm))
+  }
+  $('#rcm-buscar').onclick = buscar
+  buscar()
+}
+
+// ----- Relatório: SDR WhatsApp -----
+const COLUNAS_REL_SDR = ['Nome', 'Telefone', 'Status', 'Cultura', 'Volume de produção', 'Momento de compra', 'Perfil DISC', 'Pronto p/ handoff', 'Enviado ao consultor', 'Criado em']
+function linhaRelSdr (l) {
+  return [l.nome ?? '—', l.telefone ?? '—', l.status ?? '—', l.cultura ?? '—', l.volume_producao ?? '—',
+    l.momento_compra ?? '—', l.perfil_disc ?? '—', l.pronto_para_handoff ? 'Sim' : 'Não',
+    l.enviado_para_consultor ? 'Sim' : 'Não', fmtData((l.created_at || '').slice(0, 10))]
+}
+
+async function relSdrWhatsapp (alvo) {
+  const hoje = new Date().toISOString().slice(0, 10)
+  const de = new Date(Date.now() - 90 * 864e5).toISOString().slice(0, 10)
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>De</label><input type="date" id="rsd-de" value="${de}"></div>
+      <div class="campo"><label>Até</label><input type="date" id="rsd-ate" value="${hoje}"></div>
+      <div class="campo"><label>Status</label><select id="rsd-status"><option value="">Todos</option></select></div>
+      <button class="btn" id="rsd-buscar">Buscar</button>
+    </div>
+    <div id="rsd-resultado"></div>`
+
+  let ultimaLista = []
+  const buscar = async () => {
+    const deVal = $('#rsd-de').value, ateVal = $('#rsd-ate').value, statusVal = $('#rsd-status').value
+    $('#rsd-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
+    let q = db.from('leads').select(`
+      id, nome, telefone, status, cultura, volume_producao, momento_compra, perfil_disc,
+      pronto_para_handoff, enviado_para_consultor, created_at
+    `).gte('created_at', deVal).lte('created_at', ateVal + 'T23:59:59').order('created_at', { ascending: false }).limit(3000)
+    if (statusVal) q = q.eq('status', statusVal)
+
+    const { data, error } = await q
+    if (faltaMigracao(error) || error) { $('#rsd-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+    ultimaLista = data || []
+
+    const statusSel = $('#rsd-status')
+    if (statusSel.options.length === 1) {
+      const statusUnicos = [...new Set(ultimaLista.map(l => l.status).filter(Boolean))].sort()
+      statusUnicos.forEach(s => statusSel.insertAdjacentHTML('beforeend', `<option value="${esc(s)}">${esc(s)}</option>`))
+    }
+
+    if (!ultimaLista.length) { $('#rsd-resultado').innerHTML = `<p class="vazio">Nenhum lead nesse período.</p>`; return }
+
+    $('#rsd-resultado').innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+        <p class="texto-dim2" style="margin:0;">${ultimaLista.length} lead${ultimaLista.length > 1 ? 's' : ''} encontrado${ultimaLista.length > 1 ? 's' : ''}</p>
+        <div style="display:flex;gap:8px;">
+          <button class="btn-secundario mini" id="rsd-excel">⬇ Exportar Excel</button>
+          <button class="btn-secundario mini" id="rsd-pdf">⬇ Exportar PDF</button>
+        </div>
+      </div>
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr><th>Nome</th><th>Telefone</th><th>Status</th><th>Cultura</th><th>Volume produção</th><th>Momento compra</th><th>Perfil DISC</th><th>Pronto p/ handoff</th><th>Enviado consultor</th><th>Criado em</th></tr></thead><tbody>
+          ${ultimaLista.map(l => `<tr>
+            <td>${esc(l.nome ?? '—')}</td><td>${esc(l.telefone ?? '—')}</td><td><span class="chip">${esc(l.status ?? '—')}</span></td>
+            <td>${esc(l.cultura ?? '—')}</td><td>${esc(l.volume_producao ?? '—')}</td><td>${esc(l.momento_compra ?? '—')}</td>
+            <td>${esc(l.perfil_disc ?? '—')}</td>
+            <td>${l.pronto_para_handoff ? '<span class="badge-bom">sim</span>' : 'não'}</td>
+            <td>${l.enviado_para_consultor ? '<span class="badge-bom">sim</span>' : 'não'}</td>
+            <td>${fmtData((l.created_at || '').slice(0, 10))}</td>
+          </tr>`).join('')}
+        </tbody></table>
+      </div></div>`
+
+    $('#rsd-excel').onclick = () => exportarRelatorioExcel('relatorio_sdr_whatsapp', COLUNAS_REL_SDR, ultimaLista.map(linhaRelSdr))
+    $('#rsd-pdf').onclick = () => exportarRelatorioPDF('Relatório de SDR WhatsApp', COLUNAS_REL_SDR, ultimaLista.map(linhaRelSdr))
+  }
+  $('#rsd-buscar').onclick = buscar
+  buscar()
+}
+
+// ----- Relatório: CRM Técnico -----
+const COLUNAS_REL_CRM_TECNICO = ['Código', 'Nome', 'Município', 'Segmento', 'Nível', 'Fase', 'Área total (ha)', 'Potencial expansão (ha)', 'Responsável', 'Última visita']
+function linhaRelCrmTecnico (c) {
+  return [c.codigo ?? '—', c.nome ?? '—', c.municipio ?? '—', c.segmento ?? '—', c.nivel ?? '—', c.fase ?? '—',
+    c.area_total_ha ?? '—', c.potencial_expansao_ha ?? '—', c.responsavel?.nome ?? '—',
+    c.ultima_visita ? fmtData(c.ultima_visita) : '—']
+}
+
+async function relCrmTecnico (alvo) {
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>Fase</label><select id="rct-fase"><option value="">Todas</option></select></div>
+      <button class="btn" id="rct-buscar">Buscar</button>
+    </div>
+    <div id="rct-resultado"></div>`
+
+  let ultimaLista = []
+  const buscar = async () => {
+    const faseVal = $('#rct-fase').value
+    $('#rct-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
+    let q = db.from('tecnico_cliente').select(`
+      id, codigo, nome, municipio, segmento, nivel, fase, area_total_ha, potencial_expansao_ha, ultima_visita, criado_em,
+      responsavel:responsavel_id ( nome )
+    `).order('criado_em', { ascending: false }).limit(2000)
+    if (faseVal) q = q.eq('fase', faseVal)
+
+    const { data, error } = await q
+    if (faltaMigracao(error) || error) { $('#rct-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+    ultimaLista = data || []
+
+    const faseSel = $('#rct-fase')
+    if (faseSel.options.length === 1) {
+      const fasesUnicas = [...new Set((data || []).map(c => c.fase).filter(Boolean))].sort()
+      fasesUnicas.forEach(f => faseSel.insertAdjacentHTML('beforeend', `<option value="${esc(f)}">${esc(f)}</option>`))
+    }
+
+    if (!ultimaLista.length) { $('#rct-resultado').innerHTML = `<p class="vazio">Nenhum cliente técnico cadastrado ainda.</p>`; return }
+
+    $('#rct-resultado').innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+        <p class="texto-dim2" style="margin:0;">${ultimaLista.length} cliente${ultimaLista.length > 1 ? 's' : ''} encontrado${ultimaLista.length > 1 ? 's' : ''}</p>
+        <div style="display:flex;gap:8px;">
+          <button class="btn-secundario mini" id="rct-excel">⬇ Exportar Excel</button>
+          <button class="btn-secundario mini" id="rct-pdf">⬇ Exportar PDF</button>
+        </div>
+      </div>
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr><th>Código</th><th>Nome</th><th>Município</th><th>Segmento</th><th>Nível</th><th>Fase</th><th>Área total (ha)</th><th>Potencial expansão (ha)</th><th>Responsável</th><th>Última visita</th></tr></thead><tbody>
+          ${ultimaLista.map(c => `<tr>
+            <td>${esc(c.codigo ?? '—')}</td><td>${esc(c.nome ?? '—')}</td><td>${esc(c.municipio ?? '—')}</td>
+            <td>${esc(c.segmento ?? '—')}</td><td>${esc(c.nivel ?? '—')}</td><td><span class="chip">${esc(c.fase ?? '—')}</span></td>
+            <td>${c.area_total_ha ?? '—'}</td><td>${c.potencial_expansao_ha ?? '—'}</td>
+            <td>${esc(c.responsavel?.nome ?? '—')}</td><td>${c.ultima_visita ? fmtData(c.ultima_visita) : '—'}</td>
+          </tr>`).join('')}
+        </tbody></table>
+      </div></div>`
+
+    $('#rct-excel').onclick = () => exportarRelatorioExcel('relatorio_crm_tecnico', COLUNAS_REL_CRM_TECNICO, ultimaLista.map(linhaRelCrmTecnico))
+    $('#rct-pdf').onclick = () => exportarRelatorioPDF('Relatório de CRM Técnico', COLUNAS_REL_CRM_TECNICO, ultimaLista.map(linhaRelCrmTecnico))
+  }
+  $('#rct-buscar').onclick = buscar
+  buscar()
+}
+
+// ----- Relatório: Faturamento -----
+const ROTULO_STATUS_PEDIDO = { EMITIDO: 'Emitido', CONCLUIDO: 'Concluído', CANCELADO: 'Cancelado' }
+const ROTULO_SITUACAO_PAGAMENTO = { EM_ABERTO: 'Em aberto', PARCIAL: 'Parcial', QUITADO: 'Quitado', CANCELADO: 'Cancelado' }
+const COLUNAS_REL_FATURAMENTO = ['Número', 'Cliente', 'Vendedor', 'Produto', 'Quantidade (t)', 'Valor total', 'Situação pagamento', 'Status', 'Data pedido', 'Vencimento']
+function linhaRelFaturamento (p) {
+  return [p.numero ?? '—', p.cliente?.nome_fantasia || p.cliente?.razao_social || '—', p.vendedor?.nome ?? '—',
+    p.produto?.nome ?? '—', p.quantidade_t ?? '—', p.valor_total != null ? `R$ ${fmtNum(p.valor_total)}` : '—',
+    ROTULO_SITUACAO_PAGAMENTO[p.situacao_pagamento] ?? p.situacao_pagamento ?? '—',
+    ROTULO_STATUS_PEDIDO[p.status] ?? p.status ?? '—', fmtData(p.data_pedido), p.vencimento ? fmtData(p.vencimento) : '—']
+}
+
+async function relFaturamento (alvo) {
+  const hoje = new Date().toISOString().slice(0, 10)
+  const de = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10)
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>De</label><input type="date" id="rf-de" value="${de}"></div>
+      <div class="campo"><label>Até</label><input type="date" id="rf-ate" value="${hoje}"></div>
+      <div class="campo"><label>Situação pagamento</label>
+        <select id="rf-situacao"><option value="">Todas</option>${Object.entries(ROTULO_SITUACAO_PAGAMENTO).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div>
+      <button class="btn" id="rf-buscar">Buscar</button>
+    </div>
+    <div id="rf-resultado"></div>`
+
+  let ultimaLista = []
+  const buscar = async () => {
+    const deVal = $('#rf-de').value, ateVal = $('#rf-ate').value, situacaoVal = $('#rf-situacao').value
+    $('#rf-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
+    let q = db.from('pedido').select(`
+      id, numero, quantidade_t, valor_total, status, situacao_pagamento, data_pedido, vencimento,
+      cliente:cliente_id ( razao_social, nome_fantasia ), vendedor:vendedor_id ( nome ), produto:produto_id ( nome )
+    `).gte('data_pedido', deVal).lte('data_pedido', ateVal).order('data_pedido', { ascending: false }).limit(3000)
+    if (situacaoVal) q = q.eq('situacao_pagamento', situacaoVal)
+
+    const { data, error } = await q
+    if (faltaMigracao(error) || error) { $('#rf-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+    ultimaLista = data || []
+    if (!ultimaLista.length) { $('#rf-resultado').innerHTML = `<p class="vazio">Nenhum pedido nesse período.</p>`; return }
+
+    $('#rf-resultado').innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+        <p class="texto-dim2" style="margin:0;">${ultimaLista.length} pedido${ultimaLista.length > 1 ? 's' : ''} encontrado${ultimaLista.length > 1 ? 's' : ''}</p>
+        <div style="display:flex;gap:8px;">
+          <button class="btn-secundario mini" id="rf-excel">⬇ Exportar Excel</button>
+          <button class="btn-secundario mini" id="rf-pdf">⬇ Exportar PDF</button>
+        </div>
+      </div>
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr><th>Número</th><th>Cliente</th><th>Vendedor</th><th>Produto</th><th>Quantidade (t)</th><th>Valor total</th><th>Situação pagamento</th><th>Status</th><th>Data pedido</th><th>Vencimento</th></tr></thead><tbody>
+          ${ultimaLista.map(p => `<tr>
+            <td>${esc(p.numero ?? '—')}</td>
+            <td>${esc(p.cliente?.nome_fantasia || p.cliente?.razao_social || '—')}</td>
+            <td>${esc(p.vendedor?.nome ?? '—')}</td>
+            <td>${esc(p.produto?.nome ?? '—')}</td>
+            <td>${p.quantidade_t ?? '—'}</td>
+            <td>${p.valor_total != null ? `R$ ${fmtNum(p.valor_total)}` : '—'}</td>
+            <td><span class="chip">${esc(ROTULO_SITUACAO_PAGAMENTO[p.situacao_pagamento] ?? p.situacao_pagamento ?? '—')}</span></td>
+            <td>${esc(ROTULO_STATUS_PEDIDO[p.status] ?? p.status ?? '—')}</td>
+            <td>${fmtData(p.data_pedido)}</td>
+            <td>${p.vencimento ? fmtData(p.vencimento) : '—'}</td>
+          </tr>`).join('')}
+        </tbody></table>
+      </div></div>`
+
+    $('#rf-excel').onclick = () => exportarRelatorioExcel('relatorio_faturamento', COLUNAS_REL_FATURAMENTO, ultimaLista.map(linhaRelFaturamento))
+    $('#rf-pdf').onclick = () => exportarRelatorioPDF('Relatório de Faturamento', COLUNAS_REL_FATURAMENTO, ultimaLista.map(linhaRelFaturamento))
+  }
+  $('#rf-buscar').onclick = buscar
+  buscar()
+}
+
+// ----- Relatório: Cadastro de Funcionários -----
+const COLUNAS_REL_FUNCIONARIOS = ['Nome', 'CPF', 'Cargo', 'Setor', 'Empresa', 'Vínculo', 'Tipo', 'Telefone', 'E-mail', 'Admissão', 'Status']
+function linhaRelFuncionario (p) {
+  return [p.nome, p.cpf ?? '—', p.cargo ?? '—', p.setor?.nome ?? '—', p.empresa?.nome ?? '—', p.vinculo ?? '—',
+    p.tipo ?? '—', p.telefone ?? '—', p.email ?? '—', p.data_admissao ? fmtData(p.data_admissao) : '—', p.status ?? '—']
+}
+
+async function relCadastroFuncionarios (alvo) {
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>Status</label>
+        <select id="rf2-status"><option value="ATIVO">Ativos</option><option value="">Todos</option><option value="INATIVO">Inativos</option></select></div>
+      <button class="btn" id="rf2-buscar">Buscar</button>
+    </div>
+    <div id="rf2-resultado"></div>`
+
+  let ultimaLista = []
+  const buscar = async () => {
+    const statusVal = $('#rf2-status').value
+    $('#rf2-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
+    let q = db.from('pessoa').select(`
+      id, nome, cpf, cargo, tipo, vinculo, status, telefone, email, data_admissao,
+      setor:setor_id ( nome ), empresa:empresa_id ( nome )
+    `).order('nome').limit(3000)
+    if (statusVal) q = q.eq('status', statusVal)
+
+    const { data, error } = await q
+    if (faltaMigracao(error) || error) { $('#rf2-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+    ultimaLista = data || []
+    if (!ultimaLista.length) { $('#rf2-resultado').innerHTML = `<p class="vazio">Nenhum funcionário encontrado.</p>`; return }
+
+    $('#rf2-resultado').innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+        <p class="texto-dim2" style="margin:0;">${ultimaLista.length} funcionário${ultimaLista.length > 1 ? 's' : ''} encontrado${ultimaLista.length > 1 ? 's' : ''}</p>
+        <div style="display:flex;gap:8px;">
+          <button class="btn-secundario mini" id="rf2-excel">⬇ Exportar Excel</button>
+          <button class="btn-secundario mini" id="rf2-pdf">⬇ Exportar PDF</button>
+        </div>
+      </div>
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr><th>Nome</th><th>CPF</th><th>Cargo</th><th>Setor</th><th>Empresa</th><th>Vínculo</th><th>Tipo</th><th>Telefone</th><th>E-mail</th><th>Admissão</th><th>Status</th></tr></thead><tbody>
+          ${ultimaLista.map(p => `<tr>
+            <td>${esc(p.nome)}</td><td>${esc(p.cpf ?? '—')}</td><td>${esc(p.cargo ?? '—')}</td>
+            <td>${esc(p.setor?.nome ?? '—')}</td><td>${esc(p.empresa?.nome ?? '—')}</td><td>${esc(p.vinculo ?? '—')}</td>
+            <td>${esc(p.tipo ?? '—')}</td><td>${esc(p.telefone ?? '—')}</td><td>${esc(p.email ?? '—')}</td>
+            <td>${p.data_admissao ? fmtData(p.data_admissao) : '—'}</td>
+            <td>${p.status === 'ATIVO' ? '<span class="badge-bom">ativo</span>' : `<span class="chip">${esc(p.status ?? '—')}</span>`}</td>
+          </tr>`).join('')}
+        </tbody></table>
+      </div></div>`
+
+    $('#rf2-excel').onclick = () => exportarRelatorioExcel('relatorio_funcionarios', COLUNAS_REL_FUNCIONARIOS, ultimaLista.map(linhaRelFuncionario))
+    $('#rf2-pdf').onclick = () => exportarRelatorioPDF('Relatório de Cadastro de Funcionários', COLUNAS_REL_FUNCIONARIOS, ultimaLista.map(linhaRelFuncionario))
+  }
+  $('#rf2-buscar').onclick = buscar
+  buscar()
 }
 
 // ---------------------------------------------------------------
