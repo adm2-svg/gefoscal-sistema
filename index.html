@@ -2411,6 +2411,142 @@ function modalResumoMatinal (resumo) {
 }
 
 // ---------------------------------------------------------------
+// Painel pessoal do Lúcio — ele acumula duas responsabilidades que
+// merecem destaque na Visão Geral: gestor de RH (Agilidade e Prazos,
+// Recrutamento, PDI, Avaliação 360) e aprovador final de compras.
+// Fica no topo, antes do fluxo padrão (que continua rodando depois,
+// diferente do painel do Fabiano que substitui tudo).
+// ---------------------------------------------------------------
+async function painelLucioRH (area) {
+  const tentar = async fn => { try { return await fn() } catch { return null } }
+
+  const [compras, prorrogacoes, atrasadas, vagas, pdiAtrasados, ciclo360] = await Promise.all([
+    tentar(async () => {
+      const { data } = await db.from('solicitacao_compra')
+        .select('id,produto_servico,valor_estimado,data_solicitacao,solicitante:solicitante_id(nome),setor:setor_id(nome)')
+        .eq('status', 'AGUARDANDO_APROVACAO').order('urgencia', { ascending: false }).order('data_solicitacao')
+      return {
+        itens: data || [],
+        valor: (data || []).reduce((s, r) => s + Number(r.valor_estimado || 0), 0)
+      }
+    }),
+    tentar(async () => {
+      const { data } = await db.from('solicitacao_prorrogacao')
+        .select('id,data_nova_solicitada,solicitado_por:solicitado_por(nome),solicitacao:solicitacao_id(codigo,titulo)')
+        .eq('status', 'PENDENTE').order('criado_em')
+      return data || []
+    }),
+    tentar(async () => {
+      const { data } = await db.from('solicitacao_interna')
+        .select('id,status,urgencia,data_solicitacao,data_limite').not('status', 'in', '(CONCLUIDA,CANCELADA)')
+      return (data || []).filter(estaAtrasadaSolicitacao).length
+    }),
+    tentar(async () => {
+      const { data } = await db.from('vaga').select('id').neq('status', 'CANCELADA').neq('etapa', 'FECHADA')
+      return (data || []).length
+    }),
+    tentar(async () => {
+      const { data } = await db.from('plano_desenvolvimento').select('id').eq('status', 'ATRASADO')
+      return (data || []).length
+    }),
+    tentar(async () => (await db.from('avaliacao_360_ciclo').select('nome').eq('status', 'ABERTO').maybeSingle()).data)
+  ])
+
+  const irEclicar = async (chave, dataSub, seletor) => {
+    await irPara(chave)
+    document.querySelector(seletor || `.subabas-rh button[data-sub="${dataSub}"], .subabas button[data-sub="${dataSub}"]`)?.click()
+  }
+
+  const totalPendentes = (compras?.itens.length || 0) + (prorrogacoes?.length || 0)
+
+  const bloco = document.createElement('div')
+  bloco.className = 'panel'
+  bloco.style.cssText = 'padding:26px 28px;margin-bottom:16px;'
+  bloco.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:22px;">
+      <div style="display:flex;align-items:center;gap:12px;">
+        <span style="width:20px;height:20px;color:var(--dim);display:flex;">${ICONES_MODULO.dashboard_diretor || ICONES_MODULO._padrao}</span>
+        <h3 style="font-family:var(--serif);font-size:18px;margin:0;">Central de decisões</h3>
+      </div>
+      ${totalPendentes ? `<span class="badge-alerta" style="font-size:11.5px;padding:4px 12px;border-radius:999px;">${totalPendentes} pendente${totalPendentes > 1 ? 's' : ''}</span>` : ''}
+    </div>
+
+    <div style="margin-bottom:22px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <span style="font-size:13px;font-weight:600;">🛒 Compras aguardando aprovação</span>
+        <span class="texto-dim2" style="font-size:12.5px;">${compras?.itens.length || 0} pedido(s)${compras?.itens.length ? ` · <b style="color:var(--txt,#E8EEF7);">R$ ${fmtNum(compras.valor)}</b>` : ''}</span>
+      </div>
+      ${compras?.itens.length ? `
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          ${compras.itens.slice(0, 5).map(c => `<div class="panel" style="padding:12px 14px;background:var(--surface2);display:flex;align-items:center;justify-content:space-between;">
+            <div>
+              <div style="font-size:13.5px;font-weight:600;">${esc(c.produto_servico)}</div>
+              <div class="texto-dim2" style="font-size:11.5px;margin-top:2px;">${esc(c.solicitante?.nome ?? '—')} · ${esc(c.setor?.nome ?? '—')}</div>
+            </div>
+            <div style="text-align:right;">
+              <div style="font-size:14px;font-weight:700;">R$ ${fmtNum(c.valor_estimado)}</div>
+              <div class="texto-dim2" style="font-size:11px;margin-top:2px;">${fmtQuando(c.data_solicitacao) ?? ''}</div>
+            </div>
+          </div>`).join('')}
+        </div>
+        <div style="display:flex;justify-content:flex-end;margin-top:14px;">
+          <button class="btn mini" id="lu-ver-compras">Ver e aprovar</button>
+        </div>` : `
+        <div class="panel" style="padding:14px 16px;background:rgba(61,220,151,.06);border-color:rgba(61,220,151,.25);">
+          <span style="font-size:13px;">✓ Nenhuma compra esperando aprovação agora.</span>
+        </div>`}
+    </div>
+
+    <div style="height:1px;background:var(--line);margin:4px 0 20px;"></div>
+
+    <div>
+      <div style="font-size:13px;font-weight:600;margin-bottom:12px;">⏰ Prazos de solicitações aguardando decisão</div>
+      ${prorrogacoes?.length ? `
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          ${prorrogacoes.map(p => `<div class="panel" style="padding:12px 14px;background:var(--surface2);display:flex;align-items:center;justify-content:space-between;">
+            <div>
+              <b>${esc(p.solicitado_por?.nome ?? '—')}</b> · <span class="texto-dim2" style="font-size:12px;">${esc(p.solicitacao?.codigo ?? '')} — ${esc(p.solicitacao?.titulo ?? '')}</span>
+            </div>
+            <span class="texto-dim2" style="font-size:12px;">nova data: <b style="color:var(--txt,#E8EEF7);">${fmtData(p.data_nova_solicitada)}</b></span>
+          </div>`).join('')}
+        </div>
+        <div style="display:flex;justify-content:flex-end;margin-top:14px;">
+          <button class="btn-secundario mini" id="lu-ver-prazos">Ver e decidir</button>
+        </div>` : `
+        <div class="panel" style="padding:14px 16px;background:rgba(61,220,151,.06);border-color:rgba(61,220,151,.25);">
+          <span style="font-size:13px;">✓ Nenhum pedido de mudança de prazo pendente agora — tudo em dia.</span>
+        </div>`}
+    </div>`
+  area.appendChild(bloco)
+
+  bloco.querySelector('#lu-ver-compras')?.addEventListener('click', () => irEclicar('compras', 'aprovar'))
+  bloco.querySelector('#lu-ver-prazos')?.addEventListener('click', () => irEclicar('desempenho', 'agilidade'))
+
+  const cartaoRh = (titulo, valor, nota, cor, dataSub) => `
+    <div class="panel mke-card" style="padding:14px 16px;cursor:pointer;" data-lu-ir="${dataSub}">
+      <div style="font-size:12.5px;font-weight:600;color:var(--dim);margin-bottom:10px;">${esc(titulo)}</div>
+      <div style="font-family:var(--serif);font-size:26px;font-weight:600;${cor ? `color:${cor};` : ''}">${valor}</div>
+      <div class="texto-dim2" style="font-size:11.5px;margin-top:2px;">${esc(nota)}</div>
+    </div>`
+
+  const blocoRh = document.createElement('div')
+  blocoRh.style.cssText = 'margin-bottom:16px;'
+  blocoRh.innerHTML = `
+    <div class="texto-dim2" style="font-size:11.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;margin-bottom:12px;">Visão geral de RH</div>
+    <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;">
+      ${cartaoRh('Agilidade e Prazos', atrasadas ?? 0, 'solicitações atrasadas', (atrasadas ?? 0) > 0 ? 'var(--warn-text)' : 'var(--good-text,#3DDC97)', 'agilidade')}
+      ${cartaoRh('Recrutamento', vagas ?? 0, 'vagas abertas', null, 'recrutamento')}
+      ${cartaoRh('Desenvolvimento (PDI)', pdiAtrasados ?? 0, 'planos atrasados', (pdiAtrasados ?? 0) > 0 ? 'var(--warn-text)' : 'var(--good-text,#3DDC97)', 'pdi')}
+      ${cartaoRh('Avaliação 360', ciclo360 ? esc(ciclo360.nome) : 'Nenhum', ciclo360 ? 'ciclo em andamento' : 'ciclo aberto no momento', null, '360')}
+    </div>`
+  area.appendChild(blocoRh)
+
+  blocoRh.querySelectorAll('[data-lu-ir]').forEach(c => {
+    c.onclick = () => irEclicar('desempenho', c.dataset.luIr)
+  })
+}
+
+// ---------------------------------------------------------------
 // Calendário + Planner lado a lado. Calendário: enquanto não tiver o
 // link de incorporação do Google Calendar (URL_CALENDARIO_DIRETOR),
 // mostra um mini-calendário do mês marcando dias com tarefa/compromisso,
@@ -2849,6 +2985,13 @@ async function paginaVisaoGeral () {
     await blocoSecretaria(area)
     await blocoResumoSolicitacoesProjetos(area)
     return
+  }
+
+  // Painel pessoal do Lúcio — gestor de RH e aprovador de compras — fica
+  // em destaque no topo da Visão Geral, só pra ele. O resto do fluxo
+  // padrão continua rodando normalmente logo depois.
+  if (PERFIL.pessoaId === ID_LUCIO_DECISOR_PRORROGACAO) {
+    await painelLucioRH(area)
   }
 
   // painel do financeiro, para quem trabalha nele
