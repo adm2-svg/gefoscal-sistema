@@ -16681,6 +16681,20 @@ function removerNotasDeEstadoSdr (texto) {
   return (texto || '').replace(/\s*[-—]{0,3}\s*\*[\[(][^\])]{0,200}[\])]\*\s*$/g, '').trim()
 }
 
+// O prompt pede pra mandar várias mensagens curtas em sequência (como no
+// WhatsApp de verdade), mas cada chamada à IA devolve um texto só — sem um
+// jeito oficial de marcar "aqui começa a próxima mensagem", ela ia inventando
+// separador diferente a cada vez que a gente proibia o anterior (travessão,
+// colchete, "---" solto...). Esse marcador dá um jeito de verdade: o prompt
+// instrui a usar exatamente <<<PROXIMA_MENSAGEM>>> entre elas, e aqui a gente
+// quebra nisso e mostra cada pedaço como uma bolha separada.
+function dividirEmMensagensSdr (texto) {
+  return (texto || '')
+    .split(/<<<PROXIMA_MENSAGEM>>>/g)
+    .map(t => t.trim())
+    .filter(Boolean)
+}
+
 // Catálogo de documentos (PDF) e links disponíveis, injetado no prompt final
 // -- quando a linha do WhatsApp Business estiver no ar, a function que
 // processa a mensagem detecta os marcadores abaixo na resposta, remove eles
@@ -17062,7 +17076,6 @@ async function sdrAbaTreinar (alvo) {
     const historicoParaIa = SIM_SDR_MENSAGENS.filter(m => !m._carregando).map(m => ({ role: m.role, content: m.content }))
 
     const { data, error } = await db.functions.invoke('ia-agente-chat', { body: { systemPrompt, mensagens: historicoParaIa } })
-    const ultimo = SIM_SDR_MENSAGENS[SIM_SDR_MENSAGENS.length - 1]
     let respostaTexto = (!error && data?.resposta) ? data.resposta : '⚠️ erro ao gerar resposta: ' + (error?.message || data?.erro || 'desconhecido')
 
     // detecta os marcadores de envio de documento/uso de link -- nunca
@@ -17076,9 +17089,15 @@ async function sdrAbaTreinar (alvo) {
     respostaTexto = respostaTexto.replace(/<<<LINK_USADO\s+id="[^"]+"\s*>>>/g, '').trim()
     respostaTexto = removerNotasDeEstadoSdr(respostaTexto)
 
-    ultimo.content = respostaTexto
-    ultimo.documentoSugerido = documentoSugerido
-    delete ultimo._carregando
+    const partes = dividirEmMensagensSdr(respostaTexto)
+    SIM_SDR_MENSAGENS.pop() // tira o placeholder "carregando"
+    if (!partes.length) partes.push(respostaTexto || '(resposta vazia)')
+    partes.forEach((parte, i) => {
+      SIM_SDR_MENSAGENS.push({
+        role: 'assistant', content: parte,
+        documentoSugerido: i === partes.length - 1 ? documentoSugerido : null
+      })
+    })
     renderSimSdr()
   }
   $('#sim-sdr-enviar').onclick = enviarSimSdr
@@ -17127,7 +17146,6 @@ async function sdrAbaTreinar (alvo) {
     const historicoParaIa = SIM_SDR_MENSAGENS.filter(m => !m._carregando).map(m => ({ role: m.role, content: m.content }))
 
     const { data, error } = await db.functions.invoke('ia-agente-chat', { body: { systemPrompt, mensagens: historicoParaIa } })
-    const ultimo = SIM_SDR_MENSAGENS[SIM_SDR_MENSAGENS.length - 1]
     let respostaTexto = (!error && data?.resposta) ? data.resposta : '⚠️ erro ao gerar resposta: ' + (error?.message || data?.erro || 'desconhecido')
 
     let documentoSugerido = null
@@ -17139,9 +17157,15 @@ async function sdrAbaTreinar (alvo) {
     respostaTexto = respostaTexto.replace(/<<<LINK_USADO\s+id="[^"]+"\s*>>>/g, '').trim()
     respostaTexto = removerNotasDeEstadoSdr(respostaTexto)
 
-    ultimo.content = respostaTexto
-    ultimo.documentoSugerido = documentoSugerido
-    delete ultimo._carregando
+    const partes = dividirEmMensagensSdr(respostaTexto)
+    SIM_SDR_MENSAGENS.pop() // tira o placeholder "carregando"
+    if (!partes.length) partes.push(respostaTexto || '(resposta vazia)')
+    partes.forEach((parte, i) => {
+      SIM_SDR_MENSAGENS.push({
+        role: 'assistant', content: parte,
+        documentoSugerido: i === partes.length - 1 ? documentoSugerido : null
+      })
+    })
     renderSimSdr()
 
     btn.disabled = false; btn.textContent = '🚀 Iniciar abordagem'
