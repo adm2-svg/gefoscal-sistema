@@ -4252,6 +4252,140 @@ function abrirSub (sub, editavel) {
   if (sub === 'modelo-acesso') subModeloAcesso(alvo, editavel)
 }
 
+// Modal "Acesso" — junta num só lugar o que antes ficava espalhado (e-mail
+// vinculado ao login, nível, situação do primeiro acesso, abas liberadas)
+// e a redefinição de senha, que já existia mas era só um botão "senha"
+// perdido na lista, com um prompt() nativo do navegador. A chamada pro
+// Supabase continua sendo exatamente a mesma edge function de sempre
+// (criar-usuario) — só a apresentação ficou melhor.
+async function abrirAcessoPessoa (p, pc, perms, aoFechar) {
+  const meusModulos = (perms || []).filter(x => x.pessoa_id === p.id)
+  const nomeModulo = id => PERFIL.modulos.find(m => m.id === id)?.nome || id
+  const nivel = (pc?.papeis || []).includes('ADMIN') ? 'Administrador' : (pc ? 'Usuário' : null)
+  const estado = !pc ? 'sem cadastro de acesso — essa pessoa ainda não tem login'
+    : pc.usado_em ? 'último acesso em ' + fmtQuando(pc.usado_em)
+    : 'cadastrado, aguardando primeiro acesso'
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:460px;">
+    <div class="cabeca-secao">
+      <h3>${icDp('acesso')} Acesso de ${esc(p.nome)}</h3>
+    </div>
+
+    <div class="caixa-texto" style="margin-bottom:14px;">
+      <div class="rot">E-mail vinculado ao login</div>
+      <p style="font-family:monospace;font-size:14px;">${esc(p.email || 'sem e-mail cadastrado')}</p>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+      ${nivel ? `<span class="selo ${nivel === 'Administrador' ? 'forte' : ''}">${nivel}</span>` : ''}
+      <span class="texto-dim2" style="font-size:12px;">${esc(estado)}</span>
+    </div>
+
+    ${meusModulos.length ? `
+      <div class="texto-dim2" style="font-size:11px;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px;">
+        ${meusModulos.length} aba${meusModulos.length > 1 ? 's' : ''} liberada${meusModulos.length > 1 ? 's' : ''}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px;">
+        ${meusModulos.map(m => `<span class="chip" style="font-size:11px;">${esc(nomeModulo(m.modulo_id))}${m.pode_editar ? ' (edita)' : ''}</span>`).join('')}
+      </div>` : `<p class="texto-dim2" style="font-size:12px;margin-bottom:16px;">Nenhuma aba liberada ainda.</p>`}
+
+    <div style="height:1px;background:var(--line);margin:4px 0 18px;"></div>
+
+    <div class="cabeca-secao" style="margin-bottom:8px;"><h3 style="font-size:14px;">Atividade em Solicitações Internas</h3></div>
+    <div id="ap-atividade" style="margin-bottom:18px;"><p class="texto-dim2" style="font-size:12px;">carregando atividade...</p></div>
+
+    <div style="height:1px;background:var(--line);margin:4px 0 18px;"></div>
+
+    ${pc ? `
+      <div class="cabeca-secao" style="margin-bottom:8px;"><h3 style="font-size:14px;">Redefinir senha de acesso</h3></div>
+      <div class="campo" style="margin-bottom:12px;">
+        <div style="display:flex;gap:8px;">
+          <input id="ap-senha" type="text" autocomplete="off" placeholder="nova senha (mín. 8 caracteres)" style="flex:1;">
+          <button class="btn-secundario mini" id="ap-gerar" type="button">gerar</button>
+        </div>
+      </div>
+      <div class="acoes">
+        <button class="btn" id="ap-salvar-senha">${icDp('salvar')}Salvar nova senha</button>
+      </div>` : `<p class="texto-dim" style="font-size:13px;">Essa pessoa ainda não tem senha cadastrada —
+        salve o cadastro dela no formulário acima (com o e-mail preenchido) pra criar o acesso primeiro.</p>`}
+
+    <div class="recado oculto" id="ap-recado" style="margin-top:12px;"></div>
+    <div class="acoes" style="margin-top:16px;"><button class="btn-secundario" id="ap-fechar">${icDp('fechar')}Fechar</button></div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+  fundo.querySelector('#ap-fechar').onclick = () => fundo.remove()
+
+  // Atividade: não é histórico de login (o Auth não guarda isso aqui — só
+  // dá pra saber o último acesso, já mostrado acima) — é o que a pessoa
+  // efetivamente FEZ no sistema, olhando solicitação interna (mesma base
+  // que já alimenta a nota de agilidade do RH).
+  ;(async () => {
+    const alvoAtiv = fundo.querySelector('#ap-atividade')
+    const { data: solicitacoes, error } = await db.from('solicitacao_interna')
+      .select('id,status,data_solicitacao,data_limite,urgencia,data_conclusao,pontuacao_agilidade,solicitante_id,responsavel_id')
+      .or(`solicitante_id.eq.${p.id},responsavel_id.eq.${p.id}`)
+    if (!alvoAtiv) return
+    if (error) { alvoAtiv.innerHTML = `<p class="texto-dim2" style="font-size:12px;">Não deu pra carregar: ${esc(error.message)}</p>`; return }
+
+    const todas = solicitacoes || []
+    const abertasPorEla = todas.filter(s => s.solicitante_id === p.id).length
+    const comoResponsavel = todas.filter(s => s.responsavel_id === p.id)
+    const concluidas = comoResponsavel.filter(s => s.status === 'CONCLUIDA').length
+    const emAndamento = comoResponsavel.filter(s => !['CONCLUIDA', 'CANCELADA'].includes(s.status)).length
+    const atrasadas = comoResponsavel.filter(estaAtrasadaSolicitacao).length
+    const notas = comoResponsavel.filter(s => s.status === 'CONCLUIDA').map(pontuacaoAgilidadeSolicitacao).filter(n => n != null)
+    const notaMedia = notas.length ? Math.round(notas.reduce((a, b) => a + b, 0) / notas.length) : null
+    const datas = todas.map(s => s.data_conclusao || s.data_solicitacao).filter(Boolean).sort().reverse()
+
+    if (!todas.length) {
+      alvoAtiv.innerHTML = `<p class="texto-dim2" style="font-size:12px;">Essa pessoa ainda não abriu nem recebeu nenhuma solicitação interna.</p>`
+      return
+    }
+
+    alvoAtiv.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:10px;">
+        <div class="panel" style="padding:10px 12px;background:var(--surface2);">
+          <div class="texto-dim2" style="font-size:11px;">Abriu (como solicitante)</div>
+          <div style="font-family:var(--serif);font-size:20px;font-weight:600;">${abertasPorEla}</div>
+        </div>
+        <div class="panel" style="padding:10px 12px;background:var(--surface2);">
+          <div class="texto-dim2" style="font-size:11px;">Responsável por</div>
+          <div style="font-family:var(--serif);font-size:20px;font-weight:600;">${comoResponsavel.length}</div>
+        </div>
+        <div class="panel" style="padding:10px 12px;background:var(--surface2);">
+          <div class="texto-dim2" style="font-size:11px;">Concluídas / em andamento</div>
+          <div style="font-size:13px;font-weight:600;margin-top:2px;">${concluidas} / ${emAndamento}${atrasadas ? ` <span class="badge-alerta" style="font-size:10.5px;">${atrasadas} atrasada${atrasadas > 1 ? 's' : ''}</span>` : ''}</div>
+        </div>
+        <div class="panel" style="padding:10px 12px;background:var(--surface2);">
+          <div class="texto-dim2" style="font-size:11px;">Nota média de agilidade</div>
+          <div style="margin-top:2px;">${notaMedia != null ? `<span class="${corAgilidade(notaMedia)}" style="font-size:14px;font-weight:700;">${notaMedia}</span>` : '<span class="texto-dim2" style="font-size:12px;">sem concluídas ainda</span>'}</div>
+        </div>
+      </div>
+      ${datas.length ? `<p class="texto-dim2" style="font-size:11.5px;margin:0;">última movimentação em ${fmtQuando(datas[0])}</p>` : ''}`
+  })()
+
+  fundo.querySelector('#ap-gerar')?.addEventListener('click', () => {
+    const alfabeto = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'
+    fundo.querySelector('#ap-senha').value = Array.from({ length: 10 }, () => alfabeto[Math.floor(Math.random() * alfabeto.length)]).join('')
+  })
+
+  fundo.querySelector('#ap-salvar-senha')?.addEventListener('click', async () => {
+    const el = fundo.querySelector('#ap-recado')
+    const aviso = (t, alerta) => { el.textContent = t; el.classList.remove('oculto'); el.style.color = alerta ? 'var(--warn-text)' : 'var(--dim)' }
+    const nova = fundo.querySelector('#ap-senha').value.trim()
+    if (nova.length < 8) { aviso('A senha precisa de pelo menos 8 caracteres.', true); return }
+    const btn = fundo.querySelector('#ap-salvar-senha'); btn.disabled = true; btn.textContent = 'salvando...'
+    const { data: r, error } = await db.functions.invoke('criar-usuario', { body: { email: p.email, senha: nova } })
+    btn.disabled = false; btn.innerHTML = `${icDp('salvar')}Salvar nova senha`
+    if (error || r?.erro) { aviso('Não deu certo: ' + (r?.erro || error.message), true); return }
+    aviso(r.acao === 'usuario_criado' ? `${p.email} já pode entrar com essa senha.` : `Senha de ${p.email} atualizada.`)
+    fundo.querySelector('#ap-senha').value = ''
+    setTimeout(() => { fundo.remove(); aoFechar() }, 1400)
+  })
+}
+
 // ----- Administração › Usuários -----
 async function subUsuarios (alvo, editavel) {
   const [{ data: pessoas }, { data: cargos, error: erroCargo },
@@ -4412,7 +4546,7 @@ async function subUsuarios (alvo, editavel) {
       </div>
       <div class="botoes">
         <button class="btn-secundario mini" data-abrir="${p.id}">abrir</button>
-        ${editavel && pc ? `<button class="btn-secundario mini" data-senha="${esc(p.email)}">senha</button>` : ''}
+        ${editavel ? `<button class="btn-secundario mini" data-acesso="${p.id}">${icDp('acesso')}Acesso</button>` : ''}
         ${editavel ? `<button class="btn-secundario mini" data-excluir-pessoa="${p.id}" style="color:var(--warn-text);">excluir</button>` : ''}
       </div>
     </div>`
@@ -4442,23 +4576,13 @@ async function subUsuarios (alvo, editavel) {
 
   if (!editavel) return
 
-  // definir senha direto na lista, sem passar pelo formulário inteiro
-  $('#u-lista').querySelectorAll('[data-senha]').forEach(b => {
-    b.onclick = async () => {
-      const email = b.dataset.senha
-      const nova = window.prompt(`Senha de acesso para ${email}\n(mínimo 8 caracteres)`)
-      if (nova === null) return
-      if (nova.trim().length < 8) { recado('A senha precisa de pelo menos 8 caracteres.', true); return }
-      b.disabled = true; const antes = b.textContent; b.textContent = 'salvando...'
-      const { data: r, error } = await db.functions.invoke('criar-usuario', {
-        body: { email, senha: nova.trim() }
-      })
-      b.disabled = false; b.textContent = antes
-      if (error || r?.erro) { recado('Não deu certo: ' + (r?.erro || error.message), true); return }
-      recado(r.acao === 'usuario_criado'
-        ? `${email} já pode entrar com essa senha.`
-        : `Senha de ${email} atualizada.`)
-      setTimeout(() => abrirSub('usuarios', true), 1200)
+  // "Acesso" junta e-mail vinculado, nível, situação do primeiro acesso,
+  // abas liberadas e a redefinição de senha num modal só (ver abrirAcessoPessoa)
+  $('#u-lista').querySelectorAll('[data-acesso]').forEach(b => {
+    b.onclick = () => {
+      const p = pessoas.find(x => x.id === b.dataset.acesso)
+      const pc = preDe(p.email)
+      abrirAcessoPessoa(p, pc, perms, () => abrirSub('usuarios', true))
     }
   })
 
@@ -32583,7 +32707,8 @@ const SVG_ICONE_DP = {
   pdf: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
   fechar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
   salvar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>',
-  encaminhar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>'
+  encaminhar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>',
+  acesso: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>'
 }
 const icDp = nome => `<span class="ic-botao">${SVG_ICONE_DP[nome] || ''}</span>`
 
