@@ -4859,12 +4859,13 @@ function abrirSub2Modelo (sub, editavel) {
 }
 
 async function maDados () {
-  const [{ data: deptos }, { data: pessoas }, { data: vinculos }] = await Promise.all([
+  const [{ data: deptos }, { data: pessoas }, { data: vinculos }, { data: pre }] = await Promise.all([
     db.from('departamento').select('*').order('ordem'),
-    db.from('pessoa').select('id,nome,cargo').eq('status', 'ATIVO').order('nome'),
-    db.from('vinculo_acesso').select('*, pessoa:pessoa_id(nome), departamento:dept_id(codigo,nome,macro_area)')
+    db.from('pessoa').select('id,nome,cargo,email').eq('status', 'ATIVO').order('nome'),
+    db.from('vinculo_acesso').select('*, pessoa:pessoa_id(nome), departamento:dept_id(codigo,nome,macro_area)'),
+    db.from('usuario_precadastro').select('email,papeis,pessoa_id,usado_em')
   ])
-  return { deptos: deptos || [], pessoas: pessoas || [], vinculos: vinculos || [] }
+  return { deptos: deptos || [], pessoas: pessoas || [], vinculos: vinculos || [], precadastros: pre || [] }
 }
 
 // ----- Organograma: agrupa por maior nível que a pessoa tem em qualquer departamento -----
@@ -4942,11 +4943,139 @@ async function maMatriz (alvo) {
     </div>`
 }
 
+// ----- Acesso e senha de uma pessoa, a partir de "Gerir vínculos" (tela
+// atual do Modelo de Acesso) — mesma funcionalidade de redefinir senha e
+// ver atividade que existia na antiga aba "Usuários", só que adaptada pra
+// mostrar os departamentos vinculados (vinculo_acesso) em vez das antigas
+// abas por módulo (modulo_permissao), que não são mais usadas aqui -----
+async function abrirAcessoPessoaMa (p, pc, vinculos, aoFechar) {
+  const nivel = (pc?.papeis || []).includes('ADMIN') ? 'Administrador' : (pc ? 'Usuário' : null)
+  const estado = !pc ? 'sem cadastro de acesso — essa pessoa ainda não tem login'
+    : pc.usado_em ? 'último acesso em ' + fmtQuando(pc.usado_em)
+    : 'cadastrado, aguardando primeiro acesso'
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:460px;">
+    <div class="cabeca-secao">
+      <h3>${icDp('acesso')} Acesso de ${esc(p.nome)}</h3>
+    </div>
+
+    <div class="caixa-texto" style="margin-bottom:14px;">
+      <div class="rot">E-mail vinculado ao login</div>
+      <p style="font-family:monospace;font-size:14px;">${esc(p.email || 'sem e-mail cadastrado')}</p>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+      ${nivel ? `<span class="selo ${nivel === 'Administrador' ? 'forte' : ''}">${nivel}</span>` : ''}
+      <span class="texto-dim2" style="font-size:12px;">${esc(estado)}</span>
+    </div>
+
+    ${(vinculos || []).length ? `
+      <div class="texto-dim2" style="font-size:11px;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px;">
+        ${vinculos.length} departamento${vinculos.length > 1 ? 's' : ''} vinculado${vinculos.length > 1 ? 's' : ''}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px;">
+        ${vinculos.map(v => `<span class="chip" style="font-size:11px;background:${NIVEIS_ACESSO_INFO[v.nivel_codigo].cor};color:#fff;border:none;">${esc(v.departamento?.nome || '')} · ${NIVEIS_ACESSO_INFO[v.nivel_codigo].nome}</span>`).join('')}
+      </div>` : `<p class="texto-dim2" style="font-size:12px;margin-bottom:16px;">Nenhum departamento vinculado ainda.</p>`}
+
+    <div style="height:1px;background:var(--line);margin:4px 0 18px;"></div>
+
+    <div class="cabeca-secao" style="margin-bottom:8px;"><h3 style="font-size:14px;">Atividade em Solicitações Internas</h3></div>
+    <div id="ap-atividade" style="margin-bottom:18px;"><p class="texto-dim2" style="font-size:12px;">carregando atividade...</p></div>
+
+    <div style="height:1px;background:var(--line);margin:4px 0 18px;"></div>
+
+    ${pc ? `
+      <div class="cabeca-secao" style="margin-bottom:8px;"><h3 style="font-size:14px;">Redefinir senha de acesso</h3></div>
+      <div class="campo" style="margin-bottom:12px;">
+        <div style="display:flex;gap:8px;">
+          <input id="ap-senha" type="text" autocomplete="off" placeholder="nova senha (mín. 8 caracteres)" style="flex:1;">
+          <button class="btn-secundario mini" id="ap-gerar" type="button">gerar</button>
+        </div>
+      </div>
+      <div class="acoes">
+        <button class="btn" id="ap-salvar-senha">${icDp('salvar')}Salvar nova senha</button>
+      </div>` : `<p class="texto-dim" style="font-size:13px;">Essa pessoa ainda não tem senha cadastrada —
+        crie o login dela em "+ Novo usuário" pra depois voltar aqui.</p>`}
+
+    <div class="recado oculto" id="ap-recado" style="margin-top:12px;"></div>
+    <div class="acoes" style="margin-top:16px;"><button class="btn-secundario" id="ap-fechar">${icDp('fechar')}Fechar</button></div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+  fundo.querySelector('#ap-fechar').onclick = () => fundo.remove()
+
+  ;(async () => {
+    const alvoAtiv = fundo.querySelector('#ap-atividade')
+    const { data: solicitacoes, error } = await db.from('solicitacao_interna')
+      .select('id,status,data_solicitacao,data_limite,urgencia,data_conclusao,pontuacao_agilidade,solicitante_id,responsavel_id')
+      .or(`solicitante_id.eq.${p.id},responsavel_id.eq.${p.id}`)
+    if (!alvoAtiv) return
+    if (error) { alvoAtiv.innerHTML = `<p class="texto-dim2" style="font-size:12px;">Não deu pra carregar: ${esc(error.message)}</p>`; return }
+
+    const todas = solicitacoes || []
+    const abertasPorEla = todas.filter(s => s.solicitante_id === p.id).length
+    const comoResponsavel = todas.filter(s => s.responsavel_id === p.id)
+    const concluidas = comoResponsavel.filter(s => s.status === 'CONCLUIDA').length
+    const emAndamento = comoResponsavel.filter(s => !['CONCLUIDA', 'CANCELADA'].includes(s.status)).length
+    const atrasadas = comoResponsavel.filter(estaAtrasadaSolicitacao).length
+    const notas = comoResponsavel.filter(s => s.status === 'CONCLUIDA').map(pontuacaoAgilidadeSolicitacao).filter(n => n != null)
+    const notaMedia = notas.length ? Math.round(notas.reduce((a, b) => a + b, 0) / notas.length) : null
+    const datas = todas.map(s => s.data_conclusao || s.data_solicitacao).filter(Boolean).sort().reverse()
+
+    if (!todas.length) {
+      alvoAtiv.innerHTML = `<p class="texto-dim2" style="font-size:12px;">Essa pessoa ainda não abriu nem recebeu nenhuma solicitação interna.</p>`
+      return
+    }
+
+    alvoAtiv.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:10px;">
+        <div class="panel" style="padding:10px 12px;background:var(--surface2);">
+          <div class="texto-dim2" style="font-size:11px;">Abriu (como solicitante)</div>
+          <div style="font-family:var(--serif);font-size:20px;font-weight:600;">${abertasPorEla}</div>
+        </div>
+        <div class="panel" style="padding:10px 12px;background:var(--surface2);">
+          <div class="texto-dim2" style="font-size:11px;">Responsável por</div>
+          <div style="font-family:var(--serif);font-size:20px;font-weight:600;">${comoResponsavel.length}</div>
+        </div>
+        <div class="panel" style="padding:10px 12px;background:var(--surface2);">
+          <div class="texto-dim2" style="font-size:11px;">Concluídas / em andamento</div>
+          <div style="font-size:13px;font-weight:600;margin-top:2px;">${concluidas} / ${emAndamento}${atrasadas ? ` <span class="badge-alerta" style="font-size:10.5px;">${atrasadas} atrasada${atrasadas > 1 ? 's' : ''}</span>` : ''}</div>
+        </div>
+        <div class="panel" style="padding:10px 12px;background:var(--surface2);">
+          <div class="texto-dim2" style="font-size:11px;">Nota média de agilidade</div>
+          <div style="margin-top:2px;">${notaMedia != null ? `<span class="${corAgilidade(notaMedia)}" style="font-size:14px;font-weight:700;">${notaMedia}</span>` : '<span class="texto-dim2" style="font-size:12px;">sem concluídas ainda</span>'}</div>
+        </div>
+      </div>
+      ${datas.length ? `<p class="texto-dim2" style="font-size:11.5px;margin:0;">última movimentação em ${fmtQuando(datas[0])}</p>` : ''}`
+  })()
+
+  fundo.querySelector('#ap-gerar')?.addEventListener('click', () => {
+    const alfabeto = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'
+    fundo.querySelector('#ap-senha').value = Array.from({ length: 10 }, () => alfabeto[Math.floor(Math.random() * alfabeto.length)]).join('')
+  })
+
+  fundo.querySelector('#ap-salvar-senha')?.addEventListener('click', async () => {
+    const el = fundo.querySelector('#ap-recado')
+    const aviso = (t, alerta) => { el.textContent = t; el.classList.remove('oculto'); el.style.color = alerta ? 'var(--warn-text)' : 'var(--dim)' }
+    const nova = fundo.querySelector('#ap-senha').value.trim()
+    if (nova.length < 8) { aviso('A senha precisa de pelo menos 8 caracteres.', true); return }
+    const btn = fundo.querySelector('#ap-salvar-senha'); btn.disabled = true; btn.textContent = 'salvando...'
+    const { data: r, error } = await db.functions.invoke('criar-usuario', { body: { email: p.email, senha: nova } })
+    btn.disabled = false; btn.innerHTML = `${icDp('salvar')}Salvar nova senha`
+    if (error || r?.erro) { aviso('Não deu certo: ' + (r?.erro || error.message), true); return }
+    aviso(r.acao === 'usuario_criado' ? `${p.email} já pode entrar com essa senha.` : `Senha de ${p.email} atualizada.`)
+    fundo.querySelector('#ap-senha').value = ''
+    setTimeout(() => { fundo.remove(); aoFechar() }, 1400)
+  })
+}
+
 // ----- Gerir vínculos: escolhe pessoa, adiciona/edita/revoga -----
 async function maVinculos (alvo, editavel) {
-  const { deptos, pessoas, vinculos } = await maDados()
+  const { deptos, pessoas, vinculos, precadastros } = await maDados()
   window.__MA_DEPTOS = deptos
   window.__MA_PESSOAS = pessoas
+  window.__MA_PRECADASTROS = precadastros
 
   alvo.innerHTML = `
     <div class="filtros" style="align-items:end;margin-bottom:16px;">
@@ -5035,8 +5164,13 @@ async function renderVinculosDaPessoa (pessoaId, editavel) {
   const deptos = window.__MA_DEPTOS || []
   const jaTemDepto = new Set((vinculos || []).map(v => v.dept_id))
   const disponiveis = deptos.filter(d => !jaTemDepto.has(d.id))
+  const pessoa = (window.__MA_PESSOAS || []).find(p => p.id === pessoaId)
+  const pc = pessoa ? (window.__MA_PRECADASTROS || []).find(x => x.email === (pessoa.email || '').toLowerCase()) : null
 
   $('#ma-vinculos-pessoa').innerHTML = `
+    ${editavel && pessoa ? `<div style="display:flex;justify-content:flex-end;margin-bottom:10px;">
+      <button class="btn-secundario" id="ma-acesso-senha">${icDp('acesso')}Acesso e senha</button>
+    </div>` : ''}
     <div class="panel" style="padding:0;margin-bottom:16px;"><div class="tabela-scroll">
       <table><thead><tr><th>Departamento</th><th>Nível</th><th>Origem</th><th>Válido até</th>${editavel ? '<th></th>' : ''}</tr></thead><tbody>
         ${(vinculos || []).map(v => `<tr>
@@ -5052,6 +5186,10 @@ async function renderVinculosDaPessoa (pessoaId, editavel) {
       </tbody></table>
     </div></div>
     ${editavel ? `<button class="btn" id="ma-novo-vinculo">+ Conceder acesso a um departamento</button>` : ''}`
+
+  if (pessoa) {
+    $('#ma-acesso-senha')?.addEventListener('click', () => abrirAcessoPessoaMa(pessoa, pc, vinculos || [], () => renderVinculosDaPessoa(pessoaId, editavel)))
+  }
 
   if (!editavel) return
   $('#ma-novo-vinculo').onclick = () => formVinculoAcesso(pessoaId, null, disponiveis, () => renderVinculosDaPessoa(pessoaId, editavel))
