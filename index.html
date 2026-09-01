@@ -15913,33 +15913,8 @@ async function sdrAbaTreinar (alvo) {
       conforme a cultura e a UF do lead — deixe cultura/UF em branco pra um bloco valer sempre
       (é o caso normal de Comercial e Psicológico; Técnico/Climático costumam ter cultura ou UF).
     </p>
-    <div class="acoes" style="margin-bottom:14px;"><button class="btn-secundario mini" id="sdr-novo-conhecimento">+ novo conhecimento</button></div>
-    <div id="sdr-lista-conhecimento">
-      ${CATEGORIAS_SDR_CONHECIMENTO.map(cat => {
-        const entradas = (biblioteca || []).filter(e => e.categoria === cat.valor)
-        if (!entradas.length) return ''
-        return `
-          <div style="margin-bottom:16px;">
-            <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">${cat.icone} ${cat.rotulo}</div>
-            ${entradas.map(e => `
-              <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 12px;
-                border:1px solid var(--line2);border-radius:8px;margin-bottom:6px;${e.ativo ? '' : 'opacity:.5;'}">
-                <div style="min-width:0;">
-                  <div style="font-size:12.5px;font-weight:600;">${esc(e.titulo)}
-                    ${e.cultura ? `<span class="chip" style="font-size:10px;margin-left:6px;">${esc(e.cultura)}</span>` : ''}
-                    ${e.uf ? `<span class="chip" style="font-size:10px;margin-left:4px;">${esc(e.uf)}</span>` : ''}
-                    ${!e.ativo ? '<span class="chip" style="font-size:10px;margin-left:4px;">inativo</span>' : ''}</div>
-                  <div class="texto-dim2" style="font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:480px;">
-                    ${esc((e.conteudo || '').replace(/\s+/g, ' ').trim().slice(0, 120))}...</div>
-                </div>
-                <div style="display:flex;gap:6px;flex:none;">
-                  <button class="btn-secundario mini" data-editar-conhecimento="${e.id}">editar</button>
-                  <button class="btn-secundario mini" data-excluir-conhecimento="${e.id}">excluir</button>
-                </div>
-              </div>`).join('')}
-          </div>`
-      }).join('') || '<p class="texto-dim2">Nenhum conhecimento cadastrado ainda.</p>'}
-    </div>
+    <div class="acoes" style="margin-bottom:14px;"><button class="btn-secundario mini" id="sdr-novo-conhecimento">${icDp('novo')}Novo conhecimento</button></div>
+    <div id="sdr-lista-conhecimento"></div>
 
     <h4 style="font-family:var(--serif);font-size:15px;margin:28px 0 6px;">Pré-visualizar prompt final</h4>
     <p class="texto-dim2" style="font-size:12.5px;margin-bottom:10px;">
@@ -16038,15 +16013,56 @@ async function sdrAbaTreinar (alvo) {
   renderHistoricoPromptSdr()
 
   $('#sdr-novo-conhecimento').onclick = () => formConhecimentoSdr(null, alvo)
-  alvo.querySelectorAll('[data-editar-conhecimento]').forEach(btn => {
-    btn.onclick = () => {
-      const e = (biblioteca || []).find(x => String(x.id) === btn.dataset.editarConhecimento)
-      if (e) formConhecimentoSdr(e, alvo)
+
+  // ----- Biblioteca de conhecimento: fica escondida por padrão (só um
+  // botão dizendo quantos itens tem) pra economizar espaço na tela — só
+  // renderiza a lista de verdade quando a pessoa pede pra ver -----
+  let mostrarBibliotecaConhecimentoSdr = false
+  const renderListaConhecimentoSdr = () => {
+    const cont = $('#sdr-lista-conhecimento')
+    if (!cont) return
+    const total = (biblioteca || []).length
+
+    if (!mostrarBibliotecaConhecimentoSdr) {
+      cont.innerHTML = `<button class="btn-secundario mini" id="sdr-toggle-conhecimento">Ver biblioteca de conhecimento (${total} ${total === 1 ? 'item' : 'itens'})</button>`
+    } else {
+      cont.innerHTML = (CATEGORIAS_SDR_CONHECIMENTO.map(cat => {
+        const entradas = (biblioteca || []).filter(e => e.categoria === cat.valor)
+        if (!entradas.length) return ''
+        return `
+          <div style="margin-bottom:16px;">
+            <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">${cat.icone} ${cat.rotulo}</div>
+            ${entradas.map(e => `
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 12px;
+                border:1px solid var(--line2);border-radius:8px;margin-bottom:6px;${e.ativo ? '' : 'opacity:.5;'}">
+                <div style="min-width:0;">
+                  <div style="font-size:12.5px;font-weight:600;">${esc(e.titulo)}
+                    ${e.cultura ? `<span class="chip" style="font-size:10px;margin-left:6px;">${esc(e.cultura)}</span>` : ''}
+                    ${e.uf ? `<span class="chip" style="font-size:10px;margin-left:4px;">${esc(e.uf)}</span>` : ''}
+                    ${!e.ativo ? '<span class="chip" style="font-size:10px;margin-left:4px;">inativo</span>' : ''}</div>
+                  <div class="texto-dim2" style="font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:480px;">
+                    ${esc((e.conteudo || '').replace(/\s+/g, ' ').trim().slice(0, 120))}...</div>
+                </div>
+                <div style="display:flex;gap:6px;flex:none;">
+                  <button class="btn-secundario mini" data-editar-conhecimento="${e.id}">${icDp('editar')}Editar</button>
+                </div>
+              </div>`).join('')}
+          </div>`
+      }).join('') || '<p class="texto-dim2">Nenhum conhecimento cadastrado ainda.</p>') +
+        `<button class="btn-secundario mini" id="sdr-toggle-conhecimento" style="margin-top:6px;">Esconder biblioteca</button>`
+
+      cont.querySelectorAll('[data-editar-conhecimento]').forEach(btn => {
+        btn.onclick = () => {
+          const e = (biblioteca || []).find(x => String(x.id) === btn.dataset.editarConhecimento)
+          if (e) formConhecimentoSdr(e, alvo)
+        }
+      })
     }
-  })
-  alvo.querySelectorAll('[data-excluir-conhecimento]').forEach(btn => {
-    btn.onclick = () => excluirConhecimentoSdr(btn.dataset.excluirConhecimento, alvo)
-  })
+
+    const btnToggle = cont.querySelector('#sdr-toggle-conhecimento')
+    if (btnToggle) btnToggle.onclick = () => { mostrarBibliotecaConhecimentoSdr = !mostrarBibliotecaConhecimentoSdr; renderListaConhecimentoSdr() }
+  }
+  renderListaConhecimentoSdr()
 
   $('#sdr-preview-gerar').onclick = () => {
     const cultura = $('#sdr-preview-cultura').value.trim()
@@ -16255,15 +16271,20 @@ function formConhecimentoSdr (entrada, alvoLista) {
     </div>
     ${entrada ? `<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;margin-top:4px;">
       <input type="checkbox" id="sc-ativo" ${entrada.ativo ? 'checked' : ''}> ativo</label>` : ''}
-    <div class="acoes" style="margin-top:14px;">
-      <button class="btn" id="sc-salvar">${entrada ? 'Salvar alterações' : 'Criar'}</button>
-      <button class="btn-secundario" id="sc-cancelar">Cancelar</button>
+    <div class="acoes" style="margin-top:14px;justify-content:space-between;">
+      <div>${entrada ? `<button class="btn-secundario" id="sc-excluir" style="color:var(--warn-text);">${icDp('excluir')}Excluir</button>` : ''}</div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn-secundario" id="sc-cancelar">${icDp('fechar')}Cancelar</button>
+        <button class="btn" id="sc-salvar">${icDp('salvar')}${entrada ? 'Salvar alterações' : 'Criar'}</button>
+      </div>
     </div>
     <div class="recado oculto" id="sc-recado"></div>
   </div>`
   document.body.appendChild(fundo)
   fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
   fundo.querySelector('#sc-cancelar').onclick = () => fundo.remove()
+  const btnExcluir = fundo.querySelector('#sc-excluir')
+  if (btnExcluir) btnExcluir.onclick = () => excluirConhecimentoSdr(entrada.id, alvoLista, () => fundo.remove())
   fundo.querySelector('#sc-salvar').onclick = async () => {
     const el = fundo.querySelector('#sc-recado')
     const aviso = t => { el.textContent = t; el.classList.remove('oculto') }
@@ -16292,10 +16313,11 @@ function formConhecimentoSdr (entrada, alvoLista) {
   }
 }
 
-async function excluirConhecimentoSdr (id, alvo) {
+async function excluirConhecimentoSdr (id, alvo, aoExcluir) {
   if (!confirm('Excluir esse conhecimento? Não tem como desfazer.')) return
   const { error } = await db.from('sdr_conhecimento').delete().eq('id', id)
   if (error) { alert(error.message); return }
+  if (aoExcluir) aoExcluir()
   sdrAbaTreinar(alvo)
 }
 
@@ -16364,7 +16386,7 @@ async function sdrAbaDocumentos (alvo) {
       cliente durante a conversa, quando fizer sentido pelo que ele perguntou. Quando a linha do WhatsApp
       Business estiver no ar, o envio de verdade acontece automaticamente; no simulador de teste (aba
       "Treinar IA"), ela só mostra visualmente que enviaria.</p>
-    <div class="acoes" style="margin-bottom:14px;"><button class="btn-secundario mini" id="sdr-novo-documento">+ novo documento</button></div>
+    <div class="acoes" style="margin-bottom:14px;"><button class="btn-secundario mini" id="sdr-novo-documento">${icDp('novo')}Novo documento</button></div>
     <div id="sdr-lista-documentos">
       ${documentos && documentos.length ? documentos.map(d => `
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 12px;
@@ -16376,9 +16398,8 @@ async function sdrAbaDocumentos (alvo) {
             ${d.descricao ? `<div class="texto-dim2" style="font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:480px;">${esc(d.descricao)}</div>` : ''}
           </div>
           <div style="display:flex;gap:6px;flex:none;">
-            <button class="btn-secundario mini" data-abrir-documento="${esc(d.storage_path)}">abrir</button>
-            <button class="btn-secundario mini" data-editar-documento="${d.id}">editar</button>
-            <button class="btn-secundario mini" data-excluir-documento="${d.id}">excluir</button>
+            <button class="btn-secundario mini" data-abrir-documento="${esc(d.storage_path)}">${icDp('ver')}Abrir</button>
+            <button class="btn-secundario mini" data-editar-documento="${d.id}">${icDp('editar')}Editar</button>
           </div>
         </div>`).join('') : '<p class="texto-dim2">Nenhum documento cadastrado ainda.</p>'}
     </div>`
@@ -16387,9 +16408,6 @@ async function sdrAbaDocumentos (alvo) {
   alvo.querySelectorAll('[data-abrir-documento]').forEach(btn => { btn.onclick = () => abrirArquivo(btn.dataset.abrirDocumento) })
   alvo.querySelectorAll('[data-editar-documento]').forEach(btn => {
     btn.onclick = () => { const d = (documentos || []).find(x => String(x.id) === btn.dataset.editarDocumento); if (d) formDocumentoSdr(d, alvo) }
-  })
-  alvo.querySelectorAll('[data-excluir-documento]').forEach(btn => {
-    btn.onclick = () => excluirDocumentoSdr(btn.dataset.excluirDocumento, alvo)
   })
 }
 
@@ -16409,15 +16427,20 @@ function formDocumentoSdr (entrada, alvoLista) {
       ${entrada?.nome_arquivo ? `<span class="texto-dim2" style="font-size:11px;">arquivo atual: ${esc(entrada.nome_arquivo)}</span>` : ''}</div>
     ${entrada ? `<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;margin-top:4px;">
       <input type="checkbox" id="sd-ativo" ${entrada.ativo ? 'checked' : ''}> ativo</label>` : ''}
-    <div class="acoes" style="margin-top:14px;">
-      <button class="btn" id="sd-salvar">${entrada ? 'Salvar alterações' : 'Criar'}</button>
-      <button class="btn-secundario" id="sd-cancelar">Cancelar</button>
+    <div class="acoes" style="margin-top:14px;justify-content:space-between;">
+      <div>${entrada ? `<button class="btn-secundario" id="sd-excluir" style="color:var(--warn-text);">${icDp('excluir')}Excluir</button>` : ''}</div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn-secundario" id="sd-cancelar">${icDp('fechar')}Cancelar</button>
+        <button class="btn" id="sd-salvar">${icDp('salvar')}${entrada ? 'Salvar alterações' : 'Criar'}</button>
+      </div>
     </div>
     <div class="recado oculto" id="sd-recado"></div>
   </div>`
   document.body.appendChild(fundo)
   fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
   fundo.querySelector('#sd-cancelar').onclick = () => fundo.remove()
+  const btnExcluirDoc = fundo.querySelector('#sd-excluir')
+  if (btnExcluirDoc) btnExcluirDoc.onclick = () => excluirDocumentoSdr(entrada.id, alvoLista, () => fundo.remove())
   fundo.querySelector('#sd-salvar').onclick = async () => {
     const el = fundo.querySelector('#sd-recado')
     const aviso = t => { el.textContent = t; el.classList.remove('oculto') }
@@ -16455,10 +16478,11 @@ function formDocumentoSdr (entrada, alvoLista) {
   }
 }
 
-async function excluirDocumentoSdr (id, alvo) {
+async function excluirDocumentoSdr (id, alvo, aoExcluir) {
   if (!confirm('Excluir esse documento? Não tem como desfazer.')) return
   const { error } = await db.from('sdr_documento').delete().eq('id', id)
   if (error) { alert(error.message); return }
+  if (aoExcluir) aoExcluir()
   sdrAbaDocumentos(alvo)
 }
 
@@ -16473,7 +16497,7 @@ async function sdrAbaLinks (alvo) {
       Links que a SDR IA pode citar direto no texto da resposta (o WhatsApp já mostra como link clicável)
       — site, formulário, catálogo online, etc. Diferente do documento, não precisa de marcador de envio;
       só registra qual link foi usado, pro Analytics.</p>
-    <div class="acoes" style="margin-bottom:14px;"><button class="btn-secundario mini" id="sdr-novo-link">+ novo link</button></div>
+    <div class="acoes" style="margin-bottom:14px;"><button class="btn-secundario mini" id="sdr-novo-link">${icDp('novo')}Novo link</button></div>
     <div id="sdr-lista-links">
       ${links && links.length ? links.map(l => `
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 12px;
@@ -16486,8 +16510,7 @@ async function sdrAbaLinks (alvo) {
               <a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.url)}</a>${l.descricao ? ' — ' + esc(l.descricao) : ''}</div>
           </div>
           <div style="display:flex;gap:6px;flex:none;">
-            <button class="btn-secundario mini" data-editar-link="${l.id}">editar</button>
-            <button class="btn-secundario mini" data-excluir-link="${l.id}">excluir</button>
+            <button class="btn-secundario mini" data-editar-link="${l.id}">${icDp('editar')}Editar</button>
           </div>
         </div>`).join('') : '<p class="texto-dim2">Nenhum link cadastrado ainda.</p>'}
     </div>`
@@ -16495,9 +16518,6 @@ async function sdrAbaLinks (alvo) {
   $('#sdr-novo-link').onclick = () => formLinkSdr(null, alvo)
   alvo.querySelectorAll('[data-editar-link]').forEach(btn => {
     btn.onclick = () => { const l = (links || []).find(x => String(x.id) === btn.dataset.editarLink); if (l) formLinkSdr(l, alvo) }
-  })
-  alvo.querySelectorAll('[data-excluir-link]').forEach(btn => {
-    btn.onclick = () => excluirLinkSdr(btn.dataset.excluirLink, alvo)
   })
 }
 
@@ -16515,15 +16535,20 @@ function formLinkSdr (entrada, alvoLista) {
       <textarea id="sl-descricao" placeholder="ex: mandar quando o cliente quiser ver o catálogo completo" style="min-height:80px;">${esc(entrada?.descricao || '')}</textarea></div>
     ${entrada ? `<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;margin-top:4px;">
       <input type="checkbox" id="sl-ativo" ${entrada.ativo ? 'checked' : ''}> ativo</label>` : ''}
-    <div class="acoes" style="margin-top:14px;">
-      <button class="btn" id="sl-salvar">${entrada ? 'Salvar alterações' : 'Criar'}</button>
-      <button class="btn-secundario" id="sl-cancelar">Cancelar</button>
+    <div class="acoes" style="margin-top:14px;justify-content:space-between;">
+      <div>${entrada ? `<button class="btn-secundario" id="sl-excluir" style="color:var(--warn-text);">${icDp('excluir')}Excluir</button>` : ''}</div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn-secundario" id="sl-cancelar">${icDp('fechar')}Cancelar</button>
+        <button class="btn" id="sl-salvar">${icDp('salvar')}${entrada ? 'Salvar alterações' : 'Criar'}</button>
+      </div>
     </div>
     <div class="recado oculto" id="sl-recado"></div>
   </div>`
   document.body.appendChild(fundo)
   fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
   fundo.querySelector('#sl-cancelar').onclick = () => fundo.remove()
+  const btnExcluirLink = fundo.querySelector('#sl-excluir')
+  if (btnExcluirLink) btnExcluirLink.onclick = () => excluirLinkSdr(entrada.id, alvoLista, () => fundo.remove())
   fundo.querySelector('#sl-salvar').onclick = async () => {
     const el = fundo.querySelector('#sl-recado')
     const aviso = t => { el.textContent = t; el.classList.remove('oculto') }
@@ -16549,10 +16574,11 @@ function formLinkSdr (entrada, alvoLista) {
   }
 }
 
-async function excluirLinkSdr (id, alvo) {
+async function excluirLinkSdr (id, alvo, aoExcluir) {
   if (!confirm('Excluir esse link? Não tem como desfazer.')) return
   const { error } = await db.from('sdr_link').delete().eq('id', id)
   if (error) { alert(error.message); return }
+  if (aoExcluir) aoExcluir()
   sdrAbaLinks(alvo)
 }
 
