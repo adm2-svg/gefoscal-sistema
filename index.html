@@ -13072,6 +13072,7 @@ function formLead (l, editavel, gerencia, aoFechar) {
       await db.from('lead_historico').insert({
         lead_id: leadId, etapa_de: l?.etapa ?? null, etapa_para: novaEtapa, pessoa_id: PERFIL.pessoaId
       })
+      dispararAnaliseConversaSdr(leadId, l?.etapa ?? null, novaEtapa) // roda em segundo plano
     }
     // sincroniza com os Contatos do Google do vendedor, se tiver
     // telefone/e-mail — silencioso: se o Google ainda não estiver
@@ -13093,6 +13094,7 @@ function formLead (l, editavel, gerencia, aoFechar) {
       if (e1) { aviso(e1.message); return }
       const { error: e2 } = await db.from('lead').update({ cliente_id: cliente.id, etapa: 'GANHO' }).eq('id', l.id)
       if (e2) { aviso(e2.message); return }
+      dispararAnaliseConversaSdr(l.id, l.etapa, 'GANHO') // roda em segundo plano
       aviso('Cliente criado e lead marcado como ganho. Complete o cadastro em Crédito e Cobrança → Clientes.', true)
       setTimeout(() => { fechar(); aoFechar() }, 1800)
     }
@@ -13126,6 +13128,7 @@ async function atualizarEtapaLead (lead, novaEtapa, aoTerminar) {
   const { error } = await db.from('lead').update({ etapa: novaEtapa, atualizado_em: new Date().toISOString() }).eq('id', lead.id)
   if (error) { alert('Não consegui mover: ' + error.message); return }
   await db.from('lead_historico').insert({ lead_id: lead.id, etapa_de: lead.etapa, etapa_para: novaEtapa, pessoa_id: PERFIL.pessoaId })
+  dispararAnaliseConversaSdr(lead.id, lead.etapa, novaEtapa) // roda em segundo plano, não trava a tela
   aoTerminar()
 }
 
@@ -15268,7 +15271,8 @@ async function paginaSdrWhatsapp () {
   const area = areaLivre()
   area.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
-  const abas = [['leads', 'Leads'], ['funil', 'Funil'], ['regioes', 'Regiões'], ['treinar', 'Treinar IA']]
+  const abas = [['leads', 'Leads'], ['funil', 'Funil'], ['regioes', 'Regiões'], ['treinar', 'Treinar IA'],
+    ['documentos', 'Documentos'], ['links', 'Links'], ['analytics', 'Analytics']]
   area.innerHTML = `
     <div class="subabas">
       ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
@@ -15291,6 +15295,9 @@ function abrirSubAbaSdr (sub) {
   if (sub === 'funil') sdrAbaFunil(alvo)
   if (sub === 'treinar') sdrAbaTreinar(alvo)
   if (sub === 'regioes') sdrAbaRegioes(alvo)
+  if (sub === 'documentos') sdrAbaDocumentos(alvo)
+  if (sub === 'links') sdrAbaLinks(alvo)
+  if (sub === 'analytics') sdrAbaAnalytics(alvo)
 }
 
 async function sdrCarregarLeads () {
@@ -15754,6 +15761,19 @@ const CATEGORIAS_SDR_CONHECIMENTO = [
   { valor: 'MACRO_REGIONAL', rotulo: 'Cenário macro/regional', icone: '🗺️' }
 ]
 const AGENTE_AJUSTADOR_SDR_ID = '54e79b82-ec63-4426-a67c-2c5657a8dfd4' // agente que propõe ajustes de prompt/biblioteca a partir do simulador de teste
+const AGENTE_ANALISTA_CONVERSAS_SDR_ID = '7e7f1dba-5d81-4aa0-8d46-855d2bc08371' // analisa a transcrição de uma negociação encerrada (GANHO/PERDIDO) e preenche a ficha do Analytics
+const CATEGORIAS_SDR_RECURSO = [
+  { valor: 'CATALOGO', rotulo: 'Catálogo' },
+  { valor: 'FICHA_TECNICA', rotulo: 'Ficha técnica' },
+  { valor: 'LAUDO', rotulo: 'Laudo' },
+  { valor: 'INSTITUCIONAL', rotulo: 'Institucional' },
+  { valor: 'OUTRO', rotulo: 'Outro' }
+]
+const ROTULO_MOTIVO_SDR = {
+  PRECO: 'Preço', PRAZO: 'Prazo', JA_TEM_FORNECEDOR: 'Já tem fornecedor fiel',
+  NAO_E_DECISOR: 'Não é o decisor', SUMIU_SEM_RESPONDER: 'Sumiu sem responder',
+  CONFIANCA_TECNICA: 'Confiança técnica', CONDICAO_COMERCIAL: 'Condição comercial', OUTRO: 'Outro'
+}
 
 // cultura/UF em branco no cadastro = vale sempre; cultura/UF preenchida
 // só entra quando bate com a do lead — é assim que Comercial e
@@ -15768,20 +15788,99 @@ function filtrarBibliotecaSdr (biblioteca, { cultura, uf } = {}) {
   })
 }
 
-function montarPromptFinalSdr (promptBase, biblioteca, filtro) {
+function montarPromptFinalSdr (promptBase, biblioteca, filtro, recursos) {
   const blocos = filtrarBibliotecaSdr(biblioteca, filtro)
     .map(e => `### [${CATEGORIAS_SDR_CONHECIMENTO.find(c => c.valor === e.categoria)?.rotulo || e.categoria}] ${e.titulo}\n${e.conteudo}`)
     .join('\n\n')
-  return blocos ? `${promptBase}\n\n${blocos}` : promptBase
+  let final = blocos ? `${promptBase}\n\n${blocos}` : promptBase
+  if (recursos) final += montarBlocoRecursosSdr(recursos.documentos, recursos.links)
+  return final
+}
+
+// Catálogo de documentos (PDF) e links disponíveis, injetado no prompt final
+// -- quando a linha do WhatsApp Business estiver no ar, a function que
+// processa a mensagem detecta os marcadores abaixo na resposta, remove eles
+// do texto que vai pro cliente e manda o PDF como mídia (ou só loga o link
+// usado, pro Analytics). No simulador de teste, o próprio front já detecta
+// e mostra visualmente (ver enviarSimSdr).
+function montarBlocoRecursosSdr (documentos, links) {
+  const doc = (documentos || []).filter(d => d.ativo)
+  const lnk = (links || []).filter(l => l.ativo)
+  if (!doc.length && !lnk.length) return ''
+  let bloco = '\n\n### RECURSOS DISPONÍVEIS PRA ENVIAR AO CLIENTE\n'
+  if (doc.length) {
+    bloco += `\nDOCUMENTOS (PDF) — quando fizer sentido pelo que o cliente perguntou, inclua no FIM da sua resposta o marcador exato abaixo (o cliente nunca vê esse marcador — ele é removido antes de enviar, e o PDF vai como mídia separada):\n<<<ENVIAR_DOCUMENTO id="uuid-do-documento">>>\n\n` +
+      doc.map(d => `- id:${d.id} | título:${d.titulo}${d.descricao ? ` | quando enviar: ${d.descricao}` : ''}`).join('\n') + '\n'
+  }
+  if (lnk.length) {
+    bloco += `\nLINKS — pode incluir a URL direto no texto normal da resposta (o WhatsApp já mostra como link clicável). Depois de usar um link desta lista, inclua também em qualquer lugar da resposta o marcador de registro abaixo (também é removido antes de enviar, é só pra medir no Analytics quais links realmente funcionam):\n<<<LINK_USADO id="uuid-do-link">>>\n\n` +
+      lnk.map(l => `- id:${l.id} | título:${l.titulo} | url:${l.url}${l.descricao ? ` | quando usar: ${l.descricao}` : ''}`).join('\n') + '\n'
+  }
+  return bloco
+}
+
+// Gatilho da análise automática de conversa: chamado pelos 3 lugares do
+// CRM onde a etapa de um lead pode virar GANHO/PERDIDO (form de edição,
+// kanban de Gestão, "converter em cliente" — ver atualizarEtapaLead e o
+// form de lead). Só analisa negociações que vieram do bot de WhatsApp SDR
+// (têm uma linha correspondente em `leads` com lead_crm_id apontando pra
+// cá); se o lead não veio de lá, não faz nada. Roda em segundo plano —
+// nunca trava nem avisa a pessoa que mudou a etapa, só loga erro no console.
+async function dispararAnaliseConversaSdr (leadId, etapaAnterior, etapaNova) {
+  if (etapaAnterior === etapaNova) return
+  if (!['GANHO', 'PERDIDO'].includes(etapaNova)) return
+  try {
+    const { data: leadSdr } = await db.from('leads').select('id,telefone,nome,cultura,uf,volume_producao,perfil_disc')
+      .eq('lead_crm_id', leadId).maybeSingle()
+    if (!leadSdr) return // negociação não veio do SDR WhatsApp, nada a analisar
+
+    const { data: mensagens } = await db.from('mensagens').select('papel,conteudo,created_at')
+      .eq('telefone', leadSdr.telefone).order('created_at', { ascending: true })
+    if (!mensagens || !mensagens.length) return // sem conversa registrada, não tem o que analisar
+
+    const transcricao = mensagens.map(m => `${m.papel === 'assistant' ? 'SDR IA' : 'Cliente'}: ${m.conteudo}`).join('\n')
+    const dadosConhecidos = [
+      leadSdr.cultura ? `Cultura: ${leadSdr.cultura}` : null,
+      leadSdr.uf ? `UF: ${leadSdr.uf}` : null,
+      leadSdr.volume_producao ? `Volume de produção: ${leadSdr.volume_producao}` : null,
+      leadSdr.perfil_disc ? `Perfil DISC já calculado: ${leadSdr.perfil_disc}` : null
+    ].filter(Boolean).join(' · ')
+
+    const prompt = `RESULTADO DA NEGOCIAÇÃO: ${etapaNova}\n\nDADOS JÁ CONHECIDOS DO LEAD: ${dadosConhecidos || '(nenhum)'}\n\nTRANSCRIÇÃO COMPLETA DA CONVERSA:\n${transcricao}`
+
+    const { data, error } = await db.functions.invoke('ia-agente-chat', {
+      body: { agenteId: AGENTE_ANALISTA_CONVERSAS_SDR_ID, mensagens: [{ role: 'user', content: prompt }] }
+    })
+    if (error || !data?.resposta) { console.error('Analista de Conversas SDR não respondeu:', error?.message || data?.erro); return }
+
+    const m = data.resposta.match(/<<<ANALISE_CONVERSA_SDR>>>\s*([\s\S]*?)\s*<<<FIM_ANALISE_CONVERSA_SDR>>>/)
+    if (!m) { console.error('Analista de Conversas SDR devolveu algo sem o marcador esperado.'); return }
+    let analise = null
+    try { analise = JSON.parse(m[1]) } catch { console.error('Analista de Conversas SDR devolveu JSON inválido.'); return }
+
+    const { data: promptAtivo } = await db.from('sdr_prompt').select('id').eq('ativo', true).maybeSingle()
+
+    await db.from('sdr_analise_conversa').insert({
+      lead_id: leadId, lead_sdr_id: leadSdr.id, resultado: etapaNova,
+      motivo_categoria: analise.motivo_categoria || null, motivo_texto: analise.motivo_texto || null,
+      objecoes: analise.objecoes || [], pontos_positivos: analise.pontos_positivos || [],
+      perfil_inferido: analise.perfil_inferido || null, prompt_versao_id: promptAtivo?.id || null
+    })
+  } catch (e) {
+    console.error('Falha ao analisar conversa SDR:', e)
+  }
 }
 
 async function sdrAbaTreinar (alvo) {
-  const [{ data: versoes, error }, { data: biblioteca }] = await Promise.all([
+  const [{ data: versoes, error }, { data: biblioteca }, { data: documentos }, { data: links }] = await Promise.all([
     db.from('sdr_prompt').select('id,conteudo,ativo,criado_em,atualizado_por:atualizado_por(nome)').order('criado_em', { ascending: false }),
-    db.from('sdr_conhecimento').select('*').order('categoria').order('titulo')
+    db.from('sdr_conhecimento').select('*').order('categoria').order('titulo'),
+    db.from('sdr_documento').select('*').eq('ativo', true).order('titulo'),
+    db.from('sdr_link').select('*').eq('ativo', true).order('titulo')
   ])
   if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
   SDR_CACHE.biblioteca = biblioteca || []
+  const recursos = { documentos: documentos || [], links: links || [] }
 
   const ativa = (versoes || []).find(v => v.ativo)
   const historico = (versoes || []).filter(v => !v.ativo)
@@ -15891,6 +15990,11 @@ async function sdrAbaTreinar (alvo) {
         <label style="font-size:11px;">O que ela errou nessa conversa?</label>
         <textarea id="sim-sdr-feedback" style="width:100%;min-height:110px;"
           placeholder="ex: ela não perguntou a cultura antes de falar de preço; foi ríspida na objeção..."></textarea>
+        <div class="campo" style="margin-top:8px;">
+          <label style="font-size:11px;">📱 Print de uma conversa real do WhatsApp (opcional)</label>
+          <input type="file" id="sim-sdr-print" accept="image/*">
+          <span class="texto-dim2" style="font-size:11px;">Dá pra corrigir a partir de um print de verdade em vez de (ou além d)a simulação acima — a IA lê a imagem direto.</span>
+        </div>
         <div class="acoes" style="margin-top:8px;">
           <button class="btn mini" id="sim-sdr-ajustar">Enviar ajustes</button>
         </div>
@@ -15927,7 +16031,7 @@ async function sdrAbaTreinar (alvo) {
     const cultura = $('#sdr-preview-cultura').value.trim()
     const uf = $('#sdr-preview-uf').value.trim()
     const pre = $('#sdr-preview-resultado')
-    pre.textContent = montarPromptFinalSdr(ativa?.conteudo || '(nenhum prompt ativo ainda)', biblioteca, { cultura, uf })
+    pre.textContent = montarPromptFinalSdr(ativa?.conteudo || '(nenhum prompt ativo ainda)', biblioteca, { cultura, uf }, recursos)
     pre.classList.remove('oculto')
   }
 
@@ -15939,7 +16043,8 @@ async function sdrAbaTreinar (alvo) {
     if (!corpo) return
     corpo.innerHTML = SIM_SDR_MENSAGENS.length ? SIM_SDR_MENSAGENS.map(m => `
       <div class="sec-msg ${m.role === 'user' ? 'sec-user' : 'sec-ia'} ${m._carregando ? 'sec-carregando' : ''}"
-        style="align-self:${m.role === 'user' ? 'flex-end' : 'flex-start'};">${m._carregando ? 'Pensando...' : esc(m.content)}</div>
+        style="align-self:${m.role === 'user' ? 'flex-end' : 'flex-start'};">${m._carregando ? 'Pensando...' : esc(m.content)}
+        ${m.documentoSugerido ? `<div style="margin-top:6px;"><span class="chip" style="font-size:10.5px;">📎 enviaria: ${esc(m.documentoSugerido.titulo)}</span></div>` : ''}</div>
     `).join('') : '<p class="texto-dim2" style="font-size:12px;">Escreva a primeira mensagem como se fosse o cliente.</p>'
     corpo.scrollTop = corpo.scrollHeight
   }
@@ -15962,12 +16067,25 @@ async function sdrAbaTreinar (alvo) {
 
     const cultura = $('#sim-sdr-cultura').value.trim()
     const uf = $('#sim-sdr-uf').value.trim()
-    const systemPrompt = montarPromptFinalSdr(ativa?.conteudo || '', biblioteca, { cultura, uf })
+    const systemPrompt = montarPromptFinalSdr(ativa?.conteudo || '', biblioteca, { cultura, uf }, recursos)
     const historicoParaIa = SIM_SDR_MENSAGENS.filter(m => !m._carregando).map(m => ({ role: m.role, content: m.content }))
 
     const { data, error } = await db.functions.invoke('ia-agente-chat', { body: { systemPrompt, mensagens: historicoParaIa } })
     const ultimo = SIM_SDR_MENSAGENS[SIM_SDR_MENSAGENS.length - 1]
-    ultimo.content = (!error && data?.resposta) ? data.resposta : '⚠️ erro ao gerar resposta: ' + (error?.message || data?.erro || 'desconhecido')
+    let respostaTexto = (!error && data?.resposta) ? data.resposta : '⚠️ erro ao gerar resposta: ' + (error?.message || data?.erro || 'desconhecido')
+
+    // detecta os marcadores de envio de documento/uso de link -- nunca
+    // aparecem pro "cliente" simulado, só viram o chip 📎 visual aqui
+    let documentoSugerido = null
+    const mDoc = respostaTexto.match(/<<<ENVIAR_DOCUMENTO\s+id="([^"]+)"\s*>>>/)
+    if (mDoc) {
+      documentoSugerido = recursos.documentos.find(d => String(d.id) === mDoc[1]) || null
+      respostaTexto = respostaTexto.replace(mDoc[0], '').trim()
+    }
+    respostaTexto = respostaTexto.replace(/<<<LINK_USADO\s+id="[^"]+"\s*>>>/g, '').trim()
+
+    ultimo.content = respostaTexto
+    ultimo.documentoSugerido = documentoSugerido
     delete ultimo._carregando
     renderSimSdr()
   }
@@ -15977,21 +16095,43 @@ async function sdrAbaTreinar (alvo) {
   $('#sim-sdr-ajustar').onclick = async () => {
     const feedback = $('#sim-sdr-feedback').value.trim()
     const statusEl = $('#sim-sdr-status')
-    if (!feedback) { statusEl.textContent = 'Escreve o que ela errou primeiro.'; return }
+    const arquivoPrint = $('#sim-sdr-print')?.files?.[0] || null
+    if (!feedback && !arquivoPrint) { statusEl.textContent = 'Escreve o que ela errou ou anexa um print primeiro.'; return }
     const conversaValida = SIM_SDR_MENSAGENS.filter(m => !m._carregando)
-    if (!conversaValida.length) { statusEl.textContent = 'Simula uma conversa primeiro.'; return }
+    if (!conversaValida.length && !arquivoPrint) { statusEl.textContent = 'Simula uma conversa primeiro (ou anexa um print de uma conversa real).'; return }
 
     const btn = $('#sim-sdr-ajustar'); btn.disabled = true; btn.textContent = 'Analisando...'
     statusEl.textContent = ''
 
-    const transcricao = conversaValida.map(m => `${m.role === 'user' ? 'Cliente (simulado)' : 'SDR IA'}: ${m.content}`).join('\n')
+    // se veio um print de conversa real, lê como base64 pra mandar junto
+    // como imagem (a mesma chamada, formato multimodal) -- a function
+    // ia-agente-chat já repassa isso pra API da Anthropic do jeito que vier
+    let anexo = null
+    if (arquivoPrint) {
+      try {
+        anexo = await new Promise((resolve, reject) => {
+          const leitor = new FileReader()
+          leitor.onload = e => resolve({ data: e.target.result.split(',')[1], media_type: arquivoPrint.type, filename: arquivoPrint.name })
+          leitor.onerror = () => reject(new Error('falha ao ler o arquivo'))
+          leitor.readAsDataURL(arquivoPrint)
+        })
+      } catch (e) {
+        statusEl.textContent = 'Não deu pra ler o print anexado: ' + e.message
+        btn.disabled = false; btn.textContent = 'Enviar ajustes'
+        return
+      }
+    }
+
+    const transcricao = conversaValida.length
+      ? conversaValida.map(m => `${m.role === 'user' ? 'Cliente (simulado)' : 'SDR IA'}: ${m.content}`).join('\n')
+      : '(nenhuma conversa simulada aqui dentro — o feedback é sobre o print de conversa real anexado)'
     const listaConhecimentos = (biblioteca || []).map(e =>
       `- id:${e.id} | categoria:${e.categoria} | título:${e.titulo} | cultura:${e.cultura || '-'} | uf:${e.uf || '-'}\n  conteúdo: ${e.conteudo}`
     ).join('\n')
-    const prompt = `PROMPT DE ATUAÇÃO ATUAL:\n${ativa?.conteudo || '(nenhum)'}\n\nBIBLIOTECA DE CONHECIMENTO ATUAL:\n${listaConhecimentos || '(vazia)'}\n\nTRANSCRIÇÃO DA CONVERSA DE TESTE:\n${transcricao}\n\nFEEDBACK DO HUMANO SOBRE O QUE ELA ERROU:\n${feedback}`
+    const prompt = `PROMPT DE ATUAÇÃO ATUAL:\n${ativa?.conteudo || '(nenhum)'}\n\nBIBLIOTECA DE CONHECIMENTO ATUAL:\n${listaConhecimentos || '(vazia)'}\n\nTRANSCRIÇÃO DA CONVERSA DE TESTE:\n${transcricao}\n\nFEEDBACK DO HUMANO SOBRE O QUE ELA ERROU:\n${feedback || '(sem texto — analise o print de conversa anexado)'}`
 
     const { data, error } = await db.functions.invoke('ia-agente-chat', {
-      body: { agenteId: AGENTE_AJUSTADOR_SDR_ID, mensagens: [{ role: 'user', content: prompt }] }
+      body: { agenteId: AGENTE_AJUSTADOR_SDR_ID, mensagens: [{ role: 'user', content: prompt }], anexo }
     })
     btn.disabled = false; btn.textContent = 'Enviar ajustes'
     if (error || !data?.resposta) { statusEl.textContent = 'Erro: ' + (error?.message || 'sem resposta da IA'); return }
@@ -16189,6 +16329,400 @@ function abrirVisualizarPromptSdr (versao) {
   document.body.appendChild(fundo)
   fundo.querySelector('#vp-fechar').onclick = () => fundo.remove()
   fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+}
+
+// ----- Treinar IA › Documentos: PDFs que a SDR IA pode "enviar" ao cliente -----
+async function sdrAbaDocumentos (alvo) {
+  const { data: documentos, error } = await db.from('sdr_documento').select('*').order('categoria').order('titulo')
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  SDR_CACHE.documentos = documentos || []
+
+  alvo.innerHTML = `
+    <p class="texto-dim2" style="margin-bottom:12px;font-size:12.5px;">
+      PDFs (catálogos, tabelas técnicas, laudos, fichas de produto) que a SDR IA pode citar e "enviar" pro
+      cliente durante a conversa, quando fizer sentido pelo que ele perguntou. Quando a linha do WhatsApp
+      Business estiver no ar, o envio de verdade acontece automaticamente; no simulador de teste (aba
+      "Treinar IA"), ela só mostra visualmente que enviaria.</p>
+    <div class="acoes" style="margin-bottom:14px;"><button class="btn-secundario mini" id="sdr-novo-documento">+ novo documento</button></div>
+    <div id="sdr-lista-documentos">
+      ${documentos && documentos.length ? documentos.map(d => `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 12px;
+          border:1px solid var(--line2);border-radius:8px;margin-bottom:6px;${d.ativo ? '' : 'opacity:.5;'}">
+          <div style="min-width:0;">
+            <div style="font-size:12.5px;font-weight:600;">📄 ${esc(d.titulo)}
+              ${d.categoria ? `<span class="chip" style="font-size:10px;margin-left:6px;">${esc(CATEGORIAS_SDR_RECURSO.find(c => c.valor === d.categoria)?.rotulo || d.categoria)}</span>` : ''}
+              ${!d.ativo ? '<span class="chip" style="font-size:10px;margin-left:4px;">inativo</span>' : ''}</div>
+            ${d.descricao ? `<div class="texto-dim2" style="font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:480px;">${esc(d.descricao)}</div>` : ''}
+          </div>
+          <div style="display:flex;gap:6px;flex:none;">
+            <button class="btn-secundario mini" data-abrir-documento="${esc(d.storage_path)}">abrir</button>
+            <button class="btn-secundario mini" data-editar-documento="${d.id}">editar</button>
+            <button class="btn-secundario mini" data-excluir-documento="${d.id}">excluir</button>
+          </div>
+        </div>`).join('') : '<p class="texto-dim2">Nenhum documento cadastrado ainda.</p>'}
+    </div>`
+
+  $('#sdr-novo-documento').onclick = () => formDocumentoSdr(null, alvo)
+  alvo.querySelectorAll('[data-abrir-documento]').forEach(btn => { btn.onclick = () => abrirArquivo(btn.dataset.abrirDocumento) })
+  alvo.querySelectorAll('[data-editar-documento]').forEach(btn => {
+    btn.onclick = () => { const d = (documentos || []).find(x => String(x.id) === btn.dataset.editarDocumento); if (d) formDocumentoSdr(d, alvo) }
+  })
+  alvo.querySelectorAll('[data-excluir-documento]').forEach(btn => {
+    btn.onclick = () => excluirDocumentoSdr(btn.dataset.excluirDocumento, alvo)
+  })
+}
+
+function formDocumentoSdr (entrada, alvoLista) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:520px;">
+    <h3>${entrada ? 'Editar documento' : 'Novo documento'}</h3>
+    <div class="campo"><label>Título</label><input id="sd-titulo" value="${esc(entrada?.titulo || '')}"></div>
+    <div class="campo"><label>Categoria (opcional)</label>
+      <select id="sd-categoria"><option value="">— sem categoria —</option>
+        ${CATEGORIAS_SDR_RECURSO.map(c => `<option value="${c.valor}" ${entrada?.categoria === c.valor ? 'selected' : ''}>${c.rotulo}</option>`).join('')}</select></div>
+    <div class="campo"><label>Descrição — quando a IA deve enviar esse documento</label>
+      <textarea id="sd-descricao" placeholder="ex: enviar quando o cliente perguntar sobre dosagem do produto X" style="min-height:80px;">${esc(entrada?.descricao || '')}</textarea></div>
+    <div class="campo"><label>${entrada ? 'Trocar o arquivo (opcional)' : 'Arquivo (PDF)'}</label>
+      <input type="file" id="sd-arquivo" accept=".pdf">
+      ${entrada?.nome_arquivo ? `<span class="texto-dim2" style="font-size:11px;">arquivo atual: ${esc(entrada.nome_arquivo)}</span>` : ''}</div>
+    ${entrada ? `<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;margin-top:4px;">
+      <input type="checkbox" id="sd-ativo" ${entrada.ativo ? 'checked' : ''}> ativo</label>` : ''}
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="sd-salvar">${entrada ? 'Salvar alterações' : 'Criar'}</button>
+      <button class="btn-secundario" id="sd-cancelar">Cancelar</button>
+    </div>
+    <div class="recado oculto" id="sd-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+  fundo.querySelector('#sd-cancelar').onclick = () => fundo.remove()
+  fundo.querySelector('#sd-salvar').onclick = async () => {
+    const el = fundo.querySelector('#sd-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto') }
+    const titulo = fundo.querySelector('#sd-titulo').value.trim()
+    if (!titulo) { aviso('Preenche o título.'); return }
+    const arquivo = fundo.querySelector('#sd-arquivo').files[0]
+    if (!entrada && !arquivo) { aviso('Escolhe o arquivo PDF.'); return }
+    const btn = fundo.querySelector('#sd-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    let storagePath = entrada?.storage_path
+    let nomeArquivo = entrada?.nome_arquivo
+    if (arquivo) {
+      try {
+        const enviado = await enviarArquivo(arquivo, 'sdr-documentos')
+        storagePath = enviado.caminho; nomeArquivo = enviado.nome
+      } catch (e) {
+        aviso(e.message); btn.disabled = false; btn.textContent = entrada ? 'Salvar alterações' : 'Criar'; return
+      }
+    }
+    const corpo = {
+      titulo, descricao: fundo.querySelector('#sd-descricao').value.trim() || null,
+      categoria: fundo.querySelector('#sd-categoria').value || null,
+      storage_path: storagePath, nome_arquivo: nomeArquivo
+    }
+    let error
+    if (entrada) {
+      corpo.ativo = fundo.querySelector('#sd-ativo').checked
+      ;({ error } = await db.from('sdr_documento').update(corpo).eq('id', entrada.id))
+    } else {
+      ;({ error } = await db.from('sdr_documento').insert({ ...corpo, criado_por: PERFIL.pessoaId }))
+    }
+    btn.disabled = false; btn.textContent = entrada ? 'Salvar alterações' : 'Criar'
+    if (error) { aviso(error.message); return }
+    fundo.remove()
+    if (alvoLista) sdrAbaDocumentos(alvoLista)
+  }
+}
+
+async function excluirDocumentoSdr (id, alvo) {
+  if (!confirm('Excluir esse documento? Não tem como desfazer.')) return
+  const { error } = await db.from('sdr_documento').delete().eq('id', id)
+  if (error) { alert(error.message); return }
+  sdrAbaDocumentos(alvo)
+}
+
+// ----- Treinar IA › Links: URLs que a SDR IA pode mandar no texto normal -----
+async function sdrAbaLinks (alvo) {
+  const { data: links, error } = await db.from('sdr_link').select('*').order('categoria').order('titulo')
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  SDR_CACHE.links = links || []
+
+  alvo.innerHTML = `
+    <p class="texto-dim2" style="margin-bottom:12px;font-size:12.5px;">
+      Links que a SDR IA pode citar direto no texto da resposta (o WhatsApp já mostra como link clicável)
+      — site, formulário, catálogo online, etc. Diferente do documento, não precisa de marcador de envio;
+      só registra qual link foi usado, pro Analytics.</p>
+    <div class="acoes" style="margin-bottom:14px;"><button class="btn-secundario mini" id="sdr-novo-link">+ novo link</button></div>
+    <div id="sdr-lista-links">
+      ${links && links.length ? links.map(l => `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 12px;
+          border:1px solid var(--line2);border-radius:8px;margin-bottom:6px;${l.ativo ? '' : 'opacity:.5;'}">
+          <div style="min-width:0;">
+            <div style="font-size:12.5px;font-weight:600;">🔗 ${esc(l.titulo)}
+              ${l.categoria ? `<span class="chip" style="font-size:10px;margin-left:6px;">${esc(CATEGORIAS_SDR_RECURSO.find(c => c.valor === l.categoria)?.rotulo || l.categoria)}</span>` : ''}
+              ${!l.ativo ? '<span class="chip" style="font-size:10px;margin-left:4px;">inativo</span>' : ''}</div>
+            <div class="texto-dim2" style="font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:480px;">
+              <a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.url)}</a>${l.descricao ? ' — ' + esc(l.descricao) : ''}</div>
+          </div>
+          <div style="display:flex;gap:6px;flex:none;">
+            <button class="btn-secundario mini" data-editar-link="${l.id}">editar</button>
+            <button class="btn-secundario mini" data-excluir-link="${l.id}">excluir</button>
+          </div>
+        </div>`).join('') : '<p class="texto-dim2">Nenhum link cadastrado ainda.</p>'}
+    </div>`
+
+  $('#sdr-novo-link').onclick = () => formLinkSdr(null, alvo)
+  alvo.querySelectorAll('[data-editar-link]').forEach(btn => {
+    btn.onclick = () => { const l = (links || []).find(x => String(x.id) === btn.dataset.editarLink); if (l) formLinkSdr(l, alvo) }
+  })
+  alvo.querySelectorAll('[data-excluir-link]').forEach(btn => {
+    btn.onclick = () => excluirLinkSdr(btn.dataset.excluirLink, alvo)
+  })
+}
+
+function formLinkSdr (entrada, alvoLista) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:520px;">
+    <h3>${entrada ? 'Editar link' : 'Novo link'}</h3>
+    <div class="campo"><label>Título</label><input id="sl-titulo" value="${esc(entrada?.titulo || '')}"></div>
+    <div class="campo"><label>URL</label><input id="sl-url" placeholder="https://..." value="${esc(entrada?.url || '')}"></div>
+    <div class="campo"><label>Categoria (opcional)</label>
+      <select id="sl-categoria"><option value="">— sem categoria —</option>
+        ${CATEGORIAS_SDR_RECURSO.map(c => `<option value="${c.valor}" ${entrada?.categoria === c.valor ? 'selected' : ''}>${c.rotulo}</option>`).join('')}</select></div>
+    <div class="campo"><label>Descrição — quando a IA deve usar esse link</label>
+      <textarea id="sl-descricao" placeholder="ex: mandar quando o cliente quiser ver o catálogo completo" style="min-height:80px;">${esc(entrada?.descricao || '')}</textarea></div>
+    ${entrada ? `<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;margin-top:4px;">
+      <input type="checkbox" id="sl-ativo" ${entrada.ativo ? 'checked' : ''}> ativo</label>` : ''}
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="sl-salvar">${entrada ? 'Salvar alterações' : 'Criar'}</button>
+      <button class="btn-secundario" id="sl-cancelar">Cancelar</button>
+    </div>
+    <div class="recado oculto" id="sl-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+  fundo.querySelector('#sl-cancelar').onclick = () => fundo.remove()
+  fundo.querySelector('#sl-salvar').onclick = async () => {
+    const el = fundo.querySelector('#sl-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto') }
+    const titulo = fundo.querySelector('#sl-titulo').value.trim()
+    const url = fundo.querySelector('#sl-url').value.trim()
+    if (!titulo || !url) { aviso('Preenche título e URL.'); return }
+    const corpo = {
+      titulo, url, descricao: fundo.querySelector('#sl-descricao').value.trim() || null,
+      categoria: fundo.querySelector('#sl-categoria').value || null
+    }
+    const btn = fundo.querySelector('#sl-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    let error
+    if (entrada) {
+      corpo.ativo = fundo.querySelector('#sl-ativo').checked
+      ;({ error } = await db.from('sdr_link').update(corpo).eq('id', entrada.id))
+    } else {
+      ;({ error } = await db.from('sdr_link').insert({ ...corpo, criado_por: PERFIL.pessoaId }))
+    }
+    btn.disabled = false; btn.textContent = entrada ? 'Salvar alterações' : 'Criar'
+    if (error) { aviso(error.message); return }
+    fundo.remove()
+    if (alvoLista) sdrAbaLinks(alvoLista)
+  }
+}
+
+async function excluirLinkSdr (id, alvo) {
+  if (!confirm('Excluir esse link? Não tem como desfazer.')) return
+  const { error } = await db.from('sdr_link').delete().eq('id', id)
+  if (error) { alert(error.message); return }
+  sdrAbaLinks(alvo)
+}
+
+// ----- Treinar IA › Analytics: o que está funcionando no treinamento -----
+// Tudo calculado em cima de sdr_analise_conversa (preenchida sozinha pela
+// IA "Analista de Conversas SDR" quando um lead vindo do WhatsApp SDR
+// fecha como GANHO/PERDIDO — ver dispararAnaliseConversaSdr) cruzado com
+// leads (dados do bot) e lead (etapa comercial no CRM).
+async function sdrAbaAnalytics (alvo) {
+  const [{ data: analises, error }, { data: leadsSdr }, { data: leadsCrm }, { data: versoesPrompt }] = await Promise.all([
+    db.from('sdr_analise_conversa').select('*').order('criado_em', { ascending: false }),
+    db.from('leads').select('id,status,cultura,uf,volume_producao,perfil_disc,lead_crm_id'),
+    db.from('lead').select('id,etapa,uf,valor_estimado,criado_em').eq('origem', 'whatsapp_sdr'),
+    db.from('sdr_prompt').select('id,criado_em').order('criado_em')
+  ])
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  const listaAnalises = analises || []
+  const listaLeadsSdr = leadsSdr || []
+  const listaLeadsCrm = leadsCrm || []
+  const porLeadCrmId = {}
+  listaLeadsSdr.forEach(l => { if (l.lead_crm_id) porLeadCrmId[l.lead_crm_id] = l })
+
+  // ----- conversão geral e cruzada -----
+  const encerrados = listaLeadsCrm.filter(l => ['GANHO', 'PERDIDO'].includes(l.etapa))
+  const ganhos = encerrados.filter(l => l.etapa === 'GANHO')
+  const taxaConversaoGeral = encerrados.length ? Math.round(ganhos.length / encerrados.length * 100) : null
+
+  const cruzar = campo => {
+    const grupos = {}
+    encerrados.forEach(l => {
+      const origemSdr = porLeadCrmId[l.id]
+      const chave = (origemSdr?.[campo] || l[campo] || '—')
+      grupos[chave] = grupos[chave] || { total: 0, ganhos: 0 }
+      grupos[chave].total++
+      if (l.etapa === 'GANHO') grupos[chave].ganhos++
+    })
+    return Object.entries(grupos).map(([rotulo, v]) => ({ rotulo: `${rotulo} (${v.total})`, valor: Math.round(v.ganhos / v.total * 100) }))
+      .sort((a, b) => b.valor - a.valor)
+  }
+  const convPorCultura = cruzar('cultura')
+  const convPorUf = cruzar('uf')
+  const convPorDisc = cruzar('perfil_disc')
+  const convPorVolume = cruzar('volume_producao') // texto livre — cruza pelo valor exato mesmo
+
+  // ----- ranking de objeções: frequência x taxa de contorno -----
+  const objecoesFlat = []
+  listaAnalises.forEach(a => (a.objecoes || []).forEach(o => objecoesFlat.push(o)))
+  const porObjecao = {}
+  objecoesFlat.forEach(o => {
+    const chave = (o.objecao || '—').trim()
+    porObjecao[chave] = porObjecao[chave] || { total: 0, contornadas: 0 }
+    porObjecao[chave].total++
+    if (o.contornada) porObjecao[chave].contornadas++
+  })
+  const rankingObjecoes = Object.entries(porObjecao).map(([rotulo, v]) => ({
+    rotulo, total: v.total, taxaContorno: Math.round(v.contornadas / v.total * 100)
+  })).sort((a, b) => b.total - a.total)
+
+  // ----- ranking de técnicas de contorno por taxa de sucesso -----
+  const porTecnica = {}
+  objecoesFlat.filter(o => o.tecnica_usada).forEach(o => {
+    const chave = o.tecnica_usada.trim()
+    porTecnica[chave] = porTecnica[chave] || { total: 0, sucesso: 0 }
+    porTecnica[chave].total++
+    if (o.contornada) porTecnica[chave].sucesso++
+  })
+  const rankingTecnicas = Object.entries(porTecnica).map(([rotulo, v]) => ({ rotulo: `${rotulo} (${v.total})`, valor: Math.round(v.sucesso / v.total * 100) }))
+    .sort((a, b) => b.valor - a.valor)
+
+  // ----- funil: qualificação (bot) + comercial (CRM, pós handoff) -----
+  const funilQualificacao = STATUS_LEAD_SDR.map(s => ({ rotulo: ROTULO_STATUS_LEAD_SDR[s], valor: listaLeadsSdr.filter(l => l.status === s).length }))
+  const funilComercial = ETAPAS_LEAD.map(e => ({ rotulo: ROTULO_ETAPA_LEAD[e], valor: listaLeadsCrm.filter(l => l.etapa === e).length }))
+
+  // ----- motivos de perda categorizados -----
+  const perdas = listaAnalises.filter(a => a.resultado === 'PERDIDO')
+  const porMotivoPerda = {}
+  perdas.forEach(a => { const c = a.motivo_categoria || 'OUTRO'; porMotivoPerda[c] = (porMotivoPerda[c] || 0) + 1 })
+  const rankingPerdas = Object.entries(porMotivoPerda).map(([c, total]) => ({ rotulo: ROTULO_MOTIVO_SDR[c] || c, valor: total }))
+    .sort((a, b) => b.valor - a.valor)
+
+  // ----- cruzamento com versões do prompt -----
+  const rotuloVersao = {}
+  ;(versoesPrompt || []).forEach((v, i) => { rotuloVersao[v.id] = `v${i + 1} (${formatarHoraRelativa(v.criado_em)})` })
+  const porVersao = {}
+  listaAnalises.forEach(a => {
+    if (!a.prompt_versao_id) return
+    porVersao[a.prompt_versao_id] = porVersao[a.prompt_versao_id] || { total: 0, ganhos: 0 }
+    porVersao[a.prompt_versao_id].total++
+    if (a.resultado === 'GANHO') porVersao[a.prompt_versao_id].ganhos++
+  })
+  const rankingVersoes = Object.entries(porVersao).map(([id, v]) => ({
+    rotulo: `${rotuloVersao[id] || id.slice(0, 8)} — ${v.total} negociação(ões)`, valor: Math.round(v.ganhos / v.total * 100)
+  }))
+
+  // ----- alerta de objeção emergente (cresceu nas últimas semanas e ainda com baixo contorno) -----
+  const dia = 86400000
+  const agora = Date.now()
+  const contarPeriodo = (deMs, ateMs) => {
+    const porObj = {}
+    listaAnalises.filter(a => { const t = new Date(a.criado_em).getTime(); return t >= deMs && t < ateMs })
+      .forEach(a => (a.objecoes || []).forEach(o => {
+        const chave = (o.objecao || '—').trim()
+        porObj[chave] = porObj[chave] || { total: 0, contornadas: 0 }
+        porObj[chave].total++
+        if (o.contornada) porObj[chave].contornadas++
+      }))
+    return porObj
+  }
+  const periodoRecente = contarPeriodo(agora - 30 * dia, agora)
+  const periodoAnterior = contarPeriodo(agora - 60 * dia, agora - 30 * dia)
+  const objecoesEmergentes = Object.entries(periodoRecente)
+    .filter(([chave, v]) => {
+      const antes = periodoAnterior[chave]?.total || 0
+      const taxa = Math.round(v.contornadas / v.total * 100)
+      return v.total >= 2 && v.total > antes && taxa < 50
+    })
+    .map(([rotulo, v]) => ({ rotulo, total: v.total, antes: periodoAnterior[rotulo]?.total || 0, taxa: Math.round(v.contornadas / v.total * 100) }))
+    .sort((a, b) => b.total - a.total)
+
+  alvo.innerHTML = `
+    <div class="resumo-topo" style="margin-bottom:16px;">
+      ${kpi('Taxa de conversão geral', taxaConversaoGeral != null ? taxaConversaoGeral + '%' : '—', encerrados.length + ' negociação(ões) encerrada(s)')}
+      ${kpi('Negociações ganhas', ganhos.length)}
+      ${kpi('Análises registradas', listaAnalises.length, 'preenchidas pela IA ao encerrar')}
+      ${kpi('Leads no bot (todos os tempos)', listaLeadsSdr.length)}
+    </div>
+
+    ${objecoesEmergentes.length ? `
+      <div class="panel" style="padding:16px;margin-bottom:16px;border:1px solid var(--warn-text, #c8a11a);background:rgba(200,161,26,.08);">
+        <h3 style="font-family:var(--serif);font-size:14.5px;margin:0 0 8px;">⚠️ Objeção emergente — prioridade de treinamento</h3>
+        ${objecoesEmergentes.map(o => `<p style="font-size:12.5px;margin:4px 0;">
+          <b>${esc(o.rotulo)}</b> — ${o.total}x nos últimos 30 dias (era ${o.antes}x nos 30 dias antes), só ${o.taxa}% contornada.</p>`).join('')}
+      </div>` : ''}
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;" class="grade-painel-comb">
+      <div class="panel" style="padding:18px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Funil de qualificação (bot)</h3>
+        ${barrasHorizontais(funilQualificacao.filter(f => f.valor > 0), { unidade: 'leads' })}
+      </div>
+      <div class="panel" style="padding:18px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Funil comercial (pós-handoff, CRM)</h3>
+        ${barrasHorizontais(funilComercial.filter(f => f.valor > 0), { unidade: 'leads' })}
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;" class="grade-painel-comb">
+      <div class="panel" style="padding:18px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Conversão por cultura</h3>
+        ${barrasHorizontais(convPorCultura, { unidade: '%' })}
+      </div>
+      <div class="panel" style="padding:18px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Conversão por UF</h3>
+        ${barrasHorizontais(convPorUf, { unidade: '%' })}
+      </div>
+      <div class="panel" style="padding:18px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Conversão por perfil DISC</h3>
+        ${barrasHorizontais(convPorDisc, { unidade: '%' })}
+      </div>
+      <div class="panel" style="padding:18px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Conversão por volume de produção</h3>
+        ${barrasHorizontais(convPorVolume, { unidade: '%' })}
+        <p class="texto-dim2" style="font-size:10.5px;margin-top:8px;">Volume é texto livre digitado/inferido na conversa — cruza pelo valor exato, sem faixas.</p>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;" class="grade-painel-comb">
+      <div class="panel" style="padding:18px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Objeções mais frequentes × taxa de contorno</h3>
+        ${rankingObjecoes.length ? `<div class="tabela-scroll"><table><thead><tr><th>Objeção</th><th class="num">Vezes</th><th class="num">% contornada</th></tr></thead><tbody>
+          ${rankingObjecoes.map(o => `<tr><td>${esc(o.rotulo)}</td><td class="num">${o.total}</td>
+            <td class="num"><span class="${o.taxaContorno >= 70 ? 'badge-bom' : o.taxaContorno >= 40 ? 'chip' : 'badge-alerta'}">${o.taxaContorno}%</span></td></tr>`).join('')}
+          </tbody></table></div>` : '<p class="vazio">Sem objeções registradas ainda.</p>'}
+      </div>
+      <div class="panel" style="padding:18px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Técnicas de contorno por taxa de sucesso</h3>
+        ${barrasHorizontais(rankingTecnicas, { unidade: '%' })}
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;" class="grade-painel-comb">
+      <div class="panel" style="padding:18px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Motivos de perda</h3>
+        ${barrasHorizontais(rankingPerdas, { unidade: 'casos' })}
+      </div>
+      <div class="panel" style="padding:18px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Conversão por versão do prompt</h3>
+        ${barrasHorizontais(rankingVersoes, { unidade: '%' })}
+        <p class="texto-dim2" style="font-size:10.5px;margin-top:8px;">Cada análise leva a versão do prompt que estava ativa quando a IA analisou a negociação encerrada.</p>
+      </div>
+    </div>`
 }
 
 // ---------------------------------------------------------------
