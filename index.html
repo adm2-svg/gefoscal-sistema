@@ -1502,6 +1502,7 @@ async function abrirApp () {
   ligarEscutaChatInterno()
   ligarChecagemPeriodicaNotificacoes()
   tocarSomNotificacao()
+  avisarPedidosProrrogacaoPendentes()
 }
 
 // ----- Notificações pessoais: sino no topo. Dispara quando: uma solicitação
@@ -3338,6 +3339,7 @@ function detalheSolicitacao (s, aoFechar) {
       <button class="btn-secundario mini" id="ds-programar">📅 ${s.data_planejada ? 'Reprogramar' : 'Programar quando vou fazer'}</button>
       ${prazo?.atrasada ? '<button class="btn-secundario mini" id="ds-prorrogar" style="color:var(--warn-text,#c8901a);">⏰ Pedir mudança de prazo</button>' : ''}
     </div>` : ''}
+    <div id="ds-historico-prazo"></div>
 
     <div class="caixa-texto" style="margin-bottom:12px;">
       <div class="rot">${esc(s.titulo)}</div>
@@ -3399,6 +3401,33 @@ function detalheSolicitacao (s, aoFechar) {
   if (btnProgramar) btnProgramar.onclick = () => abrirProgramarSolicitacao(s, () => { fechar(); aoFechar() })
   const btnProrrogar = fundo.querySelector('#ds-prorrogar')
   if (btnProrrogar) btnProrrogar.onclick = () => formPedirProrrogacao(s, () => { fechar(); aoFechar() })
+
+  // histórico de pedidos de mudança de prazo dessa solicitação específica —
+  // fica visível pra quem abrir (quem pediu e quem decide), mesmo depois
+  // de aceito/recusado, que antes sumia de qualquer tela do sistema
+  const carregarHistoricoPrazoSolicitacao = async () => {
+    const alvoHist = fundo.querySelector('#ds-historico-prazo')
+    if (!alvoHist) return
+    const { data: pedidos } = await db.from('solicitacao_prorrogacao')
+      .select('id,data_atual,data_nova_solicitada,justificativa,parecer_decisao,status,criado_em,decidido_em,solicitado_por:solicitado_por(nome),decidido_por:decidido_por(nome)')
+      .eq('solicitacao_id', s.id).order('criado_em', { ascending: false })
+    if (!pedidos?.length) { alvoHist.innerHTML = ''; return }
+    const ROTULO_STATUS_PRORROG = { PENDENTE: '⏳ Aguardando decisão', ACEITO: '✓ Aceito', RECUSADO: '✗ Recusado' }
+    alvoHist.innerHTML = `
+      <div class="cabeca-secao" style="margin-top:14px;"><h3 style="font-family:var(--serif);font-size:14px;">⏰ Histórico de pedidos de prazo</h3></div>
+      ${pedidos.map(p => `<div class="panel" style="padding:10px 12px;margin-bottom:8px;background:var(--surface2);">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px;">
+          <span class="texto-dim2" style="font-size:12px;">${p.data_atual ? fmtData(p.data_atual) : '—'} → <b>${fmtData(p.data_nova_solicitada)}</b></span>
+          <span style="font-size:11px;${p.status === 'ACEITO' ? 'color:var(--ok-text,#2e7d32);' : p.status === 'RECUSADO' ? 'color:var(--warn-text,#c8901a);' : ''}">${ROTULO_STATUS_PRORROG[p.status]}</span>
+        </div>
+        <p class="texto-dim" style="font-size:12px;margin:0 0 4px;">"${esc(p.justificativa)}"</p>
+        ${p.parecer_decisao ? `<p class="texto-dim2" style="font-size:11.5px;margin:0 0 4px;">Motivo da decisão: ${esc(p.parecer_decisao)}</p>` : ''}
+        ${p.status !== 'PENDENTE'
+          ? `<p class="texto-dim2" style="font-size:11px;margin:0;">decidido por ${esc(p.decidido_por?.nome ?? '—')} em ${fmtQuando(p.decidido_em) ?? '—'}</p>`
+          : `<p class="texto-dim2" style="font-size:11px;margin:0;">pedido por ${esc(p.solicitado_por?.nome ?? '—')} em ${fmtQuando(p.criado_em) ?? '—'}</p>`}
+      </div>`).join('')}`
+  }
+  carregarHistoricoPrazoSolicitacao()
 
   const carregarParticipantes = async () => {
     const { data } = await db.from('solicitacao_participante').select('id,pessoa_id,pessoa:pessoa_id(nome)').eq('solicitacao_id', s.id)
@@ -3593,6 +3622,46 @@ function formPedirProrrogacao (s, aoFechar) {
 
     fundo.remove()
     aoFechar()
+  }
+}
+
+// Avisa quem decide (quem edita o módulo de Desempenho/RH) assim que entra
+// no sistema, se tiver pedido de mudança de prazo esperando decisão — antes
+// só dava pra saber pelo sino de notificação, e passava despercebido
+async function avisarPedidosProrrogacaoPendentes () {
+  if (!podeEditar('desempenho')) return
+  const { data: pedidos } = await db.from('solicitacao_prorrogacao')
+    .select('id,data_nova_solicitada,solicitado_por:solicitado_por(nome),solicitacao:solicitacao_id(codigo,titulo)')
+    .eq('status', 'PENDENTE').order('criado_em', { ascending: true })
+  if (!pedidos?.length) return
+  modalAvisoProrrogacoes(pedidos)
+}
+
+function modalAvisoProrrogacoes (pedidos) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:480px;">
+    <h3>⏰ Pedido${pedidos.length > 1 ? 's' : ''} de mudança de prazo esperando você</h3>
+    <p class="texto-dim2" style="font-size:12px;margin:-6px 0 12px;">
+      ${pedidos.length} solicitaç${pedidos.length > 1 ? 'ões estão' : 'ão está'} com pedido de prazo novo aguardando decisão.</p>
+    <div style="max-height:260px;overflow-y:auto;">
+      ${pedidos.map(p => `<div class="panel" style="padding:10px 12px;margin-bottom:8px;background:var(--surface2);">
+        <b>${esc(p.solicitado_por?.nome ?? '—')}</b> · <span class="texto-dim2" style="font-size:12px;">${esc(p.solicitacao?.codigo ?? '')} — ${esc(p.solicitacao?.titulo ?? '')}</span>
+        <p class="texto-dim2" style="font-size:11.5px;margin:4px 0 0;">Nova data proposta: ${fmtData(p.data_nova_solicitada)}</p>
+      </div>`).join('')}
+    </div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="mp-ver">Ver e decidir</button>
+      <button class="btn-secundario" id="mp-depois">Ver depois</button>
+    </div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+  fundo.querySelector('#mp-depois').onclick = () => fundo.remove()
+  fundo.querySelector('#mp-ver').onclick = async () => {
+    fundo.remove()
+    await irPara('desempenho')
+    document.querySelector('.subabas-rh button[data-sub="agilidade"]')?.click()
   }
 }
 
@@ -28918,6 +28987,46 @@ Volume de trabalho agora: ${resumo.total} solicitação(ões) ativa(s), ${resumo
   })
 }
 
+// Histórico dos pedidos de prazo já decididos (aceitos e recusados) —
+// some da fila de pendentes assim que alguém decide, então sem isso não
+// dava pra ver depois quais solicitações tiveram o prazo mudado. Fica
+// escondido por padrão (só o botão) pra não poluir a tela de Agilidade.
+let mostrarHistoricoProrrogacoes = false
+async function carregarHistoricoProrrogacoes () {
+  const alvoDiv = $('#ag-historico-prorrogacoes')
+  if (!alvoDiv) return
+  const { data: decididos } = await db.from('solicitacao_prorrogacao')
+    .select('id,data_atual,data_nova_solicitada,justificativa,parecer_decisao,status,decidido_em,solicitado_por:solicitado_por(nome),decidido_por:decidido_por(nome),solicitacao:solicitacao_id(codigo,titulo)')
+    .in('status', ['ACEITO', 'RECUSADO']).order('decidido_em', { ascending: false }).limit(100)
+
+  if (!decididos?.length) { alvoDiv.innerHTML = ''; return }
+
+  if (!mostrarHistoricoProrrogacoes) {
+    alvoDiv.innerHTML = `<button class="btn-secundario mini" id="ag-toggle-historico" style="margin-bottom:16px;">📜 Ver histórico de decisões de prazo (${decididos.length})</button>`
+    alvoDiv.querySelector('#ag-toggle-historico').onclick = () => { mostrarHistoricoProrrogacoes = true; carregarHistoricoProrrogacoes() }
+    return
+  }
+
+  alvoDiv.innerHTML = `
+    <div class="panel" style="padding:16px 18px;margin-bottom:16px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0;">📜 Histórico de decisões de prazo (${decididos.length})</h3>
+        <button class="btn-secundario mini" id="ag-toggle-historico">Esconder histórico</button>
+      </div>
+      ${decididos.map(p => `<div class="panel" style="padding:10px 12px;margin-bottom:8px;background:var(--surface2);">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px;">
+          <div><b>${esc(p.solicitado_por?.nome ?? '—')}</b> · <span class="texto-dim2" style="font-size:12px;">${esc(p.solicitacao?.codigo ?? '')} — ${esc(p.solicitacao?.titulo ?? '')}</span></div>
+          <span style="font-size:11px;${p.status === 'ACEITO' ? 'color:var(--ok-text,#2e7d32);' : 'color:var(--warn-text,#c8901a);'}">${p.status === 'ACEITO' ? '✓ Aceito' : '✗ Recusado'}</span>
+        </div>
+        <p class="texto-dim2" style="font-size:11.5px;margin:0 0 4px;">Prazo atual: ${p.data_atual ? fmtData(p.data_atual) : '—'} → proposto: ${fmtData(p.data_nova_solicitada)}</p>
+        <p class="texto-dim" style="font-size:12px;margin:0 0 4px;">"${esc(p.justificativa)}"</p>
+        ${p.parecer_decisao ? `<p class="texto-dim2" style="font-size:11.5px;margin:0 0 4px;">Motivo da decisão: ${esc(p.parecer_decisao)}</p>` : ''}
+        <p class="texto-dim2" style="font-size:11px;margin:0;">decidido por ${esc(p.decidido_por?.nome ?? '—')} em ${fmtQuando(p.decidido_em) ?? '—'}</p>
+      </div>`).join('')}
+    </div>`
+  alvoDiv.querySelector('#ag-toggle-historico').onclick = () => { mostrarHistoricoProrrogacoes = false; carregarHistoricoProrrogacoes() }
+}
+
 async function desempAgilidade (alvo, editavel) {
   if (!editavel) { alvo.innerHTML = `<div class="panel" style="padding:22px;">
     <p class="texto-dim">Esse indicador é sensível e só quem edita o módulo de RH enxerga
@@ -28928,6 +29037,7 @@ async function desempAgilidade (alvo, editavel) {
 
   alvo.innerHTML = `
     <div id="ag-prorrogacoes"></div>
+    <div id="ag-historico-prorrogacoes"></div>
     <div class="filtros" style="margin-bottom:14px;">
       <div class="campo"><label>De</label><input type="date" id="ag-de" value="${de}"></div>
       <div class="campo"><label>Até</label><input type="date" id="ag-ate" value="${hoje}"></div>
@@ -28936,6 +29046,7 @@ async function desempAgilidade (alvo, editavel) {
     <div id="ag-conteudo"><p class="texto-dim2">carregando...</p></div>`
 
   carregarPedidosProrrogacao()
+  carregarHistoricoProrrogacoes()
 
   const buscar = async () => {
     const { data, error } = await db.from('solicitacao_interna').select(`
