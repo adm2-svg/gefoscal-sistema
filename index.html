@@ -16695,6 +16695,21 @@ function dividirEmMensagensSdr (texto) {
     .filter(Boolean)
 }
 
+// A function ia-agente-chat volta e meia dá 502 sem erro de aplicação nenhum
+// no log — parece a infra do Supabase disputando duas instâncias pra uma
+// mesma chamada, não um bug daqui. Enquanto isso não se resolve do lado
+// deles, tenta de novo sozinho uma vez antes de mostrar erro pra pessoa.
+async function invocarIaComRetry (nomeFuncao, body, tentativas = 2) {
+  let ultimoErro = null
+  for (let i = 0; i < tentativas; i++) {
+    const resultado = await db.functions.invoke(nomeFuncao, { body })
+    if (!resultado.error) return resultado
+    ultimoErro = resultado.error
+    if (i < tentativas - 1) await new Promise(r => setTimeout(r, 600))
+  }
+  return { data: null, error: ultimoErro }
+}
+
 // Catálogo de documentos (PDF) e links disponíveis, injetado no prompt final
 // -- quando a linha do WhatsApp Business estiver no ar, a function que
 // processa a mensagem detecta os marcadores abaixo na resposta, remove eles
@@ -17075,7 +17090,7 @@ async function sdrAbaTreinar (alvo) {
     const systemPrompt = montarPromptFinalSdr(ativa?.conteudo || '', biblioteca, { cultura, uf }, recursos)
     const historicoParaIa = SIM_SDR_MENSAGENS.filter(m => !m._carregando).map(m => ({ role: m.role, content: m.content }))
 
-    const { data, error } = await db.functions.invoke('ia-agente-chat', { body: { systemPrompt, mensagens: historicoParaIa } })
+    const { data, error } = await invocarIaComRetry('ia-agente-chat', { systemPrompt, mensagens: historicoParaIa })
     let respostaTexto = (!error && data?.resposta) ? data.resposta : '⚠️ erro ao gerar resposta: ' + (error?.message || data?.erro || 'desconhecido')
 
     // detecta os marcadores de envio de documento/uso de link -- nunca
@@ -17145,7 +17160,7 @@ async function sdrAbaTreinar (alvo) {
     const systemPrompt = montarPromptFinalSdr(ativa?.conteudo || '', biblioteca, { cultura, uf }, recursos) + instrucaoColdCall
     const historicoParaIa = SIM_SDR_MENSAGENS.filter(m => !m._carregando).map(m => ({ role: m.role, content: m.content }))
 
-    const { data, error } = await db.functions.invoke('ia-agente-chat', { body: { systemPrompt, mensagens: historicoParaIa } })
+    const { data, error } = await invocarIaComRetry('ia-agente-chat', { systemPrompt, mensagens: historicoParaIa })
     let respostaTexto = (!error && data?.resposta) ? data.resposta : '⚠️ erro ao gerar resposta: ' + (error?.message || data?.erro || 'desconhecido')
 
     let documentoSugerido = null
@@ -17211,9 +17226,7 @@ async function sdrAbaTreinar (alvo) {
     ).join('\n')
     const prompt = `PROMPT DE ATUAÇÃO ATUAL:\n${ativa?.conteudo || '(nenhum)'}\n\nBIBLIOTECA DE CONHECIMENTO ATUAL:\n${listaConhecimentos || '(vazia)'}\n\nTRANSCRIÇÃO DA CONVERSA DE TESTE:\n${transcricao}\n\nFEEDBACK DO HUMANO SOBRE O QUE ELA ERROU:\n${feedback || '(sem texto — analise o print de conversa anexado)'}`
 
-    const { data, error } = await db.functions.invoke('ia-agente-chat', {
-      body: { agenteId: AGENTE_AJUSTADOR_SDR_ID, mensagens: [{ role: 'user', content: prompt }], anexo }
-    })
+    const { data, error } = await invocarIaComRetry('ia-agente-chat', { agenteId: AGENTE_AJUSTADOR_SDR_ID, mensagens: [{ role: 'user', content: prompt }], anexo })
     btn.disabled = false; btn.textContent = 'Enviar ajustes'
     if (error || !data?.resposta) { statusEl.textContent = 'Erro: ' + (error?.message || 'sem resposta da IA'); return }
 
