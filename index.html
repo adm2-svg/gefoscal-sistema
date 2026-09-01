@@ -16672,6 +16672,15 @@ function montarPromptFinalSdr (promptBase, biblioteca, filtro, recursos) {
   return final
 }
 
+// Rede de segurança contra a IA anotar o próprio estado na mensagem (tipo
+// "--- *[Aguardando confirmação]*" ou variações em parênteses/sem travessão)
+// — já pedimos no prompt pra nunca fazer isso, mas ela varia o formato, então
+// removemos aqui de forma genérica por estrutura (asterisco + colchete ou
+// parêntese no fim da mensagem), não por uma lista fixa de frases.
+function removerNotasDeEstadoSdr (texto) {
+  return (texto || '').replace(/\s*[-—]{0,3}\s*\*[\[(][^\])]{0,200}[\])]\*\s*$/g, '').trim()
+}
+
 // Catálogo de documentos (PDF) e links disponíveis, injetado no prompt final
 // -- quando a linha do WhatsApp Business estiver no ar, a function que
 // processa a mensagem detecta os marcadores abaixo na resposta, remove eles
@@ -17065,6 +17074,7 @@ async function sdrAbaTreinar (alvo) {
       respostaTexto = respostaTexto.replace(mDoc[0], '').trim()
     }
     respostaTexto = respostaTexto.replace(/<<<LINK_USADO\s+id="[^"]+"\s*>>>/g, '').trim()
+    respostaTexto = removerNotasDeEstadoSdr(respostaTexto)
 
     ultimo.content = respostaTexto
     ultimo.documentoSugerido = documentoSugerido
@@ -17094,10 +17104,11 @@ async function sdrAbaTreinar (alvo) {
       !nome && 'nome', !fazenda && 'fazenda', !cultivo && 'cultivo principal', !regiao && 'região'
     ].filter(Boolean)
 
-    const instrucaoColdCall = `\n\n### MODO ABORDAGEM FRIA (COLD CALL)\n` +
+    const instrucaoColdCall = `\n\n### MODO ABORDAGEM FRIA (COLD CALL) — OS DADOS ABAIXO SÃO REAIS E SUBSTITUEM QUALQUER EXEMPLO DO PROMPT ACIMA\n` +
       `Você está fazendo o PRIMEIRO contato com este lead — ele não te chamou, você está abordando a partir de uma lista de atuação comercial. Mande a primeira mensagem agora, de forma natural, como uma abertura de conversa real de WhatsApp.\n\n` +
-      `Informações disponíveis sobre o lead:\n${dadosPreenchidos.length ? dadosPreenchidos.join('\n') : '(nenhuma informação disponível além do contato)'}\n` +
-      (camposFaltando.length ? `\nInformações NÃO disponíveis: ${camposFaltando.join(', ')}. Não invente, não finja saber e não pergunte tudo de uma vez logo na abertura — faça a abordagem só com o que você tem, e vá descobrindo o que falta aos poucos, naturalmente, ao longo da conversa.` : '')
+      `Todo nome de pessoa, fazenda, cultivo ou região que aparece nos EXEMPLOS do prompt acima (tipo "Antônio", "Gerson", "[fazenda]", "[nome]") é só ilustração de formato, nunca é um dado real — você NUNCA usa nenhum desses nomes de exemplo aqui. Os únicos dados reais deste lead são os listados abaixo. Se um campo está preenchido, use exatamente esse valor, sem trocar por outro nome parecido nem "completar" com algo do prompt. Se um campo não está listado, ele é desconhecido de verdade — não invente um substituto.\n\n` +
+      `Dados reais deste lead:\n${dadosPreenchidos.length ? dadosPreenchidos.join('\n') : '(nenhuma informação disponível além do contato)'}\n` +
+      (camposFaltando.length ? `\nDados desconhecidos (não invente, não presuma, não pergunte tudo de uma vez logo na abertura): ${camposFaltando.join(', ')}. Vá descobrindo o que falta aos poucos, naturalmente, ao longo da conversa.` : '')
 
     // reinicia a conversa de teste sozinho ao iniciar uma nova abordagem
     simSdrColdCallIniciado = false
@@ -17126,6 +17137,7 @@ async function sdrAbaTreinar (alvo) {
       respostaTexto = respostaTexto.replace(mDoc[0], '').trim()
     }
     respostaTexto = respostaTexto.replace(/<<<LINK_USADO\s+id="[^"]+"\s*>>>/g, '').trim()
+    respostaTexto = removerNotasDeEstadoSdr(respostaTexto)
 
     ultimo.content = respostaTexto
     ultimo.documentoSugerido = documentoSugerido
