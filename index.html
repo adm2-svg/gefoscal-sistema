@@ -881,6 +881,22 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
 .modal h3 { font-family:var(--serif); margin:0 0 14px; font-size:19px; }
 .modal textarea { min-height:110px; }
 
+/* ---- ícones nos botões (usado no Cadastro > Funcionários e no DP e Segurança) ---- */
+.ic-botao { display:inline-flex; width:13px; height:13px; flex:none; vertical-align:-2px; margin-right:6px; }
+.ic-botao svg { width:100%; height:100%; }
+.mini .ic-botao { width:12px; height:12px; margin-right:4px; }
+
+/* ---- lista de funcionários (Cadastro > Funcionários e DP e Segurança) ---- */
+.linha-func-pessoa { display:flex; align-items:center; gap:11px; }
+.avatar-func { width:36px; height:36px; border-radius:50%; flex:none; object-fit:cover; }
+.avatar-func-inicial { width:36px; height:36px; border-radius:50%; flex:none; display:grid; place-items:center;
+  background:var(--hover-bg); color:var(--rust); font-family:var(--serif); font-size:14px; font-weight:600; }
+.linha-func-pessoa .dados-func { min-width:0; }
+.linha-func-pessoa .nome-func { font-size:14px; font-weight:600; color:var(--txt); }
+.linha-func-pessoa .cargo-func { color:var(--dim2); font-size:12px; margin-top:1px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#dp-func-corpo tr td { vertical-align:middle; }
+
 @media print {
   body * { visibility:hidden; }
   .area-impressao, .area-impressao * { visibility:visible; }
@@ -31329,6 +31345,22 @@ function abrirDp (sub, editavel) {
 // ----- Funcionários -----
 const ROTULO_VINCULO = { CLT: 'CLT', PJ: 'PJ', SOCIO: 'Sócio(a)/Diretor(a)', ESTAGIARIO: 'Estagiário(a)', OUTRO: 'Outro' }
 
+// ícones dos botões do Cadastro > Funcionários e do DP e Segurança — mesmo
+// estilo (traço, sem preenchimento) já usado nos ícones do menu lateral
+const SVG_ICONE_DP = {
+  editar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>',
+  excluir: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>',
+  ver: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"/><circle cx="12" cy="12" r="3"/></svg>',
+  novo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
+  concluir: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
+  imprimir: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>',
+  pdf: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
+  fechar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
+  salvar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>',
+  encaminhar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>'
+}
+const icDp = nome => `<span class="ic-botao">${SVG_ICONE_DP[nome] || ''}</span>`
+
 // pega a listinha de pessoas pro dropdown dos formulários de documento/
 // exame/ocorrência mesmo quando a aba de Funcionários nunca foi aberta
 // nessa sessão (cada sub-aba de DP e Segurança carrega independente)
@@ -31406,10 +31438,10 @@ async function dpFuncionarios (alvo, editavel, apenasClt = false) {
         ${(empresas || []).map(e => `<option value="${e.id}">${esc(e.nome)}</option>`).join('')}
         <option value="SEM_EMPRESA">Sem empresa definida</option>
       </select>
-      ${editavel ? `<button class="btn" id="dp-novo-func">+ Novo funcionário</button>` : ''}
+      ${editavel ? `<button class="btn" id="dp-novo-func">${icDp('novo')}Novo funcionário</button>` : ''}
     </div>
     <div class="panel" style="padding:0;"><div class="tabela-scroll">
-      <table><thead><tr><th></th><th>Nome</th><th>CPF</th><th>Cargo</th><th>Empresa</th><th>Setor</th>${!apenasClt ? '<th>Vínculo</th>' : ''}<th>Admissão</th><th>Status</th><th></th></tr></thead>
+      <table><thead><tr><th>Funcionário</th><th>CPF</th><th>Empresa</th><th>Setor</th>${!apenasClt ? '<th>Vínculo</th>' : ''}<th>Admissão</th><th>Status</th><th></th></tr></thead>
       <tbody id="dp-func-corpo"></tbody></table>
     </div></div>`
 
@@ -31422,17 +31454,20 @@ async function dpFuncionarios (alvo, editavel, apenasClt = false) {
       return bateBusca && bateEmpresa
     })
     $('#dp-func-corpo').innerHTML = filtrada.map(p => `<tr>
-        <td>${p.foto_url ? `<img src="${esc(p.foto_url)}" style="width:34px;height:34px;border-radius:8px;object-fit:cover;">` : `<div style="width:34px;height:34px;border-radius:8px;background:var(--surface2);"></div>`}</td>
-        <td><b>${esc(p.nome)}</b></td><td class="texto-dim2">${esc(p.cpf ?? '—')}</td>
-        <td class="texto-dim">${esc(p.cargo ?? '—')}</td>
+        <td><div class="linha-func-pessoa">
+          ${p.foto_url ? `<img class="avatar-func" src="${esc(p.foto_url)}">` : `<div class="avatar-func-inicial">${esc(iniciais(p.nome))}</div>`}
+          <div class="dados-func"><div class="nome-func">${esc(p.nome)}</div>
+            <div class="cargo-func">${esc(p.cargo ?? 'sem cargo definido')}</div></div>
+        </div></td>
+        <td class="texto-dim2">${esc(p.cpf ?? '—')}</td>
         <td class="texto-dim2">${p.empresa?.nome ? esc(p.empresa.nome) : '<span style="color:var(--warn-text);">— definir</span>'}</td>
         <td class="texto-dim2">${esc(p.setor?.nome ?? '—')}</td>
         ${!apenasClt ? `<td class="texto-dim2">${p.vinculo ? esc(ROTULO_VINCULO[p.vinculo] ?? p.vinculo) : '<span style="color:var(--warn-text);">— definir</span>'}</td>` : ''}
         <td class="texto-dim2">${p.data_admissao ? fmtData(p.data_admissao) : '—'}</td>
         <td>${p.status === 'ATIVO' ? '<span class="badge-bom">ativo</span>' : `<span class="chip">${esc(p.status ?? '—')}</span>`}</td>
-        <td style="white-space:nowrap;"><button class="btn-secundario mini" data-ver-pessoa="${p.id}">ver ficha</button>
-          ${editavel ? `<button class="btn-secundario mini" data-excluir-pessoa="${p.id}" style="color:var(--warn-text);">excluir</button>` : ''}</td>
-      </tr>`).join('') || `<tr><td colspan="${apenasClt ? 8 : 9}" class="vazio">Nenhum funcionário encontrado.</td></tr>`
+        <td style="white-space:nowrap;"><button class="btn-secundario mini" data-ver-pessoa="${p.id}">${icDp('ver')}ver ficha</button>
+          ${editavel ? `<button class="btn-secundario mini" data-excluir-pessoa="${p.id}" style="color:var(--warn-text);">${icDp('excluir')}excluir</button>` : ''}</td>
+      </tr>`).join('') || `<tr><td colspan="${apenasClt ? 7 : 8}" class="vazio">Nenhum funcionário encontrado.</td></tr>`
     $('#dp-func-corpo').querySelectorAll('[data-ver-pessoa]').forEach(b => {
       b.onclick = () => dpFichaPessoa(lista.find(p => p.id === b.dataset.verPessoa), editavel, () => dpFuncionarios(alvo, editavel, apenasClt))
     })
@@ -31501,8 +31536,8 @@ function formDpFuncionario (pessoa, aoSalvar) {
       <div class="campo"><label>Conta</label><input id="fdp-conta" value="${esc(pessoa?.conta ?? '')}"></div>
       <div class="campo"><label>Chave PIX</label><input id="fdp-pix" value="${esc(pessoa?.chave_pix ?? '')}"></div>
     </div>
-    <div class="acoes" style="margin-top:14px;"><button class="btn" id="fdp-salvar">Salvar</button>
-      <button class="btn-secundario" id="fdp-fechar">Fechar</button></div>
+    <div class="acoes" style="margin-top:14px;"><button class="btn" id="fdp-salvar">${icDp('salvar')}Salvar</button>
+      <button class="btn-secundario" id="fdp-fechar">${icDp('fechar')}Fechar</button></div>
     <div class="recado oculto" id="fdp-recado"></div>
   </div>`
   document.body.appendChild(fundo)
@@ -31582,8 +31617,8 @@ function dpImprimirChecklist (pessoa, checklist) {
           ${i.ok ? '<span style="color:#2f7a4f;font-size:11px;">(já entregue)</span>' : '<span style="color:#8a5a12;font-size:11px;">(pendente)</span>'}
         </div>`).join('')}
       </div>`,
-    acoes: `<button class="btn" id="dpc-imprimir">Baixar / imprimir PDF</button>
-            <button class="btn-secundario" id="dpc-fechar">Fechar</button>`
+    acoes: `<button class="btn" id="dpc-imprimir">${icDp('imprimir')}Baixar / imprimir PDF</button>
+            <button class="btn-secundario" id="dpc-fechar">${icDp('fechar')}Fechar</button>`
   })
   document.body.appendChild(fundo)
   fundo.querySelector('#dpc-fechar').onclick = () => fundo.remove()
@@ -31610,8 +31645,8 @@ async function dpFichaPessoa (pessoa, editavel, aoAtualizar = () => {}) {
   // lista por trás (funcionários, documentos, exames...)
   const recarregar = () => { fundo.remove(); dpFichaPessoa(pessoa, editavel, aoAtualizar) }
   const acoesLinha = (editar, excluir) => editavel
-    ? `<td style="white-space:nowrap;"><button class="btn-secundario mini" data-acao-editar="${editar}">editar</button>
-        <button class="btn-secundario mini" data-acao-excluir="${excluir}" style="color:var(--warn-text);">excluir</button></td>` : ''
+    ? `<td style="white-space:nowrap;"><button class="btn-secundario mini" data-acao-editar="${editar}">${icDp('editar')}editar</button>
+        <button class="btn-secundario mini" data-acao-excluir="${excluir}" style="color:var(--warn-text);">${icDp('excluir')}excluir</button></td>` : ''
 
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
@@ -31627,7 +31662,7 @@ async function dpFichaPessoa (pessoa, editavel, aoAtualizar = () => {}) {
     <div class="panel" style="padding:14px 16px;margin-bottom:14px;${checklistFaltando ? 'border-left:4px solid var(--warn-text);' : 'border-left:4px solid var(--good-text);'}">
       <div class="cabeca-secao" style="margin-bottom:8px;">
         <h4 style="font-family:var(--serif);font-size:14px;margin:0;">Checklist de documentação</h4>
-        <button class="btn-secundario mini" id="dpf-imprimir-checklist">🖨️ imprimir checklist</button>
+        <button class="btn-secundario mini" id="dpf-imprimir-checklist">${icDp('imprimir')}imprimir checklist</button>
       </div>
       <p class="texto-dim2" style="font-size:12px;margin:0 0 8px;">${checklistFaltando ? `Faltam ${checklistFaltando} documento(s).` : 'Documentação completa.'}</p>
       <div style="display:flex;flex-wrap:wrap;gap:6px 16px;">
@@ -31636,7 +31671,7 @@ async function dpFichaPessoa (pessoa, editavel, aoAtualizar = () => {}) {
     </div>
 
     <h4 style="font-family:var(--serif);font-size:14px;margin:14px 0 8px;">Documentos (${(docs || []).length})
-      ${editavel ? `<button class="btn-secundario mini" id="dpf-novo-doc" style="float:right;">+ novo</button>` : ''}</h4>
+      ${editavel ? `<button class="btn-secundario mini" id="dpf-novo-doc" style="float:right;">${icDp('novo')}novo</button>` : ''}</h4>
     <div class="tabela-scroll" style="max-height:180px;"><table><tbody>
       ${(docs || []).map(d => `<tr><td>${esc(d.tipo_documento)}</td>
         <td><span class="${corStatusDp(d.status, d.data_validade)}">${esc(ROTULO_STATUS_DP[d.status] ?? d.status ?? '—')}</span></td>
@@ -31645,7 +31680,7 @@ async function dpFichaPessoa (pessoa, editavel, aoAtualizar = () => {}) {
     </tbody></table></div>
 
     <h4 style="font-family:var(--serif);font-size:14px;margin:14px 0 8px;">Exames (${(exames || []).length})
-      ${editavel ? `<button class="btn-secundario mini" id="dpf-novo-exame" style="float:right;">+ novo</button>` : ''}</h4>
+      ${editavel ? `<button class="btn-secundario mini" id="dpf-novo-exame" style="float:right;">${icDp('novo')}novo</button>` : ''}</h4>
     <div class="tabela-scroll" style="max-height:180px;"><table><tbody>
       ${(exames || []).map(e => `<tr><td>${esc(e.tipo_exame)}</td>
         <td class="texto-dim2">${e.data_validade ? fmtData(e.data_validade) : '—'}</td>
@@ -31655,7 +31690,7 @@ async function dpFichaPessoa (pessoa, editavel, aoAtualizar = () => {}) {
     </tbody></table></div>
 
     <h4 style="font-family:var(--serif);font-size:14px;margin:14px 0 8px;">Folha (${(folhas || []).length})
-      ${editavel ? `<button class="btn-secundario mini" id="dpf-nova-folha" style="float:right;">+ lançar</button>` : ''}</h4>
+      ${editavel ? `<button class="btn-secundario mini" id="dpf-nova-folha" style="float:right;">${icDp('novo')}lançar</button>` : ''}</h4>
     <div class="tabela-scroll" style="max-height:180px;"><table><tbody>
       ${(folhas || []).map(f => `<tr><td class="texto-dim2">${esc(f.competencia)}</td>
         <td class="num">R$ ${fmtNum(valorLiquido(f))}</td>
@@ -31665,7 +31700,7 @@ async function dpFichaPessoa (pessoa, editavel, aoAtualizar = () => {}) {
     </tbody></table></div>
 
     <h4 style="font-family:var(--serif);font-size:14px;margin:14px 0 8px;">Ocorrências (${(ocorr || []).length})
-      ${editavel ? `<button class="btn-secundario mini" id="dpf-nova-ocorr" style="float:right;">+ nova</button>` : ''}</h4>
+      ${editavel ? `<button class="btn-secundario mini" id="dpf-nova-ocorr" style="float:right;">${icDp('novo')}nova</button>` : ''}</h4>
     <div class="tabela-scroll" style="max-height:180px;"><table><tbody>
       ${(ocorr || []).map(o => `<tr><td class="texto-dim2">${fmtData(o.data_ocorrencia)}</td><td>${esc(o.tipo)}</td>
         <td><span class="${o.status === 'ENCERRADA' ? 'badge-bom' : 'badge-alerta'}">${esc(o.status)}</span></td>
@@ -31673,10 +31708,10 @@ async function dpFichaPessoa (pessoa, editavel, aoAtualizar = () => {}) {
     </tbody></table></div>
 
     <div class="acoes" style="margin-top:16px;">
-      ${editavel ? `<button class="btn-secundario" id="dpf-editar">Editar cadastro</button>` : ''}
-      ${editavel ? `<button class="btn-secundario" id="dpf-excluir" style="color:var(--warn-text);">Excluir funcionário</button>` : ''}
-      <button class="btn-secundario" id="dpf-pdf">Gerar PDF</button>
-      <button class="btn-secundario" id="dpf-fechar">Fechar</button>
+      ${editavel ? `<button class="btn-secundario" id="dpf-editar">${icDp('editar')}Editar cadastro</button>` : ''}
+      ${editavel ? `<button class="btn-secundario" id="dpf-excluir" style="color:var(--warn-text);">${icDp('excluir')}Excluir funcionário</button>` : ''}
+      <button class="btn-secundario" id="dpf-pdf">${icDp('pdf')}Gerar PDF</button>
+      <button class="btn-secundario" id="dpf-fechar">${icDp('fechar')}Fechar</button>
     </div>
   </div>`
   document.body.appendChild(fundo)
@@ -31723,7 +31758,7 @@ async function dpDocumentos (alvo, editavel) {
 
   alvo.innerHTML = `
     ${vencidos.length ? `<div class="aviso-bloqueio" style="margin-bottom:16px;">${vencidos.length} documento(s) vencido(s) — confira abaixo.</div>` : ''}
-    ${editavel ? `<div class="acoes" style="margin-bottom:16px;"><button class="btn" id="dpd-novo">+ Novo documento</button></div>` : ''}
+    ${editavel ? `<div class="acoes" style="margin-bottom:16px;"><button class="btn" id="dpd-novo">${icDp('novo')}Novo documento</button></div>` : ''}
     <div class="panel" style="padding:0;"><div class="tabela-scroll">
       <table><thead><tr><th>Funcionário</th><th>Tipo</th><th>Validade</th><th>Status</th><th></th>${editavel ? '<th></th>' : ''}</tr></thead><tbody>
         ${lista.map(d => `<tr>
@@ -31731,8 +31766,8 @@ async function dpDocumentos (alvo, editavel) {
           <td class="texto-dim2">${d.data_validade ? fmtData(d.data_validade) : '—'}</td>
           <td><span class="${corStatusDp(d.status, d.data_validade)}">${esc(ROTULO_STATUS_DP[d.status] ?? d.status ?? '—')}</span></td>
           <td>${d.link_arquivo ? `<a href="${esc(d.link_arquivo)}" target="_blank">abrir</a>` : '—'}</td>
-          ${editavel ? `<td style="white-space:nowrap;"><button class="btn-secundario mini" data-editar-doc="${d.id}">editar</button>
-            <button class="btn-secundario mini" data-excluir-doc="${d.id}" style="color:var(--warn-text);">excluir</button></td>` : ''}
+          ${editavel ? `<td style="white-space:nowrap;"><button class="btn-secundario mini" data-editar-doc="${d.id}">${icDp('editar')}editar</button>
+            <button class="btn-secundario mini" data-excluir-doc="${d.id}" style="color:var(--warn-text);">${icDp('excluir')}excluir</button></td>` : ''}
         </tr>`).join('') || `<tr><td colspan="${editavel ? 6 : 5}" class="vazio">Nenhum documento cadastrado.</td></tr>`}
       </tbody></table>
     </div></div>`
@@ -31762,15 +31797,15 @@ async function dpExames (alvo, editavel) {
     const estaVencido = e.data_validade && e.data_validade < hoje
     if (e.status === 'ENCAMINHADO') return `<span class="chip">aguardando pagamento no Financeiro</span>`
     if (e.status === 'PAGO_AGUARDANDO_EXAME') {
-      return editavel ? `<button class="btn-secundario mini" data-registrar="${e.id}">registrar exame feito</button>` : `<span class="badge-bom">pago — aguardando resultado</span>`
+      return editavel ? `<button class="btn-secundario mini" data-registrar="${e.id}">${icDp('concluir')}registrar exame feito</button>` : `<span class="badge-bom">pago — aguardando resultado</span>`
     }
-    if (estaVencido) return editavel ? `<button class="btn-secundario mini" data-encaminhar="${e.id}">encaminhar p/ exame</button>` : '—'
+    if (estaVencido) return editavel ? `<button class="btn-secundario mini" data-encaminhar="${e.id}">${icDp('encaminhar')}encaminhar p/ exame</button>` : '—'
     return '—'
   }
 
   alvo.innerHTML = `
     ${vencidos.length ? `<div class="aviso-bloqueio" style="margin-bottom:16px;">${vencidos.length} exame(s) vencido(s) — confira abaixo.</div>` : ''}
-    ${editavel ? `<div class="acoes" style="margin-bottom:16px;"><button class="btn" id="dpe-novo">+ Novo exame</button></div>` : ''}
+    ${editavel ? `<div class="acoes" style="margin-bottom:16px;"><button class="btn" id="dpe-novo">${icDp('novo')}Novo exame</button></div>` : ''}
     <div class="panel" style="padding:0;"><div class="tabela-scroll">
       <table><thead><tr><th>Funcionário</th><th>Tipo</th><th>Clínica</th><th>Validade</th><th>Status</th><th>Acompanhamento</th><th></th>${editavel ? '<th></th>' : ''}</tr></thead><tbody>
         ${lista.map(e => `<tr>
@@ -31780,8 +31815,8 @@ async function dpExames (alvo, editavel) {
           <td><span class="${corStatusDp(e.status, e.data_validade)}">${esc(ROTULO_STATUS_DP[e.status] ?? e.status ?? '—')}</span></td>
           <td>${acompanhamento(e)}</td>
           <td>${e.link_arquivo ? `<a href="${esc(e.link_arquivo)}" target="_blank">abrir</a>` : '—'}</td>
-          ${editavel ? `<td style="white-space:nowrap;"><button class="btn-secundario mini" data-editar-exame="${e.id}">editar</button>
-            <button class="btn-secundario mini" data-excluir-exame="${e.id}" style="color:var(--warn-text);">excluir</button></td>` : ''}
+          ${editavel ? `<td style="white-space:nowrap;"><button class="btn-secundario mini" data-editar-exame="${e.id}">${icDp('editar')}editar</button>
+            <button class="btn-secundario mini" data-excluir-exame="${e.id}" style="color:var(--warn-text);">${icDp('excluir')}excluir</button></td>` : ''}
         </tr>`).join('') || `<tr><td colspan="${editavel ? 8 : 7}" class="vazio">Nenhum exame cadastrado.</td></tr>`}
       </tbody></table>
     </div></div>`
@@ -31817,8 +31852,8 @@ async function dpEncaminharExame (exame, aoSalvar) {
       volta pra cá automaticamente como "pago — aguardando resultado".</p>
     <div class="campo"><label>Valor estimado do exame (R$)</label><input id="dpef-valor" placeholder="ex: 120,00"></div>
     <div class="campo" style="margin-top:8px;"><label>Observação (opcional)</label><textarea id="dpef-obs" style="min-height:56px;"></textarea></div>
-    <div class="acoes" style="margin-top:14px;"><button class="btn" id="dpef-salvar">Encaminhar</button>
-      <button class="btn-secundario" id="dpef-fechar">Fechar</button></div>
+    <div class="acoes" style="margin-top:14px;"><button class="btn" id="dpef-salvar">${icDp('encaminhar')}Encaminhar</button>
+      <button class="btn-secundario" id="dpef-fechar">${icDp('fechar')}Fechar</button></div>
     <div class="recado oculto" id="dpef-recado"></div>
   </div>`
   document.body.appendChild(fundo)
@@ -31866,8 +31901,8 @@ async function dpRegistrarExameRealizado (exame, aoSalvar) {
     <div class="campo" style="margin-top:8px;"><label>Nova validade *</label><input type="date" id="dper-validade"></div>
     <div class="campo" style="margin-top:8px;"><label>Anexar resultado</label>
       <input type="file" id="dper-arquivo" accept="image/*,application/pdf,.doc,.docx"></div>
-    <div class="acoes" style="margin-top:14px;"><button class="btn" id="dper-salvar">Registrar</button>
-      <button class="btn-secundario" id="dper-fechar">Fechar</button></div>
+    <div class="acoes" style="margin-top:14px;"><button class="btn" id="dper-salvar">${icDp('concluir')}Registrar</button>
+      <button class="btn-secundario" id="dper-fechar">${icDp('fechar')}Fechar</button></div>
     <div class="recado oculto" id="dper-recado"></div>
   </div>`
   document.body.appendChild(fundo)
@@ -31925,7 +31960,7 @@ async function dpOcorrencias (alvo, editavel) {
       <div class="bloco ${abertas.length ? 'alerta' : ''}"><div class="rot">Em aberto</div><div class="val">${abertas.length}</div></div>
       <div class="bloco"><div class="rot">Acidentes registrados</div><div class="val">${acidentes.length}</div></div>
     </div>
-    ${editavel ? `<div class="acoes" style="margin-bottom:16px;"><button class="btn" id="dpo-novo">+ Registrar ocorrência</button></div>` : ''}
+    ${editavel ? `<div class="acoes" style="margin-bottom:16px;"><button class="btn" id="dpo-novo">${icDp('novo')}Registrar ocorrência</button></div>` : ''}
     ${lista.map(o => `<div class="panel" style="padding:18px 20px;margin-bottom:14px;border-left:4px solid ${COR_TIPO_OCORRENCIA[o.tipo] || 'var(--line2)'};">
       <div class="cabeca-secao">
         <div style="display:flex;align-items:center;gap:10px;">
@@ -31943,10 +31978,10 @@ async function dpOcorrencias (alvo, editavel) {
       <p style="font-size:13.5px;white-space:pre-wrap;margin:12px 0;line-height:1.55;">${esc(o.descricao ?? '—')}</p>
       ${o.acao_tomada ? `<p class="texto-dim2" style="font-size:12.5px;white-space:pre-wrap;line-height:1.5;background:var(--surface2);padding:10px 12px;border-radius:8px;"><b style="color:var(--txt);">Ação tomada:</b> ${esc(o.acao_tomada)}</p>` : ''}
       <div class="acoes" style="margin-top:12px;">
-        ${editavel ? `<button class="btn-secundario mini" data-editar-ocorr="${o.id}">editar</button>` : ''}
-        ${editavel ? `<button class="btn-secundario mini" data-excluir-ocorr="${o.id}" style="color:var(--warn-text);">excluir</button>` : ''}
-        ${editavel && o.status !== 'ENCERRADA' ? `<button class="btn-secundario mini" data-concluir-ocorr="${o.id}">✓ concluir</button>` : ''}
-        <button class="btn-secundario mini" data-pdf-ocorr="${o.id}">📄 gerar PDF pra assinatura</button>
+        ${editavel ? `<button class="btn-secundario mini" data-editar-ocorr="${o.id}">${icDp('editar')}editar</button>` : ''}
+        ${editavel ? `<button class="btn-secundario mini" data-excluir-ocorr="${o.id}" style="color:var(--warn-text);">${icDp('excluir')}excluir</button>` : ''}
+        ${editavel && o.status !== 'ENCERRADA' ? `<button class="btn-secundario mini" data-concluir-ocorr="${o.id}">${icDp('concluir')}concluir</button>` : ''}
+        <button class="btn-secundario mini" data-pdf-ocorr="${o.id}">${icDp('pdf')}gerar PDF pra assinatura</button>
       </div>
     </div>`).join('') || `<p class="vazio">Nenhuma ocorrência registrada.</p>`}`
 
@@ -31997,8 +32032,8 @@ function formDpRegistro (tipo, registro, aoSalvar) {
       <span class="texto-dim2" style="font-size:10.5px;">ou, se preferir, cola um link do Drive abaixo</span></div>
     <div class="campo" style="margin-top:6px;"><label>Link do arquivo (opcional)</label><input id="dpr-link" value="${esc(registro?.link_arquivo ?? '')}" placeholder="link do Drive, se tiver"></div>
     <div class="campo" style="margin-top:10px;"><label>Observações</label><textarea id="dpr-obs" style="min-height:56px;">${esc(registro?.observacoes ?? '')}</textarea></div>
-    <div class="acoes" style="margin-top:14px;"><button class="btn" id="dpr-salvar">Salvar</button>
-      <button class="btn-secundario" id="dpr-fechar">Fechar</button></div>
+    <div class="acoes" style="margin-top:14px;"><button class="btn" id="dpr-salvar">${icDp('salvar')}Salvar</button>
+      <button class="btn-secundario" id="dpr-fechar">${icDp('fechar')}Fechar</button></div>
     <div class="recado oculto" id="dpr-recado"></div>
   </div>`
   document.body.appendChild(fundo)
@@ -32061,8 +32096,8 @@ function formDpOcorrencia (registro, aoSalvar) {
     </div>
     <div class="campo" style="margin-top:10px;"><label>Descrição *</label><textarea id="dpo-desc" style="min-height:90px;">${esc(registro?.descricao ?? '')}</textarea></div>
     <div class="campo" style="margin-top:10px;"><label>Ação tomada</label><textarea id="dpo-acao" style="min-height:70px;">${esc(registro?.acao_tomada ?? '')}</textarea></div>
-    <div class="acoes" style="margin-top:14px;"><button class="btn" id="dpo-salvar">Salvar</button>
-      <button class="btn-secundario" id="dpo-fechar">Fechar</button></div>
+    <div class="acoes" style="margin-top:14px;"><button class="btn" id="dpo-salvar">${icDp('salvar')}Salvar</button>
+      <button class="btn-secundario" id="dpo-fechar">${icDp('fechar')}Fechar</button></div>
     <div class="recado oculto" id="dpo-recado"></div>
   </div>`
   document.body.appendChild(fundo)
@@ -32115,8 +32150,8 @@ function formDpFolha (pessoa, registro, aoSalvar) {
       <input type="file" id="dpfl-arquivo" accept="image/*,application/pdf">
       <span class="texto-dim2" style="font-size:10.5px;">ou cola um link abaixo</span></div>
     <div class="campo" style="margin-top:6px;"><label>Link do recibo (opcional)</label><input id="dpfl-link" value="${esc(registro?.link_arquivo ?? '')}" placeholder="link do recibo, se já tiver"></div>
-    <div class="acoes" style="margin-top:14px;"><button class="btn" id="dpfl-salvar">Salvar</button>
-      <button class="btn-secundario" id="dpfl-fechar">Fechar</button></div>
+    <div class="acoes" style="margin-top:14px;"><button class="btn" id="dpfl-salvar">${icDp('salvar')}Salvar</button>
+      <button class="btn-secundario" id="dpfl-fechar">${icDp('fechar')}Fechar</button></div>
     <div class="recado oculto" id="dpfl-recado"></div>
   </div>`
   document.body.appendChild(fundo)
@@ -32183,8 +32218,8 @@ function dpGerarPdfOcorrencia (o) {
   fundo.className = 'modal-fundo'
   fundo.innerHTML = documentoPDF({
     titulo: 'REGISTRO DE OCORRÊNCIA', subtitulo: o.pessoa?.nome ?? '', corpo,
-    acoes: `<button class="btn" id="dpo-pdf-imprimir">Gerar PDF</button>
-      <button class="btn-secundario" id="dpo-pdf-fechar">Fechar</button>`
+    acoes: `<button class="btn" id="dpo-pdf-imprimir">${icDp('pdf')}Gerar PDF</button>
+      <button class="btn-secundario" id="dpo-pdf-fechar">${icDp('fechar')}Fechar</button>`
   })
   document.body.appendChild(fundo)
   fundo.querySelector('#dpo-pdf-fechar').onclick = () => fundo.remove()
