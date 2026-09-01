@@ -97,6 +97,7 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 .nav .item-pai.tem-ativo { color:var(--txt); }
 .nav .submenu { overflow:hidden; max-height:0; transition:max-height .18s ease; }
 .nav .submenu.expandido { max-height:220px; }
+.nav .submenu[data-submenu="relatorios"].expandido { max-height:60vh; overflow-y:auto; }
 .nav .submenu a { padding-left:34px; font-size:13.5px; }
 .app.nav-colapsada .nav .grupo-titulo,
 .app.nav-colapsada .nav .grupo-divisor { display:none; }
@@ -1845,7 +1846,6 @@ const PAGINAS = {
   onfly:       { nome: 'Viagens (Onfly)', render: paginaOnfly },
   dp:          { nome: 'DP e Segurança', render: paginaDpSeguranca },
   laboratorio: { nome: 'Laboratório', render: paginaLaboratorio },
-  relatorios:  { nome: 'Relatórios', render: paginaRelatorios, sempre: true },
   ti:          { nome: 'Administração Sistema', render: paginaAdministracao },
   gestao_ti:   { nome: 'Gestão de TI', render: paginaGestaoTI },
   ia_treinamento: { nome: 'Treinamento IA', render: paginaTreinamentoIA }
@@ -1932,6 +1932,21 @@ function montarMenu () {
 
   GRUPOS_MENU.forEach(([titulo, chaves]) => {
     const blocoGrupo = chaves.map(chaveDoGrupo => {
+      // "Relatórios" é um item-pai igual ao CRM, só que os filhos não são
+      // módulos de verdade (não estão em PERFIL.modulos) — são os relatórios
+      // de RELATORIOS_DISPONIVEIS, cada um checando seu próprio podeVer().
+      if (chaveDoGrupo === 'relatorios') {
+        const relDisponiveis = RELATORIOS_DISPONIVEIS.filter(r => r.podeVer())
+        if (!relDisponiveis.length) return ''
+        const icone = ICONES_MODULO.relatorios || ICONES_MODULO._padrao
+        return `<div class="item-pai" data-pai="relatorios">
+            <span class="rotulo-grupo">${icone}<span class="rotulo">Relatórios</span></span>
+            ${SVG_SETA_EXPANDIR}
+          </div>
+          <div class="submenu" data-submenu="relatorios">${relDisponiveis.map(r =>
+            `<a data-chave="rel__${r.id}" title="${esc(r.nome)}"><span class="rotulo">${esc(r.nome)}</span></a>`
+          ).join('')}</div>`
+      }
       const grupoExpansivel = MENUS_EXPANSIVEIS[chaveDoGrupo]
       if (grupoExpansivel) {
         const itensFilhos = grupoExpansivel.chaves.map(c => disponiveis.find(m => m.chave === c)).filter(Boolean)
@@ -34486,6 +34501,17 @@ const RELATORIOS_DISPONIVEIS = [
   { id: 'gestao_ti', nome: 'Gestão de TI', podeVer: () => podeVer('gestao_ti'), render: relGestaoTI }
 ]
 
+// Cada relatório vira uma "página" navegável própria (chave rel__<id>),
+// igual como CRM Comercial/SDR WhatsApp/CRM Técnico são páginas próprias
+// dentro do item-pai "CRM" no menu — é isso que faz o item-pai "Relatórios"
+// funcionar igual ao CRM: abre o menu, lista os relatórios liberados, clica
+// num nome e abre só aquele relatório na área de conteúdo.
+RELATORIOS_DISPONIVEIS.forEach(r => {
+  PAGINAS['rel__' + r.id] = { nome: r.nome, render: () => r.render(areaLivre()) }
+})
+
+// (função antiga, não é mais usada pelo menu — os relatórios agora abrem
+// direto pela página própria de cada um, registrada acima)
 async function paginaRelatorios () {
   const area = areaLivre()
   $('#subtitulo-pagina').textContent = 'Clique na seta pra abrir cada relatório, ajuste os filtros e exporte em Excel ou PDF'
