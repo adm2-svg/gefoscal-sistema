@@ -34488,7 +34488,7 @@ const RELATORIOS_DISPONIVEIS = [
 
 async function paginaRelatorios () {
   const area = areaLivre()
-  $('#subtitulo-pagina').textContent = 'Escolha a área, ajuste o período e exporte em Excel ou PDF'
+  $('#subtitulo-pagina').textContent = 'Clique na seta pra abrir cada relatório, ajuste os filtros e exporte em Excel ou PDF'
   const disponiveis = RELATORIOS_DISPONIVEIS.filter(r => r.podeVer())
 
   if (!disponiveis.length) {
@@ -34498,21 +34498,59 @@ async function paginaRelatorios () {
     return
   }
 
-  area.innerHTML = `
-    <div class="subabas">
-      ${disponiveis.map((r, i) => `<button data-rel="${r.id}" class="${i === 0 ? 'ativo' : ''}">${esc(r.nome)}</button>`).join('')}
-    </div>
-    <div id="rel-conteudo"></div>`
+  area.innerHTML = `<div id="rel-acordeao">
+    ${disponiveis.map(r => `
+      <div class="rel-acc-item" data-rel-item="${esc(r.id)}" style="border:1px solid rgba(127,127,127,.25);border-radius:10px;margin-bottom:10px;overflow:hidden;background:rgba(127,127,127,.04);">
+        <button type="button" class="rel-acc-header" data-rel="${esc(r.id)}" style="width:100%;display:flex;justify-content:space-between;align-items:center;gap:10px;padding:14px 18px;background:transparent;border:none;cursor:pointer;font-size:15px;font-weight:600;color:inherit;text-align:left;">
+          <span>${esc(r.nome)}</span>
+          <span class="rel-acc-seta" style="transition:transform .2s ease;font-size:13px;opacity:.7;display:inline-block;">▾</span>
+        </button>
+        <div class="rel-acc-corpo" style="display:none;padding:4px 18px 18px;"></div>
+      </div>`).join('')}
+  </div>`
 
-  area.querySelectorAll('.subabas button').forEach(b => {
-    b.onclick = () => {
-      area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
-      const rel = disponiveis.find(r => r.id === b.dataset.rel)
-      $('#rel-conteudo').innerHTML = `<p class="texto-dim2">carregando...</p>`
-      rel.render($('#rel-conteudo'))
+  const abrirItem = (id) => {
+    const item = area.querySelector(`.rel-acc-item[data-rel-item="${id}"]`)
+    if (!item) return
+    const header = item.querySelector('.rel-acc-header')
+    const corpo = item.querySelector('.rel-acc-corpo')
+    const seta = item.querySelector('.rel-acc-seta')
+
+    // fecha os outros — só um aberto por vez
+    area.querySelectorAll('.rel-acc-item').forEach(outro => {
+      if (outro !== item) {
+        outro.querySelector('.rel-acc-corpo').style.display = 'none'
+        outro.querySelector('.rel-acc-seta').style.transform = 'rotate(0deg)'
+      }
+    })
+
+    corpo.style.display = 'block'
+    seta.style.transform = 'rotate(180deg)'
+    if (!corpo.dataset.carregado) {
+      corpo.dataset.carregado = '1'
+      corpo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+      const rel = disponiveis.find(r => r.id === id)
+      rel.render(corpo)
     }
+  }
+
+  area.querySelectorAll('.rel-acc-header').forEach(header => {
+    header.addEventListener('click', () => {
+      const id = header.dataset.rel
+      const item = area.querySelector(`.rel-acc-item[data-rel-item="${id}"]`)
+      const corpo = item.querySelector('.rel-acc-corpo')
+      const seta = item.querySelector('.rel-acc-seta')
+      const estaAberto = corpo.style.display !== 'none'
+      if (estaAberto) {
+        corpo.style.display = 'none'
+        seta.style.transform = 'rotate(0deg)'
+      } else {
+        abrirItem(id)
+      }
+    })
   })
-  disponiveis[0].render($('#rel-conteudo'))
+
+  abrirItem(disponiveis[0].id)
 }
 
 // ----- Exportação genérica de relatório — qualquer sub-relatório novo
@@ -34539,6 +34577,24 @@ function exportarRelatorioPDF (titulo, colunas, linhas) {
   doc.save(`${titulo.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}.pdf`)
 }
 
+// ----- Helpers de filtro genérico usados pelos relatórios (busca por nome/texto e por faixa de valor) -----
+function relFiltrarTexto (lista, termo, extrator) {
+  const alvo = (termo || '').toLowerCase().trim()
+  if (!alvo) return lista
+  return lista.filter(item => extrator(item).some(v => (v ?? '').toString().toLowerCase().includes(alvo)))
+}
+function relFiltrarValor (lista, min, max, extrator) {
+  const vMin = min !== '' && min != null ? Number(min) : null
+  const vMax = max !== '' && max != null ? Number(max) : null
+  if (vMin == null && vMax == null) return lista
+  return lista.filter(item => {
+    const v = extrator(item)
+    if (v == null || isNaN(v)) return false
+    if (vMin != null && v < vMin) return false
+    if (vMax != null && v > vMax) return false
+    return true
+  })
+}
 // ----- Relatório: Solicitações -----
 const COLUNAS_REL_SOLICITACOES = ['Código', 'Título', 'Setor', 'Solicitante', 'Responsável', 'Urgência', 'Status', 'Aberta em', 'Prazo', 'Concluída em', 'Agilidade']
 function linhaRelSolicitacao (s) {
@@ -34561,6 +34617,7 @@ async function relSolicitacoes (alvo) {
       <div class="campo"><label>Até</label><input type="date" id="rl-ate" value="${hoje}"></div>
       <div class="campo"><label>Status</label>
         <select id="rl-status"><option value="">Todos</option>${STATUS_SOLICITACAO.map(s => `<option value="${s}">${ROTULO_STATUS_SOLICITACAO[s]}</option>`).join('')}</select></div>
+      <div class="campo"><label>Buscar por nome</label><input type="text" id="rl-nome" placeholder="código, título, solicitante, responsável..."></div>
       <button class="btn" id="rl-buscar">Buscar</button>
     </div>
     <div id="rl-resultado"></div>`
@@ -34571,6 +34628,7 @@ async function relSolicitacoes (alvo) {
     const deVal = $('#rl-de').value
     const ateVal = $('#rl-ate').value
     const statusVal = $('#rl-status').value
+    const nomeVal = $('#rl-nome').value
     $('#rl-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
 
     let q = db.from('solicitacao_interna').select(`
@@ -34582,8 +34640,8 @@ async function relSolicitacoes (alvo) {
     const { data, error } = await q
     if (faltaMigracao(error) || error) { $('#rl-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
 
-    ultimaLista = data || []
-    if (!ultimaLista.length) { $('#rl-resultado').innerHTML = `<p class="vazio">Nenhuma solicitação nesse período.</p>`; return }
+    ultimaLista = relFiltrarTexto(data || [], nomeVal, s => [s.codigo, s.titulo, s.solicitante?.nome, s.responsavel?.nome])
+    if (!ultimaLista.length) { $('#rl-resultado').innerHTML = `<p class="vazio">Nenhuma solicitação encontrada.</p>`; return }
 
     $('#rl-resultado').innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
@@ -34643,6 +34701,9 @@ async function relCompras (alvo) {
       <div class="campo"><label>Até</label><input type="date" id="rc-ate" value="${hoje}"></div>
       <div class="campo"><label>Status</label>
         <select id="rc-status"><option value="">Todos</option>${Object.entries(STATUS_COMPRA).map(([k, v]) => `<option value="${k}">${esc(v.rotulo)}</option>`).join('')}</select></div>
+      <div class="campo"><label>Buscar por nome</label><input type="text" id="rc-nome" placeholder="número, produto, solicitante, fornecedor..."></div>
+      <div class="campo"><label>Valor mín.</label><input type="number" id="rc-vmin" step="0.01" placeholder="0,00"></div>
+      <div class="campo"><label>Valor máx.</label><input type="number" id="rc-vmax" step="0.01" placeholder="0,00"></div>
       <button class="btn" id="rc-buscar">Buscar</button>
     </div>
     <div id="rc-resultado"></div>`
@@ -34652,6 +34713,9 @@ async function relCompras (alvo) {
     const deVal = $('#rc-de').value
     const ateVal = $('#rc-ate').value
     const statusVal = $('#rc-status').value
+    const nomeVal = $('#rc-nome').value
+    const vminVal = $('#rc-vmin').value
+    const vmaxVal = $('#rc-vmax').value
     $('#rc-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
 
     let q = db.from('solicitacao_compra').select(`
@@ -34662,8 +34726,9 @@ async function relCompras (alvo) {
 
     const { data, error } = await q
     if (faltaMigracao(error) || error) { $('#rc-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-    ultimaLista = data || []
-    if (!ultimaLista.length) { $('#rc-resultado').innerHTML = `<p class="vazio">Nenhuma solicitação de compra nesse período.</p>`; return }
+    ultimaLista = relFiltrarTexto(data || [], nomeVal, c => [c.numero, c.produto_servico, c.solicitante?.nome, c.fornecedor?.nome])
+    ultimaLista = relFiltrarValor(ultimaLista, vminVal, vmaxVal, c => c.valor_aprovado ?? c.valor_estimado)
+    if (!ultimaLista.length) { $('#rc-resultado').innerHTML = `<p class="vazio">Nenhuma solicitação de compra encontrada.</p>`; return }
 
     $('#rc-resultado').innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
@@ -34718,6 +34783,7 @@ async function relProjetos (alvo) {
     <div class="filtros" style="margin-bottom:14px;">
       <div class="campo"><label>Situação</label>
         <select id="rp-situacao"><option value="">Todas</option><option value="Ativo">Ativo</option><option value="Pausado">Pausado</option><option value="Arquivado">Arquivado</option></select></div>
+      <div class="campo"><label>Buscar por nome</label><input type="text" id="rp-nome" placeholder="nome do projeto, criado por..."></div>
       <button class="btn" id="rp-buscar">Buscar</button>
     </div>
     <div id="rp-resultado"></div>`
@@ -34725,6 +34791,7 @@ async function relProjetos (alvo) {
   let ultimaLista = []
   const buscar = async () => {
     const situacaoVal = $('#rp-situacao').value
+    const nomeVal = $('#rp-nome').value
     $('#rp-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
 
     const { data, error } = await db.from('projeto').select(`
@@ -34734,6 +34801,7 @@ async function relProjetos (alvo) {
 
     if (faltaMigracao(error) || error) { $('#rp-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
     ultimaLista = (data || []).filter(p => !situacaoVal || situacaoProjeto(p) === situacaoVal)
+    ultimaLista = relFiltrarTexto(ultimaLista, nomeVal, p => [p.nome, p.criadoPor?.nome])
     if (!ultimaLista.length) { $('#rp-resultado').innerHTML = `<p class="vazio">Nenhum projeto encontrado.</p>`; return }
 
     $('#rp-resultado').innerHTML = `
@@ -34807,6 +34875,7 @@ async function relVagas (alvo) {
     <div class="filtros" style="margin-bottom:14px;">
       <div class="campo"><label>Abertas de</label><input type="date" id="rv-de" value="${de}"></div>
       <div class="campo"><label>até</label><input type="date" id="rv-ate" value="${hoje}"></div>
+      <div class="campo"><label>Buscar por nome</label><input type="text" id="rv-nome" placeholder="cargo, selecionado..."></div>
       <button class="btn" id="rv-buscar">Buscar</button>
     </div>
     <div id="rv-resultado"></div>`
@@ -34814,6 +34883,7 @@ async function relVagas (alvo) {
   let ultimaLista = []
   const buscar = async () => {
     const deVal = $('#rv-de').value, ateVal = $('#rv-ate').value
+    const nomeVal = $('#rv-nome').value
     $('#rv-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
     const { data, error } = await db.from('vaga').select(`
       id, cargo, tipo_contratacao, etapa, status, aberta_em, fechada_em,
@@ -34821,8 +34891,8 @@ async function relVagas (alvo) {
     `).gte('aberta_em', deVal).lte('aberta_em', ateVal + 'T23:59:59').order('aberta_em', { ascending: false }).limit(1000)
 
     if (faltaMigracao(error) || error) { $('#rv-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-    ultimaLista = data || []
-    if (!ultimaLista.length) { $('#rv-resultado').innerHTML = `<p class="vazio">Nenhuma vaga nesse período.</p>`; return }
+    ultimaLista = relFiltrarTexto(data || [], nomeVal, v => [v.cargo, v.selecionado?.nome])
+    if (!ultimaLista.length) { $('#rv-resultado').innerHTML = `<p class="vazio">Nenhuma vaga encontrada.</p>`; return }
 
     $('#rv-resultado').innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
@@ -34863,6 +34933,7 @@ async function relPDI (alvo) {
     <div class="filtros" style="margin-bottom:14px;">
       <div class="campo"><label>Status</label>
         <select id="rd-status"><option value="">Todos</option>${Object.entries(ROTULO_STATUS_PDI).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div>
+      <div class="campo"><label>Buscar por nome</label><input type="text" id="rd-nome" placeholder="pessoa, responsável, objetivo..."></div>
       <button class="btn" id="rd-buscar">Buscar</button>
     </div>
     <div id="rd-resultado"></div>`
@@ -34870,6 +34941,7 @@ async function relPDI (alvo) {
   let ultimaLista = []
   const buscar = async () => {
     const statusVal = $('#rd-status').value
+    const nomeVal = $('#rd-nome').value
     $('#rd-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
     let q = db.from('plano_desenvolvimento').select(`
       id, objetivo, prazo, status, criado_em, concluido_em,
@@ -34879,7 +34951,7 @@ async function relPDI (alvo) {
 
     const { data, error } = await q
     if (faltaMigracao(error) || error) { $('#rd-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-    ultimaLista = data || []
+    ultimaLista = relFiltrarTexto(data || [], nomeVal, p => [p.pessoa?.nome, p.responsavel?.nome, p.objetivo])
     if (!ultimaLista.length) { $('#rd-resultado').innerHTML = `<p class="vazio">Nenhum PDI encontrado.</p>`; return }
 
     $('#rd-resultado').innerHTML = `
@@ -34926,6 +34998,7 @@ async function relAvaliacao360 (alvo) {
         <select id="r360-ciclo"><option value="">Todos</option>${(ciclos || []).map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('')}</select></div>
       <div class="campo"><label>Tipo</label>
         <select id="r360-tipo"><option value="">Todos</option>${Object.entries(ROTULO_TIPO_360).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div>
+      <div class="campo"><label>Buscar por nome</label><input type="text" id="r360-nome" placeholder="avaliado, avaliador..."></div>
       <button class="btn" id="r360-buscar">Buscar</button>
     </div>
     <div id="r360-resultado"></div>`
@@ -34933,6 +35006,7 @@ async function relAvaliacao360 (alvo) {
   let ultimaLista = []
   const buscar = async () => {
     const cicloVal = $('#r360-ciclo').value, tipoVal = $('#r360-tipo').value
+    const nomeVal = $('#r360-nome').value
     $('#r360-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
     let q = db.from('avaliacao_360_resposta').select(`
       id, tipo, status, respondido_em, criado_em,
@@ -34944,7 +35018,7 @@ async function relAvaliacao360 (alvo) {
 
     const { data, error } = await q
     if (faltaMigracao(error) || error) { $('#r360-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-    ultimaLista = data || []
+    ultimaLista = relFiltrarTexto(data || [], nomeVal, r => [r.avaliado?.nome, r.avaliador?.nome])
     if (!ultimaLista.length) { $('#r360-resultado').innerHTML = `<p class="vazio">Nenhuma avaliação encontrada.</p>`; return }
 
     $('#r360-resultado').innerHTML = `
@@ -34995,6 +35069,9 @@ async function relCrmComercial (alvo) {
       <div class="campo"><label>Até</label><input type="date" id="rcm-ate" value="${hoje}"></div>
       <div class="campo"><label>Etapa</label>
         <select id="rcm-etapa"><option value="">Todas</option>${ETAPAS_LEAD.map(e => `<option value="${e}">${ROTULO_ETAPA_LEAD[e]}</option>`).join('')}</select></div>
+      <div class="campo"><label>Buscar por nome</label><input type="text" id="rcm-nome" placeholder="lead, cliente, vendedor..."></div>
+      <div class="campo"><label>Valor mín.</label><input type="number" id="rcm-vmin" step="0.01" placeholder="0,00"></div>
+      <div class="campo"><label>Valor máx.</label><input type="number" id="rcm-vmax" step="0.01" placeholder="0,00"></div>
       <button class="btn" id="rcm-buscar">Buscar</button>
     </div>
     <div id="rcm-resultado"></div>`
@@ -35002,6 +35079,7 @@ async function relCrmComercial (alvo) {
   let ultimaLista = []
   const buscar = async () => {
     const deVal = $('#rcm-de').value, ateVal = $('#rcm-ate').value, etapaVal = $('#rcm-etapa').value
+    const nomeVal = $('#rcm-nome').value, vminVal = $('#rcm-vmin').value, vmaxVal = $('#rcm-vmax').value
     $('#rcm-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
     let q = db.from('lead').select(`
       id, nome, origem, uf, municipio, etapa, valor_estimado, criado_em,
@@ -35011,8 +35089,9 @@ async function relCrmComercial (alvo) {
 
     const { data, error } = await q
     if (faltaMigracao(error) || error) { $('#rcm-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-    ultimaLista = data || []
-    if (!ultimaLista.length) { $('#rcm-resultado').innerHTML = `<p class="vazio">Nenhum lead nesse período.</p>`; return }
+    ultimaLista = relFiltrarTexto(data || [], nomeVal, l => [l.nome, l.cliente?.nome_fantasia, l.cliente?.razao_social, l.vendedor?.nome])
+    ultimaLista = relFiltrarValor(ultimaLista, vminVal, vmaxVal, l => l.valor_estimado)
+    if (!ultimaLista.length) { $('#rcm-resultado').innerHTML = `<p class="vazio">Nenhum lead encontrado.</p>`; return }
 
     $('#rcm-resultado').innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
@@ -35060,6 +35139,7 @@ async function relSdrWhatsapp (alvo) {
       <div class="campo"><label>De</label><input type="date" id="rsd-de" value="${de}"></div>
       <div class="campo"><label>Até</label><input type="date" id="rsd-ate" value="${hoje}"></div>
       <div class="campo"><label>Status</label><select id="rsd-status"><option value="">Todos</option></select></div>
+      <div class="campo"><label>Buscar por nome</label><input type="text" id="rsd-nome" placeholder="nome, telefone..."></div>
       <button class="btn" id="rsd-buscar">Buscar</button>
     </div>
     <div id="rsd-resultado"></div>`
@@ -35067,6 +35147,7 @@ async function relSdrWhatsapp (alvo) {
   let ultimaLista = []
   const buscar = async () => {
     const deVal = $('#rsd-de').value, ateVal = $('#rsd-ate').value, statusVal = $('#rsd-status').value
+    const nomeVal = $('#rsd-nome').value
     $('#rsd-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
     let q = db.from('leads').select(`
       id, nome, telefone, status, cultura, volume_producao, momento_compra, perfil_disc,
@@ -35076,15 +35157,16 @@ async function relSdrWhatsapp (alvo) {
 
     const { data, error } = await q
     if (faltaMigracao(error) || error) { $('#rsd-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-    ultimaLista = data || []
+    const bruta = data || []
 
     const statusSel = $('#rsd-status')
     if (statusSel.options.length === 1) {
-      const statusUnicos = [...new Set(ultimaLista.map(l => l.status).filter(Boolean))].sort()
+      const statusUnicos = [...new Set(bruta.map(l => l.status).filter(Boolean))].sort()
       statusUnicos.forEach(s => statusSel.insertAdjacentHTML('beforeend', `<option value="${esc(s)}">${esc(s)}</option>`))
     }
 
-    if (!ultimaLista.length) { $('#rsd-resultado').innerHTML = `<p class="vazio">Nenhum lead nesse período.</p>`; return }
+    ultimaLista = relFiltrarTexto(bruta, nomeVal, l => [l.nome, l.telefone])
+    if (!ultimaLista.length) { $('#rsd-resultado').innerHTML = `<p class="vazio">Nenhum lead encontrado.</p>`; return }
 
     $('#rsd-resultado').innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
@@ -35126,6 +35208,7 @@ async function relCrmTecnico (alvo) {
   alvo.innerHTML = `
     <div class="filtros" style="margin-bottom:14px;">
       <div class="campo"><label>Fase</label><select id="rct-fase"><option value="">Todas</option></select></div>
+      <div class="campo"><label>Buscar por nome</label><input type="text" id="rct-nome" placeholder="nome, código, município, responsável..."></div>
       <button class="btn" id="rct-buscar">Buscar</button>
     </div>
     <div id="rct-resultado"></div>`
@@ -35133,6 +35216,7 @@ async function relCrmTecnico (alvo) {
   let ultimaLista = []
   const buscar = async () => {
     const faseVal = $('#rct-fase').value
+    const nomeVal = $('#rct-nome').value
     $('#rct-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
     let q = db.from('tecnico_cliente').select(`
       id, codigo, nome, municipio, segmento, nivel, fase, area_total_ha, potencial_expansao_ha, ultima_visita, criado_em,
@@ -35142,15 +35226,16 @@ async function relCrmTecnico (alvo) {
 
     const { data, error } = await q
     if (faltaMigracao(error) || error) { $('#rct-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-    ultimaLista = data || []
+    const bruta = data || []
 
     const faseSel = $('#rct-fase')
     if (faseSel.options.length === 1) {
-      const fasesUnicas = [...new Set((data || []).map(c => c.fase).filter(Boolean))].sort()
+      const fasesUnicas = [...new Set(bruta.map(c => c.fase).filter(Boolean))].sort()
       fasesUnicas.forEach(f => faseSel.insertAdjacentHTML('beforeend', `<option value="${esc(f)}">${esc(f)}</option>`))
     }
 
-    if (!ultimaLista.length) { $('#rct-resultado').innerHTML = `<p class="vazio">Nenhum cliente técnico cadastrado ainda.</p>`; return }
+    ultimaLista = relFiltrarTexto(bruta, nomeVal, c => [c.nome, c.codigo, c.municipio, c.responsavel?.nome])
+    if (!ultimaLista.length) { $('#rct-resultado').innerHTML = `<p class="vazio">Nenhum cliente técnico encontrado.</p>`; return }
 
     $('#rct-resultado').innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
@@ -35198,6 +35283,9 @@ async function relFaturamento (alvo) {
       <div class="campo"><label>Até</label><input type="date" id="rf-ate" value="${hoje}"></div>
       <div class="campo"><label>Situação pagamento</label>
         <select id="rf-situacao"><option value="">Todas</option>${Object.entries(ROTULO_SITUACAO_PAGAMENTO).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div>
+      <div class="campo"><label>Buscar por nome</label><input type="text" id="rf-nome" placeholder="número, cliente, vendedor, produto..."></div>
+      <div class="campo"><label>Valor mín.</label><input type="number" id="rf-vmin" step="0.01" placeholder="0,00"></div>
+      <div class="campo"><label>Valor máx.</label><input type="number" id="rf-vmax" step="0.01" placeholder="0,00"></div>
       <button class="btn" id="rf-buscar">Buscar</button>
     </div>
     <div id="rf-resultado"></div>`
@@ -35205,6 +35293,7 @@ async function relFaturamento (alvo) {
   let ultimaLista = []
   const buscar = async () => {
     const deVal = $('#rf-de').value, ateVal = $('#rf-ate').value, situacaoVal = $('#rf-situacao').value
+    const nomeVal = $('#rf-nome').value, vminVal = $('#rf-vmin').value, vmaxVal = $('#rf-vmax').value
     $('#rf-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
     let q = db.from('pedido').select(`
       id, numero, quantidade_t, valor_total, status, situacao_pagamento, data_pedido, vencimento,
@@ -35214,8 +35303,9 @@ async function relFaturamento (alvo) {
 
     const { data, error } = await q
     if (faltaMigracao(error) || error) { $('#rf-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-    ultimaLista = data || []
-    if (!ultimaLista.length) { $('#rf-resultado').innerHTML = `<p class="vazio">Nenhum pedido nesse período.</p>`; return }
+    ultimaLista = relFiltrarTexto(data || [], nomeVal, p => [p.numero, p.cliente?.nome_fantasia, p.cliente?.razao_social, p.vendedor?.nome, p.produto?.nome])
+    ultimaLista = relFiltrarValor(ultimaLista, vminVal, vmaxVal, p => p.valor_total)
+    if (!ultimaLista.length) { $('#rf-resultado').innerHTML = `<p class="vazio">Nenhum pedido encontrado.</p>`; return }
 
     $('#rf-resultado').innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
@@ -35261,6 +35351,7 @@ async function relCadastroFuncionarios (alvo) {
     <div class="filtros" style="margin-bottom:14px;">
       <div class="campo"><label>Status</label>
         <select id="rf2-status"><option value="ATIVO">Ativos</option><option value="">Todos</option><option value="INATIVO">Inativos</option></select></div>
+      <div class="campo"><label>Buscar por nome</label><input type="text" id="rf2-nome" placeholder="nome, CPF, cargo..."></div>
       <button class="btn" id="rf2-buscar">Buscar</button>
     </div>
     <div id="rf2-resultado"></div>`
@@ -35268,6 +35359,7 @@ async function relCadastroFuncionarios (alvo) {
   let ultimaLista = []
   const buscar = async () => {
     const statusVal = $('#rf2-status').value
+    const nomeVal = $('#rf2-nome').value
     $('#rf2-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
     let q = db.from('pessoa').select(`
       id, nome, cpf, cargo, tipo, vinculo, status, telefone, email, data_admissao,
@@ -35277,7 +35369,7 @@ async function relCadastroFuncionarios (alvo) {
 
     const { data, error } = await q
     if (faltaMigracao(error) || error) { $('#rf2-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-    ultimaLista = data || []
+    ultimaLista = relFiltrarTexto(data || [], nomeVal, p => [p.nome, p.cpf, p.cargo])
     if (!ultimaLista.length) { $('#rf2-resultado').innerHTML = `<p class="vazio">Nenhum funcionário encontrado.</p>`; return }
 
     $('#rf2-resultado').innerHTML = `
@@ -35328,6 +35420,9 @@ async function relFinanceiro (alvo) {
         <select id="rfin-tipo"><option value="">Todos</option><option value="ENTRADA">Entrada</option><option value="SAIDA">Saída</option></select></div>
       <div class="campo"><label>Situação</label>
         <select id="rfin-situacao"><option value="">Todas</option><option value="EFETIVADO">Efetivado</option><option value="PENDENTE">Pendente</option></select></div>
+      <div class="campo"><label>Buscar por nome</label><input type="text" id="rfin-nome" placeholder="descrição, conta, categoria, centro de custo..."></div>
+      <div class="campo"><label>Valor mín.</label><input type="number" id="rfin-vmin" step="0.01" placeholder="0,00"></div>
+      <div class="campo"><label>Valor máx.</label><input type="number" id="rfin-vmax" step="0.01" placeholder="0,00"></div>
       <button class="btn" id="rfin-buscar">Buscar</button>
     </div>
     <div id="rfin-resultado"></div>`
@@ -35335,6 +35430,7 @@ async function relFinanceiro (alvo) {
   let ultimaLista = []
   const buscar = async () => {
     const deVal = $('#rfin-de').value, ateVal = $('#rfin-ate').value, tipoVal = $('#rfin-tipo').value, situacaoVal = $('#rfin-situacao').value
+    const nomeVal = $('#rfin-nome').value, vminVal = $('#rfin-vmin').value, vmaxVal = $('#rfin-vmax').value
     $('#rfin-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
     let q = db.from('lancamento_financeiro').select(`
       id, descricao, valor, tipo, situacao, data_lancamento,
@@ -35345,8 +35441,9 @@ async function relFinanceiro (alvo) {
 
     const { data, error } = await q
     if (faltaMigracao(error) || error) { $('#rfin-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-    ultimaLista = data || []
-    if (!ultimaLista.length) { $('#rfin-resultado').innerHTML = `<p class="vazio">Nenhum lançamento nesse período.</p>`; return }
+    ultimaLista = relFiltrarTexto(data || [], nomeVal, l => [l.descricao, l.conta?.nome, l.categoria?.nome, l.centro?.nome])
+    ultimaLista = relFiltrarValor(ultimaLista, vminVal, vmaxVal, l => Number(l.valor))
+    if (!ultimaLista.length) { $('#rfin-resultado').innerHTML = `<p class="vazio">Nenhum lançamento encontrado.</p>`; return }
 
     const totalEntradas = ultimaLista.filter(l => l.tipo === 'ENTRADA').reduce((s, l) => s + Number(l.valor), 0)
     const totalSaidas = ultimaLista.filter(l => l.tipo === 'SAIDA').reduce((s, l) => s + Number(l.valor), 0)
@@ -35394,6 +35491,7 @@ async function relEstoque (alvo) {
       <div class="campo"><label>Até</label><input type="date" id="re-ate" value="${hoje}"></div>
       <div class="campo"><label>Tipo</label>
         <select id="re-tipo"><option value="">Todos</option><option value="ENTRADA">Entrada</option><option value="SAIDA">Saída</option></select></div>
+      <div class="campo"><label>Buscar por nome</label><input type="text" id="re-nome" placeholder="produto, local, registrado por..."></div>
       <button class="btn" id="re-buscar">Buscar</button>
     </div>
     <div id="re-resultado"></div>`
@@ -35401,6 +35499,7 @@ async function relEstoque (alvo) {
   let ultimaLista = []
   const buscar = async () => {
     const deVal = $('#re-de').value, ateVal = $('#re-ate').value, tipoVal = $('#re-tipo').value
+    const nomeVal = $('#re-nome').value
     $('#re-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
     let q = db.from('movimentacao_estoque').select(`
       id, tipo, quantidade, unidade, data_mov, local_estoque, turno,
@@ -35410,8 +35509,8 @@ async function relEstoque (alvo) {
 
     const { data, error } = await q
     if (faltaMigracao(error) || error) { $('#re-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-    ultimaLista = data || []
-    if (!ultimaLista.length) { $('#re-resultado').innerHTML = `<p class="vazio">Nenhuma movimentação nesse período.</p>`; return }
+    ultimaLista = relFiltrarTexto(data || [], nomeVal, m => [m.produto?.nome, m.quem?.nome, m.local_estoque])
+    if (!ultimaLista.length) { $('#re-resultado').innerHTML = `<p class="vazio">Nenhuma movimentação encontrada.</p>`; return }
 
     $('#re-resultado').innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
@@ -35456,6 +35555,7 @@ async function relCombustivel (alvo) {
       <div class="campo"><label>Até</label><input type="date" id="rcb-ate" value="${hoje}"></div>
       <div class="campo"><label>Tipo</label>
         <select id="rcb-tipo"><option value="">Todos</option>${TIPOS_COMBUSTIVEL.map(t => `<option value="${t}">${ROTULO_COMBUSTIVEL[t]}</option>`).join('')}</select></div>
+      <div class="campo"><label>Buscar por nome</label><input type="text" id="rcb-nome" placeholder="veículo, bombista, operador..."></div>
       <button class="btn" id="rcb-buscar">Buscar</button>
     </div>
     <div id="rcb-resultado"></div>`
@@ -35463,6 +35563,7 @@ async function relCombustivel (alvo) {
   let ultimaLista = []
   const buscar = async () => {
     const deVal = $('#rcb-de').value, ateVal = $('#rcb-ate').value, tipoVal = $('#rcb-tipo').value
+    const nomeVal = $('#rcb-nome').value
     $('#rcb-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
     let q = db.from('abastecimento').select(`
       id, tipo, litros, data_abastecimento, destino,
@@ -35473,8 +35574,8 @@ async function relCombustivel (alvo) {
 
     const { data, error } = await q
     if (faltaMigracao(error) || error) { $('#rcb-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-    ultimaLista = data || []
-    if (!ultimaLista.length) { $('#rcb-resultado').innerHTML = `<p class="vazio">Nenhum abastecimento nesse período.</p>`; return }
+    ultimaLista = relFiltrarTexto(data || [], nomeVal, a => [a.veiculo?.placa, a.equipamento?.tag, a.bombista?.nome, a.operador?.nome])
+    if (!ultimaLista.length) { $('#rcb-resultado').innerHTML = `<p class="vazio">Nenhum abastecimento encontrado.</p>`; return }
 
     const totalLitros = ultimaLista.reduce((s, a) => s + Number(a.litros || 0), 0)
 
@@ -35525,6 +35626,9 @@ async function relManutencao (alvo) {
       <div class="campo"><label>Até</label><input type="date" id="rm-ate" value="${hoje}"></div>
       <div class="campo"><label>Status</label>
         <select id="rm-status"><option value="">Todos</option>${STATUS_OS.map(s => `<option value="${s}">${ROTULO_STATUS_OS[s]}</option>`).join('')}</select></div>
+      <div class="campo"><label>Buscar por nome</label><input type="text" id="rm-nome" placeholder="código, equipamento, solicitante, responsável..."></div>
+      <div class="campo"><label>Valor mín.</label><input type="number" id="rm-vmin" step="0.01" placeholder="0,00"></div>
+      <div class="campo"><label>Valor máx.</label><input type="number" id="rm-vmax" step="0.01" placeholder="0,00"></div>
       <button class="btn" id="rm-buscar">Buscar</button>
     </div>
     <div id="rm-resultado"></div>`
@@ -35532,6 +35636,7 @@ async function relManutencao (alvo) {
   let ultimaLista = []
   const buscar = async () => {
     const deVal = $('#rm-de').value, ateVal = $('#rm-ate').value, statusVal = $('#rm-status').value
+    const nomeVal = $('#rm-nome').value, vminVal = $('#rm-vmin').value, vmaxVal = $('#rm-vmax').value
     $('#rm-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
     let q = db.from('ordem_servico').select(`
       id, codigo, tipo, prioridade, status, data_solicitacao, data_limite, data_conclusao, valor_total,
@@ -35542,8 +35647,9 @@ async function relManutencao (alvo) {
 
     const { data, error } = await q
     if (faltaMigracao(error) || error) { $('#rm-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-    ultimaLista = data || []
-    if (!ultimaLista.length) { $('#rm-resultado').innerHTML = `<p class="vazio">Nenhuma ordem de serviço nesse período.</p>`; return }
+    ultimaLista = relFiltrarTexto(data || [], nomeVal, o => [o.codigo, o.equipamento?.tag, o.veiculo?.placa, o.solicitante?.nome, o.responsavel?.nome])
+    ultimaLista = relFiltrarValor(ultimaLista, vminVal, vmaxVal, o => o.valor_total)
+    if (!ultimaLista.length) { $('#rm-resultado').innerHTML = `<p class="vazio">Nenhuma ordem de serviço encontrada.</p>`; return }
 
     $('#rm-resultado').innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
@@ -35612,6 +35718,7 @@ async function relFrotaVeiculos (alvo) {
     <div class="filtros" style="margin-bottom:14px;">
       <div class="campo"><label>Status</label>
         <select id="rfv-status"><option value="">Todos</option>${Object.entries(ROTULO_STATUS_FROTA).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div>
+      <div class="campo"><label>Buscar por nome</label><input type="text" id="rfv-nome" placeholder="placa, descrição, responsável, condutor..."></div>
       <button class="btn" id="rfv-buscar">Buscar</button>
     </div>
     <div id="rfv-resultado"></div>`
@@ -35619,6 +35726,7 @@ async function relFrotaVeiculos (alvo) {
   let ultimaLista = []
   const buscar = async () => {
     const statusVal = $('#rfv-status').value
+    const nomeVal = $('#rfv-nome').value
     $('#rfv-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
     let q = db.from('veiculo').select(`
       id, placa, descricao, eh_proprio, status_frota, ipva_vencimento, data_entrada,
@@ -35628,7 +35736,7 @@ async function relFrotaVeiculos (alvo) {
 
     const { data, error } = await q
     if (faltaMigracao(error) || error) { $('#rfv-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-    ultimaLista = data || []
+    ultimaLista = relFiltrarTexto(data || [], nomeVal, v => [v.placa, v.descricao, v.responsavel?.nome, v.condutor?.nome])
     if (!ultimaLista.length) { $('#rfv-resultado').innerHTML = `<p class="vazio">Nenhum veículo encontrado.</p>`; return }
 
     $('#rfv-resultado').innerHTML = `
@@ -35669,6 +35777,7 @@ async function relFrotaAcoes (alvo) {
     <div class="filtros" style="margin-bottom:14px;">
       <div class="campo"><label>Status</label>
         <select id="rfa-status"><option value="">Todos</option><option value="ABERTA">Aberta</option><option value="CONCLUIDA">Concluída</option><option value="CANCELADA">Cancelada</option></select></div>
+      <div class="campo"><label>Buscar por nome</label><input type="text" id="rfa-nome" placeholder="veículo, categoria, fornecedor..."></div>
       <button class="btn" id="rfa-buscar">Buscar</button>
     </div>
     <div id="rfa-resultado"></div>`
@@ -35676,6 +35785,7 @@ async function relFrotaAcoes (alvo) {
   let ultimaLista = []
   const buscar = async () => {
     const statusVal = $('#rfa-status').value
+    const nomeVal = $('#rfa-nome').value
     $('#rfa-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
     let q = db.from('frota_acao').select(`
       id, categoria, descricao, sla_prazo, status, concluido_em,
@@ -35685,7 +35795,7 @@ async function relFrotaAcoes (alvo) {
 
     const { data, error } = await q
     if (faltaMigracao(error) || error) { $('#rfa-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-    ultimaLista = data || []
+    ultimaLista = relFiltrarTexto(data || [], nomeVal, a => [a.veiculo?.descricao, a.categoria, a.descricao, a.fornecedor?.nome])
     if (!ultimaLista.length) { $('#rfa-resultado').innerHTML = `<p class="vazio">Nenhuma ação encontrada.</p>`; return }
 
     $('#rfa-resultado').innerHTML = `
@@ -35756,6 +35866,9 @@ async function relJuridicoContratos (alvo) {
     <div class="filtros" style="margin-bottom:14px;">
       <div class="campo"><label>Status</label>
         <select id="rjc-status"><option value="">Todos</option>${Object.entries(ROTULO_STATUS_CONTRATO_PJ).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div>
+      <div class="campo"><label>Buscar por nome</label><input type="text" id="rjc-nome" placeholder="título, contraparte, categoria, responsável..."></div>
+      <div class="campo"><label>Valor mín.</label><input type="number" id="rjc-vmin" step="0.01" placeholder="0,00"></div>
+      <div class="campo"><label>Valor máx.</label><input type="number" id="rjc-vmax" step="0.01" placeholder="0,00"></div>
       <button class="btn" id="rjc-buscar">Buscar</button>
     </div>
     <div id="rjc-resultado"></div>`
@@ -35763,6 +35876,7 @@ async function relJuridicoContratos (alvo) {
   let ultimaLista = []
   const buscar = async () => {
     const statusVal = $('#rjc-status').value
+    const nomeVal = $('#rjc-nome').value, vminVal = $('#rjc-vmin').value, vmaxVal = $('#rjc-vmax').value
     $('#rjc-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
     let q = db.from('juridico_contrato').select(`
       id, titulo, contraparte, categoria, valor, data_inicio, data_fim, renovacao, status,
@@ -35772,7 +35886,8 @@ async function relJuridicoContratos (alvo) {
 
     const { data, error } = await q
     if (faltaMigracao(error) || error) { $('#rjc-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-    ultimaLista = data || []
+    ultimaLista = relFiltrarTexto(data || [], nomeVal, c => [c.titulo, c.contraparte, c.categoria, c.responsavel?.nome])
+    ultimaLista = relFiltrarValor(ultimaLista, vminVal, vmaxVal, c => c.valor)
     if (!ultimaLista.length) { $('#rjc-resultado').innerHTML = `<p class="vazio">Nenhum contrato encontrado.</p>`; return }
 
     $('#rjc-resultado').innerHTML = `
@@ -35815,6 +35930,7 @@ async function relJuridicoLicencas (alvo) {
     <div class="filtros" style="margin-bottom:14px;">
       <div class="campo"><label>Status</label>
         <select id="rjl-status"><option value="">Todos</option><option value="VIGENTE">Vigente</option><option value="VENCIDA">Vencida</option></select></div>
+      <div class="campo"><label>Buscar por nome</label><input type="text" id="rjl-nome" placeholder="nome, categoria, órgão, responsável..."></div>
       <button class="btn" id="rjl-buscar">Buscar</button>
     </div>
     <div id="rjl-resultado"></div>`
@@ -35822,6 +35938,7 @@ async function relJuridicoLicencas (alvo) {
   let ultimaLista = []
   const buscar = async () => {
     const statusVal = $('#rjl-status').value
+    const nomeVal = $('#rjl-nome').value
     $('#rjl-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
     let q = db.from('juridico_licenca').select(`
       id, nome, categoria, orgao_emissor, numero, data_emissao, data_validade, status,
@@ -35831,7 +35948,7 @@ async function relJuridicoLicencas (alvo) {
 
     const { data, error } = await q
     if (faltaMigracao(error) || error) { $('#rjl-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-    ultimaLista = data || []
+    ultimaLista = relFiltrarTexto(data || [], nomeVal, l => [l.nome, l.categoria, l.orgao_emissor, l.numero, l.responsavel?.nome])
     if (!ultimaLista.length) { $('#rjl-resultado').innerHTML = `<p class="vazio">Nenhuma licença encontrada.</p>`; return }
 
     $('#rjl-resultado').innerHTML = `
@@ -35874,6 +35991,9 @@ async function relJuridicoProcessos (alvo) {
     <div class="filtros" style="margin-bottom:14px;">
       <div class="campo"><label>Status</label>
         <select id="rjp-status"><option value="">Todos</option>${Object.entries(ROTULO_STATUS_PROCESSO).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div>
+      <div class="campo"><label>Buscar por nome</label><input type="text" id="rjp-nome" placeholder="número, órgão, assunto, parte contrária, responsável..."></div>
+      <div class="campo"><label>Valor mín.</label><input type="number" id="rjp-vmin" step="0.01" placeholder="0,00"></div>
+      <div class="campo"><label>Valor máx.</label><input type="number" id="rjp-vmax" step="0.01" placeholder="0,00"></div>
       <button class="btn" id="rjp-buscar">Buscar</button>
     </div>
     <div id="rjp-resultado"></div>`
@@ -35881,6 +36001,7 @@ async function relJuridicoProcessos (alvo) {
   let ultimaLista = []
   const buscar = async () => {
     const statusVal = $('#rjp-status').value
+    const nomeVal = $('#rjp-nome').value, vminVal = $('#rjp-vmin').value, vmaxVal = $('#rjp-vmax').value
     $('#rjp-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
     let q = db.from('juridico_processo').select(`
       id, numero_processo, orgao, assunto, tipo, parte_contraria, posicao, valor_causa, responsavel, status, proxima_data,
@@ -35890,7 +36011,8 @@ async function relJuridicoProcessos (alvo) {
 
     const { data, error } = await q
     if (faltaMigracao(error) || error) { $('#rjp-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-    ultimaLista = data || []
+    ultimaLista = relFiltrarTexto(data || [], nomeVal, p => [p.numero_processo, p.orgao, p.assunto, p.parte_contraria, p.responsavel_pessoa?.nome || p.responsavel])
+    ultimaLista = relFiltrarValor(ultimaLista, vminVal, vmaxVal, p => p.valor_causa)
     if (!ultimaLista.length) { $('#rjp-resultado').innerHTML = `<p class="vazio">Nenhum processo encontrado.</p>`; return }
 
     $('#rjp-resultado').innerHTML = `
@@ -35935,6 +36057,7 @@ async function relJuridicoNotificacoes (alvo) {
     <div class="filtros" style="margin-bottom:14px;">
       <div class="campo"><label>Status</label>
         <select id="rjn-status"><option value="">Todos</option>${Object.entries(ROTULO_STATUS_NOTIFICACAO).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div>
+      <div class="campo"><label>Buscar por nome</label><input type="text" id="rjn-nome" placeholder="órgão, número, descrição, responsável..."></div>
       <button class="btn" id="rjn-buscar">Buscar</button>
     </div>
     <div id="rjn-resultado"></div>`
@@ -35942,6 +36065,7 @@ async function relJuridicoNotificacoes (alvo) {
   let ultimaLista = []
   const buscar = async () => {
     const statusVal = $('#rjn-status').value
+    const nomeVal = $('#rjn-nome').value
     $('#rjn-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
     let q = db.from('juridico_notificacao').select(`
       id, tipo, orgao, numero, data_recebimento, prazo_resposta, descricao, status,
@@ -35951,7 +36075,7 @@ async function relJuridicoNotificacoes (alvo) {
 
     const { data, error } = await q
     if (faltaMigracao(error) || error) { $('#rjn-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-    ultimaLista = data || []
+    ultimaLista = relFiltrarTexto(data || [], nomeVal, n => [n.orgao, n.numero, n.descricao, n.responsavel?.nome])
     if (!ultimaLista.length) { $('#rjn-resultado').innerHTML = `<p class="vazio">Nenhuma notificação encontrada.</p>`; return }
 
     $('#rjn-resultado').innerHTML = `
@@ -36019,6 +36143,9 @@ async function relOnflyDespesas (alvo) {
     <div class="filtros" style="margin-bottom:14px;">
       <div class="campo"><label>De</label><input type="date" id="rod-de" value="${de}"></div>
       <div class="campo"><label>Até</label><input type="date" id="rod-ate" value="${hoje}"></div>
+      <div class="campo"><label>Buscar por nome</label><input type="text" id="rod-nome" placeholder="pessoa, descrição, tipo, área..."></div>
+      <div class="campo"><label>Valor mín.</label><input type="number" id="rod-vmin" step="0.01" placeholder="0,00"></div>
+      <div class="campo"><label>Valor máx.</label><input type="number" id="rod-vmax" step="0.01" placeholder="0,00"></div>
       <button class="btn" id="rod-buscar">Buscar</button>
     </div>
     <div id="rod-resultado"></div>`
@@ -36026,14 +36153,16 @@ async function relOnflyDespesas (alvo) {
   let ultimaLista = []
   const buscar = async () => {
     const deVal = $('#rod-de').value, ateVal = $('#rod-ate').value
+    const nomeVal = $('#rod-nome').value, vminVal = $('#rod-vmin').value, vmaxVal = $('#rod-vmax').value
     $('#rod-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
     const { data, error } = await db.from('onfly_despesa').select(`
       id, descricao, data, valor, tipo_despesa, reembolsavel, area, pessoa:pessoa_id ( nome )
     `).gte('data', deVal).lte('data', ateVal).order('data', { ascending: false }).limit(3000)
 
     if (faltaMigracao(error) || error) { $('#rod-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-    ultimaLista = data || []
-    if (!ultimaLista.length) { $('#rod-resultado').innerHTML = `<p class="vazio">Nenhuma despesa nesse período.</p>`; return }
+    ultimaLista = relFiltrarTexto(data || [], nomeVal, d => [d.pessoa?.nome, d.descricao, d.tipo_despesa, d.area])
+    ultimaLista = relFiltrarValor(ultimaLista, vminVal, vmaxVal, d => d.valor)
+    if (!ultimaLista.length) { $('#rod-resultado').innerHTML = `<p class="vazio">Nenhuma despesa encontrada.</p>`; return }
 
     $('#rod-resultado').innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
@@ -36074,6 +36203,9 @@ async function relOnflyRdv (alvo) {
     <div class="filtros" style="margin-bottom:14px;">
       <div class="campo"><label>Status</label>
         <select id="ror-status"><option value="">Todos</option>${Object.entries(ROTULO_STATUS_RDV).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div>
+      <div class="campo"><label>Buscar por nome</label><input type="text" id="ror-nome" placeholder="protocolo, nome, pessoa, motivo..."></div>
+      <div class="campo"><label>Valor mín.</label><input type="number" id="ror-vmin" step="0.01" placeholder="0,00"></div>
+      <div class="campo"><label>Valor máx.</label><input type="number" id="ror-vmax" step="0.01" placeholder="0,00"></div>
       <button class="btn" id="ror-buscar">Buscar</button>
     </div>
     <div id="ror-resultado"></div>`
@@ -36081,6 +36213,7 @@ async function relOnflyRdv (alvo) {
   let ultimaLista = []
   const buscar = async () => {
     const statusVal = $('#ror-status').value
+    const nomeVal = $('#ror-nome').value, vminVal = $('#ror-vmin').value, vmaxVal = $('#ror-vmax').value
     $('#ror-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
     let q = db.from('onfly_rdv').select(`
       id, protocolo, nome, motivo, status, valor_total, valor_reembolsavel, criado_em_onfly,
@@ -36090,7 +36223,8 @@ async function relOnflyRdv (alvo) {
 
     const { data, error } = await q
     if (faltaMigracao(error) || error) { $('#ror-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-    ultimaLista = data || []
+    ultimaLista = relFiltrarTexto(data || [], nomeVal, r => [r.protocolo, r.nome, r.pessoa?.nome, r.motivo])
+    ultimaLista = relFiltrarValor(ultimaLista, vminVal, vmaxVal, r => r.valor_total)
     if (!ultimaLista.length) { $('#ror-resultado').innerHTML = `<p class="vazio">Nenhum reembolso encontrado.</p>`; return }
 
     $('#ror-resultado').innerHTML = `
@@ -36155,35 +36289,48 @@ function linhaRelDPDocumento (d) {
 }
 
 async function relDPDocumentos (alvo) {
-  alvo.innerHTML = `<div id="rdd-resultado"><p class="texto-dim2">carregando...</p></div>`
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>Buscar por nome</label><input type="text" id="rdd-nome" placeholder="pessoa, tipo de documento, número..."></div>
+    </div>
+    <div id="rdd-resultado"><p class="texto-dim2">carregando...</p></div>`
+
   const { data, error } = await db.from('dp_documento').select(`
     id, tipo_documento, numero_documento, data_emissao, data_validade, status, pessoa:pessoa_id ( nome )
   `).order('data_validade', { ascending: true, nullsFirst: false }).limit(3000)
 
   if (faltaMigracao(error) || error) { $('#rdd-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-  const lista = data || []
-  if (!lista.length) { $('#rdd-resultado').innerHTML = `<p class="vazio">Nenhum documento cadastrado.</p>`; return }
+  const bruta = data || []
+  if (!bruta.length) { $('#rdd-resultado').innerHTML = `<p class="vazio">Nenhum documento cadastrado.</p>`; return }
 
-  $('#rdd-resultado').innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
-      <p class="texto-dim2" style="margin:0;">${lista.length} documento${lista.length > 1 ? 's' : ''}</p>
-      <div style="display:flex;gap:8px;">
-        <button class="btn-secundario mini" id="rdd-excel">⬇ Exportar Excel</button>
-        <button class="btn-secundario mini" id="rdd-pdf">⬇ Exportar PDF</button>
+  const renderizar = (lista) => {
+    if (!lista.length) { $('#rdd-resultado').innerHTML = `<p class="vazio">Nenhum documento encontrado.</p>`; return }
+    $('#rdd-resultado').innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+        <p class="texto-dim2" style="margin:0;">${lista.length} documento${lista.length > 1 ? 's' : ''}</p>
+        <div style="display:flex;gap:8px;">
+          <button class="btn-secundario mini" id="rdd-excel">⬇ Exportar Excel</button>
+          <button class="btn-secundario mini" id="rdd-pdf">⬇ Exportar PDF</button>
+        </div>
       </div>
-    </div>
-    <div class="panel" style="padding:0;"><div class="tabela-scroll">
-      <table><thead><tr><th>Pessoa</th><th>Tipo</th><th>Número</th><th>Emissão</th><th>Validade</th><th>Status</th></tr></thead><tbody>
-        ${lista.map(d => `<tr>
-          <td>${esc(d.pessoa?.nome ?? '—')}</td><td>${esc(d.tipo_documento ?? '—')}</td><td>${esc(d.numero_documento ?? '—')}</td>
-          <td>${d.data_emissao ? fmtData(d.data_emissao) : '—'}</td><td>${d.data_validade ? fmtData(d.data_validade) : '—'}</td>
-          <td><span class="${corStatusDp(d.status, d.data_validade)}">${esc(ROTULO_STATUS_DP[d.status] ?? d.status ?? '—')}</span></td>
-        </tr>`).join('')}
-      </tbody></table>
-    </div></div>`
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr><th>Pessoa</th><th>Tipo</th><th>Número</th><th>Emissão</th><th>Validade</th><th>Status</th></tr></thead><tbody>
+          ${lista.map(d => `<tr>
+            <td>${esc(d.pessoa?.nome ?? '—')}</td><td>${esc(d.tipo_documento ?? '—')}</td><td>${esc(d.numero_documento ?? '—')}</td>
+            <td>${d.data_emissao ? fmtData(d.data_emissao) : '—'}</td><td>${d.data_validade ? fmtData(d.data_validade) : '—'}</td>
+            <td><span class="${corStatusDp(d.status, d.data_validade)}">${esc(ROTULO_STATUS_DP[d.status] ?? d.status ?? '—')}</span></td>
+          </tr>`).join('')}
+        </tbody></table>
+      </div></div>`
 
-  $('#rdd-excel').onclick = () => exportarRelatorioExcel('relatorio_dp_documentos', COLUNAS_REL_DP_DOCUMENTOS, lista.map(linhaRelDPDocumento))
-  $('#rdd-pdf').onclick = () => exportarRelatorioPDF('Relatório de DP - Documentos', COLUNAS_REL_DP_DOCUMENTOS, lista.map(linhaRelDPDocumento))
+    $('#rdd-excel').onclick = () => exportarRelatorioExcel('relatorio_dp_documentos', COLUNAS_REL_DP_DOCUMENTOS, lista.map(linhaRelDPDocumento))
+    $('#rdd-pdf').onclick = () => exportarRelatorioPDF('Relatório de DP - Documentos', COLUNAS_REL_DP_DOCUMENTOS, lista.map(linhaRelDPDocumento))
+  }
+
+  $('#rdd-nome').addEventListener('input', () => {
+    renderizar(relFiltrarTexto(bruta, $('#rdd-nome').value, d => [d.pessoa?.nome, d.tipo_documento, d.numero_documento]))
+  })
+  renderizar(bruta)
 }
 
 const COLUNAS_REL_DP_EXAMES = ['Pessoa', 'Tipo de exame', 'Validade', 'Clínica', 'Status']
@@ -36193,35 +36340,48 @@ function linhaRelDPExame (e) {
 }
 
 async function relDPExames (alvo) {
-  alvo.innerHTML = `<div id="rde-resultado"><p class="texto-dim2">carregando...</p></div>`
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>Buscar por nome</label><input type="text" id="rde-nome" placeholder="pessoa, tipo de exame, clínica..."></div>
+    </div>
+    <div id="rde-resultado"><p class="texto-dim2">carregando...</p></div>`
+
   const { data, error } = await db.from('dp_exame').select(`
     id, tipo_exame, data_validade, status, clinica, pessoa:pessoa_id ( nome )
   `).order('data_validade', { ascending: true, nullsFirst: false }).limit(3000)
 
   if (faltaMigracao(error) || error) { $('#rde-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-  const lista = data || []
-  if (!lista.length) { $('#rde-resultado').innerHTML = `<p class="vazio">Nenhum exame cadastrado.</p>`; return }
+  const bruta = data || []
+  if (!bruta.length) { $('#rde-resultado').innerHTML = `<p class="vazio">Nenhum exame cadastrado.</p>`; return }
 
-  $('#rde-resultado').innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
-      <p class="texto-dim2" style="margin:0;">${lista.length} exame${lista.length > 1 ? 's' : ''}</p>
-      <div style="display:flex;gap:8px;">
-        <button class="btn-secundario mini" id="rde-excel">⬇ Exportar Excel</button>
-        <button class="btn-secundario mini" id="rde-pdf">⬇ Exportar PDF</button>
+  const renderizar = (lista) => {
+    if (!lista.length) { $('#rde-resultado').innerHTML = `<p class="vazio">Nenhum exame encontrado.</p>`; return }
+    $('#rde-resultado').innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+        <p class="texto-dim2" style="margin:0;">${lista.length} exame${lista.length > 1 ? 's' : ''}</p>
+        <div style="display:flex;gap:8px;">
+          <button class="btn-secundario mini" id="rde-excel">⬇ Exportar Excel</button>
+          <button class="btn-secundario mini" id="rde-pdf">⬇ Exportar PDF</button>
+        </div>
       </div>
-    </div>
-    <div class="panel" style="padding:0;"><div class="tabela-scroll">
-      <table><thead><tr><th>Pessoa</th><th>Tipo de exame</th><th>Validade</th><th>Clínica</th><th>Status</th></tr></thead><tbody>
-        ${lista.map(e => `<tr>
-          <td>${esc(e.pessoa?.nome ?? '—')}</td><td>${esc(e.tipo_exame ?? '—')}</td>
-          <td>${e.data_validade ? fmtData(e.data_validade) : '—'}</td><td>${esc(e.clinica ?? '—')}</td>
-          <td><span class="${corStatusDp(e.status, e.data_validade)}">${esc(ROTULO_STATUS_DP[e.status] ?? e.status ?? '—')}</span></td>
-        </tr>`).join('')}
-      </tbody></table>
-    </div></div>`
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr><th>Pessoa</th><th>Tipo de exame</th><th>Validade</th><th>Clínica</th><th>Status</th></tr></thead><tbody>
+          ${lista.map(e => `<tr>
+            <td>${esc(e.pessoa?.nome ?? '—')}</td><td>${esc(e.tipo_exame ?? '—')}</td>
+            <td>${e.data_validade ? fmtData(e.data_validade) : '—'}</td><td>${esc(e.clinica ?? '—')}</td>
+            <td><span class="${corStatusDp(e.status, e.data_validade)}">${esc(ROTULO_STATUS_DP[e.status] ?? e.status ?? '—')}</span></td>
+          </tr>`).join('')}
+        </tbody></table>
+      </div></div>`
 
-  $('#rde-excel').onclick = () => exportarRelatorioExcel('relatorio_dp_exames', COLUNAS_REL_DP_EXAMES, lista.map(linhaRelDPExame))
-  $('#rde-pdf').onclick = () => exportarRelatorioPDF('Relatório de DP - Exames', COLUNAS_REL_DP_EXAMES, lista.map(linhaRelDPExame))
+    $('#rde-excel').onclick = () => exportarRelatorioExcel('relatorio_dp_exames', COLUNAS_REL_DP_EXAMES, lista.map(linhaRelDPExame))
+    $('#rde-pdf').onclick = () => exportarRelatorioPDF('Relatório de DP - Exames', COLUNAS_REL_DP_EXAMES, lista.map(linhaRelDPExame))
+  }
+
+  $('#rde-nome').addEventListener('input', () => {
+    renderizar(relFiltrarTexto(bruta, $('#rde-nome').value, e => [e.pessoa?.nome, e.tipo_exame, e.clinica]))
+  })
+  renderizar(bruta)
 }
 
 const COLUNAS_REL_DP_OCORRENCIAS = ['Pessoa', 'Cargo', 'Data', 'Tipo', 'Descrição', 'Ação tomada', 'Status']
@@ -36231,37 +36391,50 @@ function linhaRelDPOcorrencia (o) {
 }
 
 async function relDPOcorrencias (alvo) {
-  alvo.innerHTML = `<div id="rdo-resultado"><p class="texto-dim2">carregando...</p></div>`
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>Buscar por nome</label><input type="text" id="rdo-nome" placeholder="pessoa, cargo, tipo, descrição..."></div>
+    </div>
+    <div id="rdo-resultado"><p class="texto-dim2">carregando...</p></div>`
+
   const { data, error } = await db.from('dp_ocorrencia').select(`
     id, data_ocorrencia, tipo, descricao, acao_tomada, status, pessoa:pessoa_id ( nome, cargo )
   `).order('data_ocorrencia', { ascending: false }).limit(3000)
 
   if (faltaMigracao(error) || error) { $('#rdo-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-  const lista = data || []
-  if (!lista.length) { $('#rdo-resultado').innerHTML = `<p class="vazio">Nenhuma ocorrência registrada.</p>`; return }
+  const bruta = data || []
+  if (!bruta.length) { $('#rdo-resultado').innerHTML = `<p class="vazio">Nenhuma ocorrência registrada.</p>`; return }
   const corStatusOcorrencia = s => s === 'ENCERRADA' ? 'badge-bom' : s === 'EM_ANDAMENTO' ? 'chip' : 'badge-alerta'
 
-  $('#rdo-resultado').innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
-      <p class="texto-dim2" style="margin:0;">${lista.length} ocorrência${lista.length > 1 ? 's' : ''}</p>
-      <div style="display:flex;gap:8px;">
-        <button class="btn-secundario mini" id="rdo-excel">⬇ Exportar Excel</button>
-        <button class="btn-secundario mini" id="rdo-pdf">⬇ Exportar PDF</button>
+  const renderizar = (lista) => {
+    if (!lista.length) { $('#rdo-resultado').innerHTML = `<p class="vazio">Nenhuma ocorrência encontrada.</p>`; return }
+    $('#rdo-resultado').innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+        <p class="texto-dim2" style="margin:0;">${lista.length} ocorrência${lista.length > 1 ? 's' : ''}</p>
+        <div style="display:flex;gap:8px;">
+          <button class="btn-secundario mini" id="rdo-excel">⬇ Exportar Excel</button>
+          <button class="btn-secundario mini" id="rdo-pdf">⬇ Exportar PDF</button>
+        </div>
       </div>
-    </div>
-    <div class="panel" style="padding:0;"><div class="tabela-scroll">
-      <table><thead><tr><th>Pessoa</th><th>Cargo</th><th>Data</th><th>Tipo</th><th>Descrição</th><th>Ação tomada</th><th>Status</th></tr></thead><tbody>
-        ${lista.map(o => `<tr>
-          <td>${esc(o.pessoa?.nome ?? '—')}</td><td>${esc(o.pessoa?.cargo ?? '—')}</td>
-          <td>${o.data_ocorrencia ? fmtData(o.data_ocorrencia) : '—'}</td><td>${esc(o.tipo ?? '—')}</td>
-          <td>${esc(o.descricao ?? '—')}</td><td>${esc(o.acao_tomada ?? '—')}</td>
-          <td><span class="${corStatusOcorrencia(o.status)}">${esc(o.status ?? '—')}</span></td>
-        </tr>`).join('')}
-      </tbody></table>
-    </div></div>`
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr><th>Pessoa</th><th>Cargo</th><th>Data</th><th>Tipo</th><th>Descrição</th><th>Ação tomada</th><th>Status</th></tr></thead><tbody>
+          ${lista.map(o => `<tr>
+            <td>${esc(o.pessoa?.nome ?? '—')}</td><td>${esc(o.pessoa?.cargo ?? '—')}</td>
+            <td>${o.data_ocorrencia ? fmtData(o.data_ocorrencia) : '—'}</td><td>${esc(o.tipo ?? '—')}</td>
+            <td>${esc(o.descricao ?? '—')}</td><td>${esc(o.acao_tomada ?? '—')}</td>
+            <td><span class="${corStatusOcorrencia(o.status)}">${esc(o.status ?? '—')}</span></td>
+          </tr>`).join('')}
+        </tbody></table>
+      </div></div>`
 
-  $('#rdo-excel').onclick = () => exportarRelatorioExcel('relatorio_dp_ocorrencias', COLUNAS_REL_DP_OCORRENCIAS, lista.map(linhaRelDPOcorrencia))
-  $('#rdo-pdf').onclick = () => exportarRelatorioPDF('Relatório de DP - Ocorrências', COLUNAS_REL_DP_OCORRENCIAS, lista.map(linhaRelDPOcorrencia))
+    $('#rdo-excel').onclick = () => exportarRelatorioExcel('relatorio_dp_ocorrencias', COLUNAS_REL_DP_OCORRENCIAS, lista.map(linhaRelDPOcorrencia))
+    $('#rdo-pdf').onclick = () => exportarRelatorioPDF('Relatório de DP - Ocorrências', COLUNAS_REL_DP_OCORRENCIAS, lista.map(linhaRelDPOcorrencia))
+  }
+
+  $('#rdo-nome').addEventListener('input', () => {
+    renderizar(relFiltrarTexto(bruta, $('#rdo-nome').value, o => [o.pessoa?.nome, o.pessoa?.cargo, o.tipo, o.descricao]))
+  })
+  renderizar(bruta)
 }
 
 // ----- Relatório: Laboratório -----
@@ -36281,6 +36454,7 @@ async function relLaboratorio (alvo) {
       <div class="campo"><label>Até</label><input type="date" id="rlab-ate" value="${hoje}"></div>
       <div class="campo"><label>Status</label>
         <select id="rlab-status"><option value="">Todos</option>${STATUS_AMOSTRA.map(s => `<option value="${s}">${ROTULO_STATUS_AMOSTRA[s]}</option>`).join('')}</select></div>
+      <div class="campo"><label>Buscar por nome</label><input type="text" id="rlab-nome" placeholder="número, produtor, placa, produto..."></div>
       <button class="btn" id="rlab-buscar">Buscar</button>
     </div>
     <div id="rlab-resultado"></div>`
@@ -36288,6 +36462,7 @@ async function relLaboratorio (alvo) {
   let ultimaLista = []
   const buscar = async () => {
     const deVal = $('#rlab-de').value, ateVal = $('#rlab-ate').value, statusVal = $('#rlab-status').value
+    const nomeVal = $('#rlab-nome').value
     $('#rlab-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
     let q = db.from('lab_amostra').select(`
       id, numero_amostra, produtor_nome, placa_caminhao, produto_nome, data_amostra, quantidade, origem, status, resultado,
@@ -36297,8 +36472,8 @@ async function relLaboratorio (alvo) {
 
     const { data, error } = await q
     if (faltaMigracao(error) || error) { $('#rlab-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-    ultimaLista = data || []
-    if (!ultimaLista.length) { $('#rlab-resultado').innerHTML = `<p class="vazio">Nenhuma amostra nesse período.</p>`; return }
+    ultimaLista = relFiltrarTexto(data || [], nomeVal, a => [a.numero_amostra, a.produtor_nome, a.placa_caminhao, a.produto_nome])
+    if (!ultimaLista.length) { $('#rlab-resultado').innerHTML = `<p class="vazio">Nenhuma amostra encontrada.</p>`; return }
 
     $('#rlab-resultado').innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
@@ -36339,6 +36514,9 @@ async function relMarketing (alvo) {
     <div class="filtros" style="margin-bottom:14px;">
       <div class="campo"><label>Coluna</label>
         <select id="rmk-coluna"><option value="">Todas</option>${COLUNAS_QUADRO_MKT.map(([c, r]) => `<option value="${c}">${r}</option>`).join('')}</select></div>
+      <div class="campo"><label>Buscar por nome</label><input type="text" id="rmk-nome" placeholder="título, canal, responsável..."></div>
+      <div class="campo"><label>Verba mín.</label><input type="number" id="rmk-vmin" step="0.01" placeholder="0,00"></div>
+      <div class="campo"><label>Verba máx.</label><input type="number" id="rmk-vmax" step="0.01" placeholder="0,00"></div>
       <button class="btn" id="rmk-buscar">Buscar</button>
     </div>
     <div id="rmk-resultado"></div>`
@@ -36346,6 +36524,7 @@ async function relMarketing (alvo) {
   let ultimaLista = []
   const buscar = async () => {
     const colunaVal = $('#rmk-coluna').value
+    const nomeVal = $('#rmk-nome').value, vminVal = $('#rmk-vmin').value, vmaxVal = $('#rmk-vmax').value
     $('#rmk-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
     let q = db.from('marketing_card').select(`
       id, titulo, tipo, canal, coluna, data_publicacao, verba, responsavel
@@ -36354,7 +36533,8 @@ async function relMarketing (alvo) {
 
     const { data, error } = await q
     if (faltaMigracao(error) || error) { $('#rmk-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-    ultimaLista = data || []
+    ultimaLista = relFiltrarTexto(data || [], nomeVal, c => [c.titulo, c.canal, c.responsavel])
+    ultimaLista = relFiltrarValor(ultimaLista, vminVal, vmaxVal, c => c.verba)
     if (!ultimaLista.length) { $('#rmk-resultado').innerHTML = `<p class="vazio">Nenhum card de marketing encontrado.</p>`; return }
 
     $('#rmk-resultado').innerHTML = `
@@ -36415,34 +36595,54 @@ function linhaRelDespesaTI (d) {
 }
 
 async function relDespesasTI (alvo) {
-  alvo.innerHTML = `<div id="rdti-resultado"><p class="texto-dim2">carregando...</p></div>`
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>Buscar por nome</label><input type="text" id="rdti-nome" placeholder="nome, categoria, fornecedor..."></div>
+      <div class="campo"><label>Valor mín.</label><input type="number" id="rdti-vmin" step="0.01" placeholder="0,00"></div>
+      <div class="campo"><label>Valor máx.</label><input type="number" id="rdti-vmax" step="0.01" placeholder="0,00"></div>
+      <button class="btn" id="rdti-buscar">Filtrar</button>
+    </div>
+    <div id="rdti-resultado"><p class="texto-dim2">carregando...</p></div>`
+
   const { data, error } = await db.from('despesa_ti').select('*').order('status').order('nome').limit(2000)
 
   if (faltaMigracao(error) || error) { $('#rdti-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-  const lista = data || []
-  if (!lista.length) { $('#rdti-resultado').innerHTML = `<p class="vazio">Nenhuma despesa de TI cadastrada.</p>`; return }
+  const bruta = data || []
+  if (!bruta.length) { $('#rdti-resultado').innerHTML = `<p class="vazio">Nenhuma despesa de TI cadastrada.</p>`; return }
 
-  $('#rdti-resultado').innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
-      <p class="texto-dim2" style="margin:0;">${lista.length} despesa${lista.length > 1 ? 's' : ''}</p>
-      <div style="display:flex;gap:8px;">
-        <button class="btn-secundario mini" id="rdti-excel">⬇ Exportar Excel</button>
-        <button class="btn-secundario mini" id="rdti-pdf">⬇ Exportar PDF</button>
+  const renderizar = (lista) => {
+    if (!lista.length) { $('#rdti-resultado').innerHTML = `<p class="vazio">Nenhuma despesa encontrada.</p>`; return }
+    $('#rdti-resultado').innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+        <p class="texto-dim2" style="margin:0;">${lista.length} despesa${lista.length > 1 ? 's' : ''}</p>
+        <div style="display:flex;gap:8px;">
+          <button class="btn-secundario mini" id="rdti-excel">⬇ Exportar Excel</button>
+          <button class="btn-secundario mini" id="rdti-pdf">⬇ Exportar PDF</button>
+        </div>
       </div>
-    </div>
-    <div class="panel" style="padding:0;"><div class="tabela-scroll">
-      <table><thead><tr><th>Nome</th><th>Categoria</th><th>Fornecedor</th><th>Valor</th><th>Periodicidade</th><th>Próxima cobrança</th><th>Status</th></tr></thead><tbody>
-        ${lista.map(d => `<tr>
-          <td>${esc(d.nome)}</td><td>${esc(d.categoria ?? '—')}</td><td>${esc(d.fornecedor ?? '—')}</td>
-          <td>${d.valor != null ? `R$ ${fmtNum(d.valor)}` : '—'}</td><td>${esc(d.periodicidade ?? '—')}</td>
-          <td>${d.proxima_cobranca ? fmtData(d.proxima_cobranca) : '—'}</td>
-          <td><span class="${d.status === 'ATIVA' ? 'badge-bom' : 'chip'}">${esc(d.status ?? '—')}</span></td>
-        </tr>`).join('')}
-      </tbody></table>
-    </div></div>`
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr><th>Nome</th><th>Categoria</th><th>Fornecedor</th><th>Valor</th><th>Periodicidade</th><th>Próxima cobrança</th><th>Status</th></tr></thead><tbody>
+          ${lista.map(d => `<tr>
+            <td>${esc(d.nome)}</td><td>${esc(d.categoria ?? '—')}</td><td>${esc(d.fornecedor ?? '—')}</td>
+            <td>${d.valor != null ? `R$ ${fmtNum(d.valor)}` : '—'}</td><td>${esc(d.periodicidade ?? '—')}</td>
+            <td>${d.proxima_cobranca ? fmtData(d.proxima_cobranca) : '—'}</td>
+            <td><span class="${d.status === 'ATIVA' ? 'badge-bom' : 'chip'}">${esc(d.status ?? '—')}</span></td>
+          </tr>`).join('')}
+        </tbody></table>
+      </div></div>`
 
-  $('#rdti-excel').onclick = () => exportarRelatorioExcel('relatorio_despesas_ti', COLUNAS_REL_DESPESAS_TI, lista.map(linhaRelDespesaTI))
-  $('#rdti-pdf').onclick = () => exportarRelatorioPDF('Relatório de Despesas de TI', COLUNAS_REL_DESPESAS_TI, lista.map(linhaRelDespesaTI))
+    $('#rdti-excel').onclick = () => exportarRelatorioExcel('relatorio_despesas_ti', COLUNAS_REL_DESPESAS_TI, lista.map(linhaRelDespesaTI))
+    $('#rdti-pdf').onclick = () => exportarRelatorioPDF('Relatório de Despesas de TI', COLUNAS_REL_DESPESAS_TI, lista.map(linhaRelDespesaTI))
+  }
+
+  const filtrar = () => {
+    let lista = relFiltrarTexto(bruta, $('#rdti-nome').value, d => [d.nome, d.categoria, d.fornecedor])
+    lista = relFiltrarValor(lista, $('#rdti-vmin').value, $('#rdti-vmax').value, d => d.valor)
+    renderizar(lista)
+  }
+  $('#rdti-buscar').onclick = filtrar
+  $('#rdti-nome').addEventListener('input', filtrar)
+  renderizar(bruta)
 }
 
 const COLUNAS_REL_MELHORIAS = ['Título', 'Descrição', 'Solicitante', 'Status', 'Prioridade', 'Resposta', 'Criado em']
@@ -36456,6 +36656,7 @@ async function relMelhoriasSolicitadas (alvo) {
     <div class="filtros" style="margin-bottom:14px;">
       <div class="campo"><label>Status</label>
         <select id="rms-status"><option value="">Todos</option>${STATUS_MELHORIA.map(s => `<option value="${s}">${ROTULO_STATUS_MELHORIA[s]}</option>`).join('')}</select></div>
+      <div class="campo"><label>Buscar por nome</label><input type="text" id="rms-nome" placeholder="título, descrição, solicitante..."></div>
       <button class="btn" id="rms-buscar">Buscar</button>
     </div>
     <div id="rms-resultado"></div>`
@@ -36463,6 +36664,7 @@ async function relMelhoriasSolicitadas (alvo) {
   let ultimaLista = []
   const buscar = async () => {
     const statusVal = $('#rms-status').value
+    const nomeVal = $('#rms-nome').value
     $('#rms-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
     let q = db.from('melhoria_solicitada').select(`
       id, titulo, descricao, status, prioridade, resposta, criado_em, solicitante:solicitante_id ( nome )
@@ -36471,7 +36673,7 @@ async function relMelhoriasSolicitadas (alvo) {
 
     const { data, error } = await q
     if (faltaMigracao(error) || error) { $('#rms-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-    ultimaLista = data || []
+    ultimaLista = relFiltrarTexto(data || [], nomeVal, m => [m.titulo, m.descricao, m.solicitante?.nome])
     if (!ultimaLista.length) { $('#rms-resultado').innerHTML = `<p class="vazio">Nenhuma melhoria encontrada.</p>`; return }
 
     $('#rms-resultado').innerHTML = `
