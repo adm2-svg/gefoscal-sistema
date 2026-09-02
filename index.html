@@ -427,6 +427,10 @@ tbody tr:hover { background: var(--hover-bg); }
   padding:12px 13px; cursor:grab; transition:transform .12s ease, box-shadow .12s ease, border-color .12s ease; }
 .sdr-kanban-card:hover { transform:translateY(-1px); box-shadow:0 8px 18px rgba(0,0,0,.10); border-color:var(--line2); }
 .sdr-kanban-card:active { cursor:grabbing; }
+/* IA pausada nesse contato (botão "Bloquear IA" na ficha) — fundo
+   avermelhado pra ficar óbvio de longe, sem precisar abrir o card. */
+.sdr-kanban-card.pausado { background:rgba(var(--critico-rgb),.10); border-color:rgba(var(--critico-rgb),.45); }
+.sdr-kanban-card.pausado:hover { border-color:var(--critico-text); }
 .sdr-kc-topo { display:flex; justify-content:space-between; align-items:center; gap:8px; }
 .sdr-kc-nome { font-weight:700; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .sdr-kc-disc { flex:none; width:22px; height:22px; border-radius:7px; font-size:11px; font-weight:800;
@@ -1458,6 +1462,44 @@ function seloBomDia (registro) {
   if (registro.bom_dia_aviso_data > new Date().toISOString().slice(0, 10)) return ''
   const turno = ROTULO_TURNO[registro.bom_dia_turno_aviso] || registro.bom_dia_turno_aviso
   return `<span class="chip" title="Estratégia do Bom Dia" style="background:rgba(var(--rust-rgb),.16);color:var(--rust);border:none;">☀️ bom dia hoje (${esc(turno)})</span>`
+}
+
+// ---------------------------------------------------------------
+// "Bloquear IA" — pra quando um contato deu errado e a pessoa não quer
+// mais que o bot do SDR fale com ele. O backend (sdr-whatsapp-webhook)
+// já respeita a flag "ia_pausada": continua registrando as mensagens
+// recebidas, mas não responde mais. Isso aqui é só a UI pra ligar/desligar.
+// ---------------------------------------------------------------
+function montarPausarIA (container, registro) {
+  const pausada = !!registro?.ia_pausada
+  container.innerHTML = `
+    <div class="caixa-texto" style="margin-top:10px;${pausada ? 'border-color:rgba(var(--critico-rgb),.5);' : ''}">
+      <div class="rot" style="${pausada ? 'color:var(--critico-text);' : ''}">🤖 IA no WhatsApp</div>
+      ${pausada
+        ? `<p style="font-size:12.5px;margin:8px 0;color:var(--critico-text);">
+             IA pausada nesse contato — ela não responde mais, só registra o que chegar.</p>
+           <button type="button" class="btn-secundario mini" id="pia-retomar">▶️ Reativar IA</button>`
+        : `<p class="texto-dim2" style="font-size:12px;margin:8px 0;">
+             Deu errado com esse contato? Pausa a IA aqui — ela para de responder, mas continua registrando
+             o que chegar, pra ficar só com atendimento humano.</p>
+           <button type="button" class="btn-secundario mini" id="pia-pausar">⏸ Pausar IA</button>`}
+    </div>`
+  const btnPausar = container.querySelector('#pia-pausar')
+  if (btnPausar) btnPausar.onclick = async () => {
+    if (!confirm('Pausar a IA nesse contato? Ela para de responder até você reativar.')) return
+    const patch = { ia_pausada: true, ia_pausada_em: new Date().toISOString(), ia_pausada_por: PERFIL.pessoaId }
+    const { error } = await db.from('leads').update(patch).eq('id', registro.id)
+    if (error) { alert('Não consegui pausar: ' + error.message); return }
+    Object.assign(registro, patch)
+    montarPausarIA(container, registro)
+  }
+  const btnRetomar = container.querySelector('#pia-retomar')
+  if (btnRetomar) btnRetomar.onclick = async () => {
+    const { error } = await db.from('leads').update({ ia_pausada: false }).eq('id', registro.id)
+    if (error) { alert('Não consegui reativar: ' + error.message); return }
+    registro.ia_pausada = false
+    montarPausarIA(container, registro)
+  }
 }
 // deixa o papel (ADMIN, GESTOR_COMERCIAL...) legível — "Gestor Comercial"
 // em vez do nome cru do banco com underline
@@ -16549,6 +16591,18 @@ function abrirRelatorioLeadSdr (lead) {
   fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
 }
 
+// Depois de criar/transferir um lead do SDR, atualiza a aba que estiver
+// aberta no momento (Funil ou Leads) — sem isso, chamar essas ações de
+// dentro do Funil quebrava tentando abrir o painel de chat, que só
+// existe na aba Leads.
+async function atualizarAposMudancaSdr (leadId) {
+  await sdrCarregarLeads()
+  const abaAtivaBtn = document.querySelector('.subabas button.ativo')
+  const sub = abaAtivaBtn?.dataset.sub || 'leads'
+  abrirSubAbaSdr(sub)
+  if (sub === 'leads' && leadId != null) setTimeout(() => selecionarLeadSdr(leadId), 200)
+}
+
 // ---- Cadastro manual de lead no SDR — pra quando alguém liga/manda
 // mensagem por fora (WhatsApp pessoal) antes do bot ter conversado ----
 function abrirNovoLeadSdr () {
@@ -16582,9 +16636,7 @@ function abrirNovoLeadSdr () {
     const { data, error } = await db.from('leads').insert({ nome: nome || null, telefone, uf: uf || null, status: 'novo' }).select('id').single()
     if (error) { aviso(error.message.includes('duplicate') ? 'Já existe um lead do SDR com esse telefone.' : error.message); return }
     fundo.remove()
-    await sdrCarregarLeads()
-    renderListaSdr()
-    selecionarLeadSdr(data.id)
+    atualizarAposMudancaSdr(data.id)
   }
 }
 
@@ -16646,6 +16698,7 @@ function abrirFichaSdr (lead) {
     </div>
 
     <div id="sf-bomdia"></div>
+    <div id="sf-pausar-ia"></div>
 
     <div class="acoes" style="margin-top:14px;">
       <button class="btn" id="sf-salvar">Salvar</button>
@@ -16784,6 +16837,7 @@ function abrirFichaSdr (lead) {
   }
 
   montarBomDia(fundo.querySelector('#sf-bomdia'), 'sf', 'leads', lead)
+  montarPausarIA(fundo.querySelector('#sf-pausar-ia'), lead)
 
   const btnTransferir = fundo.querySelector('#sf-transferir')
   if (btnTransferir) btnTransferir.onclick = () => abrirTransferirLeadSdr(lead)
@@ -16826,11 +16880,8 @@ async function abrirTransferirLeadSdr (lead) {
     btn.disabled = true; btn.textContent = 'Transferindo...'
     const ok = await executarTransferenciaSdr(lead, vendedorId)
     if (!ok) { btn.disabled = false; btn.textContent = 'Confirmar transferência'; return }
-    fundo.remove()
-    document.querySelectorAll('.modal-fundo').forEach(m => m.remove()) // fecha também a ficha, se estava aberta
-    await sdrCarregarLeads()
-    renderListaSdr()
-    selecionarLeadSdr(lead.id)
+    document.querySelectorAll('.modal-fundo').forEach(m => m.remove()) // fecha o picker e a ficha, se estava aberta
+    atualizarAposMudancaSdr(lead.id)
   }
 }
 
@@ -16974,12 +17025,13 @@ async function sdrAbaFunil (alvo) {
 
   const cartao = l => {
     const iniciais = (l.nome || l.telefone || '?').trim().split(/\s+/).slice(0, 2).map(p => p[0]).join('').toUpperCase()
-    return `<div class="sdr-kanban-card" data-lead-sdr="${l.id}" draggable="true">
+    return `<div class="sdr-kanban-card${l.ia_pausada ? ' pausado' : ''}" data-lead-sdr="${l.id}" draggable="true">
       <div class="sdr-kc-topo">
         <div style="display:flex;gap:8px;align-items:center;min-width:0;">
           ${avatarHtml(null, l.nome || l.telefone, 26)}
           <span class="sdr-kc-nome">${esc(l.nome || l.telefone)}</span>
         </div>
+        ${l.ia_pausada ? `<span class="chip" title="IA pausada nesse contato" style="background:rgba(var(--critico-rgb),.18);color:var(--critico-text);border:none;">⏸ IA pausada</span>` : ''}
         ${l.perfil_disc ? `<span class="sdr-kc-disc" title="Perfil DISC inferido pela IA">${esc(l.perfil_disc)}</span>` : ''}
       </div>
       <div class="sdr-kc-campos">
@@ -16999,9 +17051,13 @@ async function sdrAbaFunil (alvo) {
   }
 
   alvo.innerHTML = `
-    <p class="texto-dim2" style="margin-bottom:12px;font-size:12.5px;">
-      A IA atualiza o status automaticamente conforme a conversa. Você também pode arrastar entre colunas.
-    </p>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
+      <p class="texto-dim2" style="margin:0;font-size:12.5px;">
+        A IA atualiza o status automaticamente conforme a conversa. Você também pode arrastar entre colunas
+        ou clicar num card pra abrir a ficha completa.
+      </p>
+      <button class="btn-secundario mini" id="sdr-funil-novo-lead" style="flex:none;">+ Novo lead</button>
+    </div>
     <div class="crm-board" style="grid-template-columns:repeat(${STATUS_LEAD_SDR.length},minmax(220px,1fr));">
       ${STATUS_LEAD_SDR.map(st => {
         const desta = lista.filter(l => (l.status || 'novo') === st)
@@ -17014,6 +17070,8 @@ async function sdrAbaFunil (alvo) {
       }).join('')}
     </div>`
 
+  $('#sdr-funil-novo-lead').onclick = () => abrirNovoLeadSdr()
+
   alvo.querySelectorAll('[data-lead-sdr]').forEach(el => {
     el.ondragstart = e => {
       SDR_ARRASTANDO = el.dataset.leadSdr
@@ -17021,6 +17079,10 @@ async function sdrAbaFunil (alvo) {
       el.style.opacity = '.4'
     }
     el.ondragend = () => { el.style.opacity = '1'; SDR_ARRASTANDO = null }
+    el.onclick = () => {
+      const lead = SDR_CACHE.leads.find(l => String(l.id) === el.dataset.leadSdr)
+      if (lead) abrirFichaSdr(lead)
+    }
   })
 
   alvo.querySelectorAll('[data-ver-relatorio]').forEach(btn => {
