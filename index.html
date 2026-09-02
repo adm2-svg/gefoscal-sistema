@@ -27029,7 +27029,7 @@ function nomeProcessoFrota (proc) {
 // ----- Frota › Painel -----
 async function frotaPainel (alvo, editavel) {
   const [{ data: veiculos }, { data: acoes }] = await Promise.all([
-    db.from('veiculo').select('id,descricao,status_frota,eh_proprio,valor_entrada'),
+    db.from('veiculo').select('id,descricao,status_frota,eh_proprio,valor_entrada').eq('oculto', false),
     db.from('frota_acao').select('id,descricao,categoria,sla_prazo,lembrete_data,lembrete_visto,status,veiculo:veiculo_id(descricao),fornecedor:fornecedor_id(nome)')
       .eq('lembrete_visto', false).lte('lembrete_data', hojeISO()).eq('status', 'ABERTA').order('lembrete_data')
   ])
@@ -27123,8 +27123,8 @@ async function frotaItens (alvo, editavel) {
   if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
 
   const lista = data || []
-  const disponiveis = lista.filter(i => i.status_frota === 'DISPONIVEL_VENDA')
-  const vendidos = lista.filter(i => i.status_frota === 'VENDIDO')
+  const disponiveis = lista.filter(i => i.status_frota === 'DISPONIVEL_VENDA' && !i.oculto)
+  const vendidos = lista.filter(i => i.status_frota === 'VENDIDO' && !i.oculto)
   const valorDisponivel = disponiveis.reduce((s, i) => s + Number(i.valor_entrada || 0), 0)
   const resultadoAcumulado = vendidos.reduce((s, i) => { const r = resultadoFrota(i, custosDoc, custosManut, custosComb, custosPecas); return s + (r ? r.liquido : 0) }, 0)
 
