@@ -1368,6 +1368,97 @@ const fmtData = d => d ? d.split('-').reverse().join('/') : '—'
 const fmtQuando = t => t ? new Date(t).toLocaleDateString('pt-BR') : null
 const esc = t => String(t ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
 const iniciais = n => String(n ?? '').split(' ').filter(Boolean).slice(0, 2).map(x => x[0]).join('').toUpperCase()
+
+// ---------------------------------------------------------------
+// Estratégia do Bom Dia — mensagem sem resposta? avisa 3 dias úteis
+// depois, no turno oposto, pra mandar só um "bom dia"/"boa tarde".
+// Exceção: se o 3º dia útil cair numa sexta, pula pro próximo dia
+// útil (segunda), já que sexta não é um bom dia pra retomar contato.
+// Só considera sábado/domingo como não-úteis (sem feriado, por ora).
+// ---------------------------------------------------------------
+const ROTULO_TURNO = { manha: 'manhã', tarde: 'tarde' }
+const ROTULO_RESULTADO_INTERACAO = { sem_resposta: 'Sem resposta', respondeu: 'Respondeu', agendou: 'Agendou', outro: 'Outro' }
+function turnoAtual () { return new Date().getHours() < 12 ? 'manha' : 'tarde' }
+function calcularAvisoBomDia (dataOrigemStr, turnoOrigem) {
+  const turnoAviso = turnoOrigem === 'manha' ? 'tarde' : 'manha'
+  const d = new Date(`${dataOrigemStr}T12:00:00`)
+  let uteis = 0
+  while (uteis < 3) {
+    d.setDate(d.getDate() + 1)
+    const dow = d.getDay()
+    if (dow !== 0 && dow !== 6) uteis++
+  }
+  if (d.getDay() === 5) { // caiu na sexta — empurra pra próximo dia útil (segunda)
+    do { d.setDate(d.getDate() + 1) } while (d.getDay() === 0 || d.getDay() === 6)
+  }
+  return { data: d.toISOString().slice(0, 10), turno: turnoAviso }
+}
+// Bloco de UI (ativar/desativar + status) reaproveitado no Lead do CRM e
+// no Lead do SDR — só muda a tabela e o id. Ativar já calcula e grava a
+// data/turno do aviso; o botão de desativar só zera a flag.
+function blocoBomDia (registro, prefixoId) {
+  const ativo = !!registro?.bom_dia_ativo
+  const avisoFmt = registro?.bom_dia_aviso_data ? fmtData(registro.bom_dia_aviso_data) : null
+  return `
+    <div class="caixa-texto" style="margin-top:10px;">
+      <div class="rot">☀️ Estratégia do Bom Dia</div>
+      ${ativo
+        ? `<p style="font-size:12.5px;margin:8px 0;">Ativa — aviso agendado pra <b>${esc(avisoFmt)}</b>,
+             na parte da <b>${ROTULO_TURNO[registro.bom_dia_turno_aviso] || registro.bom_dia_turno_aviso}</b>.</p>
+           <button type="button" class="btn-secundario mini" id="${prefixoId}-bd-desativar">Desativar</button>`
+        : `<p class="texto-dim2" style="font-size:12px;margin:8px 0;">
+             Mandou mensagem e não teve resposta? Ativa aqui — o sistema avisa 3 dias úteis depois,
+             no turno oposto, pra você só mandar um "bom dia"/"boa tarde".</p>
+           <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;">
+             <div class="campo" style="width:150px;margin:0;"><label style="font-size:11px;">Data da mensagem</label>
+               <input type="date" id="${prefixoId}-bd-data" value="${new Date().toISOString().slice(0, 10)}"></div>
+             <div class="campo" style="width:120px;margin:0;"><label style="font-size:11px;">Turno</label>
+               <select id="${prefixoId}-bd-turno">
+                 <option value="manha" ${turnoAtual() === 'manha' ? 'selected' : ''}>Manhã</option>
+                 <option value="tarde" ${turnoAtual() === 'tarde' ? 'selected' : ''}>Tarde</option>
+               </select></div>
+             <button type="button" class="btn-secundario mini" id="${prefixoId}-bd-ativar">Ativar</button>
+           </div>`}
+    </div>`
+}
+// Monta + liga + auto-atualiza o bloco do Bom Dia dentro de "container".
+// "registro" é o objeto do lead (CRM ou SDR) já carregado em memória — é
+// mutado in-place a cada ativar/desativar, pra ficha inteira ver o estado
+// novo sem precisar recarregar tudo. "tabela" é 'lead' ou 'leads'.
+function montarBomDia (container, prefixoId, tabela, registro) {
+  container.innerHTML = blocoBomDia(registro, prefixoId)
+  const btnAtivar = container.querySelector(`#${prefixoId}-bd-ativar`)
+  if (btnAtivar) btnAtivar.onclick = async () => {
+    const dataOrigem = container.querySelector(`#${prefixoId}-bd-data`).value
+    const turnoOrigem = container.querySelector(`#${prefixoId}-bd-turno`).value
+    if (!dataOrigem) { alert('Informe a data da mensagem.'); return }
+    const aviso = calcularAvisoBomDia(dataOrigem, turnoOrigem)
+    const patch = {
+      bom_dia_ativo: true, bom_dia_origem_data: dataOrigem, bom_dia_turno_origem: turnoOrigem,
+      bom_dia_aviso_data: aviso.data, bom_dia_turno_aviso: aviso.turno, bom_dia_criado_por: PERFIL.pessoaId
+    }
+    const { error } = await db.from(tabela).update(patch).eq('id', registro.id)
+    if (error) { alert('Não consegui ativar: ' + error.message); return }
+    Object.assign(registro, patch)
+    montarBomDia(container, prefixoId, tabela, registro)
+  }
+  const btnDesativar = container.querySelector(`#${prefixoId}-bd-desativar`)
+  if (btnDesativar) btnDesativar.onclick = async () => {
+    const { error } = await db.from(tabela).update({ bom_dia_ativo: false }).eq('id', registro.id)
+    if (error) { alert('Não consegui desativar: ' + error.message); return }
+    registro.bom_dia_ativo = false
+    montarBomDia(container, prefixoId, tabela, registro)
+  }
+}
+// selo pro card do kanban (CRM ou SDR) — só aparece se ativo e o dia do
+// aviso já chegou (a notificação de verdade quem dispara é o job diário
+// no banco; isso aqui é só o lembrete visual no card)
+function seloBomDia (registro) {
+  if (!registro?.bom_dia_ativo || !registro?.bom_dia_aviso_data) return ''
+  if (registro.bom_dia_aviso_data > new Date().toISOString().slice(0, 10)) return ''
+  const turno = ROTULO_TURNO[registro.bom_dia_turno_aviso] || registro.bom_dia_turno_aviso
+  return `<span class="chip" title="Estratégia do Bom Dia" style="background:rgba(var(--rust-rgb),.16);color:var(--rust);border:none;">☀️ bom dia hoje (${esc(turno)})</span>`
+}
 // deixa o papel (ADMIN, GESTOR_COMERCIAL...) legível — "Gestor Comercial"
 // em vez do nome cru do banco com underline
 const formatarPapel = p => String(p ?? '').toLowerCase().replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
@@ -12290,6 +12381,7 @@ function abrirCrm (sub, editavel, gerencia) {
 const selLead = `
   id, nome, cliente_id, vendedor_id, origem, uf, municipio, telefone, email,
   etapa, valor_estimado, observacoes, criado_em, atualizado_em, atribuido_por_id, atribuido_em, arquivado,
+  bom_dia_ativo, bom_dia_origem_data, bom_dia_turno_origem, bom_dia_aviso_data, bom_dia_turno_aviso, bom_dia_criado_por,
   vendedor:vendedor_id ( nome ), cliente:cliente_id ( razao_social, nome_fantasia ),
   atribuidoPor:atribuido_por_id ( nome )`
 
@@ -13725,6 +13817,53 @@ async function popularMunicipios (selectEl, uf, atual) {
   selectEl.disabled = false
 }
 
+// Quando o lead do CRM veio do SDR IA (origem = whatsapp_sdr), mostra aqui
+// dentro do formLead um resumo somente-leitura do que a IA já levantou +
+// o histórico de contato manual + a conversa — pra quem recebeu o lead
+// (via Transferir) não perder contexto nenhum.
+async function carregarHistoricoSdrNoLead (fundo, l) {
+  const alvo = fundo.querySelector('#ld-sdr-historico')
+  if (!alvo) return
+  const { data: sdr } = await db.from('leads').select('*').or(`lead_crm_id.eq.${l.id},telefone.eq.${l.telefone}`).maybeSingle()
+  if (!sdr) return
+
+  const [{ data: interacoes }, { data: mensagens }] = await Promise.all([
+    db.from('leads_interacao').select('*').eq('lead_id', sdr.id).order('data_hora', { ascending: false }),
+    db.from('mensagens').select('*').eq('telefone', sdr.telefone).order('created_at', { ascending: true })
+  ])
+
+  alvo.innerHTML = `
+    <div class="caixa-texto" style="margin-top:10px;">
+      <div class="rot">🤖 Histórico do SDR IA</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;font-size:12.5px;margin:8px 0;">
+        <div><span class="texto-dim2">Cultura:</span> ${esc(sdr.cultura || '—')}</div>
+        <div><span class="texto-dim2">Volume:</span> ${esc(sdr.volume_producao || '—')}</div>
+        <div><span class="texto-dim2">Fornecedor atual:</span> ${esc(sdr.fornecedor_atual || '—')}</div>
+        <div><span class="texto-dim2">Perfil DISC:</span> ${esc(sdr.perfil_disc ? `${sdr.perfil_disc} — ${ROTULO_DISC[sdr.perfil_disc] || ''}` : '—')}</div>
+        <div style="grid-column:1/-1;"><span class="texto-dim2">Momento de compra:</span> ${esc(sdr.momento_compra || '—')}</div>
+      </div>
+      ${interacoes?.length ? `
+        <div class="rot" style="margin-top:10px;">Tentativas de contato registradas</div>
+        <div style="margin-top:6px;display:grid;gap:5px;">
+          ${interacoes.map(i => `<div style="font-size:12px;">
+            <b>${fmtQuando(i.data_hora)}</b> (${ROTULO_TURNO[i.turno] || i.turno}) — ${esc(ROTULO_RESULTADO_INTERACAO[i.resultado] || i.resultado || 'sem resultado registrado')}
+            ${i.observacao ? `<br><span class="texto-dim2">${esc(i.observacao)}</span>` : ''}
+          </div>`).join('')}
+        </div>` : ''}
+      ${mensagens?.length ? `
+        <details style="margin-top:10px;">
+          <summary style="cursor:pointer;font-size:12.5px;color:var(--dim);">Ver conversa (${mensagens.length} mensagens)</summary>
+          <div style="max-height:260px;overflow-y:auto;margin-top:8px;display:flex;flex-direction:column;gap:6px;">
+            ${mensagens.map(m => `<div style="display:flex;justify-content:${m.papel === 'assistant' ? 'flex-end' : 'flex-start'};">
+              <div style="max-width:80%;padding:6px 10px;border-radius:10px;font-size:12px;line-height:1.4;
+                ${m.papel === 'assistant' ? 'background:var(--rust);color:#fff;' : 'background:var(--surface2);border:1px solid var(--line2);'}">
+                ${esc(m.conteudo).replace(/\n/g, '<br>')}
+              </div></div>`).join('')}
+          </div>
+        </details>` : ''}
+    </div>`
+}
+
 function formLead (l, editavel, gerencia, aoFechar) {
   const podeReatribuir = editavel && gerencia // trocar o vendedor é ação de quem gerencia
   const podeExcluir = editavel && gerencia && l
@@ -13772,6 +13911,8 @@ function formLead (l, editavel, gerencia, aoFechar) {
         <button type="button" class="btn-secundario mini" id="ld-obs-padronizar">✨ Padronizar com IA</button>
       </div>` : ''}
       <textarea id="ld-obs" style="min-height:260px;font-size:14.5px;line-height:1.5;" ${editavel ? '' : 'disabled'}>${esc(l?.observacoes ?? '')}</textarea></div>
+    ${l ? `<div id="ld-sdr-historico"></div>` : ''}
+    ${l ? `<div id="ld-bomdia"></div>` : ''}
     ${l ? `<div class="cabeca-secao" style="margin-top:16px;margin-bottom:4px;">
         <h3 style="font-family:var(--serif);font-size:14px;">Agenda</h3></div>
       <div id="ld-agenda-lista" style="margin-bottom:8px;"><p class="texto-dim2" style="font-size:12px;">carregando agenda...</p></div>
@@ -13866,6 +14007,8 @@ function formLead (l, editavel, gerencia, aoFechar) {
   }
 
   if (l) carregarAgendaLead(fundo, l, editavel)
+  if (l) montarBomDia(fundo.querySelector('#ld-bomdia'), 'ld', 'lead', l)
+  if (l && l.origem === 'whatsapp_sdr' && l.telefone) carregarHistoricoSdrNoLead(fundo, l)
   let propostaCarregada = l && l.etapa === 'PROPOSTA'
   if (propostaCarregada) carregarPropostaLead(fundo, l, editavel)
 
@@ -14034,6 +14177,7 @@ function renderFunilGestao (alvo, lista, editavel, aoMudar, gerencia = true) {
         ${alertaTxt ? `<div class="alerta-txt ${alerta}"><span class="ic">⏱</span>${esc(alertaTxt)}</div>` : ''}
         ${l.cliente_id ? `<div><span class="ic">✔</span>Convertido em cliente</div>` : ''}
       </div>
+      ${seloBomDia(l) ? `<div style="margin-top:7px;">${seloBomDia(l)}</div>` : ''}
       <div class="rodape">
         <span class="data">${fmtData((l.criado_em || '').slice(0, 10))}</span>
         <button type="button" class="btn-agendar" data-agendar="${l.id}" onclick="event.stopPropagation()">📅 Agendar</button>
@@ -16215,13 +16359,15 @@ function renderListaSdr () {
   if (!SDR_CACHE.leads.length) { lista.innerHTML = `<p class="texto-dim2" style="padding:14px;">Nenhum lead ainda.</p>`; return }
 
   lista.innerHTML = `
-    <div style="padding:12px 14px;border-bottom:1px solid var(--line2);background:var(--panel);">
-      <input id="sdr-busca-lead" placeholder="Buscar por nome ou telefone..." style="width:100%;font-size:13px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface2);color:var(--txt);">
+    <div style="padding:12px 14px;border-bottom:1px solid var(--line2);background:var(--panel);display:flex;gap:8px;">
+      <input id="sdr-busca-lead" placeholder="Buscar por nome ou telefone..." style="flex:1;min-width:0;font-size:13px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface2);color:var(--txt);">
+      <button class="btn-secundario mini" id="sdr-btn-novo-lead" title="Cadastrar contato feito por fora (ligação, WhatsApp pessoal)" style="flex:none;">+ Novo</button>
     </div>
     <div id="sdr-lista-itens"></div>`
   renderItensListaSdr('')
   const busca = $('#sdr-busca-lead')
   busca.oninput = () => renderItensListaSdr(busca.value.trim().toLowerCase())
+  $('#sdr-btn-novo-lead').onclick = () => abrirNovoLeadSdr()
 }
 
 function renderItensListaSdr (filtro) {
@@ -16323,7 +16469,9 @@ function renderDetalheSdr (lead) {
         </div>
       </div>
       <div style="display:flex;gap:8px;align-items:center;flex:none;">
+        ${seloBomDia(lead)}
         <span class="${corStatusLeadSdr(lead.status)}">${esc(ROTULO_STATUS_LEAD_SDR[lead.status] || lead.status)}</span>
+        <button class="btn-secundario mini" id="sdr-btn-ficha" title="Ficha completa, histórico de contato e transferência">📇 Ficha</button>
         <button class="btn-secundario mini" id="sdr-btn-relatorio" title="Ver relatório completo da IA">⋮</button>
       </div>
     </div>
@@ -16344,6 +16492,9 @@ function renderDetalheSdr (lead) {
 
   const btnRelatorio = $('#sdr-btn-relatorio')
   if (btnRelatorio) btnRelatorio.onclick = () => abrirRelatorioLeadSdr(lead)
+
+  const btnFicha = $('#sdr-btn-ficha')
+  if (btnFicha) btnFicha.onclick = () => abrirFichaSdr(lead)
 }
 
 // ---- Relatório da IA (menu 3 pontinhos): o que ela levantou até agora, incluindo DISC ----
@@ -16396,6 +16547,345 @@ function abrirRelatorioLeadSdr (lead) {
   document.body.appendChild(fundo)
   fundo.querySelector('#rel-fechar').onclick = () => fundo.remove()
   fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+}
+
+// ---- Cadastro manual de lead no SDR — pra quando alguém liga/manda
+// mensagem por fora (WhatsApp pessoal) antes do bot ter conversado ----
+function abrirNovoLeadSdr () {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:420px;">
+    <div class="cabeca-secao"><h3>Novo lead do SDR IA</h3></div>
+    <p class="texto-dim2" style="font-size:12px;margin:-6px 0 12px;">
+      Pra registrar um contato feito por fora (ligação, WhatsApp pessoal) antes do bot ter conversado com ele.
+    </p>
+    <div class="campo"><label>Nome</label><input id="nl-nome"></div>
+    <div class="campo"><label>Telefone *</label><input id="nl-telefone" placeholder="com DDD, só números"></div>
+    <div class="campo"><label>UF</label>
+      <select id="nl-uf"><option value="">—</option>${UFS_BRASIL.map(uf => `<option value="${uf}">${uf}</option>`).join('')}</select></div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="nl-criar">Criar</button>
+      <button class="btn-secundario" id="nl-cancelar">Cancelar</button>
+    </div>
+    <div class="recado oculto" id="nl-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.querySelector('#nl-cancelar').onclick = () => fundo.remove()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+
+  const aviso = t => { const el = fundo.querySelector('#nl-recado'); el.textContent = t; el.classList.remove('oculto') }
+  fundo.querySelector('#nl-criar').onclick = async () => {
+    const nome = fundo.querySelector('#nl-nome').value.trim()
+    const telefone = fundo.querySelector('#nl-telefone').value.trim().replace(/\D/g, '')
+    const uf = fundo.querySelector('#nl-uf').value
+    if (!telefone) { aviso('Informe o telefone.'); return }
+    const { data, error } = await db.from('leads').insert({ nome: nome || null, telefone, uf: uf || null, status: 'novo' }).select('id').single()
+    if (error) { aviso(error.message.includes('duplicate') ? 'Já existe um lead do SDR com esse telefone.' : error.message); return }
+    fundo.remove()
+    await sdrCarregarLeads()
+    renderListaSdr()
+    selecionarLeadSdr(data.id)
+  }
+}
+
+// ---- Ficha completa do lead do SDR: campos do "funil normal", histórico
+// de contato manual e Estratégia do Bom Dia. Aberta pelo botão "📇 Ficha". ----
+function abrirFichaSdr (lead) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal modal-largo">
+    <div class="cabeca-secao">
+      <h3>${esc(lead.nome || lead.telefone)}</h3>
+      <span class="${corStatusLeadSdr(lead.status)}">${esc(ROTULO_STATUS_LEAD_SDR[lead.status] || lead.status)}</span>
+    </div>
+    <div class="form-grade">
+      <div class="campo"><label>Nome</label><input id="sf-nome" value="${esc(lead.nome ?? '')}"></div>
+      <div class="campo"><label>Telefone</label><input id="sf-telefone" value="${esc(lead.telefone ?? '')}"></div>
+      <div class="campo"><label>Status</label>
+        <select id="sf-status">${STATUS_LEAD_SDR.map(s => `<option value="${s}" ${s === (lead.status || 'novo') ? 'selected' : ''}>${ROTULO_STATUS_LEAD_SDR[s]}</option>`).join('')}</select></div>
+      <div class="campo"><label>UF</label>
+        <select id="sf-uf"><option value="">—</option>${UFS_BRASIL.map(uf => `<option value="${uf}" ${uf === (lead.uf ?? '') ? 'selected' : ''}>${uf}</option>`).join('')}</select></div>
+      <div class="campo"><label>Município</label>
+        <select id="sf-municipio"><option value="${esc(lead.municipio ?? '')}" selected>${esc(lead.municipio || (lead.uf ? 'carregando...' : 'selecione o UF primeiro'))}</option></select></div>
+      <div class="campo"><label>E-mail</label><input id="sf-email" value="${esc(lead.email ?? '')}"></div>
+      <div class="campo"><label>Valor estimado (R$)</label><input id="sf-valor" type="number" step="0.01" value="${lead.valor_estimado ?? ''}"></div>
+    </div>
+    <div class="campo" style="margin-top:10px;">
+      <label>Observações</label>
+      <div style="display:flex;gap:6px;margin-bottom:6px;">
+        <button type="button" class="btn-secundario mini" id="sf-obs-ditar">🎙️ Ditar</button>
+        <button type="button" class="btn-secundario mini" id="sf-obs-padronizar">✨ Padronizar com IA</button>
+      </div>
+      <textarea id="sf-obs" style="min-height:140px;font-size:14.5px;line-height:1.5;">${esc(lead.observacoes ?? '')}</textarea>
+    </div>
+
+    <div class="cabeca-secao" style="margin-top:16px;margin-bottom:4px;">
+      <h3 style="font-family:var(--serif);font-size:14px;">Histórico de contato</h3></div>
+    <div id="sf-historico-lista" style="margin-bottom:10px;"><p class="texto-dim2" style="font-size:12px;">carregando...</p></div>
+    <div class="form-grade" style="grid-template-columns:1fr 1fr 1.2fr;align-items:end;">
+      <div class="campo"><label>Data</label><input id="sf-hist-data" type="date" value="${new Date().toISOString().slice(0, 10)}"></div>
+      <div class="campo"><label>Turno</label>
+        <select id="sf-hist-turno">
+          <option value="manha" ${turnoAtual() === 'manha' ? 'selected' : ''}>Manhã</option>
+          <option value="tarde" ${turnoAtual() === 'tarde' ? 'selected' : ''}>Tarde</option>
+        </select></div>
+      <div class="campo"><label>Resultado</label>
+        <select id="sf-hist-resultado">
+          <option value="sem_resposta">Sem resposta</option>
+          <option value="respondeu">Respondeu</option>
+          <option value="agendou">Agendou</option>
+          <option value="outro">Outro</option>
+        </select></div>
+    </div>
+    <div class="campo"><label>Observação (opcional)</label><input id="sf-hist-obs" placeholder="o que foi dito, resultado da ligação..."></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:6px;flex-wrap:wrap;">
+      <label style="font-size:12px;display:flex;gap:6px;align-items:center;">
+        <input type="checkbox" id="sf-hist-bomdia"> já ativar a Estratégia do Bom Dia com essa data/turno
+      </label>
+      <button class="btn-secundario mini" id="sf-hist-add" type="button">Registrar contato</button>
+    </div>
+
+    <div id="sf-bomdia"></div>
+
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="sf-salvar">Salvar</button>
+      ${souGerenciaCrm() ? `<button class="btn-secundario" id="sf-transferir">Transferir pra vendedor</button>` : ''}
+      <button class="btn-secundario" id="sf-fechar">Fechar</button>
+    </div>
+    <div class="recado oculto" id="sf-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#sf-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const selUf = fundo.querySelector('#sf-uf')
+  const selMun = fundo.querySelector('#sf-municipio')
+  popularMunicipios(selMun, lead.uf ?? '', lead.municipio ?? '')
+  selUf.addEventListener('change', () => popularMunicipios(selMun, selUf.value, ''))
+
+  // Ditar por voz e Padronizar com IA — mesmo padrão já usado no formLead do CRM
+  const obsTextarea = fundo.querySelector('#sf-obs')
+  const btnDitar = fundo.querySelector('#sf-obs-ditar')
+  const btnPad = fundo.querySelector('#sf-obs-padronizar')
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition
+  if (!SR) {
+    btnDitar.disabled = true
+    btnDitar.title = 'Seu navegador não suporta ditado por voz — funciona no Chrome ou Edge.'
+  } else {
+    let gravando = false, reconhecedor = null
+    btnDitar.onclick = () => {
+      if (gravando) { reconhecedor?.stop(); return }
+      reconhecedor = new SR()
+      reconhecedor.lang = 'pt-BR'
+      reconhecedor.interimResults = false
+      reconhecedor.continuous = true
+      reconhecedor.onresult = e => {
+        let novo = ''
+        for (let i = e.resultIndex; i < e.results.length; i++) novo += e.results[i][0].transcript
+        if (novo.trim()) obsTextarea.value = obsTextarea.value.trim() ? obsTextarea.value.trim() + ' ' + novo.trim() : novo.trim()
+      }
+      const parar = () => { gravando = false; btnDitar.textContent = '🎙️ Ditar'; btnDitar.classList.remove('gravando-voz') }
+      reconhecedor.onend = parar
+      reconhecedor.onerror = parar
+      reconhecedor.start()
+      gravando = true
+      btnDitar.textContent = '⏹ Parar'
+      btnDitar.classList.add('gravando-voz')
+    }
+  }
+  btnPad.onclick = async () => {
+    const textoAtual = obsTextarea.value.trim()
+    if (!textoAtual) { alert('Escreva ou dite alguma observação primeiro.'); return }
+    btnPad.disabled = true; btnPad.textContent = 'Padronizando...'
+    const instrucao = 'Reescreva esta observação de CRM de forma objetiva e padronizada: o que foi feito ou conversado, o resultado, e o próximo passo (se houver). Só as informações relevantes, sem redundância, português direto, sem saudação nem assinatura.'
+    const { data, error } = await db.functions.invoke('ia-melhorar-texto', { body: { texto: textoAtual, instrucao } })
+    btnPad.disabled = false; btnPad.textContent = '✨ Padronizar com IA'
+    if (error || data?.erro) {
+      let msg = data?.erro || error?.message || 'Não consegui padronizar agora.'
+      if (error?.context?.json) { try { const c = await error.context.json(); msg = c?.erro || msg } catch {} }
+      alert(msg)
+      return
+    }
+    obsTextarea.value = data.texto
+  }
+
+  const aviso = (t, ok = false) => {
+    const el = fundo.querySelector('#sf-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = ok ? 'var(--good-text)' : 'var(--warn-text)'
+    el.style.color = ok ? 'var(--good-text)' : 'var(--warn-text)'
+  }
+
+  fundo.querySelector('#sf-salvar').onclick = async () => {
+    const nome = fundo.querySelector('#sf-nome').value.trim()
+    const telefone = fundo.querySelector('#sf-telefone').value.trim()
+    if (!nome && !telefone) { aviso('Preencha nome ou telefone.'); return }
+    const corpo = {
+      nome: nome || null, telefone: telefone || lead.telefone,
+      status: fundo.querySelector('#sf-status').value,
+      uf: fundo.querySelector('#sf-uf').value.trim().toUpperCase() || null,
+      municipio: fundo.querySelector('#sf-municipio').value.trim() || null,
+      email: fundo.querySelector('#sf-email').value.trim() || null,
+      valor_estimado: fundo.querySelector('#sf-valor').value || null,
+      observacoes: fundo.querySelector('#sf-obs').value.trim() || null,
+      updated_at: new Date().toISOString()
+    }
+    const { error } = await db.from('leads').update(corpo).eq('id', lead.id)
+    if (error) { aviso(error.message); return }
+    Object.assign(lead, corpo)
+    const idx = SDR_CACHE.leads.findIndex(l => l.id === lead.id)
+    if (idx >= 0) Object.assign(SDR_CACHE.leads[idx], corpo)
+    aviso('Salvo!', true)
+    renderListaSdr()
+    renderDetalheSdr(lead)
+  }
+
+  async function carregarHistoricoContatoSdr () {
+    const { data } = await db.from('leads_interacao').select('*, criadoPor:criado_por(nome)').eq('lead_id', lead.id).order('data_hora', { ascending: false })
+    const alvoHist = fundo.querySelector('#sf-historico-lista')
+    if (!alvoHist) return
+    if (!data?.length) { alvoHist.innerHTML = `<p class="texto-dim2" style="font-size:12px;">Nenhum contato registrado ainda.</p>`; return }
+    alvoHist.innerHTML = data.map(i => `<div style="font-size:12px;padding:6px 0;border-bottom:1px solid var(--line2);">
+      <b>${fmtQuando(i.data_hora)}</b> (${ROTULO_TURNO[i.turno] || i.turno}) — ${esc(ROTULO_RESULTADO_INTERACAO[i.resultado] || i.resultado || '—')}
+      ${i.criadoPor?.nome ? `<span class="texto-dim2"> · ${esc(i.criadoPor.nome)}</span>` : ''}
+      ${i.observacao ? `<div class="texto-dim2" style="margin-top:2px;">${esc(i.observacao)}</div>` : ''}
+    </div>`).join('')
+  }
+  carregarHistoricoContatoSdr()
+
+  fundo.querySelector('#sf-hist-add').onclick = async () => {
+    const dataHist = fundo.querySelector('#sf-hist-data').value
+    const turnoHist = fundo.querySelector('#sf-hist-turno').value
+    const resultadoHist = fundo.querySelector('#sf-hist-resultado').value
+    const obsHist = fundo.querySelector('#sf-hist-obs').value.trim()
+    if (!dataHist) { alert('Informe a data do contato.'); return }
+    const { error } = await db.from('leads_interacao').insert({
+      lead_id: lead.id, data_hora: new Date(`${dataHist}T12:00:00`).toISOString(),
+      turno: turnoHist, resultado: resultadoHist, observacao: obsHist || null,
+      canal: 'whatsapp pessoal', criado_por: PERFIL.pessoaId
+    })
+    if (error) { alert('Não consegui registrar: ' + error.message); return }
+
+    if (fundo.querySelector('#sf-hist-bomdia').checked) {
+      const avisoCalc = calcularAvisoBomDia(dataHist, turnoHist)
+      const patch = {
+        bom_dia_ativo: true, bom_dia_origem_data: dataHist, bom_dia_turno_origem: turnoHist,
+        bom_dia_aviso_data: avisoCalc.data, bom_dia_turno_aviso: avisoCalc.turno, bom_dia_criado_por: PERFIL.pessoaId
+      }
+      const { error: erroBd } = await db.from('leads').update(patch).eq('id', lead.id)
+      if (!erroBd) {
+        Object.assign(lead, patch)
+        montarBomDia(fundo.querySelector('#sf-bomdia'), 'sf', 'leads', lead)
+      }
+    }
+    fundo.querySelector('#sf-hist-obs').value = ''
+    fundo.querySelector('#sf-hist-bomdia').checked = false
+    carregarHistoricoContatoSdr()
+  }
+
+  montarBomDia(fundo.querySelector('#sf-bomdia'), 'sf', 'leads', lead)
+
+  const btnTransferir = fundo.querySelector('#sf-transferir')
+  if (btnTransferir) btnTransferir.onclick = () => abrirTransferirLeadSdr(lead)
+}
+
+// ---- Transferir: só pra gestor/diretoria, em qualquer status do funil do
+// SDR, escolhendo qualquer vendedor (não só por UF) — separado do "Enviar
+// pra consultor" automático, que continua existindo do jeito que estava. ----
+async function abrirTransferirLeadSdr (lead) {
+  const { data: pessoas } = await db.from('pessoa').select('id,nome,eh_vendedor').eq('status', 'ATIVO').order('nome')
+  let vendedores = (pessoas || []).filter(p => p.eh_vendedor)
+  if (!vendedores.length) vendedores = pessoas || []
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:420px;">
+    <div class="cabeca-secao"><h3>Transferir lead</h3></div>
+    <p class="texto-dim2" style="font-size:12px;margin:-6px 0 12px;">
+      ${esc(lead.nome || lead.telefone)} vai pro funil do CRM normal com você escolhendo o vendedor,
+      já levando o histórico do SDR IA (dados levantados + tentativas de contato) junto.
+      ${lead.lead_crm_id ? ' Esse lead já tinha sido enviado antes — isso só reatribui pra outra pessoa.' : ''}
+    </p>
+    <div class="campo"><label>Vendedor</label>
+      <select id="tf-vendedor">${vendedores.map(v => `<option value="${v.id}">${esc(v.nome)}</option>`).join('')}</select>
+    </div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="tf-confirmar">Confirmar transferência</button>
+      <button class="btn-secundario" id="tf-cancelar">Cancelar</button>
+    </div>
+    <div class="recado oculto" id="tf-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.querySelector('#tf-cancelar').onclick = () => fundo.remove()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+
+  fundo.querySelector('#tf-confirmar').onclick = async () => {
+    const vendedorId = fundo.querySelector('#tf-vendedor').value
+    if (!vendedorId) return
+    const btn = fundo.querySelector('#tf-confirmar')
+    btn.disabled = true; btn.textContent = 'Transferindo...'
+    const ok = await executarTransferenciaSdr(lead, vendedorId)
+    if (!ok) { btn.disabled = false; btn.textContent = 'Confirmar transferência'; return }
+    fundo.remove()
+    document.querySelectorAll('.modal-fundo').forEach(m => m.remove()) // fecha também a ficha, se estava aberta
+    await sdrCarregarLeads()
+    renderListaSdr()
+    selecionarLeadSdr(lead.id)
+  }
+}
+
+async function executarTransferenciaSdr (lead, vendedorId) {
+  const [{ data: interacoes }, { data: mensagensLead }] = await Promise.all([
+    db.from('leads_interacao').select('*').eq('lead_id', lead.id).order('data_hora', { ascending: true }),
+    db.from('mensagens').select('id').eq('telefone', lead.telefone)
+  ])
+  const resumoInteracoes = (interacoes || []).map(i =>
+    `- ${fmtQuando(i.data_hora)} (${ROTULO_TURNO[i.turno] || i.turno}): ${ROTULO_RESULTADO_INTERACAO[i.resultado] || i.resultado || 'sem resultado'}${i.observacao ? ' — ' + i.observacao : ''}`
+  ).join('\n')
+  const observ = [
+    lead.cultura ? `Cultura: ${lead.cultura}` : null,
+    lead.volume_producao ? `Volume: ${lead.volume_producao}` : null,
+    lead.fornecedor_atual ? `Fornecedor atual: ${lead.fornecedor_atual}` : null,
+    lead.momento_compra ? `Momento de compra: ${lead.momento_compra}` : null,
+    lead.perfil_disc ? `Perfil DISC: ${lead.perfil_disc} (${ROTULO_DISC[lead.perfil_disc] || ''}) — ${lead.perfil_disc_analise || ''}` : null,
+    lead.observacoes || null,
+    resumoInteracoes ? `Histórico de contato:\n${resumoInteracoes}` : null,
+    `(${mensagensLead?.length || 0} mensagens trocadas com o SDR IA — abra este lead pra ver o histórico completo)`,
+    '(lead originado do SDR de WhatsApp)'
+  ].filter(Boolean).join('\n')
+
+  if (lead.lead_crm_id) {
+    const { error } = await db.from('lead').update({ vendedor_id: vendedorId, atualizado_em: new Date().toISOString() }).eq('id', lead.lead_crm_id)
+    if (error) { alert('Não consegui transferir: ' + error.message); return false }
+    await db.from('lead_historico').insert({
+      lead_id: lead.lead_crm_id, pessoa_id: PERFIL.pessoaId, observacao: 'Reatribuído via Transferir do SDR IA'
+    })
+  } else {
+    const { data: novoLead, error } = await db.from('lead').insert({
+      nome: lead.nome || lead.telefone, telefone: lead.telefone, email: lead.email,
+      uf: lead.uf, municipio: lead.municipio, valor_estimado: lead.valor_estimado,
+      origem: 'whatsapp_sdr', etapa: 'NOVO', vendedor_id: vendedorId,
+      observacoes: observ, atribuido_por_id: PERFIL.pessoaId, atribuido_em: new Date().toISOString()
+    }).select('id').single()
+    if (error) { alert('Não consegui transferir: ' + error.message); return false }
+    await db.from('leads').update({
+      lead_crm_id: novoLead.id, enviado_para_consultor: true,
+      enviado_em: new Date().toISOString(), enviado_por: PERFIL.pessoaId
+    }).eq('id', lead.id)
+    await db.from('lead_historico').insert({
+      lead_id: novoLead.id, etapa_para: 'NOVO', pessoa_id: PERFIL.pessoaId, observacao: 'Transferido do SDR IA'
+    })
+    lead.lead_crm_id = novoLead.id
+    lead.enviado_para_consultor = true
+  }
+
+  await db.from('notificacao_pessoal').insert({
+    destinatario_id: vendedorId,
+    titulo: 'Lead transferido do SDR IA',
+    mensagem: `${lead.nome || lead.telefone} (${lead.telefone}) foi transferido pra você, já com o histórico do SDR IA.`,
+    entidade: 'lead_whatsapp', lida: false
+  })
+  return true
 }
 
 async function enviarLeadParaConsultor (lead) {
@@ -16496,6 +16986,7 @@ async function sdrAbaFunil (alvo) {
         <div><span class="rot">Cultura</span><span class="val">${esc(l.cultura || '—')}</span></div>
         <div><span class="rot">Volume</span><span class="val">${esc(l.volume_producao || '—')}</span></div>
       </div>
+      ${seloBomDia(l) ? `<div style="margin-top:6px;">${seloBomDia(l)}</div>` : ''}
       <div class="sdr-kc-acoes">
         <a href="https://wa.me/${esc((l.telefone || '').replace(/\D/g, ''))}" target="_blank" rel="noopener"
            onclick="event.stopPropagation()" title="Chamar no WhatsApp">📞</a>
