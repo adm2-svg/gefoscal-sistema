@@ -16,7 +16,7 @@
 <link rel="icon" href="icon-192.png">
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400..700&family=Roboto:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700;900&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="skins_gefoscal.css">
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
@@ -25506,7 +25506,7 @@ async function manutLancarCorporativo (alvo, editavel, escopo) {
   alvo.innerHTML = `
     <div class="panel" style="padding:20px;max-width:640px;">
       <h3 style="font-family:var(--serif);font-size:18px;margin:0 0 4px;">Lançar manutenção</h3>
-      <p class="texto-dim2" style="font-size:12px;margin:0 0 14px;">Pra quando o carro já foi (ou está) na oficina — sem fila de programação, é só registrar.</p>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 14px;">Pra quando o carro já foi, está na oficina, ou você só quer deixar agendado — sem fila de programação, é só registrar.</p>
 
       ${chamadosAbertos.length ? `
       <div class="campo" style="margin-bottom:12px;"><label>Chamado em aberto (opcional)</label>
@@ -25524,20 +25524,21 @@ async function manutLancarCorporativo (alvo, editavel, escopo) {
           </select></div>
         <div class="campo oculto" id="mlc-campo-departamento"><label>Departamento deste veículo <span id="mlc-dep-obrigatorio" class="texto-dim2">(primeira vez — fica salvo pra próxima)</span></label>
           <select id="mlc-departamento"><option value="">Selecione...</option>${opcoesDepartamento.map(s => `<option value="${s.id}">${esc(s.nome)}</option>`).join('')}</select></div>
-        <div class="campo" style="grid-column:1/-1;"><label>O que foi feito *</label>
+        <div class="campo" style="grid-column:1/-1;"><label>Situação</label>
+          <select id="mlc-situacao">
+            <option value="ABERTA">Ainda vai levar (agendado, sem valor ainda)</option>
+            <option value="SERVICO_TERCEIRO">Em andamento (na oficina)</option>
+            <option value="CONCLUIDA" selected>Concluída</option>
+          </select></div>
+        <div class="campo" style="grid-column:1/-1;"><label id="mlc-label-feito">O que foi feito *</label>
           <textarea id="mlc-feito" style="min-height:70px;" placeholder="Ex.: troca dos 4 pneus, revisão dos 10 mil km..."></textarea></div>
         <div class="campo"><label>Oficina / mecânico</label>
           <select id="mlc-fornecedor"><option value="">selecionar da lista...</option>${MANUT_CACHE.fornecedores.map(f => `<option value="${f.id}">${esc(f.nome)}</option>`).join('')}</select></div>
         <div class="campo" style="align-self:end;"><button type="button" class="btn-secundario mini" id="mlc-fornecedor-novo">+ nova oficina</button></div>
-        <div class="campo"><label>Data *</label><input type="date" id="mlc-data" value="${hoje}"></div>
-        <div class="campo"><label>Valor (R$) *</label><input id="mlc-valor" inputmode="decimal" placeholder="0,00"></div>
+        <div class="campo"><label id="mlc-label-data">Data *</label><input type="date" id="mlc-data" value="${hoje}"></div>
+        <div class="campo"><label id="mlc-label-valor">Valor (R$) *</label><input id="mlc-valor" inputmode="decimal" placeholder="0,00"></div>
         <div class="campo" style="grid-column:1/-1;"><label>Categoria financeira</label>
           <select id="mlc-categoria"><option value="">—</option>${MANUT_CACHE.categoriasFin.filter(c => c.status !== 'INATIVO').map(c => `<option value="${c.id}" ${c.nome === 'Serviços de terceiros' ? 'selected' : ''}>${esc(c.nome)}</option>`).join('')}</select></div>
-        <div class="campo" style="grid-column:1/-1;"><label>Situação</label>
-          <select id="mlc-situacao">
-            <option value="SERVICO_TERCEIRO">Em andamento (na oficina)</option>
-            <option value="CONCLUIDA" selected>Concluída</option>
-          </select></div>
       </div>
 
       <div class="oculto" id="mlc-bloco-orcamentos" style="margin-top:12px;">
@@ -25572,6 +25573,20 @@ async function manutLancarCorporativo (alvo, editavel, escopo) {
     $('#mlc-bloco-orcamentos').classList.toggle('oculto', valor < VALOR_LIMITE_ORCAMENTO_CORPORATIVO)
   }
   $('#mlc-valor').oninput = alternarOrcamentos
+
+  // "ainda vai levar" é um agendamento — ainda não tem valor nem o que foi
+  // feito de verdade, só o que precisa ser resolvido. Os textos e a
+  // obrigatoriedade do valor mudam conforme a situação escolhida.
+  const alternarSituacao = () => {
+    const agendado = $('#mlc-situacao').value === 'ABERTA'
+    $('#mlc-label-feito').textContent = agendado ? 'O que precisa ser feito *' : 'O que foi feito *'
+    $('#mlc-feito').placeholder = agendado ? 'Ex.: revisão dos 10 mil km, trocar os 4 pneus...' : 'Ex.: troca dos 4 pneus, revisão dos 10 mil km...'
+    $('#mlc-label-data').textContent = agendado ? 'Data prevista' : 'Data *'
+    $('#mlc-label-valor').textContent = agendado ? 'Valor (R$) — se já souber' : 'Valor (R$) *'
+    $('#mlc-valor').placeholder = agendado ? 'opcional' : '0,00'
+  }
+  $('#mlc-situacao').onchange = alternarSituacao
+  alternarSituacao()
 
   // se o veículo escolhido já tem departamento corporativo marcado, esconde
   // o campo (não precisa perguntar de novo); se não tem, mostra pra marcar
@@ -25651,9 +25666,11 @@ async function manutLancarCorporativo (alvo, editavel, escopo) {
     const veiculoId = $('#mlc-veiculo').value
     const feito = $('#mlc-feito').value.trim()
     const valor = numeroBR($('#mlc-valor').value)
+    const situacao = $('#mlc-situacao').value
+    const agendado = situacao === 'ABERTA'
     if (!veiculoId) { aviso('Escolha o veículo.'); return }
-    if (!feito) { aviso('Descreva o que foi feito.'); return }
-    if (!valor) { aviso('Informe o valor.'); return }
+    if (!feito) { aviso(agendado ? 'Descreva o que precisa ser feito.' : 'Descreva o que foi feito.'); return }
+    if (!agendado && !valor) { aviso('Informe o valor.'); return }
 
     const veiculoEscolhido = MANUT_CACHE.veiculos.find(v => v.id === veiculoId)
     const jaTemDepartamento = SETORES_FROTA_CORPORATIVA.includes(veiculoEscolhido?.setor_id)
@@ -25661,7 +25678,7 @@ async function manutLancarCorporativo (alvo, editavel, escopo) {
     if (!jaTemDepartamento && !departamentoEscolhido) { aviso('Esse veículo ainda não tem departamento — escolha um (só dessa vez).'); return }
 
     let orcamentos = {}
-    if (valor >= VALOR_LIMITE_ORCAMENTO_CORPORATIVO) {
+    if (valor && valor >= VALOR_LIMITE_ORCAMENTO_CORPORATIVO) {
       const o1 = numeroBR($('#mlc-orc1-valor').value)
       const o2 = numeroBR($('#mlc-orc2-valor').value)
       if (!o1 || !o2) { aviso(`Valor acima de R$ ${fmtNum(VALOR_LIMITE_ORCAMENTO_CORPORATIVO)} exige os 2 orçamentos preenchidos.`); return }
@@ -25674,7 +25691,6 @@ async function manutLancarCorporativo (alvo, editavel, escopo) {
     }
 
     const fornecedorId = $('#mlc-fornecedor').value || null
-    const situacao = $('#mlc-situacao').value
     const dataEscolhida = $('#mlc-data').value || hoje
 
     const btn = $('#mlc-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
@@ -25691,8 +25707,10 @@ async function manutLancarCorporativo (alvo, editavel, escopo) {
     const camposComuns = {
       area: 'ADMINISTRATIVO_COMERCIAL',
       status: situacao,
+      solicitante_id: PERFIL.pessoaId,
       fornecedor_id: fornecedorId,
       diagnostico: feito,
+      data_limite: agendado ? dataEscolhida : null,
       data_conclusao: situacao === 'CONCLUIDA' ? dataEscolhida : null,
       valor_terceiros: valor,
       categoria_financeira_id: $('#mlc-categoria').value || null,
@@ -25729,7 +25747,7 @@ async function manutLancarCorporativo (alvo, editavel, escopo) {
 
     IDS_OS_FROTA_CORPORATIVA = null
     btn.disabled = false; btn.textContent = 'Lançar manutenção'
-    aviso(chamado ? 'Chamado completado.' : 'Manutenção lançada.', false)
+    aviso(chamado ? 'Chamado completado.' : agendado ? 'Agendado — vai aparecer em "Chamado em aberto" quando você voltar pra completar.' : 'Manutenção lançada.', false)
     $('#mlc-feito').value = ''; $('#mlc-valor').value = ''
     $('#mlc-orc1-valor').value = ''; $('#mlc-orc2-valor').value = ''
     alternarOrcamentos()
@@ -25909,7 +25927,8 @@ async function detalheOS (os, editavel, aoFechar, escopo) {
         <div class="form-grade">
           <div class="campo"><label>Situação</label>
             <select id="do-situacao">
-              <option value="SERVICO_TERCEIRO" ${os.status !== 'CONCLUIDA' ? 'selected' : ''}>Em andamento (na oficina)</option>
+              <option value="ABERTA" ${os.status === 'ABERTA' ? 'selected' : ''}>Ainda vai levar (agendado)</option>
+              <option value="SERVICO_TERCEIRO" ${os.status !== 'CONCLUIDA' && os.status !== 'ABERTA' ? 'selected' : ''}>Em andamento (na oficina)</option>
               <option value="CONCLUIDA" ${os.status === 'CONCLUIDA' ? 'selected' : ''}>Concluída</option>
             </select></div>
           <div class="campo"><label>Oficina / mecânico</label>
