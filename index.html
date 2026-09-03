@@ -223,10 +223,28 @@ tbody tr:hover { background: var(--hover-bg); }
 /* ---- Documento do pedido: cores fixas da marca, para sair igual no papel ---- */
 .doc { --verde:#1c5632; --verde-claro:#eef5f0; --ouro:#c8a11a; --borda:#d7e3da;
        background:#fff; color:#1b1b1b; border-radius:10px; overflow:hidden; }
-.doc-topo { background:var(--verde); color:#fff; padding:22px 26px; border-bottom:4px solid var(--ouro); }
-.doc-topo h2 { margin:0; font-size:21px; letter-spacing:.5px; font-weight:600; }
-.doc-topo .sub { font-size:12px; opacity:.85; margin-top:3px; }
-.doc-topo img { height:40px; width:auto; }
+.doc-topo { background:var(--verde); color:#fff; padding:20px 26px; border-bottom:4px solid var(--ouro);
+             display:flex; justify-content:space-between; align-items:center; gap:16px; }
+.doc-topo h2 { margin:0; font-size:23px; letter-spacing:.4px; font-weight:600; line-height:1.15; }
+.doc-topo .sub { font-size:12.5px; opacity:.8; margin-top:4px; letter-spacing:.3px; }
+.doc-topo img { height:44px; width:auto; background:#fff; border-radius:7px; padding:6px 9px; }
+.doc-topo .topo-marca { display:flex; align-items:center; gap:17px; min-width:0; }
+.doc-topo .topo-selo { border-radius:20px; padding:6px 15px; font-size:11.5px; font-weight:700;
+                       letter-spacing:.5px; white-space:nowrap; flex:none; }
+
+/* rótulo em cima / valor embaixo, alinhados em coluna — some com a
+   quebra feia que acontecia quando "Cliente: NOME" ia tudo em linha */
+.doc .kv { display:grid; grid-template-columns:auto 1fr; gap:10px 18px; align-items:baseline; }
+.doc .kv > span { font-size:10.5px; text-transform:uppercase; letter-spacing:.5px;
+                  color:#6d7c72; font-weight:700; white-space:nowrap; }
+.doc .kv > b { font-size:13.5px; color:#1b1b1b; font-weight:600; overflow-wrap:break-word; }
+
+/* 4 colunas; e-mail e endereço ocupam duas, pra não partir no meio */
+.doc .grade-info { display:grid; grid-template-columns:repeat(4,1fr); gap:11px; }
+.doc .grade-info .doc-info.largo { grid-column:span 2; }
+.doc .doc-linha.duas { align-items:start; }
+.doc .assinaturas { margin-top:14px; }
+@media (max-width:720px) { .doc .grade-info { grid-template-columns:repeat(2,1fr); } }
 .doc-corpo { padding:22px; display:grid; gap:16px; }
 .doc-linha { display:grid; gap:16px; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); }
 .doc .bloco { border:1px solid var(--borda); border-radius:8px; overflow:hidden; background:#fff; }
@@ -252,7 +270,7 @@ tbody tr:hover { background: var(--hover-bg); }
 .doc .doc-importante ol { margin:0; padding-left:18px; font-size:12px; line-height:1.65; color:#3a4640; }
 .doc .doc-info { border:1px solid var(--borda); border-radius:8px; padding:12px 14px; }
 .doc .doc-info .rot { font-size:10.5px; font-weight:700; color:#1b1b1b; }
-.doc .doc-info .val { font-size:12.5px; color:#3a4640; margin-top:5px; line-height:1.5; overflow-wrap:anywhere; }
+.doc .doc-info .val { font-size:12.5px; color:#3a4640; margin-top:5px; line-height:1.5; overflow-wrap:break-word; }
 .doc .caixa-texto { border:1.5px solid var(--verde); border-radius:8px; padding:14px 16px; }
 .doc .caixa-texto .rot { color:var(--verde); font-size:11px; letter-spacing:.6px;
                          text-transform:uppercase; font-weight:600; margin-bottom:7px; }
@@ -265,9 +283,9 @@ tbody tr:hover { background: var(--hover-bg); }
 .doc table { font-size:12.5px; }
 .doc table th { background:var(--verde-claro); color:var(--verde); position:static; }
 .doc table td { border-bottom:1px solid var(--borda); }
-.assinaturas { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-top:14px;
+.assinaturas { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-top:6px;
                text-align:center; font-size:11.5px; color:#5b6b60; }
-.assinaturas .risco { border-top:1px solid #98a89e; margin:38px 8px 7px; }
+.assinaturas .risco { border-top:1px solid #98a89e; margin:32px 8px 7px; }
 .assinaturas b { color:#1b1b1b; }
 .doc .doc-rodape { background:var(--verde); color:#fff; padding:14px 22px; font-size:11px;
                     display:flex; justify-content:space-between; align-items:center; gap:14px;
@@ -785,10 +803,14 @@ tr.detalhe .conteudo { padding:16px 18px; }
 @media print {
   .doc { border-radius:0; }
   .doc-topo { -webkit-print-color-adjust:exact; print-color-adjust:exact;
-              padding:15px 18px; border-bottom-width:3px; }
-  .doc-topo h2 { font-size:18px; }
+              padding:14px 18px; border-bottom-width:3px; }
+  .doc-topo h2 { font-size:19px; }
   .doc-topo .sub { font-size:10.5px; }
-  .doc-topo img { height:34px; }
+  .doc-topo img { height:36px; padding:4px 7px; }
+  .doc .kv { gap:7px 14px; }
+  .doc .kv > span { font-size:8.5px; }
+  .doc .kv > b { font-size:11px; }
+  .doc .grade-info { gap:9px; }
   .bloco > h4, .doc .valor-caixa.destaque, .doc table th {
     -webkit-print-color-adjust:exact; print-color-adjust:exact; }
   .doc-rodape { -webkit-print-color-adjust:exact; print-color-adjust:exact;
@@ -812,8 +834,8 @@ tr.detalhe .conteudo { padding:16px 18px; }
   .doc .estado { padding:2px 9px; font-size:10px; }
   .doc table { font-size:9.5px; }
   .doc table th, .doc table td { padding:3px 6px; }
-  .assinaturas { font-size:10px; margin-top:12px; }
-  .assinaturas .risco { margin:34px 6px 6px; }
+  .assinaturas { font-size:10px; margin-top:4px; }
+  .assinaturas .risco { margin:26px 6px 5px; }
   /* o documento ocupa a folha inteira na impressão (na tela ele fica
      limitado a 920px por causa do style inline do modal) */
   .area-impressao { max-width:100% !important; }
@@ -1266,7 +1288,7 @@ function abrirPdfPedidoComercial (pedido, cliente, vendedor, produto, decisao = 
     : pedido.cancelado_em ? { texto: 'CANCELADO', bg: '#8a2f2f' }
     : { texto: 'EMITIDO', bg: '#2f7a4f' }
   const dataPedido = pedido.data_pedido ? new Date(pedido.data_pedido + 'T00:00:00') : new Date()
-  // Prazo num lugar só: a data do campo "Prazo de Validade" e o texto do
+  // Prazo num lugar só: a data do campo "Preço válido até" e o texto do
   // bloco IMPORTANTE saem daqui, pra nunca se contradizerem. O talão de
   // papel da Gefoscal diz 30 dias — é esse o prazo oficial da casa.
   const DIAS_VALIDADE = 30
@@ -1280,65 +1302,62 @@ function abrirPdfPedidoComercial (pedido, cliente, vendedor, produto, decisao = 
   const unid = pedido.unidade ?? 'TL'
   const ehKg = unid.trim().toUpperCase() === 'KG'
   const qtd = pedido.quantidade_t
-  const unidCurta = ehKg ? 'kg' : 't'
   const unidSingular = ehKg ? 'kg' : 'tonelada'
   const unidPlural = ehKg ? 'kg' : (qtd != null && Math.abs(qtd) > 1 ? 'toneladas' : 'tonelada')
   const qtdNum = qtd != null ? fmtNum(qtd, casasPara(unid, 2)) : null
   const qtdTxt = qtdNum ? `${qtdNum} ${unidPlural}` : null
-  // conta do total por extenso, pro cliente conferir sem calculadora
-  const contaTxt = (qtdNum && pedido.preco_unitario != null)
-    ? `${qtdNum} ${unidCurta} × R$ ${fmtNum(pedido.preco_unitario)}` : ''
 
-  const infoBox = (rot, val) => `
-    <div class="doc-info">
+  // rótulo em cima, valor embaixo. `largo` ocupa duas colunas — é o que
+  // impede e-mail e endereço de quebrarem no meio da palavra
+  const infoBox = (rot, val, largo = false) => `
+    <div class="doc-info${largo ? ' largo' : ''}">
       <div class="rot">${esc(rot)}</div>
       <div class="val">${val ? esc(val) : '—'}</div>
     </div>`
+  const kv = (rot, val) => val
+    ? `<span>${esc(rot)}</span><b>${esc(val)}</b>` : ''
 
   fundo.innerHTML = `
     <div class="modal area-impressao" style="max-width:920px;padding:0;background:transparent;border:none;">
       <div class="doc">
-        <div class="doc-topo" style="display:flex;justify-content:space-between;align-items:center;gap:14px;">
-          <div style="display:flex;align-items:center;gap:16px;">
-            <img src="${LOGO_COMPLETO}" alt="Grupo Gefoscal"
-                 style="background:#fff;border-radius:6px;padding:5px 8px;">
+        <div class="doc-topo">
+          <div class="topo-marca">
+            <img src="${LOGO_COMPLETO}" alt="Grupo Gefoscal">
             <div>
               <h2>Pedido Comercial</h2>
-              <div class="sub">Grupo Gefoscal · Documento para impressão / envio ao cliente</div>
+              <div class="sub">Nº ${esc(pedido.numero ?? '—')} &middot; ${fmtData(dataPedido.toISOString().slice(0, 10))}</div>
             </div>
           </div>
-          <span style="background:${badge.bg};color:#fff;border-radius:20px;padding:5px 14px;font-size:11.5px;font-weight:700;letter-spacing:.4px;white-space:nowrap;">${badge.texto}</span>
+          <span class="topo-selo" style="background:${badge.bg};">${badge.texto}</span>
         </div>
         <div class="doc-corpo">
           <div class="doc-linha duas">
-            ${docBloco('Identificação do Pedido',
-              docLinha('Data', fmtData(dataPedido.toISOString().slice(0, 10))) +
-              docLinha('Nº do Pedido', pedido.numero) +
-              docLinha('Cliente', cliente?.razao_social) +
-              docLinha('Vendedor', vendedor?.nome) +
-              docLinha('Produto', produto?.nome) +
-              docLinha('Quantidade', qtdTxt) +
-              docLinha('Exige análise de crédito?', 'SIM'))}
+            ${docBloco('Dados do Pedido', `<div class="kv">
+              ${kv('Cliente', cliente?.razao_social)}
+              ${kv('Vendedor', vendedor?.nome)}
+              ${kv('Produto', produto?.nome)}
+              ${kv('Quantidade', qtdTxt)}
+            </div>`)}
             <div class="bloco">
-              <h4>Resumo Contábil</h4>
+              <h4>Valores</h4>
               <div class="conteudo">
                 ${docValor('Valor unitário', `por ${unidSingular}`, pedido.preco_unitario)}
-                ${docValor('TOTAL DO PEDIDO', contaTxt, pedido.valor_total, true)}
+                ${docValor('Total do pedido', '', pedido.valor_total, true)}
               </div>
             </div>
           </div>
 
           <div class="bloco">
             <h4>Informações Complementares</h4>
-            <div class="conteudo" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;">
+            <div class="conteudo grade-info">
               ${infoBox('Condição de Pagamento', pedido.condicao_pagamento || pedido.forma_pagamento)}
               ${infoBox(`Preço válido até (${DIAS_VALIDADE} dias)`, fmtData(validade.toISOString().slice(0, 10)))}
-              ${infoBox('E-mail do Vendedor', vendedor?.email)}
               ${infoBox('CPF/CNPJ', cliente?.cnpj_cpf)}
               ${infoBox('Inscrição Estadual', cliente?.inscricao_estadual)}
-              ${infoBox('Endereço de Faturamento', enderecoFat)}
               ${infoBox('Telefone', cliente?.telefone)}
-              ${infoBox('E-mail para Assinatura', cliente?.email)}
+              ${infoBox('E-mail do Vendedor', vendedor?.email, true)}
+              ${infoBox('E-mail do Cliente', cliente?.email, true)}
+              ${infoBox('Endereço de Faturamento', enderecoFat, true)}
             </div>
           </div>
 
@@ -1347,13 +1366,9 @@ function abrirPdfPedidoComercial (pedido, cliente, vendedor, produto, decisao = 
             ${docTexto('Observações', pedido.observacoes)}
           </div>
 
-          <div style="margin-top:6px;">
-            <div style="font-size:11px;font-weight:700;color:var(--verde);text-transform:uppercase;letter-spacing:.5px;">Assinaturas</div>
-            <p class="texto-dim2" style="font-size:11px;margin:2px 0 0;color:#6d7c72;">Assine manualmente após imprimir (cliente e vendedor).</p>
-            <div class="assinaturas" style="grid-template-columns:repeat(2,1fr);max-width:640px;margin-left:auto;margin-right:auto;">
-              <div><div class="risco"></div>Cliente<br><b>${esc(cliente?.razao_social ?? '')}</b></div>
-              <div><div class="risco"></div>Vendedor<br><b>${esc(vendedor?.nome ?? '')}</b></div>
-            </div>
+          <div class="assinaturas" style="grid-template-columns:repeat(2,1fr);gap:60px;">
+            <div><div class="risco"></div>Cliente<br><b>${esc(cliente?.razao_social ?? '')}</b></div>
+            <div><div class="risco"></div>Vendedor<br><b>${esc(vendedor?.nome ?? '')}</b></div>
           </div>
 
           <div class="doc-importante">
