@@ -21888,6 +21888,17 @@ async function finCadastros (alvo, editavel) {
       </tr>`).join('') || `<tr><td class="vazio">Nada cadastrado.</td></tr>`}</tbody></table>
     </div>`
 
+  const linhaCategoria = c => `<tr style="${c.status === 'INATIVO' ? 'opacity:.5;' : ''}">
+    <td>${esc(c.nome)}</td>
+    <td style="text-align:right;">
+      <span class="chip">${esc(c.tipo)}</span>
+      ${editavel ? `
+        <button class="btn-secundario mini" data-cat-editar="${c.id}" title="editar">✏️</button>
+        <button class="btn-secundario mini" data-cat-toggle="${c.id}" data-cat-status="${c.status}" title="${c.status === 'INATIVO' ? 'reativar' : 'desativar'}">${c.status === 'INATIVO' ? 'reativar' : 'desativar'}</button>
+      ` : ''}
+    </td>
+  </tr>`
+
   alvo.innerHTML = `
     ${editavel ? `<div class="panel" style="padding:20px;margin-bottom:18px;">
       <div class="cabeca-secao">
@@ -21910,8 +21921,12 @@ async function finCadastros (alvo, editavel) {
     </div>` : ''}
 
     <div class="duas-colunas" style="margin-bottom:18px;">
-      ${bloco('Categorias', FIN_CACHE.categorias,
-        c => `<span class="chip">${esc(c.tipo)}</span>`)}
+      <div class="panel" style="padding:18px;">
+        <div class="cabeca-secao"><h3>Categorias</h3>
+          ${editavel ? `<button class="btn-secundario mini" id="cat-nova">+ nova</button>` : ''}
+        </div>
+        <table><tbody id="cat-lista">${FIN_CACHE.categorias.map(linhaCategoria).join('') || `<tr><td class="vazio">Nada cadastrado.</td></tr>`}</tbody></table>
+      </div>
       ${bloco('Centros de custo', FIN_CACHE.centros)}
     </div>
 
@@ -21947,6 +21962,69 @@ async function finCadastros (alvo, editavel) {
     </div>`
 
   if (!editavel) return
+
+  // ---- CRUD de categorias financeiras ----
+  const formCategoriaFinanceira = (cat) => {
+    const fundo = document.createElement('div')
+    fundo.className = 'modal-fundo'
+    fundo.innerHTML = `<div class="modal" style="max-width:420px;">
+      <h3>${cat ? 'Editar categoria' : 'Nova categoria'}</h3>
+      <div class="campo"><label>Nome *</label><input id="fc-nome" value="${esc(cat?.nome ?? '')}"></div>
+      <div class="campo" style="margin-top:8px;"><label>Tipo *</label>
+        <select id="fc-tipo">
+          <option value="DESPESA" ${(!cat || cat.tipo === 'DESPESA') ? 'selected' : ''}>Despesa</option>
+          <option value="RECEITA" ${cat?.tipo === 'RECEITA' ? 'selected' : ''}>Receita</option>
+        </select></div>
+      <div class="acoes" style="margin-top:14px;">
+        <button class="btn" id="fc-salvar">Salvar</button>
+        <button class="btn-secundario" id="fc-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="fc-recado"></div>
+    </div>`
+    document.body.appendChild(fundo)
+    const fechar = () => fundo.remove()
+    fundo.querySelector('#fc-cancelar').onclick = fechar
+    fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+    fundo.querySelector('#fc-salvar').onclick = async () => {
+      const nome = fundo.querySelector('#fc-nome').value.trim()
+      if (!nome) {
+        const el = fundo.querySelector('#fc-recado')
+        el.textContent = 'Escreva o nome da categoria.'; el.classList.remove('oculto')
+        el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+        return
+      }
+      const corpo = { nome, tipo: fundo.querySelector('#fc-tipo').value }
+      const { error } = cat
+        ? await db.from('categoria_financeira').update(corpo).eq('id', cat.id)
+        : await db.from('categoria_financeira').insert({ ...corpo, status: 'ATIVO' })
+      if (error) {
+        const el = fundo.querySelector('#fc-recado')
+        el.textContent = error.message; el.classList.remove('oculto')
+        el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+        return
+      }
+      fechar()
+      const { data: categorias } = await db.from('categoria_financeira').select('id,nome,tipo,status').order('nome')
+      FIN_CACHE.categorias = categorias || []
+      finCadastros(alvo, editavel)
+    }
+  }
+
+  const q2 = alvo // já é o container atual
+  q2.querySelector('#cat-nova').onclick = () => formCategoriaFinanceira(null)
+  q2.querySelectorAll('[data-cat-editar]').forEach(b => {
+    b.onclick = () => formCategoriaFinanceira(FIN_CACHE.categorias.find(c => c.id === b.dataset.catEditar))
+  })
+  q2.querySelectorAll('[data-cat-toggle]').forEach(b => {
+    b.onclick = async () => {
+      const novoStatus = b.dataset.catStatus === 'INATIVO' ? 'ATIVO' : 'INATIVO'
+      await db.from('categoria_financeira').update({ status: novoStatus }).eq('id', b.dataset.catToggle)
+      const { data: categorias } = await db.from('categoria_financeira').select('id,nome,tipo,status').order('nome')
+      FIN_CACHE.categorias = categorias || []
+      finCadastros(alvo, editavel)
+    }
+  })
 
   // ---- importação do relatório contábil ----
   const lerLinhas = texto => {
@@ -24936,7 +25014,7 @@ const ROTULO_AREA_OS = { INDUSTRIA_PLANTA: 'Indústria / Planta', PATIO_ESTOQUE_
                           ADMINISTRATIVO_COMERCIAL: 'Administrativo / Comercial (carros fora da indústria)',
                           EXTRACAO_MINA: 'Extração / Mina', OUTRO: 'Outro' }
 
-let MANUT_CACHE = { equipamentos: [], veiculos: [], pessoas: [], setores: [], fornecedores: [] }
+let MANUT_CACHE = { equipamentos: [], veiculos: [], pessoas: [], setores: [], fornecedores: [], categoriasFin: [] }
 
 // ---------------------------------------------------------------
 // Frota Corporativa (Administrativo, Comercial, Direção, Escritório,
@@ -24984,15 +25062,16 @@ async function filtrarOsPorEscopo (lista, escopo) {
 
 async function garantirManutCache () {
   if (MANUT_CACHE.pessoas.length) return
-  const [{ data: equipamentos }, { data: veiculos }, { data: pessoas }, { data: setores }, { data: fornecedores }] = await Promise.all([
+  const [{ data: equipamentos }, { data: veiculos }, { data: pessoas }, { data: setores }, { data: fornecedores }, { data: categoriasFin }] = await Promise.all([
     db.from('equipamento').select('id,tag,descricao,setor_id,veiculo_id,status').order('tag'),
-    db.from('veiculo').select('id,placa,descricao,setor_id').order('placa'),
+    db.from('veiculo').select('id,placa,descricao,setor_id,oculto,status_frota').order('placa'),
     db.from('pessoa').select('id,nome').eq('status', 'ATIVO').order('nome'),
     db.from('setor').select('id,nome').order('nome'),
-    db.from('fornecedor').select('id,nome,cnpj_cpf,contato,status').order('nome')
+    db.from('fornecedor').select('id,nome,cnpj_cpf,contato,status').order('nome'),
+    db.from('categoria_financeira').select('id,nome,tipo,status').order('nome')
   ])
   MANUT_CACHE = { equipamentos: equipamentos || [], veiculos: veiculos || [], pessoas: pessoas || [],
-                   setores: setores || [], fornecedores: fornecedores || [] }
+                   setores: setores || [], fornecedores: fornecedores || [], categoriasFin: categoriasFin || [] }
 }
 
 function corStatusOS (s) {
@@ -25041,13 +25120,14 @@ async function paginaManutencao (escopo) {
 
   const [{ data: equipamentos }, { data: veiculos }, { data: pessoas }, { data: setores }] = await Promise.all([
     db.from('equipamento').select('id,tag,descricao,setor_id,veiculo_id,status').order('tag'),
-    db.from('veiculo').select('id,placa,descricao,setor_id').order('placa'),
+    db.from('veiculo').select('id,placa,descricao,setor_id,oculto,status_frota').order('placa'),
     db.from('pessoa').select('id,nome').eq('status', 'ATIVO').order('nome'),
     db.from('setor').select('id,nome').order('nome')
   ])
   const { data: fornecedores } = await db.from('fornecedor').select('id,nome,cnpj_cpf,contato,status').order('nome')
+  const { data: categoriasFin } = await db.from('categoria_financeira').select('id,nome,tipo,status').order('nome')
   MANUT_CACHE = { equipamentos: equipamentos || [], veiculos: veiculos || [], pessoas: pessoas || [],
-                   setores: setores || [], fornecedores: fornecedores || [] }
+                   setores: setores || [], fornecedores: fornecedores || [], categoriasFin: categoriasFin || [] }
 
   const abas = [['painel', 'Painel'], ['lancar', 'Lançar manutenção'], ['os', 'Ordens de serviço'],
                 ['nova', 'Abrir chamado'], ['terceiros', 'Terceiros'], ['custos', 'Custos'],
@@ -25409,7 +25489,11 @@ function manutLancarCorporativo (alvo, editavel, escopo) {
     <p class="texto-dim">Você pode consultar, mas não lançar manutenções.</p></div>`; return }
 
   const hoje = hojeISO()
-  const veiculosDisponiveis = MANUT_CACHE.veiculos.filter(veiculoEhCorporativo)
+  // pega direto da Frota > Itens — qualquer veículo já cadastrado lá aparece
+  // aqui, sem precisar marcar nada antes. Só peço o departamento se ainda
+  // não tiver sido definido (uma vez só, fica salvo no veículo pra sempre).
+  const veiculosDisponiveis = MANUT_CACHE.veiculos.filter(v => !v.oculto && v.status_frota !== 'VENDIDO')
+  const opcoesDepartamento = MANUT_CACHE.setores.filter(s => SETORES_FROTA_CORPORATIVA.includes(s.id))
 
   alvo.innerHTML = `
     <div class="panel" style="padding:20px;max-width:640px;">
@@ -25418,8 +25502,10 @@ function manutLancarCorporativo (alvo, editavel, escopo) {
       <div class="form-grade">
         <div class="campo" style="grid-column:1/-1;"><label>Veículo *</label>
           <select id="mlc-veiculo"><option value="">Selecione...</option>
-            ${veiculosDisponiveis.map(v => `<option value="${v.id}">${esc(v.placa)}${v.descricao ? ' — ' + esc(v.descricao) : ''}</option>`).join('')}
+            ${veiculosDisponiveis.map(v => `<option value="${v.id}" data-setor="${v.setor_id ?? ''}">${esc(v.placa)}${v.descricao ? ' — ' + esc(v.descricao) : ''}</option>`).join('')}
           </select></div>
+        <div class="campo oculto" id="mlc-campo-departamento"><label>Departamento deste veículo <span id="mlc-dep-obrigatorio" class="texto-dim2">(primeira vez — fica salvo pra próxima)</span></label>
+          <select id="mlc-departamento"><option value="">Selecione...</option>${opcoesDepartamento.map(s => `<option value="${s.id}">${esc(s.nome)}</option>`).join('')}</select></div>
         <div class="campo" style="grid-column:1/-1;"><label>O que foi feito *</label>
           <textarea id="mlc-feito" style="min-height:70px;" placeholder="Ex.: troca dos 4 pneus, revisão dos 10 mil km..."></textarea></div>
         <div class="campo"><label>Oficina / mecânico</label>
@@ -25428,6 +25514,8 @@ function manutLancarCorporativo (alvo, editavel, escopo) {
           <input id="mlc-fornecedor-texto" placeholder="opcional"></div>
         <div class="campo"><label>Data *</label><input type="date" id="mlc-data" value="${hoje}"></div>
         <div class="campo"><label>Valor (R$) *</label><input id="mlc-valor" inputmode="decimal" placeholder="0,00"></div>
+        <div class="campo" style="grid-column:1/-1;"><label>Categoria financeira</label>
+          <select id="mlc-categoria"><option value="">—</option>${MANUT_CACHE.categoriasFin.filter(c => c.status !== 'INATIVO').map(c => `<option value="${c.id}" ${c.nome === 'Serviços de terceiros' ? 'selected' : ''}>${esc(c.nome)}</option>`).join('')}</select></div>
         <div class="campo" style="grid-column:1/-1;"><label>Situação</label>
           <select id="mlc-situacao">
             <option value="SERVICO_TERCEIRO">Em andamento (na oficina)</option>
@@ -25468,6 +25556,18 @@ function manutLancarCorporativo (alvo, editavel, escopo) {
   }
   $('#mlc-valor').oninput = alternarOrcamentos
 
+  // se o veículo escolhido já tem departamento corporativo marcado, esconde
+  // o campo (não precisa perguntar de novo); se não tem, mostra pra marcar
+  // essa única vez — fica salvo no cadastro do veículo pra sempre.
+  const alternarDepartamento = () => {
+    const opt = $('#mlc-veiculo').selectedOptions[0]
+    const setorAtual = opt?.dataset.setor || ''
+    const jaTemDepartamento = SETORES_FROTA_CORPORATIVA.includes(setorAtual)
+    $('#mlc-campo-departamento').classList.toggle('oculto', !opt?.value || jaTemDepartamento)
+    if (jaTemDepartamento) $('#mlc-departamento').value = setorAtual
+  }
+  $('#mlc-veiculo').onchange = alternarDepartamento
+
   $('#mlc-salvar').onclick = async () => {
     const veiculoId = $('#mlc-veiculo').value
     const feito = $('#mlc-feito').value.trim()
@@ -25475,6 +25575,11 @@ function manutLancarCorporativo (alvo, editavel, escopo) {
     if (!veiculoId) { aviso('Escolha o veículo.'); return }
     if (!feito) { aviso('Descreva o que foi feito.'); return }
     if (!valor) { aviso('Informe o valor.'); return }
+
+    const veiculoEscolhido = MANUT_CACHE.veiculos.find(v => v.id === veiculoId)
+    const jaTemDepartamento = SETORES_FROTA_CORPORATIVA.includes(veiculoEscolhido?.setor_id)
+    const departamentoEscolhido = $('#mlc-departamento').value
+    if (!jaTemDepartamento && !departamentoEscolhido) { aviso('Esse veículo ainda não tem departamento — escolha um (só dessa vez).'); return }
 
     let orcamentos = {}
     if (valor >= VALOR_LIMITE_ORCAMENTO_CORPORATIVO) {
@@ -25495,6 +25600,16 @@ function manutLancarCorporativo (alvo, editavel, escopo) {
     const dataEscolhida = $('#mlc-data').value || hoje
 
     const btn = $('#mlc-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+
+    // primeira vez que esse veículo é usado no corporativo: grava o
+    // departamento nele, aí da próxima vez já vem marcado sozinho
+    if (!jaTemDepartamento && departamentoEscolhido) {
+      const { error: erroSetor } = await db.from('veiculo').update({ setor_id: departamentoEscolhido }).eq('id', veiculoId)
+      if (erroSetor) { btn.disabled = false; btn.textContent = 'Lançar manutenção'; aviso('Não deu pra salvar o departamento do veículo: ' + erroSetor.message); return }
+      if (veiculoEscolhido) veiculoEscolhido.setor_id = departamentoEscolhido
+      IDS_OS_FROTA_CORPORATIVA = null
+    }
+
     const { data: novaOS, error } = await db.from('ordem_servico').insert({
       veiculo_id: veiculoId,
       area: 'ADMINISTRATIVO_COMERCIAL',
@@ -25506,6 +25621,7 @@ function manutLancarCorporativo (alvo, editavel, escopo) {
       data_solicitacao: new Date(dataEscolhida + 'T12:00:00').toISOString(),
       data_conclusao: situacao === 'CONCLUIDA' ? dataEscolhida : null,
       valor_terceiros: valor,
+      categoria_financeira_id: $('#mlc-categoria').value || null,
       ...orcamentos
     }).select('id').single()
 
@@ -25551,8 +25667,11 @@ async function manutOS (alvo, editavel, escopo) {
     let q = db.from('ordem_servico').select(`
       id, codigo, data_solicitacao, tipo, prioridade, status, descricao_problema, area,
       data_limite, data_conclusao, valor_pecas, valor_terceiros, valor_total,
+      diagnostico, fornecedor_id, lancamento_id, categoria_financeira_id,
+      orcamento1_fornecedor_id, orcamento1_valor, orcamento2_fornecedor_id, orcamento2_valor,
+      numero_nota_fiscal, prazo_entrega,
       equipamento:equipamento_id ( tag, descricao ), veiculo:veiculo_id ( placa, descricao ),
-      solicitante:solicitante_id ( nome ), responsavel:responsavel_id ( nome )
+      solicitante:solicitante_id ( nome ), responsavel:responsavel_id ( nome ), fornecedor:fornecedor_id ( nome )
     `).order('data_solicitacao', { ascending: false }).limit(500)
     if ($('#mo-status').value) q = q.eq('status', $('#mo-status').value)
     if ($('#mo-prioridade').value) q = q.eq('prioridade', $('#mo-prioridade').value)
@@ -25708,6 +25827,8 @@ async function detalheOS (os, editavel, aoFechar, escopo) {
           <div class="campo"><label>Concluída em</label><input type="date" id="do-conclusao" value="${os.data_conclusao ?? ''}"></div>
           <div class="campo"><label>Valor peças (R$)</label><input id="do-pecas" inputmode="decimal" value="${os.valor_pecas ?? ''}"></div>
           <div class="campo"><label>Valor terceiros / mão de obra (R$)</label><input id="do-terceiros" inputmode="decimal" value="${os.valor_terceiros ?? ''}"></div>
+          <div class="campo" style="grid-column:1/-1;"><label>Categoria financeira</label>
+            <select id="do-categoria"><option value="">—</option>${MANUT_CACHE.categoriasFin.filter(c => c.status !== 'INATIVO' || c.id === os.categoria_financeira_id).map(c => `<option value="${c.id}" ${c.id === os.categoria_financeira_id ? 'selected' : ''}>${esc(c.nome)}</option>`).join('')}</select></div>
         </div>
         <div class="campo" style="margin-top:10px;"><label>O que foi feito</label>
           <textarea id="do-diagnostico" style="min-height:70px;">${esc(os.diagnostico ?? '')}</textarea></div>
@@ -25867,6 +25988,7 @@ async function detalheOS (os, editavel, aoFechar, escopo) {
         valor_pecas: pecas,
         valor_terceiros: terceiros,
         diagnostico: fundo.querySelector('#do-diagnostico').value.trim() || null,
+        categoria_financeira_id: fundo.querySelector('#do-categoria').value || null,
         ...orcamentos
       }
       const { error: erroCorp } = await db.from('ordem_servico').update(corpoCorp).eq('id', os.id)
@@ -25984,14 +26106,22 @@ async function detalheOS (os, editavel, aoFechar, escopo) {
   if (btnFin) btnFin.onclick = async () => {
     const valor = Number(os.valor_total || 0)
     if (!valor) { aviso('Essa OS ainda não tem valor de peças ou terceiros lançado.'); return }
-    const { data: cat } = await db.from('categoria_financeira').select('id').eq('nome', 'Manutenção').maybeSingle()
+    let categoriaId = os.categoria_financeira_id
+    if (!categoriaId) {
+      const { data: cat } = await db.from('categoria_financeira').select('id').eq('nome', 'Manutenção').maybeSingle()
+      categoriaId = cat?.id || null
+    }
     const { data: novo, error } = await db.from('lancamento_financeiro').insert({
       tipo: 'SAIDA',
       descricao: `Manutenção ${os.codigo} — ${nomeAlvoOS(os)}`,
       valor,
       data_lancamento: os.data_conclusao || hojeISO(),
-      categoria_id: cat?.id || null,
-      registrado_por: PERFIL.pessoaId
+      categoria_id: categoriaId,
+      registrado_por: PERFIL.pessoaId,
+      // Frota Corporativa: nota fiscal pode ainda não ter chegado, então
+      // todo lançamento gerado por aqui entra como pendente — alguém com
+      // acesso ao Financeiro efetiva depois de conferir.
+      ...(escopo === 'corporativo' ? { situacao: 'PENDENTE' } : {})
     }).select('id').single()
     if (error) { aviso(error.message); return }
     await db.from('ordem_servico').update({ lancamento_id: novo.id }).eq('id', os.id)
@@ -26198,7 +26328,12 @@ async function manutCustos (alvo, editavel, escopo) {
   const buscar = async () => {
     let q = db.from('ordem_servico').select(`
       id, codigo, area, valor_pecas, valor_terceiros, valor_total, data_solicitacao,
-      equipamento:equipamento_id ( tag, descricao ), veiculo:veiculo_id ( placa, descricao )
+      tipo, prioridade, status, descricao_problema, data_limite, data_conclusao,
+      diagnostico, fornecedor_id, lancamento_id, categoria_financeira_id,
+      orcamento1_fornecedor_id, orcamento1_valor, orcamento2_fornecedor_id, orcamento2_valor,
+      numero_nota_fiscal, prazo_entrega,
+      equipamento:equipamento_id ( tag, descricao ), veiculo:veiculo_id ( placa, descricao ),
+      solicitante:solicitante_id ( nome ), responsavel:responsavel_id ( nome ), fornecedor:fornecedor_id ( nome )
     `).gte('data_solicitacao', $('#mc-de').value).lte('data_solicitacao', $('#mc-ate').value + 'T23:59:59').limit(2000)
     if ($('#mc-area').value) q = q.eq('area', $('#mc-area').value)
 
