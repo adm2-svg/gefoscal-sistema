@@ -27466,11 +27466,25 @@ function formFrotaItem (item) {
     const { data: anexos } = await db.from('anexo').select('id,tipo,nome_arquivo,storage_path')
       .eq('entidade', 'VEICULO').eq('registro_id', item.id).order('criado_em', { ascending: false })
     q('#fr-anexos').innerHTML = (anexos || []).length ? `<div style="display:flex;flex-direction:column;gap:6px;">
-      ${anexos.map(a => `<div class="passo"><span class="quando">${esc(a.tipo || 'arquivo')}</span>
-        <span><a href="#" data-abrir-anexo-veiculo="${esc(a.storage_path)}">${esc(a.nome_arquivo ?? 'arquivo')}</a></span></div>`).join('')}
+      ${anexos.map(a => `<div class="passo" style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+        <span><span class="quando">${esc(a.tipo || 'arquivo')}</span>
+        <a href="#" data-abrir-anexo-veiculo="${esc(a.storage_path)}">${esc(a.nome_arquivo ?? 'arquivo')}</a></span>
+        <button type="button" class="btn-secundario mini" data-excluir-anexo-veiculo="${a.id}" data-caminho-anexo-veiculo="${esc(a.storage_path)}" style="flex:none;color:var(--warn-text);">excluir</button>
+        </div>`).join('')}
       </div>` : `<p class="texto-dim2" style="font-size:12px;">Nenhum arquivo anexado ainda.</p>`
     q('#fr-anexos').querySelectorAll('[data-abrir-anexo-veiculo]').forEach(a => {
       a.onclick = e => { e.preventDefault(); abrirComprovante(a.dataset.abrirAnexoVeiculo) }
+    })
+    q('#fr-anexos').querySelectorAll('[data-excluir-anexo-veiculo]').forEach(btn => {
+      btn.onclick = async () => {
+        if (!confirm('Excluir este arquivo?')) return
+        btn.disabled = true
+        const { error: erroExclusao } = await db.from('anexo').delete().eq('id', btn.dataset.excluirAnexoVeiculo)
+        if (erroExclusao) { aviso(erroExclusao.message); btn.disabled = false; return }
+        const caminho = btn.dataset.caminhoAnexoVeiculo
+        if (caminho) await db.storage.from('comprovantes').remove([caminho])
+        carregarAnexos()
+      }
     })
   }
   carregarAnexos()
