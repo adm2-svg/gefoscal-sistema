@@ -25073,7 +25073,7 @@ function abrirManutencao (sub, editavel, escopo) {
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
   $('#kpis').innerHTML = ''
   if (sub === 'painel') manutPainel(alvo, editavel, escopo)
-  if (sub === 'lancar') manutLancar(alvo, editavel, escopo)
+  if (sub === 'lancar') (escopo === 'corporativo' ? manutLancarCorporativo : manutLancar)(alvo, editavel, escopo)
   if (sub === 'os') manutOS(alvo, editavel, escopo)
   if (sub === 'nova') manutNova(alvo, escopo)
   if (sub === 'terceiros') manutTerceiros(alvo, editavel, escopo)
@@ -25394,6 +25394,141 @@ function manutLancar (alvo, editavel, escopo) {
   }
 }
 
+// ---------------------------------------------------------------
+// Lançar manutenção — Frota Corporativa (versão enxuta).
+// Aqui não existe fila interna: o carro já foi levado na oficina,
+// então isso é mais um registro de despesa do que uma OS de fábrica.
+// Sem tipo/prioridade/status de programação — só "em andamento" ou
+// "concluída". Os 2 orçamentos comparativos só entram em cena quando
+// o valor passa do limite abaixo (ajuste fácil se o valor mudar).
+// ---------------------------------------------------------------
+const VALOR_LIMITE_ORCAMENTO_CORPORATIVO = 1500
+
+function manutLancarCorporativo (alvo, editavel, escopo) {
+  if (!editavel) { alvo.innerHTML = `<div class="panel" style="padding:22px;">
+    <p class="texto-dim">Você pode consultar, mas não lançar manutenções.</p></div>`; return }
+
+  const hoje = hojeISO()
+  const veiculosDisponiveis = MANUT_CACHE.veiculos.filter(veiculoEhCorporativo)
+
+  alvo.innerHTML = `
+    <div class="panel" style="padding:20px;max-width:640px;">
+      <h3 style="font-family:var(--serif);font-size:18px;margin:0 0 4px;">Lançar manutenção</h3>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 14px;">Pra quando o carro já foi (ou está) na oficina — sem fila de programação, é só registrar.</p>
+      <div class="form-grade">
+        <div class="campo" style="grid-column:1/-1;"><label>Veículo *</label>
+          <select id="mlc-veiculo"><option value="">Selecione...</option>
+            ${veiculosDisponiveis.map(v => `<option value="${v.id}">${esc(v.placa)}${v.descricao ? ' — ' + esc(v.descricao) : ''}</option>`).join('')}
+          </select></div>
+        <div class="campo" style="grid-column:1/-1;"><label>O que foi feito *</label>
+          <textarea id="mlc-feito" style="min-height:70px;" placeholder="Ex.: troca dos 4 pneus, revisão dos 10 mil km..."></textarea></div>
+        <div class="campo"><label>Oficina / mecânico</label>
+          <select id="mlc-fornecedor"><option value="">selecionar da lista...</option>${MANUT_CACHE.fornecedores.map(f => `<option value="${f.id}">${esc(f.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Ou nome (se não estiver na lista)</label>
+          <input id="mlc-fornecedor-texto" placeholder="opcional"></div>
+        <div class="campo"><label>Data *</label><input type="date" id="mlc-data" value="${hoje}"></div>
+        <div class="campo"><label>Valor (R$) *</label><input id="mlc-valor" inputmode="decimal" placeholder="0,00"></div>
+        <div class="campo" style="grid-column:1/-1;"><label>Situação</label>
+          <select id="mlc-situacao">
+            <option value="SERVICO_TERCEIRO">Em andamento (na oficina)</option>
+            <option value="CONCLUIDA" selected>Concluída</option>
+          </select></div>
+      </div>
+
+      <div class="oculto" id="mlc-bloco-orcamentos" style="margin-top:12px;">
+        <div class="aviso-bloqueio">
+          <div><b>Valor acima de R$ ${fmtNum(VALOR_LIMITE_ORCAMENTO_CORPORATIVO)} — exige 2 orçamentos antes de aprovar</b></div>
+          <div class="form-grade" style="margin-top:8px;">
+            <div class="campo"><label>Orçamento 1 — fornecedor</label>
+              <select id="mlc-orc1-forn"><option value="">—</option>${MANUT_CACHE.fornecedores.map(f => `<option value="${f.id}">${esc(f.nome)}</option>`).join('')}</select></div>
+            <div class="campo"><label>Orçamento 1 — valor (R$)</label><input id="mlc-orc1-valor" inputmode="decimal"></div>
+            <div class="campo"><label>Orçamento 2 — fornecedor</label>
+              <select id="mlc-orc2-forn"><option value="">—</option>${MANUT_CACHE.fornecedores.map(f => `<option value="${f.id}">${esc(f.nome)}</option>`).join('')}</select></div>
+            <div class="campo"><label>Orçamento 2 — valor (R$)</label><input id="mlc-orc2-valor" inputmode="decimal"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="campo" style="margin-top:10px;"><label>Nota fiscal</label>
+        <input type="file" id="mlc-nf-arquivo" accept="image/*,application/pdf"></div>
+
+      <div class="acoes"><button class="btn" id="mlc-salvar">Lançar manutenção</button></div>
+      <div class="recado oculto" id="mlc-recado"></div>
+    </div>`
+
+  const aviso = (t, alerta = true) => {
+    const el = $('#mlc-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = alerta ? 'var(--warn-text)' : 'var(--line2)'
+    el.style.color = alerta ? 'var(--warn-text)' : 'var(--dim)'
+  }
+
+  const alternarOrcamentos = () => {
+    const valor = numeroBR($('#mlc-valor').value) || 0
+    $('#mlc-bloco-orcamentos').classList.toggle('oculto', valor < VALOR_LIMITE_ORCAMENTO_CORPORATIVO)
+  }
+  $('#mlc-valor').oninput = alternarOrcamentos
+
+  $('#mlc-salvar').onclick = async () => {
+    const veiculoId = $('#mlc-veiculo').value
+    const feito = $('#mlc-feito').value.trim()
+    const valor = numeroBR($('#mlc-valor').value)
+    if (!veiculoId) { aviso('Escolha o veículo.'); return }
+    if (!feito) { aviso('Descreva o que foi feito.'); return }
+    if (!valor) { aviso('Informe o valor.'); return }
+
+    let orcamentos = {}
+    if (valor >= VALOR_LIMITE_ORCAMENTO_CORPORATIVO) {
+      const o1 = numeroBR($('#mlc-orc1-valor').value)
+      const o2 = numeroBR($('#mlc-orc2-valor').value)
+      if (!o1 || !o2) { aviso(`Valor acima de R$ ${fmtNum(VALOR_LIMITE_ORCAMENTO_CORPORATIVO)} exige os 2 orçamentos preenchidos.`); return }
+      orcamentos = {
+        orcamento1_fornecedor_id: $('#mlc-orc1-forn').value || null,
+        orcamento1_valor: o1,
+        orcamento2_fornecedor_id: $('#mlc-orc2-forn').value || null,
+        orcamento2_valor: o2
+      }
+    }
+
+    const fornecedorId = $('#mlc-fornecedor').value || null
+    const fornecedorTexto = $('#mlc-fornecedor-texto').value.trim()
+    const situacao = $('#mlc-situacao').value
+    const dataEscolhida = $('#mlc-data').value || hoje
+
+    const btn = $('#mlc-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const { data: novaOS, error } = await db.from('ordem_servico').insert({
+      veiculo_id: veiculoId,
+      area: 'ADMINISTRATIVO_COMERCIAL',
+      tipo: 'Manutenção (frota corporativa)',
+      prioridade: 'MEDIA',
+      status: situacao,
+      fornecedor_id: fornecedorId,
+      descricao_problema: feito + (fornecedorTexto ? `\nOficina: ${fornecedorTexto}` : ''),
+      data_solicitacao: new Date(dataEscolhida + 'T12:00:00').toISOString(),
+      data_conclusao: situacao === 'CONCLUIDA' ? dataEscolhida : null,
+      valor_terceiros: valor,
+      ...orcamentos
+    }).select('id').single()
+
+    if (error) { btn.disabled = false; btn.textContent = 'Lançar manutenção'; aviso(error.message); return }
+
+    const arquivoNF = $('#mlc-nf-arquivo').files[0]
+    if (arquivoNF) {
+      try {
+        const { caminho, nome } = await subirComprovante(arquivoNF, `ordem_servico/${novaOS.id}`)
+        await db.from('anexo').insert({ entidade: 'ORDEM_SERVICO', registro_id: novaOS.id, tipo: 'nota_fiscal', nome_arquivo: nome, storage_path: caminho })
+      } catch (e) { aviso('Manutenção salva, mas a nota fiscal falhou: ' + e.message); btn.disabled = false; btn.textContent = 'Lançar manutenção'; return }
+    }
+
+    IDS_OS_FROTA_CORPORATIVA = null
+    btn.disabled = false; btn.textContent = 'Lançar manutenção'
+    aviso('Manutenção lançada.', false)
+    $('#mlc-feito').value = ''; $('#mlc-valor').value = ''
+    $('#mlc-orc1-valor').value = ''; $('#mlc-orc2-valor').value = ''
+    $('#mlc-fornecedor-texto').value = ''
+    alternarOrcamentos()
+  }
+}
+
 // ----- Ordens de serviço (lista + detalhe) -----
 async function manutOS (alvo, editavel, escopo) {
   alvo.innerHTML = `
@@ -25426,6 +25561,20 @@ async function manutOS (alvo, editavel, escopo) {
     if (error) { $('#mo-lista').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
     cache = await filtrarOsPorEscopo(data || [], escopo)
 
+    // Frota Corporativa: nota fiscal não é obrigatória pra concluir (às vezes a
+    // compra já foi feita e a nota ainda não chegou) — mas dá pra esquecer de
+    // voltar e anexar depois, então marca quem já concluiu sem NF anexada.
+    let idsComNF = new Set()
+    if (escopo === 'corporativo') {
+      const concluidasIds = cache.filter(o => o.status === 'CONCLUIDA').map(o => o.id)
+      if (concluidasIds.length) {
+        const { data: anexosNF } = await db.from('anexo').select('registro_id')
+          .eq('entidade', 'ORDEM_SERVICO').eq('tipo', 'nota_fiscal').in('registro_id', concluidasIds)
+        idsComNF = new Set((anexosNF || []).map(a => a.registro_id))
+      }
+    }
+    const nfPendente = o => escopo === 'corporativo' && o.status === 'CONCLUIDA' && !idsComNF.has(o.id)
+
     const termo = $('#mo-busca').value.trim().toLowerCase()
     const lista = termo ? cache.filter(o =>
       `${o.codigo} ${nomeAlvoOS(o)} ${o.descricao_problema ?? ''}`.toLowerCase().includes(termo)) : cache
@@ -25434,8 +25583,9 @@ async function manutOS (alvo, editavel, escopo) {
     const criticas = cache.filter(o => o.prioridade === 'CRITICA' && !['CONCLUIDA', 'CANCELADA'].includes(o.status)).length
     const valorAberto = cache.filter(o => !['CONCLUIDA', 'CANCELADA'].includes(o.status))
       .reduce((s, o) => s + Number(o.valor_total || 0), 0)
+    const kpiNfPendente = escopo === 'corporativo' ? kpi('Notas fiscais pendentes', String(cache.filter(nfPendente).length)) : ''
     $('#kpis').innerHTML = kpi('OS listadas', cache.length) + kpi('Em aberto', abertas) +
-      kpi('Críticas em aberto', criticas) + kpi('Valor em aberto', 'R$ ' + fmtNum(valorAberto))
+      kpi('Críticas em aberto', criticas) + kpi('Valor em aberto', 'R$ ' + fmtNum(valorAberto)) + kpiNfPendente
 
     $('#mo-lista').innerHTML = `
       <div class="panel" style="padding:0;"><div class="tabela-scroll">
@@ -25449,7 +25599,8 @@ async function manutOS (alvo, editavel, escopo) {
             <td>${esc(nomeAlvoOS(o))}</td>
             <td class="texto-dim2" style="max-width:280px;">${esc((o.descricao_problema ?? '').slice(0, 70))}</td>
             <td><span class="chip">${esc(ROTULO_PRIORIDADE_OS[o.prioridade] ?? '—')}</span></td>
-            <td><span class="${corStatusOS(o.status)}">${esc(ROTULO_STATUS_OS[o.status] ?? o.status)}</span></td>
+            <td><span class="${corStatusOS(o.status)}">${esc(ROTULO_STATUS_OS[o.status] ?? o.status)}</span>
+              ${nfPendente(o) ? '<br><span class="badge-alerta" style="font-size:10px;margin-top:3px;display:inline-block;">nota fiscal pendente</span>' : ''}</td>
             <td class="texto-dim">${esc(o.responsavel?.nome ?? '—')}</td>
             <td class="num">${o.valor_total ? 'R$ ' + fmtNum(o.valor_total) : '—'}</td>
           </tr>`).join('') || `<tr><td colspan="8" class="vazio">Nenhuma ordem de serviço no filtro.</td></tr>`}
@@ -25460,7 +25611,7 @@ async function manutOS (alvo, editavel, escopo) {
     $('#mo-lista').querySelectorAll('[data-abrir-os]').forEach(tr => {
       tr.onclick = () => {
         const os = cache.find(o => o.id === tr.dataset.abrirOs)
-        if (os) detalheOS(os, editavel, buscar)
+        if (os) detalheOS(os, editavel, buscar, escopo)
       }
     })
   }
@@ -25511,10 +25662,17 @@ function formEditarMaterialOS (m, aoSalvar) {
   }
 }
 
-async function detalheOS (os, editavel, aoFechar) {
+async function detalheOS (os, editavel, aoFechar, escopo) {
   const { data: materiais } = await db.from('os_material')
     .select('id,descricao,quantidade,unidade,retirado_por_nome,criado_em,solicitacao_compra_id,solicitacao:solicitacao_compra_id(numero,status)')
     .eq('ordem_servico_id', os.id).order('criado_em')
+
+  let semNotaFiscal = false
+  if (escopo === 'corporativo' && os.status === 'CONCLUIDA') {
+    const { data: anexoNF } = await db.from('anexo').select('id')
+      .eq('entidade', 'ORDEM_SERVICO').eq('registro_id', os.id).eq('tipo', 'nota_fiscal').maybeSingle()
+    semNotaFiscal = !anexoNF
+  }
 
   const nomeFornecedor = os.fornecedor?.nome ?? MANUT_CACHE.fornecedores.find(f => f.id === os.fornecedor_id)?.nome ?? null
 
@@ -25525,6 +25683,7 @@ async function detalheOS (os, editavel, aoFechar) {
       <div class="cabeca-secao">
         <h3>${esc(os.codigo)}</h3>
         <span class="${corStatusOS(os.status)}">${esc(ROTULO_STATUS_OS[os.status] ?? os.status)}</span>
+        ${semNotaFiscal ? '<span class="badge-alerta">nota fiscal pendente</span>' : ''}
       </div>
       <p class="texto-dim2" style="font-size:12px;margin:-8px 0 14px;">
         Aberta em ${fmtQuando(os.data_solicitacao) ?? '—'} por ${esc(os.solicitante?.nome ?? '—')}
@@ -25536,7 +25695,44 @@ async function detalheOS (os, editavel, aoFechar) {
         <p>${esc(os.descricao_problema ?? 'não informado')}</p>
       </div>
 
-      ${editavel ? `
+      ${editavel && escopo === 'corporativo' ? `
+        <div class="form-grade">
+          <div class="campo"><label>Situação</label>
+            <select id="do-situacao">
+              <option value="SERVICO_TERCEIRO" ${os.status !== 'CONCLUIDA' ? 'selected' : ''}>Em andamento (na oficina)</option>
+              <option value="CONCLUIDA" ${os.status === 'CONCLUIDA' ? 'selected' : ''}>Concluída</option>
+            </select></div>
+          <div class="campo"><label>Oficina / mecânico</label>
+            <select id="do-fornecedor"><option value="">—</option>
+              ${MANUT_CACHE.fornecedores.map(f => `<option value="${f.id}" ${f.id === os.fornecedor_id ? 'selected' : ''}>${esc(f.nome)}</option>`).join('')}</select></div>
+          <div class="campo"><label>Concluída em</label><input type="date" id="do-conclusao" value="${os.data_conclusao ?? ''}"></div>
+          <div class="campo"><label>Valor peças (R$)</label><input id="do-pecas" inputmode="decimal" value="${os.valor_pecas ?? ''}"></div>
+          <div class="campo"><label>Valor terceiros / mão de obra (R$)</label><input id="do-terceiros" inputmode="decimal" value="${os.valor_terceiros ?? ''}"></div>
+        </div>
+        <div class="campo" style="margin-top:10px;"><label>O que foi feito</label>
+          <textarea id="do-diagnostico" style="min-height:70px;">${esc(os.diagnostico ?? '')}</textarea></div>
+
+        <div class="oculto" id="do-bloco-orcamentos-corp" style="margin-top:12px;">
+          <div class="aviso-bloqueio">
+            <div><b>Valor acima de R$ ${fmtNum(VALOR_LIMITE_ORCAMENTO_CORPORATIVO)} — exige 2 orçamentos antes de aprovar</b></div>
+            <div class="form-grade" style="margin-top:8px;">
+              <div class="campo"><label>Orçamento 1 — fornecedor</label>
+                <select id="do-orc1-forn"><option value="">—</option>${MANUT_CACHE.fornecedores.map(f => `<option value="${f.id}" ${f.id === os.orcamento1_fornecedor_id ? 'selected' : ''}>${esc(f.nome)}</option>`).join('')}</select></div>
+              <div class="campo"><label>Orçamento 1 — valor (R$)</label><input id="do-orc1-valor" inputmode="decimal" value="${os.orcamento1_valor ?? ''}"></div>
+              <div class="campo"><label>Orçamento 2 — fornecedor</label>
+                <select id="do-orc2-forn"><option value="">—</option>${MANUT_CACHE.fornecedores.map(f => `<option value="${f.id}" ${f.id === os.orcamento2_fornecedor_id ? 'selected' : ''}>${esc(f.nome)}</option>`).join('')}</select></div>
+              <div class="campo"><label>Orçamento 2 — valor (R$)</label><input id="do-orc2-valor" inputmode="decimal" value="${os.orcamento2_valor ?? ''}"></div>
+            </div>
+          </div>
+        </div>
+        <div class="campo" style="margin-top:10px;"><label>Nota fiscal</label>
+          <input type="file" id="do-nf-arquivo" accept="image/*,application/pdf"></div>
+
+        <div class="acoes"><button class="btn" id="do-salvar">Salvar alterações</button>
+          ${!os.lancamento_id ? `<button class="btn-secundario" id="do-financeiro">Gerar lançamento financeiro</button>` :
+            `<span class="badge-bom" style="align-self:center;">lançamento financeiro já gerado</span>`}</div>
+        <div class="recado oculto" id="do-recado"></div>
+      ` : editavel ? `
         <div class="form-grade">
           <div class="campo"><label>Status</label>
             <select id="do-status">${STATUS_OS.map(s => `<option value="${s}" ${s === os.status ? 'selected' : ''}>${ROTULO_STATUS_OS[s]}</option>`).join('')}</select></div>
@@ -25616,7 +25812,17 @@ async function detalheOS (os, editavel, aoFechar) {
 
   if (!editavel) return
 
-  ligarBlocoAdministrativo('do', fundo)
+  if (escopo === 'corporativo') {
+    const alternarOrcamentosCorp = () => {
+      const valor = (numeroBR(fundo.querySelector('#do-pecas').value) || 0) + (numeroBR(fundo.querySelector('#do-terceiros').value) || 0)
+      fundo.querySelector('#do-bloco-orcamentos-corp').classList.toggle('oculto', valor < VALOR_LIMITE_ORCAMENTO_CORPORATIVO)
+    }
+    fundo.querySelector('#do-pecas').oninput = alternarOrcamentosCorp
+    fundo.querySelector('#do-terceiros').oninput = alternarOrcamentosCorp
+    alternarOrcamentosCorp()
+  } else {
+    ligarBlocoAdministrativo('do', fundo)
+  }
 
   // sugestões do campo "Material/Peça" — junta o catálogo de manutenção
   // (histórico do que já foi usado) com o que já existe cadastrado no
@@ -25637,6 +25843,46 @@ async function detalheOS (os, editavel, aoFechar) {
   }
 
   fundo.querySelector('#do-salvar').onclick = async () => {
+    if (escopo === 'corporativo') {
+      const pecas = numeroBR(fundo.querySelector('#do-pecas').value)
+      const terceiros = numeroBR(fundo.querySelector('#do-terceiros').value)
+      const valorTotalAtual = (pecas || 0) + (terceiros || 0)
+      let orcamentos = {}
+      if (valorTotalAtual >= VALOR_LIMITE_ORCAMENTO_CORPORATIVO) {
+        const o1 = numeroBR(fundo.querySelector('#do-orc1-valor').value)
+        const o2 = numeroBR(fundo.querySelector('#do-orc2-valor').value)
+        if (!o1 || !o2) { aviso(`Valor acima de R$ ${fmtNum(VALOR_LIMITE_ORCAMENTO_CORPORATIVO)} exige os 2 orçamentos preenchidos.`); return }
+        orcamentos = {
+          orcamento1_fornecedor_id: fundo.querySelector('#do-orc1-forn').value || null,
+          orcamento1_valor: o1,
+          orcamento2_fornecedor_id: fundo.querySelector('#do-orc2-forn').value || null,
+          orcamento2_valor: o2
+        }
+      }
+      const corpoCorp = {
+        status: fundo.querySelector('#do-situacao').value,
+        area: 'ADMINISTRATIVO_COMERCIAL',
+        fornecedor_id: fundo.querySelector('#do-fornecedor').value || null,
+        data_conclusao: fundo.querySelector('#do-conclusao').value || null,
+        valor_pecas: pecas,
+        valor_terceiros: terceiros,
+        diagnostico: fundo.querySelector('#do-diagnostico').value.trim() || null,
+        ...orcamentos
+      }
+      const { error: erroCorp } = await db.from('ordem_servico').update(corpoCorp).eq('id', os.id)
+      if (erroCorp) { aviso(erroCorp.message); return }
+
+      const arquivoNFCorp = fundo.querySelector('#do-nf-arquivo')?.files[0]
+      if (arquivoNFCorp) {
+        try {
+          const { caminho, nome } = await subirComprovante(arquivoNFCorp, `ordem_servico/${os.id}`)
+          await db.from('anexo').insert({ entidade: 'ORDEM_SERVICO', registro_id: os.id, tipo: 'nota_fiscal', nome_arquivo: nome, storage_path: caminho })
+        } catch (e) { aviso('Salvo, mas a nota fiscal falhou: ' + e.message); return }
+      }
+      fechar(); aoFechar()
+      return
+    }
+
     const area = fundo.querySelector('#do-area').value || null
     const dadosAdmin = lerOrcamentosAdministrativo('do', fundo)
     const status = fundo.querySelector('#do-status').value
@@ -25689,7 +25935,7 @@ async function detalheOS (os, editavel, aoFechar) {
         nome: descricao, unidade_padrao: fundo.querySelector('#do-mat-un').value.trim() || null
       }).select().maybeSingle() // ignora erro de duplicado (unique constraint) de propósito
     }
-    fechar(); detalheOS(os, editavel, aoFechar)
+    fechar(); detalheOS(os, editavel, aoFechar, escopo)
   }
 
   fundo.querySelector('#do-mat-pedir').onclick = async () => {
@@ -25715,7 +25961,7 @@ async function detalheOS (os, editavel, aoFechar) {
       solicitacao_compra_id: novaSolic.id
     })
     if (erroMat) { aviso(erroMat.message); return }
-    fechar(); detalheOS(os, editavel, aoFechar)
+    fechar(); detalheOS(os, editavel, aoFechar, escopo)
   }
 
   fundo.querySelectorAll('[data-excluir-material]').forEach(b => {
@@ -25723,14 +25969,14 @@ async function detalheOS (os, editavel, aoFechar) {
       if (!confirm('Excluir esse material lançado? Use isso quando foi erro de digitação ou o material foi devolvido.')) return
       const { error } = await db.from('os_material').delete().eq('id', b.dataset.excluirMaterial)
       if (error) { aviso(error.message); return }
-      fechar(); detalheOS(os, editavel, aoFechar)
+      fechar(); detalheOS(os, editavel, aoFechar, escopo)
     }
   })
   fundo.querySelectorAll('[data-editar-material]').forEach(b => {
     b.onclick = () => {
       const m = (materiais || []).find(x => x.id === b.dataset.editarMaterial)
       if (!m) return
-      formEditarMaterialOS(m, () => { fechar(); detalheOS(os, editavel, aoFechar) })
+      formEditarMaterialOS(m, () => { fechar(); detalheOS(os, editavel, aoFechar, escopo) })
     }
   })
 
@@ -26031,7 +26277,7 @@ async function manutCustos (alvo, editavel, escopo) {
     $('#mc-conteudo').querySelectorAll('[data-abrir-os]').forEach(tr => {
       tr.onclick = () => {
         const os = lista.find(x => x.id === tr.dataset.abrirOs)
-        if (os) detalheOS(os, editavel, buscar)
+        if (os) detalheOS(os, editavel, buscar, escopo)
       }
     })
   }
