@@ -27156,11 +27156,25 @@ async function frotaItens (alvo, editavel) {
   const listaFiltrada = () => lista.filter(i =>
     (mostrarOcultos || !i.oculto) && (!filtroSetorId || i.setor_id === filtroSetorId))
 
+  // "avulso" = não é frota própria E não tem nenhum rastro de negócio de
+  // verdade (contraparte ou vínculo jurídico) — ou seja, só passou pra
+  // carregar/abastecer, não é um ativo de "recebido em negócio" de fato.
+  const ehAvulso = i => !i.eh_proprio && !i.contraparte && !i.processo_id
+  const avulsosNaoOcultos = lista.filter(i => ehAvulso(i) && !i.oculto)
+
   alvo.innerHTML = `
     <div class="form-grade" style="margin-bottom:16px;">
       ${kpi('Disponíveis para venda', String(disponiveis.length), 'R$ ' + fmtNum(valorDisponivel) + ' em valor de entrada')}
       ${kpi('Vendidos', String(vendidos.length), (resultadoAcumulado >= 0 ? 'ganho' : 'perda') + ' líquida R$ ' + fmtNum(Math.abs(resultadoAcumulado)))}
     </div>
+    ${editavel && avulsosNaoOcultos.length ? `
+    <div class="panel" style="padding:12px 14px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;border-color:var(--warn-text);">
+      <span style="font-size:12.5px;">
+        <b>${avulsosNaoOcultos.length} veículo${avulsosNaoOcultos.length > 1 ? 's' : ''}</b> sem contraparte nem vínculo jurídico —
+        parecem ser só terceiros que passaram pra carregar/abastecer, não itens de negócio de verdade.
+      </span>
+      <button class="btn-secundario mini" id="fr-ocultar-avulsos">ocultar os ${avulsosNaoOcultos.length} da lista de Itens</button>
+    </div>` : ''}
     <div class="filtros" style="margin-bottom:14px;">
       <div class="campo"><label>Setor</label>
         <select id="fr-filtro-setor"><option value="">todos</option>${FROTA_CACHE.setores.map(s => `<option value="${s.id}">${esc(s.nome)}</option>`).join('')}</select></div>
@@ -27179,6 +27193,14 @@ async function frotaItens (alvo, editavel) {
 
   $('#fr-filtro-setor').onchange = () => { filtroSetorId = $('#fr-filtro-setor').value; desenhar() }
   $('#fr-mostrar-ocultos').onchange = () => { mostrarOcultos = $('#fr-mostrar-ocultos').checked; desenhar() }
+  const btnOcultarAvulsos = $('#fr-ocultar-avulsos')
+  if (btnOcultarAvulsos) btnOcultarAvulsos.onclick = async () => {
+    if (!confirm(`Ocultar os ${avulsosNaoOcultos.length} veículos sem contraparte/vínculo da lista de Itens? Você pode reverter a qualquer momento desmarcando "oculto" na edição de cada um.`)) return
+    btnOcultarAvulsos.disabled = true; btnOcultarAvulsos.textContent = 'ocultando...'
+    const { error: erroOcultar } = await db.from('veiculo').update({ oculto: true }).in('id', avulsosNaoOcultos.map(i => i.id))
+    if (erroOcultar) { alert('Não deu: ' + erroOcultar.message); btnOcultarAvulsos.disabled = false; btnOcultarAvulsos.textContent = `ocultar os ${avulsosNaoOcultos.length} da lista de Itens`; return }
+    frotaItens(alvo, editavel)
+  }
 
   alvo.querySelectorAll('[data-modo]').forEach(b => {
     b.onclick = () => {
@@ -27273,7 +27295,7 @@ async function frotaItens (alvo, editavel) {
         return `<tr>
         <td><b>${esc(i.descricao)}</b>${i.ano_modelo ? ` <span class="texto-dim2">(${esc(i.ano_modelo)})</span>` : ''}
           ${ident ? `<br><span class="texto-dim2" style="font-size:11px;">${esc(ident)}</span>` : ''}</td>
-        <td><span class="chip">${i.eh_proprio ? 'Frota própria' : 'Recebido em negócio'}</span></td>
+        <td><span class="chip">${i.eh_proprio ? 'Frota própria' : ehAvulso(i) ? 'Terceiro avulso' : 'Recebido em negócio'}</span></td>
         <td class="texto-dim">${esc(i.contraparte || '—')}</td>
         <td class="num">${i.valor_entrada != null ? 'R$ ' + fmtNum(i.valor_entrada) : '<span class="texto-dim2">—</span>'}</td>
         <td>${i.status_frota === 'VENDIDO' ? '<span class="badge-bom">vendido</span>'
