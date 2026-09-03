@@ -1403,6 +1403,17 @@ function calcularAvisoBomDia (dataOrigemStr, turnoOrigem) {
 function blocoBomDia (registro, prefixoId) {
   const ativo = !!registro?.bom_dia_ativo
   const avisoFmt = registro?.bom_dia_aviso_data ? fmtData(registro.bom_dia_aviso_data) : null
+  // contato com bloqueio de LGPD ("nunca mais me chame") não pode receber
+  // nem ter agendada nenhuma mensagem nova — trava aqui, valendo tanto
+  // pro CRM Comercial quanto pro SDR IA, já que os dois usam esse bloco
+  if (registro?.bloqueio_lgpd) {
+    return `
+      <div class="caixa-texto" style="margin-top:10px;border-color:rgba(var(--critico-rgb),.5);">
+        <div class="rot" style="color:var(--critico-text);">☀️ Estratégia do Bom Dia</div>
+        <p style="font-size:12.5px;margin:8px 0;color:var(--critico-text);">
+          🚫 Contato bloqueado por LGPD — não é possível agendar nem manter mensagens automáticas pra ele.</p>
+      </div>`
+  }
   return `
     <div class="caixa-texto" style="margin-top:10px;">
       <div class="rot">☀️ Estratégia do Bom Dia</div>
@@ -1472,13 +1483,15 @@ function seloBomDia (registro) {
 // ---------------------------------------------------------------
 function montarPausarIA (container, registro) {
   const pausada = !!registro?.ia_pausada
+  const travadaPorLgpd = !!registro?.bloqueio_lgpd
   container.innerHTML = `
     <div class="caixa-texto" style="margin-top:10px;${pausada ? 'border-color:rgba(var(--critico-rgb),.5);' : ''}">
       <div class="rot" style="${pausada ? 'color:var(--critico-text);' : ''}">🤖 IA no WhatsApp</div>
       ${pausada
         ? `<p style="font-size:12.5px;margin:8px 0;color:var(--critico-text);">
-             IA pausada nesse contato — ela não responde mais, só registra o que chegar.</p>
-           <button type="button" class="btn-secundario mini" id="pia-retomar">▶️ Reativar IA</button>`
+             IA pausada nesse contato — ela não responde mais, só registra o que chegar.
+             ${travadaPorLgpd ? ' Bloqueado por LGPD: pra reativar, remova antes o bloqueio de contato abaixo.' : ''}</p>
+           <button type="button" class="btn-secundario mini" id="pia-retomar" ${travadaPorLgpd ? 'disabled title="Remova o bloqueio de LGPD antes de reativar a IA"' : ''}>▶️ Reativar IA</button>`
         : `<p class="texto-dim2" style="font-size:12px;margin:8px 0;">
              Deu errado com esse contato? Pausa a IA aqui — ela para de responder, mas continua registrando
              o que chegar, pra ficar só com atendimento humano.</p>
@@ -1494,12 +1507,101 @@ function montarPausarIA (container, registro) {
     montarPausarIA(container, registro)
   }
   const btnRetomar = container.querySelector('#pia-retomar')
-  if (btnRetomar) btnRetomar.onclick = async () => {
+  if (btnRetomar && !travadaPorLgpd) btnRetomar.onclick = async () => {
     const { error } = await db.from('leads').update({ ia_pausada: false }).eq('id', registro.id)
     if (error) { alert('Não consegui reativar: ' + error.message); return }
     registro.ia_pausada = false
     montarPausarIA(container, registro)
   }
+}
+
+// ---------------------------------------------------------------
+// Bloqueio de contato por LGPD — quando o cliente pede pra nunca mais
+// ser procurado. Fica registrado no sistema quem bloqueou, quando e o
+// motivo, e trava as ações de NOVO contato pra esse cadastro (agenda,
+// Estratégia do Bom Dia, IA do SDR, transferência/envio pra vendedor).
+// Vale nos dois lugares — CRM Comercial (tabela `lead`) e SDR IA
+// (tabela `leads`) — porque o mesmo telefone pode existir nas duas
+// tabelas; por isso, ao bloquear/desbloquear, tenta espelhar a mudança
+// no outro CRM pelo telefone (best effort: se não achar ou a tabela
+// ainda não tiver as colunas migradas, não trava a ação principal).
+// ---------------------------------------------------------------
+function montarBloqueioLgpd (container, tabela, registro, aoMudar) {
+  const bloqueado = !!registro?.bloqueio_lgpd
+  container.innerHTML = `
+    <div class="caixa-texto" style="margin-top:10px;${bloqueado ? 'border-color:rgba(var(--critico-rgb),.5);background:rgba(var(--critico-rgb),.06);' : ''}">
+      <div class="rot" style="${bloqueado ? 'color:var(--critico-text);' : ''}">🚫 Bloqueio de contato (LGPD)</div>
+      ${bloqueado
+        ? `<p style="font-size:12.5px;margin:8px 0 4px;color:var(--critico-text);">
+             Bloqueado em ${fmtQuando(registro.bloqueio_lgpd_em) ?? '—'}${registro.bloqueio_lgpd_motivo ? ' — motivo: ' + esc(registro.bloqueio_lgpd_motivo) : ''}.
+             Nenhuma ação de novo contato (agenda, Bom Dia, IA, transferência) fica disponível pra esse cadastro
+             enquanto o bloqueio estiver ativo — vale pro CRM Comercial e pro SDR IA.</p>
+           <button type="button" class="btn-secundario mini" id="lgpd-desbloquear">Remover bloqueio</button>`
+        : `<p class="texto-dim2" style="font-size:12px;margin:8px 0;">
+             O cliente pediu pra não ser mais contatado? Marca aqui — fica registrado no sistema e bloqueia
+             novas ações de contato pra esse cadastro, nesse CRM e no outro (Comercial/SDR IA), quando o
+             telefone coincidir.</p>
+           <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;">
+             <div class="campo" style="flex:1;min-width:180px;margin:0;"><label style="font-size:11px;">Motivo (opcional)</label>
+               <input id="lgpd-motivo" placeholder="ex: pediu pra não ligar/mandar mensagem mais"></div>
+             <button type="button" class="btn-secundario mini" id="lgpd-bloquear" style="border-color:var(--critico-text);color:var(--critico-text);">🚫 Bloquear contato</button>
+           </div>`}
+    </div>`
+
+  const btnBloquear = container.querySelector('#lgpd-bloquear')
+  if (btnBloquear) btnBloquear.onclick = async () => {
+    if (!confirm('Bloquear esse contato por LGPD? Isso impede novas ações de contato com ele, tanto no CRM Comercial quanto no SDR IA.')) return
+    const motivo = container.querySelector('#lgpd-motivo')?.value.trim() || null
+    btnBloquear.disabled = true
+    const ok = await aplicarBloqueioLgpd(tabela, registro, true, motivo)
+    if (!ok) { btnBloquear.disabled = false; return }
+    montarBloqueioLgpd(container, tabela, registro, aoMudar)
+    aoMudar?.()
+  }
+  const btnDesbloquear = container.querySelector('#lgpd-desbloquear')
+  if (btnDesbloquear) btnDesbloquear.onclick = async () => {
+    if (!confirm('Remover o bloqueio de LGPD desse contato?')) return
+    btnDesbloquear.disabled = true
+    const ok = await aplicarBloqueioLgpd(tabela, registro, false, null)
+    if (!ok) { btnDesbloquear.disabled = false; return }
+    montarBloqueioLgpd(container, tabela, registro, aoMudar)
+    aoMudar?.()
+  }
+}
+
+// Grava o bloqueio (ou a remoção) na tabela informada ('lead' ou 'leads')
+// e espelha pelo telefone na outra tabela, se existir contato lá. Ao
+// bloquear um lead do SDR, também pausa a IA (reaproveita a flag
+// "ia_pausada", que o backend do webhook já respeita de verdade).
+async function aplicarBloqueioLgpd (tabela, registro, bloquear, motivo) {
+  const agora = new Date().toISOString()
+  const patch = {
+    bloqueio_lgpd: bloquear,
+    bloqueio_lgpd_em: bloquear ? agora : null,
+    bloqueio_lgpd_motivo: bloquear ? motivo : null,
+    bloqueio_lgpd_por: bloquear ? PERFIL.pessoaId : null
+  }
+  if (tabela === 'leads' && bloquear) {
+    patch.ia_pausada = true; patch.ia_pausada_em = agora; patch.ia_pausada_por = PERFIL.pessoaId
+  }
+  const { error } = await db.from(tabela).update(patch).eq('id', registro.id)
+  if (error) { alert('Não consegui registrar o bloqueio: ' + error.message); return false }
+  Object.assign(registro, patch)
+
+  // espelha no outro CRM pelo telefone — não trava a ação principal se falhar
+  const telefone = (registro.telefone || '').trim()
+  if (telefone) {
+    const outraTabela = tabela === 'lead' ? 'leads' : 'lead'
+    const patchEspelho = {
+      bloqueio_lgpd: patch.bloqueio_lgpd, bloqueio_lgpd_em: patch.bloqueio_lgpd_em,
+      bloqueio_lgpd_motivo: patch.bloqueio_lgpd_motivo, bloqueio_lgpd_por: patch.bloqueio_lgpd_por
+    }
+    if (outraTabela === 'leads' && bloquear) {
+      patchEspelho.ia_pausada = true; patchEspelho.ia_pausada_em = agora; patchEspelho.ia_pausada_por = PERFIL.pessoaId
+    }
+    try { await db.from(outraTabela).update(patchEspelho).eq('telefone', telefone) } catch {}
+  }
+  return true
 }
 // deixa o papel (ADMIN, GESTOR_COMERCIAL...) legível — "Gestor Comercial"
 // em vez do nome cru do banco com underline
@@ -12427,6 +12529,7 @@ const selLead = `
   id, nome, cliente_id, vendedor_id, origem, uf, municipio, telefone, email,
   etapa, valor_estimado, observacoes, criado_em, atualizado_em, atribuido_por_id, atribuido_em, arquivado,
   bom_dia_ativo, bom_dia_origem_data, bom_dia_turno_origem, bom_dia_aviso_data, bom_dia_turno_aviso, bom_dia_criado_por,
+  bloqueio_lgpd, bloqueio_lgpd_em, bloqueio_lgpd_motivo, bloqueio_lgpd_por,
   vendedor:vendedor_id ( nome ), cliente:cliente_id ( razao_social, nome_fantasia ),
   atribuidoPor:atribuido_por_id ( nome )`
 
@@ -13958,15 +14061,18 @@ function formLead (l, editavel, gerencia, aoFechar) {
       <textarea id="ld-obs" style="min-height:260px;font-size:14.5px;line-height:1.5;" ${editavel ? '' : 'disabled'}>${esc(l?.observacoes ?? '')}</textarea></div>
     ${l ? `<div id="ld-sdr-historico"></div>` : ''}
     ${l ? `<div id="ld-bomdia"></div>` : ''}
+    ${l ? `<div id="ld-lgpd"></div>` : ''}
     ${l ? `<div class="cabeca-secao" style="margin-top:16px;margin-bottom:4px;">
         <h3 style="font-family:var(--serif);font-size:14px;">Agenda</h3></div>
       <div id="ld-agenda-lista" style="margin-bottom:8px;"><p class="texto-dim2" style="font-size:12px;">carregando agenda...</p></div>
-      ${editavel ? `<div class="form-grade" style="grid-template-columns:1fr 1fr 1.4fr auto;align-items:end;">
+      ${l.bloqueio_lgpd ? `<p class="texto-dim2" style="font-size:12px;color:var(--critico-text);">
+          🚫 Contato bloqueado por LGPD — não é possível agendar novo compromisso com ele.</p>`
+        : (editavel ? `<div class="form-grade" style="grid-template-columns:1fr 1fr 1.4fr auto;align-items:end;">
         <div class="campo"><label>Data</label><input id="ag-data" type="date"></div>
         <div class="campo"><label>Hora</label><input id="ag-hora" type="time" value="09:00"></div>
         <div class="campo"><label>Título / observação</label><input id="ag-titulo" placeholder="ex: ligar, levar proposta..."></div>
         <button class="btn-secundario mini" id="ag-adicionar" type="button" style="height:38px;">Adicionar</button>
-      </div>` : ''}` : ''}
+      </div>` : '')}` : ''}
     ${l ? `<div id="ld-proposta-wrap" style="${l.etapa === 'PROPOSTA' ? '' : 'display:none;'}">
       <div class="cabeca-secao" style="margin-top:16px;margin-bottom:4px;">
         <h3 style="font-family:var(--serif);font-size:14px;">Proposta</h3></div>
@@ -14053,6 +14159,11 @@ function formLead (l, editavel, gerencia, aoFechar) {
 
   if (l) carregarAgendaLead(fundo, l, editavel)
   if (l) montarBomDia(fundo.querySelector('#ld-bomdia'), 'ld', 'lead', l)
+  if (l) montarBloqueioLgpd(fundo.querySelector('#ld-lgpd'), 'lead', l, () => {
+    aoFechar()
+    fechar()
+    formLead(l, editavel, gerencia, aoFechar)
+  })
   if (l && l.origem === 'whatsapp_sdr' && l.telefone) carregarHistoricoSdrNoLead(fundo, l)
   let propostaCarregada = l && l.etapa === 'PROPOSTA'
   if (propostaCarregada) carregarPropostaLead(fundo, l, editavel)
@@ -14215,6 +14326,7 @@ function renderFunilGestao (alvo, lista, editavel, aoMudar, gerencia = true) {
       ${alerta ? `<span class="dot ${alerta}" title="${alerta === 'atrasado' ? 'Parado há mais de 15 dias' : alerta === 'atencao' ? 'Parado há mais de 7 dias' : 'Dentro do prazo'}"></span>` : ''}
       <div class="nome">${esc(l.nome)}</div>
       <div class="sub">${esc([ROTULO_ETAPA_LEAD[l.etapa] ?? l.etapa, gerencia ? (l.vendedor?.nome ?? 'sem vendedor') : null].filter(Boolean).join(' · '))}</div>
+      ${l.bloqueio_lgpd ? `<div style="margin-top:6px;"><span class="badge-alerta" style="background:rgba(var(--critico-rgb),.18);color:var(--critico-text);">🚫 Bloqueado (LGPD)</span></div>` : ''}
       <div class="linhas">
         ${l.telefone ? `<div><span class="ic">📞</span>${esc(l.telefone)}</div>` : ''}
         ${l.municipio || l.uf ? `<div><span class="ic">📍</span>${esc([l.municipio, l.uf].filter(Boolean).join(' / '))}</div>` : ''}
@@ -14225,7 +14337,7 @@ function renderFunilGestao (alvo, lista, editavel, aoMudar, gerencia = true) {
       ${seloBomDia(l) ? `<div style="margin-top:7px;">${seloBomDia(l)}</div>` : ''}
       <div class="rodape">
         <span class="data">${fmtData((l.criado_em || '').slice(0, 10))}</span>
-        <button type="button" class="btn-agendar" data-agendar="${l.id}" onclick="event.stopPropagation()">📅 Agendar</button>
+        ${l.bloqueio_lgpd ? '' : `<button type="button" class="btn-agendar" data-agendar="${l.id}" onclick="event.stopPropagation()">📅 Agendar</button>`}
       </div>
       </div>`
   }
@@ -16436,6 +16548,7 @@ function renderItensListaSdr (filtro) {
         <div style="font-size:11.5px;color:var(--dim2);margin-top:2px;">${esc(l.telefone)}</div>
         <div style="margin-top:6px;display:flex;gap:5px;flex-wrap:wrap;align-items:center;">
           <span class="${corStatusLeadSdr(l.status)}" style="font-size:10px;">${esc(ROTULO_STATUS_LEAD_SDR[l.status] || l.status)}</span>
+          ${l.bloqueio_lgpd ? `<span class="badge-alerta" style="font-size:10px;background:rgba(var(--critico-rgb),.18);color:var(--critico-text);">🚫 LGPD</span>` : ''}
           ${l.perfil_disc ? `<span class="chip" style="font-size:10px;background:rgba(var(--rust-rgb),.14);color:var(--rust);border:none;">${esc(l.perfil_disc)}</span>` : ''}
           ${l.enviado_para_consultor ? '<span class="badge-bom" style="font-size:10px;">✓ enviado</span>' : ''}
         </div>
@@ -16482,7 +16595,11 @@ function renderDetalheSdr (lead) {
   }).join('')
 
   let blocoEnvio = ''
-  if (lead.enviado_para_consultor) {
+  if (lead.bloqueio_lgpd) {
+    blocoEnvio = `<p style="font-size:12.5px;margin:0;color:var(--critico-text);">
+      🚫 Contato bloqueado por LGPD — não é possível enviar, transferir ou notificar esse lead pra um vendedor.
+      Remova o bloqueio na 📇 Ficha se precisar retomar o contato.</p>`
+  } else if (lead.enviado_para_consultor) {
     blocoEnvio = `<div class="badge-bom" style="display:inline-block;padding:5px 10px;">✓ Enviado ao consultor${nomeVendedorCrm ? ' — ' + esc(nomeVendedorCrm) : ''}</div>`
   } else if (jaExisteNoCrm) {
     blocoEnvio = `
@@ -16515,6 +16632,7 @@ function renderDetalheSdr (lead) {
       </div>
       <div style="display:flex;gap:8px;align-items:center;flex:none;">
         ${seloBomDia(lead)}
+        ${lead.bloqueio_lgpd ? `<span class="badge-alerta" style="background:rgba(var(--critico-rgb),.18);color:var(--critico-text);">🚫 LGPD</span>` : ''}
         <span class="${corStatusLeadSdr(lead.status)}">${esc(ROTULO_STATUS_LEAD_SDR[lead.status] || lead.status)}</span>
         <button class="btn-secundario mini" id="sdr-btn-ficha" title="Ficha completa, histórico de contato e transferência">📇 Ficha</button>
         <button class="btn-secundario mini" id="sdr-btn-relatorio" title="Ver relatório completo da IA">⋮</button>
@@ -16695,17 +16813,18 @@ function abrirFichaSdr (lead) {
     <div class="campo"><label>Observação (opcional)</label><input id="sf-hist-obs" placeholder="o que foi dito, resultado da ligação..."></div>
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:6px;flex-wrap:wrap;">
       <label style="font-size:12px;display:flex;gap:6px;align-items:center;">
-        <input type="checkbox" id="sf-hist-bomdia"> já ativar a Estratégia do Bom Dia com essa data/turno
+        <input type="checkbox" id="sf-hist-bomdia" ${lead.bloqueio_lgpd ? 'disabled title="Contato bloqueado por LGPD"' : ''}> já ativar a Estratégia do Bom Dia com essa data/turno
       </label>
       <button class="btn-secundario mini" id="sf-hist-add" type="button">Registrar contato</button>
     </div>
 
     <div id="sf-bomdia"></div>
     <div id="sf-pausar-ia"></div>
+    <div id="sf-lgpd"></div>
 
     <div class="acoes" style="margin-top:14px;">
       <button class="btn" id="sf-salvar">Salvar</button>
-      ${souGerenciaCrm() ? `<button class="btn-secundario" id="sf-transferir">Transferir pra vendedor</button>` : ''}
+      ${souGerenciaCrm() && !lead.bloqueio_lgpd ? `<button class="btn-secundario" id="sf-transferir">Transferir pra vendedor</button>` : ''}
       <button class="btn-secundario" id="sf-fechar">Fechar</button>
     </div>
     <div class="recado oculto" id="sf-recado"></div>
@@ -16841,6 +16960,12 @@ function abrirFichaSdr (lead) {
 
   montarBomDia(fundo.querySelector('#sf-bomdia'), 'sf', 'leads', lead)
   montarPausarIA(fundo.querySelector('#sf-pausar-ia'), lead)
+  montarBloqueioLgpd(fundo.querySelector('#sf-lgpd'), 'leads', lead, () => {
+    renderListaSdr()
+    renderDetalheSdr(lead)
+    fundo.remove()
+    abrirFichaSdr(lead)
+  })
 
   const btnTransferir = fundo.querySelector('#sf-transferir')
   if (btnTransferir) btnTransferir.onclick = () => abrirTransferirLeadSdr(lead)
@@ -17034,7 +17159,9 @@ async function sdrAbaFunil (alvo) {
           ${avatarHtml(null, l.nome || l.telefone, 26)}
           <span class="sdr-kc-nome">${esc(l.nome || l.telefone)}</span>
         </div>
-        ${l.ia_pausada ? `<span class="chip" title="IA pausada nesse contato" style="background:rgba(var(--critico-rgb),.18);color:var(--critico-text);border:none;">⏸ IA pausada</span>` : ''}
+        ${l.bloqueio_lgpd
+          ? `<span class="chip" title="Bloqueio de contato por LGPD" style="background:rgba(var(--critico-rgb),.25);color:var(--critico-text);border:none;font-weight:700;">🚫 LGPD</span>`
+          : (l.ia_pausada ? `<span class="chip" title="IA pausada nesse contato" style="background:rgba(var(--critico-rgb),.18);color:var(--critico-text);border:none;">⏸ IA pausada</span>` : '')}
         ${l.perfil_disc ? `<span class="sdr-kc-disc" title="Perfil DISC inferido pela IA">${esc(l.perfil_disc)}</span>` : ''}
       </div>
       <div class="sdr-kc-campos">
@@ -17043,8 +17170,10 @@ async function sdrAbaFunil (alvo) {
       </div>
       ${seloBomDia(l) ? `<div style="margin-top:6px;">${seloBomDia(l)}</div>` : ''}
       <div class="sdr-kc-acoes">
-        <a href="https://wa.me/${esc((l.telefone || '').replace(/\D/g, ''))}" target="_blank" rel="noopener"
-           onclick="event.stopPropagation()" title="Chamar no WhatsApp">📞</a>
+        ${l.bloqueio_lgpd
+          ? `<span title="Contato bloqueado por LGPD" style="opacity:.35;">📞</span>`
+          : `<a href="https://wa.me/${esc((l.telefone || '').replace(/\D/g, ''))}" target="_blank" rel="noopener"
+           onclick="event.stopPropagation()" title="Chamar no WhatsApp">📞</a>`}
         <button type="button" data-abrir-conversa="${l.id}" onclick="event.stopPropagation()" title="Ver conversa">💬</button>
         <button type="button" data-ver-relatorio="${l.id}" onclick="event.stopPropagation()" title="Relatório / DISC">🏷️</button>
         <button type="button" disabled title="Agendar (em breve)" style="opacity:.35;cursor:not-allowed;">📅</button>
@@ -31615,7 +31744,7 @@ function formResponder360 (item, aoFechar) {
 // ----- Planos de desenvolvimento (PDI) -----
 async function desempPdi (alvo, editavel) {
   const { data, error } = await db.from('plano_desenvolvimento')
-    .select('id,objetivo,acoes,prazo,status,pessoa:pessoa_id(nome,foto_url),responsavel:responsavel_acompanhamento_id(nome)')
+    .select('id,objetivo,acoes,prazo,status,criado_em,concluido_em,pessoa:pessoa_id(nome,foto_url),responsavel:responsavel_acompanhamento_id(nome)')
     .order('prazo', { ascending: true, nullsFirst: false })
   if (faltaMigracao(error)) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
   const lista = data || []
@@ -31636,7 +31765,7 @@ async function desempPdi (alvo, editavel) {
     ${lista.length ? `
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;">
         ${lista.map(p => `
-          <div class="panel" style="padding:16px;">
+          <div class="panel" style="padding:16px;cursor:pointer;" data-abrir-pdi="${p.id}" title="Ver relatório completo do plano">
             <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;">
               ${avatarHtml(p.pessoa?.foto_url, p.pessoa?.nome ?? '—', 36)}
               <div style="min-width:0;flex:1;">
@@ -31658,14 +31787,73 @@ async function desempPdi (alvo, editavel) {
         <p class="texto-dim2" style="font-size:12.5px;margin:0;">${editavel ? 'Clica em "+ Novo plano" pra criar o primeiro.' : 'Assim que o RH criar um plano pra você, ele aparece aqui.'}</p>
       </div>`}`
 
+  // clique no card explode o relatório de leitura; o botão "editar" fica
+  // por cima e não deve disparar os dois ao mesmo tempo
+  alvo.querySelectorAll('[data-abrir-pdi]').forEach(card => {
+    card.onclick = () => abrirDetalhePdi(lista.find(p => p.id === card.dataset.abrirPdi), editavel, () => desempPdi(alvo, editavel))
+  })
+
   if (!editavel) return
   $('#pdi-novo').onclick = () => formPdi(null, () => desempPdi(alvo, editavel))
   alvo.querySelectorAll('[data-editar]').forEach(b => {
-    b.onclick = async () => {
+    b.onclick = async (e) => {
+      e.stopPropagation()
       const { data: item } = await db.from('plano_desenvolvimento').select('*').eq('id', b.dataset.editar).single()
       formPdi(item, () => desempPdi(alvo, editavel))
     }
   })
+}
+
+// ----- Relatório de leitura do plano de desenvolvimento — abre ao
+// clicar no card. Junta tudo (pessoa, responsável, prazo, status,
+// objetivo e ações combinadas) numa tela só, fácil de ler de cima a
+// baixo, sem precisar entrar no modo de edição pra entender o plano. -----
+function abrirDetalhePdi (p, editavel, aoFechar) {
+  if (!p) return
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+
+  const blocoTexto = (rot, texto) => `
+    <div style="border:1px solid var(--line2);border-radius:8px;padding:12px 14px;margin-bottom:12px;">
+      <div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--dim2);font-weight:700;margin-bottom:6px;">${esc(rot)}</div>
+      <p style="margin:0;font-size:13.5px;line-height:1.55;white-space:pre-wrap;">${texto ? esc(texto) : '—'}</p>
+    </div>`
+
+  fundo.innerHTML = `<div class="modal" style="max-width:600px;">
+    <div class="cabeca-secao">
+      <div style="display:flex;gap:10px;align-items:center;">
+        ${avatarHtml(p.pessoa?.foto_url, p.pessoa?.nome ?? '—', 40)}
+        <h3 style="margin:0;">${esc(p.pessoa?.nome ?? '—')}</h3>
+      </div>
+      <span class="${p.status === 'CONCLUIDO' ? 'badge-bom' : p.status === 'ATRASADO' ? 'badge-alerta' : 'chip'}">${esc(ROTULO_STATUS_PDI[p.status])}</span>
+    </div>
+    <p class="texto-dim2" style="font-size:11.5px;margin:-6px 0 16px;">🌱 Plano de desenvolvimento individual</p>
+
+    <div class="ficha" style="margin-bottom:16px;">
+      <div class="item"><div class="rot">Quem acompanha</div><div class="val">${esc(p.responsavel?.nome ?? '—')}</div></div>
+      <div class="item"><div class="rot">Prazo</div><div class="val">${p.prazo ? fmtData(p.prazo) : 'sem prazo'}</div></div>
+      <div class="item"><div class="rot">Criado em</div><div class="val">${p.criado_em ? fmtData((p.criado_em || '').slice(0, 10)) : '—'}</div></div>
+      <div class="item"><div class="rot">Concluído em</div><div class="val">${p.concluido_em ? fmtData((p.concluido_em || '').slice(0, 10)) : '—'}</div></div>
+    </div>
+
+    ${blocoTexto('Objetivo', p.objetivo)}
+    ${blocoTexto('Ações combinadas', p.acoes)}
+
+    <div class="acoes" style="margin-top:14px;display:flex;justify-content:space-between;align-items:center;">
+      <button class="btn-secundario" id="dp-fechar">Fechar</button>
+      ${editavel ? '<button class="btn" id="dp-editar">Editar plano</button>' : ''}
+    </div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+  fundo.querySelector('#dp-fechar').onclick = () => fundo.remove()
+
+  const btnEditar = fundo.querySelector('#dp-editar')
+  if (btnEditar) btnEditar.onclick = async () => {
+    const { data: item } = await db.from('plano_desenvolvimento').select('*').eq('id', p.id).single()
+    fundo.remove()
+    formPdi(item, aoFechar)
+  }
 }
 
 function formPdi (item, aoFechar) {
