@@ -25484,7 +25484,7 @@ function manutLancar (alvo, editavel, escopo) {
 // ---------------------------------------------------------------
 const VALOR_LIMITE_ORCAMENTO_CORPORATIVO = 1500
 
-function manutLancarCorporativo (alvo, editavel, escopo) {
+async function manutLancarCorporativo (alvo, editavel, escopo) {
   if (!editavel) { alvo.innerHTML = `<div class="panel" style="padding:22px;">
     <p class="texto-dim">Você pode consultar, mas não lançar manutenções.</p></div>`; return }
 
@@ -25495,10 +25495,28 @@ function manutLancarCorporativo (alvo, editavel, escopo) {
   const veiculosDisponiveis = MANUT_CACHE.veiculos.filter(v => !v.oculto && v.status_frota !== 'VENDIDO')
   const opcoesDepartamento = MANUT_CACHE.setores.filter(s => SETORES_FROTA_CORPORATIVA.includes(s.id))
 
+  // chamados já abertos (pedidos ainda sem lançamento) — pra fechar o
+  // círculo em vez de criar um lançamento solto e duplicado
+  const { data: chamadosRaw } = await db.from('ordem_servico')
+    .select('id,codigo,descricao_problema,veiculo_id,data_solicitacao,veiculo:veiculo_id(placa,descricao)')
+    .eq('status', 'ABERTA').not('veiculo_id', 'is', null).order('data_solicitacao', { ascending: false })
+  const chamadosAbertos = await filtrarOsPorEscopo(chamadosRaw || [], 'corporativo')
+  const porId = id => chamadosAbertos.find(c => c.id === id)
+
   alvo.innerHTML = `
     <div class="panel" style="padding:20px;max-width:640px;">
       <h3 style="font-family:var(--serif);font-size:18px;margin:0 0 4px;">Lançar manutenção</h3>
       <p class="texto-dim2" style="font-size:12px;margin:0 0 14px;">Pra quando o carro já foi (ou está) na oficina — sem fila de programação, é só registrar.</p>
+
+      ${chamadosAbertos.length ? `
+      <div class="campo" style="margin-bottom:12px;"><label>Chamado em aberto (opcional)</label>
+        <select id="mlc-chamado"><option value="">Novo lançamento (sem chamado)</option>
+          ${chamadosAbertos.map(c => `<option value="${c.id}">${esc(c.codigo)} — ${esc(c.veiculo?.placa ?? '')}${c.veiculo?.descricao ? ' — ' + esc(c.veiculo.descricao) : ''}${c.descricao_problema ? ' · ' + esc(c.descricao_problema.slice(0, 40)) : ''}</option>`).join('')}
+        </select>
+        <p class="texto-dim2" style="font-size:11px;margin:4px 0 0;">Escolhendo um chamado, ele é completado em vez de criar um lançamento novo.</p></div>
+      <div class="caixa-texto oculto" id="mlc-problema-chamado" style="margin-bottom:12px;"></div>
+      ` : ''}
+
       <div class="form-grade">
         <div class="campo" style="grid-column:1/-1;"><label>Veículo *</label>
           <select id="mlc-veiculo"><option value="">Selecione...</option>
@@ -25510,8 +25528,7 @@ function manutLancarCorporativo (alvo, editavel, escopo) {
           <textarea id="mlc-feito" style="min-height:70px;" placeholder="Ex.: troca dos 4 pneus, revisão dos 10 mil km..."></textarea></div>
         <div class="campo"><label>Oficina / mecânico</label>
           <select id="mlc-fornecedor"><option value="">selecionar da lista...</option>${MANUT_CACHE.fornecedores.map(f => `<option value="${f.id}">${esc(f.nome)}</option>`).join('')}</select></div>
-        <div class="campo"><label>Ou nome (se não estiver na lista)</label>
-          <input id="mlc-fornecedor-texto" placeholder="opcional"></div>
+        <div class="campo" style="align-self:end;"><button type="button" class="btn-secundario mini" id="mlc-fornecedor-novo">+ nova oficina</button></div>
         <div class="campo"><label>Data *</label><input type="date" id="mlc-data" value="${hoje}"></div>
         <div class="campo"><label>Valor (R$) *</label><input id="mlc-valor" inputmode="decimal" placeholder="0,00"></div>
         <div class="campo" style="grid-column:1/-1;"><label>Categoria financeira</label>
@@ -25568,7 +25585,69 @@ function manutLancarCorporativo (alvo, editavel, escopo) {
   }
   $('#mlc-veiculo').onchange = alternarDepartamento
 
+  // escolher um chamado em aberto trava o veículo (já é o carro do chamado)
+  // e mostra o problema relatado como referência, pra completar em cima
+  const campoChamado = $('#mlc-chamado')
+  if (campoChamado) campoChamado.onchange = () => {
+    const chamado = porId(campoChamado.value)
+    const boxProblema = $('#mlc-problema-chamado')
+    if (!chamado) {
+      boxProblema.classList.add('oculto')
+      $('#mlc-veiculo').disabled = false
+      return
+    }
+    $('#mlc-veiculo').value = chamado.veiculo_id
+    $('#mlc-veiculo').disabled = true
+    alternarDepartamento()
+    boxProblema.classList.remove('oculto')
+    boxProblema.innerHTML = `<div class="rot">Problema relatado nesse chamado</div><p>${esc(chamado.descricao_problema ?? 'não informado')}</p>`
+  }
+
+  // + nova oficina — cadastra de verdade na tabela de fornecedores (a
+  // mesma usada em Compras e em Manutenção > Terceiros), não é só um texto solto
+  $('#mlc-fornecedor-novo').onclick = () => {
+    const fundo = document.createElement('div')
+    fundo.className = 'modal-fundo'
+    fundo.style.zIndex = 10001
+    fundo.innerHTML = `<div class="modal" style="max-width:420px;">
+      <h3>Nova oficina / fornecedor</h3>
+      <div class="campo"><label>Nome *</label><input id="mfn-nome" placeholder="Ex: Rota Auto Elétrica"></div>
+      <div class="campo" style="margin-top:8px;"><label>CNPJ/CPF</label><input id="mfn-doc" placeholder="opcional"></div>
+      <div class="campo" style="margin-top:8px;"><label>Contato</label><input id="mfn-contato" placeholder="telefone, e-mail... opcional"></div>
+      <div class="acoes" style="margin-top:14px;">
+        <button class="btn" id="mfn-salvar">Cadastrar</button>
+        <button class="btn-secundario" id="mfn-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="mfn-recado"></div>
+    </div>`
+    document.body.appendChild(fundo)
+    const fechar = () => fundo.remove()
+    fundo.querySelector('#mfn-cancelar').onclick = fechar
+    fundo.onclick = e => { if (e.target === fundo) fechar() }
+    fundo.querySelector('#mfn-salvar').onclick = async () => {
+      const nome = fundo.querySelector('#mfn-nome').value.trim()
+      const elRecado = fundo.querySelector('#mfn-recado')
+      const erroMsg = t => { elRecado.textContent = t; elRecado.classList.remove('oculto'); elRecado.style.borderColor = 'var(--warn-text)'; elRecado.style.color = 'var(--warn-text)' }
+      if (!nome) { erroMsg('Escreva o nome da oficina.'); return }
+      const { data: novoForn, error } = await db.from('fornecedor').insert({
+        nome, cnpj_cpf: fundo.querySelector('#mfn-doc').value.trim() || null,
+        contato: fundo.querySelector('#mfn-contato').value.trim() || null,
+        criado_por: PERFIL.pessoaId
+      }).select('id,nome').single()
+      if (error) { erroMsg(error.message); return }
+      MANUT_CACHE.fornecedores.push(novoForn)
+      MANUT_CACHE.fornecedores.sort((a, b) => a.nome.localeCompare(b.nome))
+      const opcoesAtualizadas = MANUT_CACHE.fornecedores.map(f => `<option value="${f.id}">${esc(f.nome)}</option>`).join('')
+      $('#mlc-fornecedor').innerHTML = `<option value="">selecionar da lista...</option>${opcoesAtualizadas}`
+      $('#mlc-fornecedor').value = novoForn.id
+      $('#mlc-orc1-forn').innerHTML = `<option value="">—</option>${opcoesAtualizadas}`
+      $('#mlc-orc2-forn').innerHTML = `<option value="">—</option>${opcoesAtualizadas}`
+      fechar()
+    }
+  }
+
   $('#mlc-salvar').onclick = async () => {
+    const chamado = campoChamado ? porId(campoChamado.value) : null
     const veiculoId = $('#mlc-veiculo').value
     const feito = $('#mlc-feito').value.trim()
     const valor = numeroBR($('#mlc-valor').value)
@@ -25595,7 +25674,6 @@ function manutLancarCorporativo (alvo, editavel, escopo) {
     }
 
     const fornecedorId = $('#mlc-fornecedor').value || null
-    const fornecedorTexto = $('#mlc-fornecedor-texto').value.trim()
     const situacao = $('#mlc-situacao').value
     const dataEscolhida = $('#mlc-data').value || hoje
 
@@ -25610,37 +25688,50 @@ function manutLancarCorporativo (alvo, editavel, escopo) {
       IDS_OS_FROTA_CORPORATIVA = null
     }
 
-    const { data: novaOS, error } = await db.from('ordem_servico').insert({
-      veiculo_id: veiculoId,
+    const camposComuns = {
       area: 'ADMINISTRATIVO_COMERCIAL',
-      tipo: 'Manutenção (frota corporativa)',
-      prioridade: 'MEDIA',
       status: situacao,
       fornecedor_id: fornecedorId,
-      descricao_problema: feito + (fornecedorTexto ? `\nOficina: ${fornecedorTexto}` : ''),
-      data_solicitacao: new Date(dataEscolhida + 'T12:00:00').toISOString(),
+      diagnostico: feito,
       data_conclusao: situacao === 'CONCLUIDA' ? dataEscolhida : null,
       valor_terceiros: valor,
       categoria_financeira_id: $('#mlc-categoria').value || null,
       ...orcamentos
-    }).select('id').single()
+    }
+
+    let novaOSId, error
+    if (chamado) {
+      // completa o chamado existente em vez de criar um lançamento solto
+      ;({ error } = await db.from('ordem_servico').update(camposComuns).eq('id', chamado.id))
+      novaOSId = chamado.id
+    } else {
+      const { data: novaOS, error: erroInsert } = await db.from('ordem_servico').insert({
+        veiculo_id: veiculoId,
+        tipo: 'Manutenção (frota corporativa)',
+        prioridade: 'MEDIA',
+        descricao_problema: feito,
+        data_solicitacao: new Date(dataEscolhida + 'T12:00:00').toISOString(),
+        ...camposComuns
+      }).select('id').single()
+      novaOSId = novaOS?.id
+      error = erroInsert
+    }
 
     if (error) { btn.disabled = false; btn.textContent = 'Lançar manutenção'; aviso(error.message); return }
 
     const arquivoNF = $('#mlc-nf-arquivo').files[0]
     if (arquivoNF) {
       try {
-        const { caminho, nome } = await subirComprovante(arquivoNF, `ordem_servico/${novaOS.id}`)
-        await db.from('anexo').insert({ entidade: 'ORDEM_SERVICO', registro_id: novaOS.id, tipo: 'nota_fiscal', nome_arquivo: nome, storage_path: caminho })
+        const { caminho, nome } = await subirComprovante(arquivoNF, `ordem_servico/${novaOSId}`)
+        await db.from('anexo').insert({ entidade: 'ORDEM_SERVICO', registro_id: novaOSId, tipo: 'nota_fiscal', nome_arquivo: nome, storage_path: caminho })
       } catch (e) { aviso('Manutenção salva, mas a nota fiscal falhou: ' + e.message); btn.disabled = false; btn.textContent = 'Lançar manutenção'; return }
     }
 
     IDS_OS_FROTA_CORPORATIVA = null
     btn.disabled = false; btn.textContent = 'Lançar manutenção'
-    aviso('Manutenção lançada.', false)
+    aviso(chamado ? 'Chamado completado.' : 'Manutenção lançada.', false)
     $('#mlc-feito').value = ''; $('#mlc-valor').value = ''
     $('#mlc-orc1-valor').value = ''; $('#mlc-orc2-valor').value = ''
-    $('#mlc-fornecedor-texto').value = ''
     alternarOrcamentos()
   }
 }
@@ -26168,8 +26259,11 @@ async function detalheOS (os, editavel, aoFechar, escopo) {
 function manutNova (alvo, escopo) {
   const equipamentosDisponiveis = escopo === 'corporativo' ? MANUT_CACHE.equipamentos.filter(equipamentoEhCorporativo)
     : escopo === 'industrial' ? MANUT_CACHE.equipamentos.filter(e => !equipamentoEhCorporativo(e)) : MANUT_CACHE.equipamentos
-  const veiculosDisponiveis = escopo === 'corporativo' ? MANUT_CACHE.veiculos.filter(veiculoEhCorporativo)
+  // corporativo: pega igual à tela de Lançar — todo veículo ativo da Frota >
+  // Itens, sem depender de já ter departamento marcado
+  const veiculosDisponiveis = escopo === 'corporativo' ? MANUT_CACHE.veiculos.filter(v => !v.oculto && v.status_frota !== 'VENDIDO')
     : escopo === 'industrial' ? MANUT_CACHE.veiculos.filter(v => !veiculoEhCorporativo(v)) : MANUT_CACHE.veiculos
+  const opcoesDepartamento = MANUT_CACHE.setores.filter(s => SETORES_FROTA_CORPORATIVA.includes(s.id))
 
   alvo.innerHTML = `
     <div class="panel" style="padding:20px;max-width:760px;">
@@ -26180,7 +26274,9 @@ function manutNova (alvo, escopo) {
             ${MANUT_CACHE.setores.map(s => `<option value="${s.id}">${esc(s.nome)}</option>`).join('')}</select></div>
         <div class="campo"><label>Veículo</label>
           <select id="mn-veiculo"><option value="">nenhum específico</option>
-            ${veiculosDisponiveis.map(v => `<option value="${v.id}">${esc(v.placa)}${v.descricao ? ' — ' + esc(v.descricao) : ''}</option>`).join('')}</select></div>
+            ${veiculosDisponiveis.map(v => `<option value="${v.id}" data-setor="${v.setor_id ?? ''}">${esc(v.placa)}${v.descricao ? ' — ' + esc(v.descricao) : ''}</option>`).join('')}</select></div>
+        ${escopo === 'corporativo' ? `<div class="campo oculto" id="mn-campo-departamento"><label>Departamento deste veículo <span class="texto-dim2">(primeira vez — fica salvo pra próxima)</span></label>
+          <select id="mn-departamento"><option value="">Selecione...</option>${opcoesDepartamento.map(s => `<option value="${s.id}">${esc(s.nome)}</option>`).join('')}</select></div>` : ''}
         <div class="campo"><label>Equipamento</label>
           <select id="mn-equip"><option value="">nenhum específico</option>
             ${equipamentosDisponiveis.map(e => `<option value="${e.id}">${esc(e.tag)}${e.descricao ? ' — ' + esc(e.descricao) : ''}</option>`).join('')}</select></div>
@@ -26204,15 +26300,43 @@ function manutNova (alvo, escopo) {
     el.style.color = alerta ? 'var(--warn-text)' : 'var(--dim)'
   }
 
+  if (escopo === 'corporativo') {
+    const alternarDepartamento = () => {
+      const opt = $('#mn-veiculo').selectedOptions[0]
+      const setorAtual = opt?.dataset.setor || ''
+      const jaTemDepartamento = SETORES_FROTA_CORPORATIVA.includes(setorAtual)
+      $('#mn-campo-departamento').classList.toggle('oculto', !opt?.value || jaTemDepartamento)
+      if (jaTemDepartamento) $('#mn-departamento').value = setorAtual
+    }
+    $('#mn-veiculo').onchange = alternarDepartamento
+  }
+
   $('#mn-salvar').onclick = async () => {
     const descricao = $('#mn-descricao').value.trim()
     if (!descricao) { aviso('Descreva o problema.'); return }
+    const veiculoId = $('#mn-veiculo').value
+
+    let departamentoEscolhido = ''
+    if (escopo === 'corporativo' && veiculoId) {
+      const veiculoEscolhido = MANUT_CACHE.veiculos.find(v => v.id === veiculoId)
+      const jaTemDepartamento = SETORES_FROTA_CORPORATIVA.includes(veiculoEscolhido?.setor_id)
+      departamentoEscolhido = $('#mn-departamento').value
+      if (!jaTemDepartamento && !departamentoEscolhido) { aviso('Esse veículo ainda não tem departamento — escolha um (só dessa vez).'); return }
+    }
 
     const btn = $('#mn-salvar'); btn.disabled = true; btn.textContent = 'Enviando...'
+
+    if (departamentoEscolhido) {
+      const { error: erroSetor } = await db.from('veiculo').update({ setor_id: departamentoEscolhido }).eq('id', veiculoId)
+      if (erroSetor) { btn.disabled = false; btn.textContent = 'Abrir chamado'; aviso('Não deu pra salvar o departamento do veículo: ' + erroSetor.message); return }
+      const veiculoEscolhido = MANUT_CACHE.veiculos.find(v => v.id === veiculoId)
+      if (veiculoEscolhido) veiculoEscolhido.setor_id = departamentoEscolhido
+    }
+
     const { error } = await db.from('ordem_servico').insert({
       solicitante_id: PERFIL.pessoaId,
       setor_id: $('#mn-setor').value || null,
-      veiculo_id: $('#mn-veiculo').value || null,
+      veiculo_id: veiculoId || null,
       equipamento_id: $('#mn-equip').value || null,
       local_descricao: $('#mn-local').value.trim() || null,
       tipo: $('#mn-tipo').value,
