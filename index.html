@@ -19452,8 +19452,11 @@ async function formPedidoVenda (p, preset = null) {
               .map(f => `<option ${p?.forma_pagamento === f ? 'selected' : ''}>${f}</option>`).join('')}
           </select></div>
         <div class="campo" style="grid-column:1/-1;"><label>Local de entrega</label>
+          <select id="pv-local-sel" style="margin-bottom:6px;">
+            <option value="">— escolha um local cadastrado do cliente —</option></select>
           <input id="pv-local" value="${esc(p?.local_entrega ?? '')}"
-            placeholder="o pedido será retirado pelo cliente"></div>
+            placeholder="o pedido será retirado pelo cliente">
+          <span class="texto-dim2" id="pv-local-aviso" style="font-size:11px;"></span></div>
       </div>
 
       <div class="secao" style="margin-top:16px;">
@@ -19535,9 +19538,47 @@ async function formPedidoVenda (p, preset = null) {
       : ''
     el.style.color = el.textContent ? 'var(--warn-text)' : 'var(--dim2)'
   }
+  // Locais de entrega do cliente (as fazendas). Ao escolher o cliente,
+  // o seletor é preenchido e o marcado como padrão já entra sozinho —
+  // sem apagar o que a pessoa tiver digitado à mão.
+  let enderecosCli = []
+  const montarLocais = async (clienteId) => {
+    const sel = q('#pv-local-sel'); const aviso2 = q('#pv-local-aviso')
+    if (!sel) return
+    enderecosCli = []
+    if (!clienteId) {
+      sel.innerHTML = '<option value="">— escolha o cliente primeiro —</option>'
+      aviso2.textContent = ''
+      return
+    }
+    const { data } = await db.from('cliente_endereco').select('*')
+      .eq('cliente_id', clienteId).eq('ativo', true)
+      .order('principal', { ascending: false }).order('apelido')
+    enderecosCli = data || []
+    sel.innerHTML = '<option value="">— digitar outro local —</option>' +
+      enderecosCli.map(e => `<option value="${e.id}">${esc(e.apelido)}${e.municipio ? ' — ' + esc(e.municipio) : ''}${e.principal ? ' (padrão)' : ''}</option>`).join('')
+    aviso2.textContent = enderecosCli.length
+      ? ''
+      : 'Esse cliente não tem local de entrega cadastrado. Dá pra cadastrar em Cadastro › Clientes.'
+    // só preenche sozinho quando o campo está vazio: não atropela edição
+    const padrao = enderecosCli.find(e => e.principal)
+    if (padrao && !q('#pv-local').value.trim()) {
+      sel.value = padrao.id
+      q('#pv-local').value = textoLocalEntrega(padrao)
+    }
+  }
+  q('#pv-local-sel').onchange = () => {
+    const e = enderecosCli.find(x => x.id === q('#pv-local-sel').value)
+    if (e) q('#pv-local').value = textoLocalEntrega(e)
+  }
+
+  const mostrarClienteELocais = () => {
+    mostrarCliente()
+    montarLocais(q('#pv-cliente').value || null)
+  }
   buscaCli.oninput = mostrarCliente
-  buscaCli.onchange = mostrarCliente
-  mostrarCliente()
+  buscaCli.onchange = mostrarClienteELocais
+  mostrarClienteELocais()
 
   const totalCalc = () => {
     const t = (numeroBR(q('#pv-qtd').value) ?? 0) * (numeroBR(q('#pv-preco').value) ?? 0)
@@ -20018,13 +20059,198 @@ async function cobClientes (alvo, editavel) {
   if (editavel) $('#cl-novo').onclick = () => formCliente(null)
 }
 
-function formCliente (c) {
+// recarrega a lista de clientes na tela em que a pessoa está: a mesma
+// janela é usada em Cadastro > Clientes e em Crédito e Cobrança > Clientes
+function recarregarListaClientes () {
+  if ($('#sub-cadastro')) abrirCadastro('clientes')
+  else if ($('#sub-cobranca')) abrirCobranca('clientes')
+}
+
+// ---------------------------------------------------------------
+// Endereços de entrega do cliente (as fazendas) e arquivos do cadastro
+//
+// O endereço que está no cadastro do cliente é o de FATURAMENTO — é ele
+// que sai na nota. Os daqui são os de ENTREGA: um cliente pode ter
+// várias fazendas. O marcado como padrão já vem escolhido no pedido.
+// ---------------------------------------------------------------
+// o texto que vai pro pedido e sai no PDF
+const textoLocalEntrega = e => [
+  e.apelido,
+  [e.endereco, e.bairro, e.municipio ? `${e.municipio}${e.uf ? '/' + e.uf : ''}` : null]
+    .filter(Boolean).join(', ')
+].filter(Boolean).join(' — ')
+
+const resumoEnderecoCliente = e => [
+  e.endereco, e.bairro,
+  e.municipio ? `${e.municipio}${e.uf ? '/' + e.uf : ''}` : null,
+  e.cep ? 'CEP ' + e.cep : null
+].filter(Boolean).join(', ')
+
+async function carregarEnderecosCliente (raiz, clienteId, editavel) {
+  const alvo = raiz.querySelector('#cl-enderecos')
+  if (!alvo) return
+  const { data, error } = await db.from('cliente_endereco')
+    .select('*').eq('cliente_id', clienteId)
+    .order('principal', { ascending: false }).order('apelido')
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  const lista = data || []
+  const recarregar = () => carregarEnderecosCliente(raiz, clienteId, editavel)
+
+  alvo.innerHTML = lista.length ? lista.map(e => `
+    <div class="panel" style="padding:11px 13px;margin-bottom:8px;${e.ativo ? '' : 'opacity:.55;'}
+         ${e.principal ? 'border-left:3px solid var(--good-text);' : ''}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
+        <div style="min-width:0;">
+          <div style="font-weight:600;font-size:13.5px;">${esc(e.apelido)}
+            ${e.principal ? '<span class="badge-bom" style="font-size:10px;margin-left:6px;">padrão</span>' : ''}
+            ${e.ativo ? '' : '<span class="chip" style="font-size:10px;margin-left:6px;">inativo</span>'}</div>
+          <div class="texto-dim2" style="font-size:11.5px;margin-top:2px;">${esc(resumoEnderecoCliente(e)) || '—'}</div>
+          ${e.referencia ? `<div class="texto-dim2" style="font-size:11px;margin-top:2px;">📍 ${esc(e.referencia)}</div>` : ''}
+          ${e.contato || e.telefone ? `<div class="texto-dim2" style="font-size:11px;margin-top:2px;">${esc(e.contato ?? '')}${e.contato && e.telefone ? ' · ' : ''}${esc(e.telefone ?? '')}</div>` : ''}
+        </div>
+        ${editavel ? `<div style="display:flex;gap:4px;flex:none;">
+          ${e.principal ? '' : `<button type="button" class="btn-secundario mini" data-padrao="${e.id}" title="usar como padrão no pedido">${icDp('concluir')}</button>`}
+          <button type="button" class="btn-secundario mini" data-edit-end="${e.id}">editar</button>
+          <button type="button" class="btn-secundario mini" data-del-end="${e.id}" style="color:var(--warn-text);">excluir</button>
+        </div>` : ''}
+      </div>
+    </div>`).join('')
+    : '<p class="texto-dim2" style="font-size:12.5px;">Nenhum local de entrega cadastrado. Use o + pra adicionar a primeira fazenda.</p>'
+
+  if (!editavel) return
+  alvo.querySelectorAll('[data-edit-end]').forEach(b => {
+    b.onclick = () => formClienteEndereco(clienteId, lista.find(e => e.id === b.dataset.editEnd), recarregar)
+  })
+  alvo.querySelectorAll('[data-del-end]').forEach(b => {
+    const e = lista.find(x => x.id === b.dataset.delEnd)
+    b.onclick = () => excluirComJustificativa({
+      tabela: 'cliente_endereco', id: b.dataset.delEnd, modulo: 'Cadastro',
+      titulo: 'Excluir local de entrega', descricao: e ? `${e.apelido} — ${resumoEnderecoCliente(e)}` : 'local de entrega',
+      aoExcluir: recarregar
+    })
+  })
+  alvo.querySelectorAll('[data-padrao]').forEach(b => {
+    b.onclick = async () => {
+      // o banco só aceita um padrão por cliente, então tira o antigo antes
+      await db.from('cliente_endereco').update({ principal: false }).eq('cliente_id', clienteId)
+      const { error } = await db.from('cliente_endereco').update({ principal: true }).eq('id', b.dataset.padrao)
+      if (error) { alert('Não deu pra marcar como padrão: ' + error.message); return }
+      recarregar()
+    }
+  })
+}
+
+function formClienteEndereco (clienteId, reg, aoSalvar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  const v = k => esc(reg?.[k] ?? '')
+  fundo.innerHTML = `<div class="modal">
+    <h3>${reg ? 'Editar local de entrega' : 'Novo local de entrega'}</h3>
+    <div class="form-grade">
+      <div class="campo" style="grid-column:1/-1;"><label>Nome do local *</label>
+        <input id="ce-apelido" value="${v('apelido')}" placeholder="ex: Fazenda Santa Luzia, Sede, Armazém"></div>
+      <div class="campo" style="grid-column:1/-1;"><label>Endereço</label>
+        <input id="ce-end" value="${v('endereco')}" placeholder="ex: Rod. BA-225, Km 43"></div>
+      <div class="campo"><label>Bairro / zona</label><input id="ce-bairro" value="${v('bairro')}"></div>
+      <div class="campo"><label>Município</label><input id="ce-mun" value="${v('municipio')}"></div>
+      <div class="campo"><label>UF</label><input id="ce-uf" maxlength="2" value="${v('uf')}"></div>
+      <div class="campo"><label>CEP</label><input id="ce-cep" value="${v('cep')}"></div>
+      <div class="campo"><label>Contato no local</label><input id="ce-contato" value="${v('contato')}"></div>
+      <div class="campo"><label>Telefone</label><input id="ce-tel" value="${v('telefone')}"></div>
+    </div>
+    <div class="campo" style="margin-top:12px;"><label>Referência / roteiro de entrega</label>
+      <input id="ce-ref" value="${v('referencia')}" placeholder="ex: entrar na porteira azul, 6 km após o posto"></div>
+    <div class="campo"><label>Observações</label>
+      <textarea id="ce-obs" style="min-height:56px;">${v('observacoes')}</textarea></div>
+    <label class="linha-modulo" style="margin-top:10px;">
+      <input type="checkbox" id="ce-padrao" ${reg?.principal ? 'checked' : ''}>
+      <span class="nome">Usar como padrão no pedido</span></label>
+    <label class="linha-modulo">
+      <input type="checkbox" id="ce-ativo" ${reg && !reg.ativo ? '' : 'checked'}>
+      <span class="nome">Ativo</span></label>
+    <div class="acoes">
+      <button class="btn" id="ce-salvar">Salvar</button>
+      <button class="btn-secundario" id="ce-cancelar">Cancelar</button>
+    </div>
+    <div class="recado oculto" id="ce-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const q = s => fundo.querySelector(s)
+  const fechar = () => fundo.remove()
+  q('#ce-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  const aviso = t => { const el = q('#ce-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+
+  q('#ce-salvar').onclick = async () => {
+    const apelido = q('#ce-apelido').value.trim()
+    if (!apelido) { aviso('Dê um nome pro local — é assim que ele aparece na hora do pedido.'); return }
+    const padrao = q('#ce-padrao').checked
+    const corpo = {
+      cliente_id: clienteId, apelido,
+      endereco: q('#ce-end').value.trim() || null,
+      bairro: q('#ce-bairro').value.trim() || null,
+      municipio: q('#ce-mun').value.trim() || null,
+      uf: q('#ce-uf').value.trim().toUpperCase() || null,
+      cep: q('#ce-cep').value.trim() || null,
+      contato: q('#ce-contato').value.trim() || null,
+      telefone: q('#ce-tel').value.trim() || null,
+      referencia: q('#ce-ref').value.trim() || null,
+      observacoes: q('#ce-obs').value.trim() || null,
+      ativo: q('#ce-ativo').checked,
+      principal: padrao
+    }
+    const btn = q('#ce-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    // só um padrão por cliente: solta o antigo antes de gravar
+    if (padrao) await db.from('cliente_endereco').update({ principal: false }).eq('cliente_id', clienteId)
+    const { error } = reg
+      ? await db.from('cliente_endereco').update(corpo).eq('id', reg.id)
+      : await db.from('cliente_endereco').insert({ ...corpo, criado_por: PERFIL.pessoaId })
+    if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Salvar'; return }
+    fechar(); aoSalvar()
+  }
+}
+
+// ----- arquivos do cadastro do cliente -----
+async function carregarArquivosCliente (raiz, clienteId, editavel) {
+  const alvo = raiz.querySelector('#cl-lista-arquivos')
+  if (!alvo) return
+  const { data } = await db.from('anexo').select('id,nome_arquivo,storage_path,tipo,criado_em')
+    .eq('entidade', 'CLIENTE').eq('registro_id', clienteId).order('criado_em')
+  const lista = data || []
+  alvo.innerHTML = lista.length ? lista.map(a => `
+    <div class="linha-modulo" style="justify-content:space-between;gap:10px;">
+      <span style="min-width:0;font-size:13px;overflow-wrap:anywhere;">📎 ${esc(a.nome_arquivo || 'arquivo')}
+        <span class="texto-dim2" style="font-size:11px;">${a.tipo ? ' · ' + esc(a.tipo) : ''} · ${fmtQuando(a.criado_em) ?? ''}</span></span>
+      <span style="display:flex;gap:4px;flex:none;">
+        <button type="button" class="btn-secundario mini" data-abrir-arq="${esc(a.storage_path)}">abrir</button>
+        ${editavel ? `<button type="button" class="btn-secundario mini" data-del-arq="${a.id}" style="color:var(--warn-text);">excluir</button>` : ''}
+      </span>
+    </div>`).join('')
+    : '<p class="texto-dim2" style="font-size:12.5px;">Nenhum arquivo anexado.</p>'
+
+  const recarregar = () => carregarArquivosCliente(raiz, clienteId, editavel)
+  alvo.querySelectorAll('[data-abrir-arq]').forEach(b => { b.onclick = () => abrirComprovante(b.dataset.abrirArq) })
+  alvo.querySelectorAll('[data-del-arq]').forEach(b => {
+    const a = lista.find(x => x.id === b.dataset.delArq)
+    b.onclick = () => excluirComJustificativa({
+      tabela: 'anexo', id: b.dataset.delArq, modulo: 'Cadastro',
+      titulo: 'Excluir arquivo do cliente', descricao: a?.nome_arquivo || 'arquivo do cliente',
+      aoExcluir: async () => {
+        if (a?.storage_path) { try { await db.storage.from('comprovantes').remove([a.storage_path]) } catch (e) { console.warn(e) } }
+        recarregar()
+      }
+    })
+  })
+}
+
+function formCliente (c, aoSalvar = recarregarListaClientes) {
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
   const v = k => esc(c?.[k] ?? '')
 
   fundo.innerHTML = `
-    <div class="modal">
+    <div class="modal modal-largo">
       <h3>${c ? 'Editar cliente' : 'Novo cliente'}</h3>
       ${c?.conferir_dados ? `<div class="recado" style="border-color:var(--warn-text);color:var(--warn-text);margin:0 0 12px;">
         O nome deste cadastro difere do que saiu na ${esc(c.dados_nf_origem ?? 'NF')}.
@@ -20054,6 +20280,38 @@ function formCliente (c) {
       ${c?.conferir_dados ? `<label class="linha-modulo" style="margin-top:10px;">
         <input type="checkbox" id="cl-conferido">
         <span class="nome">Já conferi: o nome acima está correto</span></label>` : ''}
+
+      ${c ? `
+      <div class="secao" style="margin-top:20px;">
+        <div class="cabeca-secao" style="margin-bottom:4px;">
+          <h3 style="font-family:var(--serif);font-size:15px;">Locais de entrega / Fazendas</h3>
+          <button type="button" class="btn-secundario mini" id="cl-add-end"
+            title="Adicionar local de entrega" aria-label="Adicionar local de entrega">${icDp('novo')}</button>
+        </div>
+        <p class="texto-dim2" style="font-size:11.5px;margin:0 0 10px;">
+          O endereço lá em cima é o de <b>faturamento</b> — é ele que sai na nota.
+          Aqui vão os locais de <b>entrega</b>: um cliente pode ter várias fazendas.
+          O marcado como padrão já vem escolhido na hora de emitir o pedido.</p>
+        <div id="cl-enderecos"><p class="texto-dim2" style="font-size:12px;">carregando...</p></div>
+      </div>
+
+      <div class="secao" style="margin-top:20px;">
+        <div class="cabeca-secao" style="margin-bottom:4px;">
+          <h3 style="font-family:var(--serif);font-size:15px;">Arquivos do cliente</h3></div>
+        <div class="form-grade" style="margin-bottom:8px;">
+          <div class="campo"><label>Tipo do arquivo</label>
+            <select id="cl-arq-tipo">
+              ${['dados cadastrais', 'contrato social', 'cartão CNPJ', 'inscrição estadual',
+                 'comprovante de endereço', 'documento do sócio', 'contrato de venda', 'outro']
+                .map(t => `<option>${t}</option>`).join('')}
+            </select></div>
+          <div class="campo"><label>Escolher arquivo</label>
+            <input type="file" id="cl-arquivos" multiple>
+            <span class="texto-dim2" id="cl-arq-status" style="font-size:11px;"></span></div>
+        </div>
+        <div id="cl-lista-arquivos"></div>
+      </div>` : `<p class="texto-dim2" style="font-size:12px;margin-top:14px;">
+        Salve o cliente primeiro — depois abre de novo pra cadastrar os locais de entrega e anexar arquivos.</p>`}
 
       <div class="acoes">
         <button class="btn" id="cl-salvar">Salvar</button>
@@ -20100,7 +20358,7 @@ function formCliente (c) {
       ? await db.from('cliente').update(corpo).eq('id', c.id)
       : await db.from('cliente').insert(corpo)
     if (error) { aviso(error.message); return }
-    fechar(); abrirCobranca('clientes')
+    fechar(); aoSalvar()
   }
 
   const bx = q('#cl-excluir')
@@ -20116,10 +20374,43 @@ function formCliente (c) {
       await db.from('cliente').update({ status: 'INATIVO' }).eq('id', c.id)
     } else {
       if (!confirm('Excluir este cliente em definitivo?')) return
-      const { error } = await db.from('cliente').delete().eq('id', c.id)
-      if (error) { aviso(error.message); return }
+      fechar()
+      excluirComJustificativa({
+        tabela: 'cliente', id: c.id, modulo: 'Cadastro',
+        titulo: 'Excluir cliente', descricao: c.razao_social, aoExcluir: aoSalvar
+      })
+      return
     }
-    fechar(); abrirCobranca('clientes')
+    fechar(); aoSalvar()
+  }
+
+  // endereços de entrega e arquivos só existem depois que o cliente tem id
+  if (c) {
+    const editavelCli = podeEditar('cadastro') || podeEditar('cobranca')
+    carregarEnderecosCliente(fundo, c.id, editavelCli)
+    carregarArquivosCliente(fundo, c.id, editavelCli)
+    const btnAdd = q('#cl-add-end')
+    if (btnAdd) btnAdd.onclick = () => formClienteEndereco(c.id, null,
+      () => carregarEnderecosCliente(fundo, c.id, editavelCli))
+    const inpArq = q('#cl-arquivos')
+    if (inpArq) inpArq.onchange = async () => {
+      const arquivos = [...inpArq.files]
+      if (!arquivos.length) return
+      const rot = q('#cl-arq-status')
+      rot.textContent = 'enviando...'
+      try {
+        for (const arquivo of arquivos) {
+          const { caminho, nome } = await subirComprovante(arquivo, `cliente/${c.id}`)
+          await db.from('anexo').insert({
+            entidade: 'CLIENTE', registro_id: c.id, tipo: q('#cl-arq-tipo').value || 'dados cadastrais',
+            nome_arquivo: nome, storage_path: caminho
+          })
+        }
+        rot.textContent = ''
+        inpArq.value = ''
+        carregarArquivosCliente(fundo, c.id, editavelCli)
+      } catch (e) { rot.textContent = 'não deu pra enviar: ' + e.message }
+    }
   }
 }
 
@@ -34956,7 +35247,7 @@ const MAPA_ICONE_BOTAO = {
   editar: 'editar', edite: 'editar', alterar: 'editar',
   excluir: 'excluir', apagar: 'excluir', remover: 'excluir', deletar: 'excluir',
   ver: 'ver', abrir: 'ver', detalhes: 'ver', 'ver ficha': 'ver', visualizar: 'ver',
-  novo: 'novo', nova: 'novo', adicionar: 'novo',
+  novo: 'novo', nova: 'novo', adicionar: 'novo', '+': 'novo',
   imprimir: 'imprimir', pdf: 'pdf', 'gerar pdf': 'pdf',
   salvar: 'salvar', concluir: 'concluir', 'marcar concluída': 'concluir',
   histórico: 'historico', 'hist.': 'historico', historico: 'historico',
