@@ -968,6 +968,11 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
 .modal h3 { font-family:var(--serif); margin:0 0 14px; font-size:19px; }
 .modal textarea { min-height:110px; }
 
+/* ---- botão só com o ícone: o texto vira tooltip (title) ---- */
+button.mini.btn-so-icone { padding:5px 7px; min-width:0; line-height:0; }
+button.mini.btn-so-icone .ic-botao { margin:0; }
+button.mini.btn-so-icone svg { width:15px; height:15px; display:block; }
+
 /* ---- ícones nos botões (usado no Cadastro > Funcionários e no DP e Segurança) ---- */
 .ic-botao { display:inline-flex; width:13px; height:13px; flex:none; vertical-align:-2px; margin-right:6px; }
 .ic-botao svg { width:100%; height:100%; }
@@ -1904,6 +1909,7 @@ async function abrirApp () {
   montarMenu()
   $('#tela-login').classList.add('oculto')
   $('#tela-app').classList.remove('oculto')
+  ligarIconizacaoGlobal()
   irPara('visao_geral')
   montarWidgetAssistente()
   montarWidgetChatInterno()
@@ -9029,10 +9035,11 @@ async function telaCotacao (s) {
     })
 
     fundo.querySelectorAll('[data-apagar]').forEach(b => {
-      b.onclick = async () => {
-        await db.from('orcamento').delete().eq('id', b.dataset.apagar)
-        recarregar()
-      }
+      b.onclick = () => excluirComJustificativa({
+        tabela: 'orcamento', id: b.dataset.apagar, modulo: 'Compras',
+        titulo: 'Excluir orçamento', descricao: b.dataset.nomeOrcamento || 'orçamento da solicitação',
+        aoExcluir: recarregar
+      })
     })
 
     fundo.querySelectorAll('[data-abrir-anexo]').forEach(a => {
@@ -20442,11 +20449,11 @@ async function finContas (alvo, editavel) {
   if (!editavel) return
 
   alvo.querySelectorAll('[data-del-conta]').forEach(b => {
-    b.onclick = async () => { if (!confirm('Remover esta conta?')) return
-      const { error } = await db.from('conta_financeira').delete().eq('id', b.dataset.delConta)
-      if (error) { alert('Não deu para remover — provavelmente há lançamentos vinculados.'); return }
-      paginaFinanceiro()
-    }
+    b.onclick = () => excluirComJustificativa({
+      tabela: 'conta_financeira', id: b.dataset.delConta, modulo: 'Financeiro',
+      titulo: 'Remover conta', descricao: b.dataset.nomeConta || 'conta financeira',
+      aoExcluir: paginaFinanceiro
+    })
   })
   $('#ct-salvar').onclick = async () => {
     const nome = $('#ct-nome').value.trim()
@@ -20607,8 +20614,11 @@ async function finInvestimentos (alvo, editavel) {
     inp.onchange = async () => { await db.from('investimento').update({ saldo_atual: Number(inp.value) || 0 }).eq('id', inp.dataset.saldo); finInvestimentos(alvo, true) }
   })
   alvo.querySelectorAll('[data-del-inv]').forEach(b => {
-    b.onclick = async () => { if (!confirm('Excluir este investimento?')) return
-      await db.from('investimento').delete().eq('id', b.dataset.delInv); finInvestimentos(alvo, true) }
+    b.onclick = () => excluirComJustificativa({
+      tabela: 'investimento', id: b.dataset.delInv, modulo: 'Financeiro',
+      titulo: 'Excluir investimento', descricao: b.dataset.nomeInv || 'investimento',
+      aoExcluir: () => finInvestimentos(alvo, true)
+    })
   })
   $('#iv-salvar').onclick = async () => {
     const nome = $('#iv-nome').value.trim()
@@ -21593,7 +21603,7 @@ function telaLancamento (l, acao) {
     const btn = q('#tl-ok'); btn.disabled = true
 
     if (excluindo) {
-      if (motivo.length < 5) { aviso('Escreva o motivo da exclusão.'); btn.disabled = false; return }
+      if (motivo.length < 10) { aviso('Escreva o motivo da exclusão — pelo menos uma frase.'); btn.disabled = false; return }
       // quem apontava para este lançamento volta a ficar em aberto
       const { data: compras } = await db.from('solicitacao_compra')
         .select('id, numero, produto_servico').eq('lancamento_id', l.id)
@@ -21604,7 +21614,10 @@ function telaLancamento (l, acao) {
         motivo, pessoa_id: PERFIL.pessoaId
       })
 
-      const { error } = await db.from('lancamento_financeiro').delete().eq('id', l.id)
+      const { error } = await db.rpc('excluir_registro', {
+        p_tabela: 'lancamento_financeiro', p_id: l.id, p_motivo: motivo,
+        p_modulo: 'Financeiro', p_descricao: `${l.descricao ?? 'lançamento'} — R$ ${fmtNum(l.valor)}`
+      })
       if (error) { aviso(error.message); btn.disabled = false; return }
 
       // a compra volta para "aprovada a pagar": ela nunca foi paga de fato
@@ -22092,12 +22105,19 @@ async function finFechamento (alvo, editavel) {
   }
 
   alvo.querySelectorAll('[data-del-doc]').forEach(b => {
-    b.onclick = async () => {
-      if (!confirm('Remover este documento do fechamento?')) return
+    b.onclick = () => {
       const d = lista.find(x => x.id === b.dataset.delDoc)
-      if (d?.arquivo_caminho) await db.storage.from('documentos').remove([d.arquivo_caminho])
-      await db.from('documento_pagamento').delete().eq('id', b.dataset.delDoc)
-      abrirFinanceiro('fechamento', true)
+      excluirComJustificativa({
+        tabela: 'documento_pagamento', id: b.dataset.delDoc, modulo: 'Financeiro',
+        titulo: 'Remover documento do fechamento',
+        descricao: d?.descricao || d?.arquivo_nome || 'documento do fechamento',
+        aoExcluir: async () => {
+          // o arquivo só sai depois que o registro saiu, pra não ficar
+          // registro apontando pra arquivo que não existe mais
+          if (d?.arquivo_caminho) { try { await db.storage.from('documentos').remove([d.arquivo_caminho]) } catch (e) { console.warn(e) } }
+          abrirFinanceiro('fechamento', true)
+        }
+      })
     }
   })
 
@@ -23936,10 +23956,15 @@ async function estLancamentos (alvo, editavel) {
 
     if (!editavel) return
     $('#ml-lista').querySelectorAll('[data-del-mov]').forEach(b => {
-      b.onclick = async () => {
-        if (!confirm('Excluir este lançamento? O saldo é recalculado na hora.')) return
-        await db.from('movimentacao_estoque').delete().eq('id', b.dataset.delMov)
-        buscar()
+      b.onclick = () => {
+        const m = lista.find(x => x.id === b.dataset.delMov)
+        excluirComJustificativa({
+          tabela: 'movimentacao_estoque', id: b.dataset.delMov, modulo: 'Estoque e Produção',
+          titulo: 'Excluir lançamento de estoque',
+          descricao: m ? `${m.tipo ?? ''} ${fmtNum(m.quantidade ?? 0, 2)} ${m.unidade ?? ''} — ${m.produto?.nome ?? ''} (${fmtData(m.data_mov)})`.trim()
+                       : 'lançamento de estoque',
+          aoExcluir: buscar
+        })
       }
     })
   }
@@ -24152,12 +24177,12 @@ async function estProdutos (alvo, editavel) {
   })
 
   alvo.querySelectorAll('[data-del-prod]').forEach(b => {
-    b.onclick = async () => {
-      if (!confirm('Remover este produto? Só é possível porque ele não tem lançamento.')) return
-      const { error } = await db.from('produto').delete().eq('id', b.dataset.delProd)
-      if (error) { alert(error.message); return }
-      paginaEstoque()
-    }
+    b.onclick = () => excluirComJustificativa({
+      tabela: 'produto', id: b.dataset.delProd, modulo: 'Estoque e Produção',
+      titulo: 'Remover produto',
+      descricao: EST_CACHE.produtos.find(x => x.id === b.dataset.delProd)?.nome || 'produto',
+      aoExcluir: paginaEstoque
+    })
   })
 }
 
@@ -25072,11 +25097,15 @@ async function combAbastecimentos (alvo, editavel) {
 
     if (podeExcluir) {
       $('#ah-lista').querySelectorAll('[data-del-ab]').forEach(b => {
-        b.onclick = async () => {
-          if (!confirm('Excluir este abastecimento? Essa ação é só do administrador e não tem volta.')) return
-          const { error } = await db.from('abastecimento').delete().eq('id', b.dataset.delAb)
-          if (error) { alert(error.message); return }
-          buscar()
+        b.onclick = () => {
+          const a = data.find(x => x.id === b.dataset.delAb)
+          excluirComJustificativa({
+            tabela: 'abastecimento', id: b.dataset.delAb, modulo: 'Combustível',
+            titulo: 'Excluir abastecimento',
+            descricao: a ? `${fmtNum(a.litros ?? 0, 2)} L — ${a.veiculo?.placa ?? a.equipamento?.tag ?? a.tipo ?? ''} (${fmtData(a.data_abastecimento?.slice(0, 10))})`.trim()
+                         : 'abastecimento',
+            aoExcluir: buscar
+          })
         }
       })
     }
@@ -25256,11 +25285,15 @@ async function combEntradas (alvo, editavel) {
 
     if (podeExcluir) {
       $('#eh-lista').querySelectorAll('[data-del-en]').forEach(b => {
-        b.onclick = async () => {
-          if (!confirm('Excluir esta entrada? Essa ação é só do administrador e não tem volta.')) return
-          const { error } = await db.from('entrada_combustivel').delete().eq('id', b.dataset.delEn)
-          if (error) { alert(error.message); return }
-          buscar()
+        b.onclick = () => {
+          const e = data.find(x => x.id === b.dataset.delEn)
+          excluirComJustificativa({
+            tabela: 'entrada_combustivel', id: b.dataset.delEn, modulo: 'Combustível',
+            titulo: 'Excluir entrada de combustível',
+            descricao: e ? `${fmtNum(e.litros ?? 0, 2)} L — ${e.tipo ?? ''}${e.numero_nf ? ' NF ' + e.numero_nf : ''} (${fmtData(e.data_entrada?.slice(0, 10))})`.trim()
+                         : 'entrada de combustível',
+            aoExcluir: buscar
+          })
         }
       })
     }
@@ -34750,6 +34783,7 @@ async function paginaDpSeguranca () {
       <button data-sub="exames">🩺 Exames</button>
       <button data-sub="ponto">⏱️ Ponto</button>
       <button data-sub="ocorrencias">📌 Ocorrências</button>
+      <button data-sub="historico">🗑️ Histórico de exclusões</button>
     </div>
     <div id="sub-dp"></div>`
   area.querySelectorAll('.subabas button').forEach(b => {
@@ -34774,6 +34808,7 @@ function abrirDp (sub, editavel) {
   if (sub === 'exames') dpExames(alvo, editavel)
   if (sub === 'ponto') dpPonto(alvo, editavel)
   if (sub === 'ocorrencias') dpOcorrencias(alvo, editavel)
+  if (sub === 'historico') historicoExclusoes(alvo, 'DP e Segurança')
 }
 
 // ----- Funcionários -----
@@ -34790,6 +34825,8 @@ const SVG_ICONE_DP = {
   imprimir: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>',
   pdf: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
   fechar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
+  historico: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l4 2"/></svg>',
+  anexo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>',
   salvar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>',
   encaminhar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>',
   acesso: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>'
@@ -34799,6 +34836,160 @@ const icDp = nome => `<span class="ic-botao">${SVG_ICONE_DP[nome] || ''}</span>`
 // pega a listinha de pessoas pro dropdown dos formulários de documento/
 // exame/ocorrência mesmo quando a aba de Funcionários nunca foi aberta
 // nessa sessão (cada sub-aba de DP e Segurança carrega independente)
+// ---------------------------------------------------------------
+// Exclusão com justificativa — um caminho só pro sistema inteiro
+//
+// Nada é apagado sem motivo. Quem apaga passa por aqui, a função
+// `excluir_registro` no banco valida o motivo, guarda uma cópia da
+// linha em JSON e só então exclui. O histórico fica em `exclusao_log`
+// e aparece na aba "Histórico" de cada módulo.
+// ---------------------------------------------------------------
+function excluirComJustificativa ({ tabela, id, modulo, descricao, aoExcluir = () => {}, titulo }) {
+  if (!tabela || !id) return
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:540px;">
+    <h3>${esc(titulo || 'Excluir registro')}</h3>
+    <p class="texto-dim" style="font-size:13px;line-height:1.55;margin:0 0 4px;">
+      ${descricao ? `Vai ser excluído: <b style="color:var(--txt);">${esc(descricao)}</b>.` : 'Confirme a exclusão.'}</p>
+    <p class="texto-dim2" style="font-size:12px;line-height:1.5;margin:0 0 14px;">
+      Fica registrado no histórico com seu nome, a data e uma cópia do registro — dá pra consultar depois.</p>
+    <div class="campo"><label>Por que está excluindo? *</label>
+      <textarea id="exc-motivo" style="min-height:80px;"
+        placeholder="ex: lançado em duplicidade, cadastrado no cliente errado"></textarea>
+      <span class="texto-dim2" style="font-size:11px;">Pelo menos uma frase.</span></div>
+    <div class="acoes">
+      <button class="btn" id="exc-confirmar" style="background:var(--warn-text);border-color:var(--warn-text);">Excluir</button>
+      <button class="btn-secundario" id="exc-cancelar">Cancelar</button>
+    </div>
+    <div class="recado oculto" id="exc-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const q = s => fundo.querySelector(s)
+  const fechar = () => fundo.remove()
+  q('#exc-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  setTimeout(() => q('#exc-motivo').focus(), 50)
+
+  const aviso = t => { const el = q('#exc-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+
+  q('#exc-confirmar').onclick = async () => {
+    const motivo = q('#exc-motivo').value.trim()
+    if (motivo.length < 10) { aviso('Escreva o motivo — pelo menos uma frase.'); return }
+    const btn = q('#exc-confirmar'); btn.disabled = true; btn.textContent = 'Excluindo...'
+    const { error } = await db.rpc('excluir_registro', {
+      p_tabela: tabela, p_id: String(id), p_motivo: motivo,
+      p_modulo: modulo || null, p_descricao: descricao || null
+    })
+    if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Excluir'; return }
+    fechar(); aoExcluir()
+  }
+}
+
+// ---------------------------------------------------------------
+// Histórico de exclusões — reaproveitável por qualquer módulo
+// ---------------------------------------------------------------
+async function historicoExclusoes (alvo, modulo = null, limite = 200) {
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  let q = db.from('exclusao_log')
+    .select('*, pessoa:pessoa_id ( nome )')
+    .order('excluido_em', { ascending: false }).limit(limite)
+  if (modulo) q = q.eq('modulo', modulo)
+  const { data, error } = await q
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  const lista = data || []
+
+  alvo.innerHTML = `
+    <p class="texto-dim2" style="font-size:12px;margin:0 0 14px;">
+      ${modulo ? `Exclusões feitas em <b>${esc(modulo)}</b>.` : 'Exclusões feitas no sistema.'}
+      Ninguém edita nem apaga este histórico.</p>
+    ${lista.length ? lista.map(l => `<div class="panel" style="padding:14px 16px;margin-bottom:10px;border-left:3px solid var(--warn-text);">
+      <div class="cabeca-secao" style="margin-bottom:6px;">
+        <div>
+          <div style="font-weight:600;font-size:13.5px;">${esc(l.descricao || l.tabela)}</div>
+          <div class="texto-dim2" style="font-size:11px;">${esc(l.tabela)}${l.modulo ? ' · ' + esc(l.modulo) : ''}</div>
+        </div>
+        <span class="texto-dim2" style="font-size:11.5px;white-space:nowrap;">${fmtQuando(l.excluido_em) ?? '—'}</span>
+      </div>
+      <p style="font-size:13px;line-height:1.55;margin:8px 0 0;white-space:pre-wrap;">"${esc(l.motivo)}"</p>
+      <p class="texto-dim2" style="font-size:11.5px;margin:8px 0 0;">
+        por <b style="color:var(--txt);">${esc(l.pessoa?.nome ?? '—')}</b>
+        · <button class="btn-secundario mini" data-ver-dados="${l.id}">ver o que foi apagado</button></p>
+    </div>`).join('') : '<p class="vazio">Nenhuma exclusão registrada.</p>'}`
+
+  alvo.querySelectorAll('[data-ver-dados]').forEach(b => {
+    b.onclick = () => {
+      const l = lista.find(x => x.id === b.dataset.verDados)
+      if (!l) return
+      const f = document.createElement('div')
+      f.className = 'modal-fundo'
+      f.innerHTML = `<div class="modal" style="max-width:620px;">
+        <h3>O que foi apagado</h3>
+        <p class="texto-dim2" style="font-size:12px;">${esc(l.tabela)} · ${fmtQuando(l.excluido_em) ?? ''}</p>
+        <div style="max-height:50vh;overflow:auto;background:var(--surface2);border-radius:8px;padding:12px 14px;margin-top:10px;">
+          ${Object.entries(l.dados || {}).map(([k, v]) => `<div class="mini-kv">
+            <span class="texto-dim">${esc(k)}</span>
+            <span style="text-align:right;max-width:60%;word-break:break-word;">${esc(v === null ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v))}</span>
+          </div>`).join('')}
+        </div>
+        <div class="acoes"><button class="btn-secundario" id="vd-fechar">Fechar</button></div>
+      </div>`
+      document.body.appendChild(f)
+      f.querySelector('#vd-fechar').onclick = () => f.remove()
+      f.onclick = e => { if (e.target === f) f.remove() }
+    }
+  })
+}
+
+// ---------------------------------------------------------------
+// Botões só com ícone, no sistema inteiro
+//
+// Em vez de reescrever centenas de botões um a um, um observador troca
+// o texto pelo ícone quando o rótulo é um dos conhecidos. O texto vira
+// tooltip (title) e rótulo de acessibilidade — quem passa o mouse ou usa
+// leitor de tela continua sabendo o que o botão faz. Rótulo que não está
+// no mapa (baixa, parcial, faturamento...) fica como texto mesmo, porque
+// ali a palavra é a informação.
+// ---------------------------------------------------------------
+const MAPA_ICONE_BOTAO = {
+  editar: 'editar', edite: 'editar', alterar: 'editar',
+  excluir: 'excluir', apagar: 'excluir', remover: 'excluir', deletar: 'excluir',
+  ver: 'ver', abrir: 'ver', detalhes: 'ver', 'ver ficha': 'ver', visualizar: 'ver',
+  novo: 'novo', nova: 'novo', adicionar: 'novo',
+  imprimir: 'imprimir', pdf: 'pdf', 'gerar pdf': 'pdf',
+  salvar: 'salvar', concluir: 'concluir', 'marcar concluída': 'concluir',
+  histórico: 'historico', 'hist.': 'historico', historico: 'historico',
+  anexo: 'anexo', anexos: 'anexo',
+  fechar: 'fechar', cancelar: 'fechar'
+}
+function iconizarBotoes (raiz = document.body) {
+  const alvos = raiz.querySelectorAll?.('button.mini:not([data-iconizado])') || []
+  alvos.forEach(b => {
+    b.setAttribute('data-iconizado', '1')
+    if (b.querySelector('svg, .ic-botao')) return          // já tem ícone
+    const texto = (b.textContent || '').trim()
+    const chave = MAPA_ICONE_BOTAO[texto.toLowerCase()]
+    if (!chave || !SVG_ICONE_DP[chave]) return
+    b.title = texto
+    b.setAttribute('aria-label', texto)
+    b.classList.add('btn-so-icone')
+    b.innerHTML = `<span class="ic-botao">${SVG_ICONE_DP[chave]}</span>`
+  })
+}
+function ligarIconizacaoGlobal () {
+  if (window.__ICONIZADOR_LIGADO) return
+  window.__ICONIZADOR_LIGADO = true
+  let agendado = false
+  const rodar = () => { agendado = false; try { iconizarBotoes() } catch (e) { console.warn('iconizar:', e) } }
+  new MutationObserver(() => {
+    if (agendado) return
+    agendado = true
+    requestAnimationFrame(rodar)
+  }).observe(document.body, { childList: true, subtree: true })
+  rodar()
+}
+
 async function garantirDpPessoas () {
   if (window.__DP_PESSOAS && window.__DP_PESSOAS.length) return
   const { data } = await db.from('pessoa').select('id,nome')
@@ -34808,11 +34999,11 @@ async function garantirDpPessoas () {
 
 // exclui um lançamento de documento/exame/folha/ocorrência (essas tabelas
 // não têm nada dependurado nelas, então é exclusão direta mesmo)
-async function excluirRegistroDp (tabela, id, aoExcluir, nomeItem = 'este registro') {
-  if (!confirm(`Excluir ${nomeItem}? Essa ação não pode ser desfeita.`)) return
-  const { error } = await db.from(tabela).delete().eq('id', id)
-  if (error) { alert('Não deu pra excluir: ' + error.message); return }
-  aoExcluir()
+function excluirRegistroDp (tabela, id, aoExcluir, nomeItem = 'este registro') {
+  excluirComJustificativa({
+    tabela, id, modulo: 'DP e Segurança', descricao: nomeItem, aoExcluir,
+    titulo: 'Excluir ' + nomeItem
+  })
 }
 
 // excluir funcionário é mais delicado: a pessoa costuma estar referenciada
@@ -35987,16 +36178,21 @@ async function detalhePontoInconsistencia (reg, aoAtualizar = () => {}) {
 // Excluir inconsistência leva junto o que está dependurado nela: os
 // anexos (linha e arquivo no storage) e as notificações que apontam pra
 // ela — senão sobra notificação clicável apontando pro nada.
-async function excluirPontoInconsistencia (id, aoExcluir) {
-  if (!confirm('Excluir essa inconsistência? Os arquivos anexados vão junto. Não dá pra desfazer.')) return
-  const anexos = await anexosPonto('PONTO_INCONSISTENCIA', id)
-  const caminhos = anexos.map(a => a.storage_path).filter(Boolean)
-  if (caminhos.length) { try { await db.storage.from('comprovantes').remove(caminhos) } catch (e) { console.warn(e) } }
-  await db.from('anexo').delete().eq('entidade', 'PONTO_INCONSISTENCIA').eq('registro_id', id)
-  await db.from('notificacao_pessoal').delete().eq('entidade', 'ponto_inconsistencia').eq('entidade_id', id)
-  const { error } = await db.from('ponto_inconsistencia').delete().eq('id', id)
-  if (error) { alert('Não deu pra excluir: ' + error.message); return }
-  aoExcluir()
+function excluirPontoInconsistencia (id, aoExcluir) {
+  excluirComJustificativa({
+    tabela: 'ponto_inconsistencia', id, modulo: 'DP e Segurança',
+    descricao: 'Inconsistência de ponto', titulo: 'Excluir inconsistência de ponto',
+    aoExcluir: async () => {
+      // o registro já foi apagado com o motivo guardado; aqui só limpa o
+      // que ficou dependurado nele
+      const anexos = await anexosPonto('PONTO_INCONSISTENCIA', id)
+      const caminhos = anexos.map(a => a.storage_path).filter(Boolean)
+      if (caminhos.length) { try { await db.storage.from('comprovantes').remove(caminhos) } catch (e) { console.warn(e) } }
+      await db.from('anexo').delete().eq('entidade', 'PONTO_INCONSISTENCIA').eq('registro_id', id)
+      await db.from('notificacao_pessoal').delete().eq('entidade', 'ponto_inconsistencia').eq('entidade_id', id)
+      aoExcluir()
+    }
+  })
 }
 
 // abre pelo id (usado pela notificação e pela Central de atenção)
