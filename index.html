@@ -2009,6 +2009,9 @@ function ligarChecagemPeriodicaNotificacoes () {
 // apontar; hoje só existe 'solicitacao_interna', mas é só acrescentar
 // uma linha nova quando outro módulo passar a gerar notificação.
 const ABRIR_ENTIDADE_NOTIFICACAO = {
+  // abre o registro numa janela própria: quem é responsável pela
+  // inconsistência responde direto daqui, mesmo sem ter o módulo de DP
+  ponto_inconsistencia: async (id) => { await abrirPontoInconsistenciaPorId(id) },
   solicitacao_interna: async (id) => {
     await irPara('solicitacoes')
     const { data: s } = await db.from('solicitacao_interna').select(`
@@ -2470,6 +2473,21 @@ async function painelAtencao (area) {
   const tarefas = []
   let comprasAndando = 0
 
+  // Inconsistências de ponto em que a pessoa é a responsável — não
+  // depende de ter o módulo de DP, a policy do banco já filtra
+  tarefas.push((async () => {
+    const { data } = await db.from('ponto_inconsistencia')
+      .select('id,tipo,data_inicio,data_fim,status,pessoa:pessoa_id(nome)')
+      .eq('responsavel_id', PERFIL.pessoaId).eq('status', 'ABERTA').limit(50)
+    ;(data || []).forEach(r => {
+      itens.push({
+        modulo: 'DP e Segurança', chave: 'dp', pontoId: r.id,
+        titulo: `Ponto de ${esc(r.pessoa?.nome ?? '—')} — ${esc(r.tipo)}`,
+        data: r.data_inicio, urgente: true, detalhe: 'justificar'
+      })
+    })
+  })())
+
   if (podeVer('manutencao')) {
     tarefas.push((async () => {
       const { data } = await db.from('ordem_servico')
@@ -2665,7 +2683,7 @@ async function painelAtencao (area) {
 
     ${itens.length ? `<div style="display:flex;flex-direction:column;gap:8px;max-height:360px;overflow:auto;margin-top:14px;">
       ${itens.slice(0, 30).map(i => `
-        <div data-ir-atencao="${i.chave}" style="cursor:pointer;display:flex;align-items:center;gap:12px;
+        <div data-ir-atencao="${i.chave}" ${i.pontoId ? `data-abrir-ponto-inc="${i.pontoId}"` : ''} style="cursor:pointer;display:flex;align-items:center;gap:12px;
              padding:11px 14px;border-radius:8px;background:var(--surface2);
              border-left:3px solid ${i.urgente ? 'var(--warn-text)' : 'var(--gold, #c8a11a)'};transition:background .15s ease;"
              onmouseover="this.style.background='var(--hover-bg)'" onmouseout="this.style.background='var(--surface2)'">
@@ -2686,7 +2704,10 @@ async function painelAtencao (area) {
       + ${comprasAndando} compra${comprasAndando > 1 ? 's' : ''} sua${comprasAndando > 1 ? 's' : ''} em andamento — veja em "Minhas compras" logo abaixo.</p>` : ''}`
   area.appendChild(bloco)
   bloco.querySelectorAll('[data-ir-atencao]').forEach(el => {
-    el.onclick = () => irPara(el.dataset.irAtencao)
+    el.onclick = async () => {
+      if (el.dataset.abrirPontoInc) { await abrirPontoInconsistenciaPorId(el.dataset.abrirPontoInc); return }
+      irPara(el.dataset.irAtencao)
+    }
   })
 }
 
@@ -34699,11 +34720,13 @@ async function paginaDpSeguranca () {
   area.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
   const hoje = hojeISO()
-  const [{ count: totalPessoas }, { data: docs }, { data: exames }, { count: totalOcorrAbertas }] = await Promise.all([
+  const [{ count: totalPessoas }, { data: docs }, { data: exames }, { count: totalOcorrAbertas },
+         { count: pontoAbertas }] = await Promise.all([
     db.from('pessoa').select('id', { count: 'exact', head: true }).or('data_admissao.not.is.null,cpf.not.is.null,tipo.eq.INTERNO'),
     db.from('dp_documento').select('data_validade').lt('data_validade', hoje),
     db.from('dp_exame').select('data_validade').lt('data_validade', hoje).not('status', 'in', '(ENCAMINHADO,PAGO_AGUARDANDO_EXAME)'),
-    db.from('dp_ocorrencia').select('id', { count: 'exact', head: true }).neq('status', 'ENCERRADA')
+    db.from('dp_ocorrencia').select('id', { count: 'exact', head: true }).neq('status', 'ENCERRADA'),
+    db.from('ponto_inconsistencia').select('id', { count: 'exact', head: true }).eq('status', 'ABERTA')
   ])
 
   area.innerHTML = `
@@ -34711,12 +34734,14 @@ async function paginaDpSeguranca () {
       ${kpiDp('👥', 'Funcionários', totalPessoas ?? 0)}
       ${kpiDp('📄', 'Documentos vencidos', (docs || []).length, (docs || []).length ? 'alerta' : '')}
       ${kpiDp('🩺', 'Exames vencidos', (exames || []).length, (exames || []).length ? 'alerta' : '')}
+      ${kpiDp('⏱️', 'Ponto — em aberto', pontoAbertas ?? 0, pontoAbertas ? 'alerta' : '')}
       ${kpiDp('📌', 'Ocorrências abertas', totalOcorrAbertas ?? 0)}
     </div>
     <div class="subabas">
       <button data-sub="funcionarios" class="ativo">👥 Funcionários</button>
       <button data-sub="documentos">📄 Documentos</button>
       <button data-sub="exames">🩺 Exames</button>
+      <button data-sub="ponto">⏱️ Ponto</button>
       <button data-sub="ocorrencias">📌 Ocorrências</button>
     </div>
     <div id="sub-dp"></div>`
@@ -34740,6 +34765,7 @@ function abrirDp (sub, editavel) {
   if (sub === 'funcionarios') dpFuncionarios(alvo, editavel, true)
   if (sub === 'documentos') dpDocumentos(alvo, editavel)
   if (sub === 'exames') dpExames(alvo, editavel)
+  if (sub === 'ponto') dpPonto(alvo, editavel)
   if (sub === 'ocorrencias') dpOcorrencias(alvo, editavel)
 }
 
@@ -35596,6 +35622,529 @@ function formDpFolha (pessoa, registro, aoSalvar) {
 
 // ----- PDF completo da ficha (documentos + exames + folha + ocorrências) -----
 // ----- PDF de uma ocorrência, formatado pra colher assinatura do funcionário -----
+// ---------------------------------------------------------------
+// Ponto — inconsistências e faltas   (sub-aba de DP e Segurança)
+//
+// Inconsistência: o escritório abre um apontamento sobre o ponto de
+// alguém (com anexo do espelho), e isso vira PENDÊNCIA de um
+// responsável. O responsável recebe notificação, responde com a
+// justificativa, e o DP dá baixa. O responsável enxerga e responde a
+// dele mesmo sem ter o módulo de DP — a policy no banco cuida disso.
+//
+// Falta: falta sem justificativa. Gera documento pra imprimir e
+// assinar, em dois modelos (comunicado ou advertência).
+// ---------------------------------------------------------------
+const TIPOS_INCONSISTENCIA_PONTO = [
+  'Falta de marcação', 'Entrada fora do horário', 'Saída fora do horário',
+  'Intervalo não registrado', 'Marcação duplicada', 'Hora extra não autorizada',
+  'Saída antecipada', 'Atraso', 'Abono a conferir', 'Outro'
+]
+const ROTULO_STATUS_PONTO = {
+  ABERTA: 'aberta', RESPONDIDA: 'respondida', CONCLUIDA: 'concluída', NAO_PROCEDE: 'não procede'
+}
+const COR_STATUS_PONTO = {
+  ABERTA: 'badge-alerta', RESPONDIDA: 'chip', CONCLUIDA: 'badge-bom', NAO_PROCEDE: 'badge-bom'
+}
+const ROTULO_STATUS_FALTA = {
+  AGUARDANDO_ASSINATURA: 'aguardando assinatura', ASSINADA: 'assinada',
+  JUSTIFICADA: 'justificada', ARQUIVADA: 'arquivada'
+}
+const COR_STATUS_FALTA = {
+  AGUARDANDO_ASSINATURA: 'badge-alerta', ASSINADA: 'badge-bom',
+  JUSTIFICADA: 'badge-bom', ARQUIVADA: 'chip'
+}
+
+const periodoPonto = r => r.data_fim && r.data_fim !== r.data_inicio
+  ? `${fmtData(r.data_inicio)} a ${fmtData(r.data_fim)}` : fmtData(r.data_inicio)
+
+const SELECT_PONTO_INC = `*, pessoa:pessoa_id ( nome, cargo ),
+  responsavel:responsavel_id ( nome ), criador:criado_por ( nome ),
+  respondedor:respondido_por ( nome ), baixador:baixado_por ( nome )`
+
+// ----- anexos (mesma tabela `anexo` que o resto do sistema usa) -----
+async function anexosPonto (entidade, registroId) {
+  const { data } = await db.from('anexo').select('id,nome_arquivo,storage_path,criado_em')
+    .eq('entidade', entidade).eq('registro_id', registroId).order('criado_em')
+  return data || []
+}
+function listaAnexosPontoHtml (anexos) {
+  if (!anexos.length) return '<span class="texto-dim2" style="font-size:12px;">nenhum arquivo anexado</span>'
+  return anexos.map(a => `<button class="btn-secundario mini" data-anexo-ponto="${esc(a.storage_path)}"
+    style="margin:0 6px 6px 0;">${icDp('pdf')}${esc(a.nome_arquivo || 'arquivo')}</button>`).join('')
+}
+function ligarAnexosPonto (raiz) {
+  raiz.querySelectorAll('[data-anexo-ponto]').forEach(b => {
+    b.onclick = () => abrirComprovante(b.dataset.anexoPonto)
+  })
+}
+async function subirAnexosPonto (input, entidade, registroId, pasta) {
+  const arquivos = [...(input?.files || [])]
+  for (const arquivo of arquivos) {
+    const { caminho, nome } = await subirComprovante(arquivo, `${pasta}/${registroId}`)
+    await db.from('anexo').insert({
+      entidade, registro_id: registroId, tipo: 'anexo', nome_arquivo: nome, storage_path: caminho
+    })
+  }
+  return arquivos.length
+}
+
+// =================================================================
+// A tela da sub-aba
+// =================================================================
+async function dpPonto (alvo, editavel) {
+  await garantirDpPessoas()
+  const [{ data: incs }, { data: faltas }] = await Promise.all([
+    db.from('ponto_inconsistencia').select(SELECT_PONTO_INC).order('data_inicio', { ascending: false }),
+    db.from('ponto_falta').select('*, pessoa:pessoa_id ( nome, cargo ), emissor:emitido_por ( nome )')
+      .order('data_falta', { ascending: false })
+  ])
+  const lista = incs || []
+  const listaF = faltas || []
+  const abertas = lista.filter(r => r.status === 'ABERTA')
+  const respondidas = lista.filter(r => r.status === 'RESPONDIDA')
+  const semAssinar = listaF.filter(f => f.status === 'AGUARDANDO_ASSINATURA')
+  const aba = window.__PONTO_ABA || 'inconsistencias'
+
+  alvo.innerHTML = `
+    <div class="resumo-topo" style="margin-bottom:18px;">
+      ${kpiDp('⏱️', 'Inconsistências abertas', abertas.length, abertas.length ? 'alerta' : '')}
+      ${kpiDp('✍️', 'Respondidas — aguardando baixa', respondidas.length)}
+      ${kpiDp('📄', 'Faltas sem assinatura', semAssinar.length, semAssinar.length ? 'alerta' : '')}
+      ${kpiDp('📌', 'Faltas registradas', listaF.length)}
+    </div>
+    <div class="subabas" style="margin-bottom:14px;">
+      <button data-pt="inconsistencias" class="${aba === 'inconsistencias' ? 'ativo' : ''}">⏱️ Inconsistências</button>
+      <button data-pt="faltas" class="${aba === 'faltas' ? 'ativo' : ''}">📄 Faltas</button>
+    </div>
+    <div id="ponto-corpo"></div>`
+
+  alvo.querySelectorAll('[data-pt]').forEach(b => {
+    b.onclick = () => { window.__PONTO_ABA = b.dataset.pt; dpPonto(alvo, editavel) }
+  })
+
+  const corpo = alvo.querySelector('#ponto-corpo')
+  const recarregar = () => dpPonto(alvo, editavel)
+
+  if (aba === 'inconsistencias') {
+    corpo.innerHTML = `
+      ${editavel ? `<div class="acoes" style="margin-bottom:16px;">
+        <button class="btn" id="pt-nova-inc">${icDp('novo')}Registrar inconsistência</button></div>` : ''}
+      ${lista.map(r => `<div class="panel" style="padding:16px 18px;margin-bottom:12px;
+           border-left:4px solid ${r.status === 'ABERTA' ? 'var(--warn-text)' : r.status === 'RESPONDIDA' ? 'var(--gold, #c8a11a)' : 'var(--good-text)'};">
+        <div class="cabeca-secao" style="margin-bottom:8px;">
+          <div>
+            <div style="font-weight:600;font-size:14.5px;">${esc(r.pessoa?.nome ?? '—')}</div>
+            <div class="texto-dim2" style="font-size:11.5px;">${esc(r.pessoa?.cargo ?? '')}${r.pessoa?.cargo ? ' · ' : ''}${esc(r.tipo)} · ${periodoPonto(r)}</div>
+          </div>
+          <span class="${COR_STATUS_PONTO[r.status] || 'chip'}">${esc(ROTULO_STATUS_PONTO[r.status] ?? r.status)}</span>
+        </div>
+        ${r.descricao ? `<p style="font-size:13px;white-space:pre-wrap;line-height:1.55;margin:8px 0;">${esc(r.descricao)}</p>` : ''}
+        <p class="texto-dim2" style="font-size:11.5px;margin:6px 0 0;">
+          Responsável: <b style="color:var(--txt);">${esc(r.responsavel?.nome ?? 'ninguém definido')}</b>
+          ${r.criador?.nome ? ` · aberta por ${esc(r.criador.nome)}` : ''}</p>
+        <div class="acoes" style="margin-top:10px;">
+          <button class="btn-secundario mini" data-ver-inc="${r.id}">${icDp('ver')}abrir</button>
+        </div>
+      </div>`).join('') || '<p class="vazio">Nenhuma inconsistência registrada.</p>'}`
+
+    if (editavel) corpo.querySelector('#pt-nova-inc').onclick = () => formPontoInconsistencia(null, recarregar)
+    corpo.querySelectorAll('[data-ver-inc]').forEach(b => {
+      b.onclick = () => detalhePontoInconsistencia(lista.find(r => r.id === b.dataset.verInc), recarregar)
+    })
+  } else {
+    corpo.innerHTML = `
+      ${editavel ? `<div class="acoes" style="margin-bottom:16px;">
+        <button class="btn" id="pt-nova-falta">${icDp('novo')}Registrar falta</button></div>` : ''}
+      <div class="panel" style="padding:0;"><div class="tabela-scroll">
+        <table><thead><tr><th>Funcionário</th><th>Data da falta</th><th>Documento</th><th>Status</th><th></th></tr></thead><tbody>
+          ${listaF.map(f => `<tr>
+            <td><b>${esc(f.pessoa?.nome ?? '—')}</b><div class="texto-dim2" style="font-size:11px;">${esc(f.pessoa?.cargo ?? '')}</div></td>
+            <td class="texto-dim">${fmtData(f.data_falta)}</td>
+            <td class="texto-dim2">${f.tipo_documento === 'ADVERTENCIA' ? 'Advertência' : 'Comunicado de falta'}</td>
+            <td><span class="${COR_STATUS_FALTA[f.status] || 'chip'}">${esc(ROTULO_STATUS_FALTA[f.status] ?? f.status)}</span></td>
+            <td style="white-space:nowrap;">
+              <button class="btn-secundario mini" data-pdf-falta="${f.id}">${icDp('imprimir')}imprimir</button>
+              ${editavel ? `<button class="btn-secundario mini" data-editar-falta="${f.id}">${icDp('editar')}editar</button>
+                <button class="btn-secundario mini" data-excluir-falta="${f.id}" style="color:var(--warn-text);">${icDp('excluir')}excluir</button>` : ''}
+            </td>
+          </tr>`).join('') || `<tr><td colspan="5" class="vazio">Nenhuma falta registrada.</td></tr>`}
+        </tbody></table>
+      </div></div>`
+
+    if (editavel) {
+      corpo.querySelector('#pt-nova-falta').onclick = () => formPontoFalta(null, recarregar)
+      corpo.querySelectorAll('[data-editar-falta]').forEach(b => {
+        b.onclick = () => formPontoFalta(listaF.find(f => f.id === b.dataset.editarFalta), recarregar)
+      })
+      corpo.querySelectorAll('[data-excluir-falta]').forEach(b => {
+        b.onclick = () => excluirRegistroDp('ponto_falta', b.dataset.excluirFalta, recarregar, 'este registro de falta')
+      })
+    }
+    corpo.querySelectorAll('[data-pdf-falta]').forEach(b => {
+      b.onclick = () => pdfPontoFalta(listaF.find(f => f.id === b.dataset.pdfFalta))
+    })
+  }
+
+  // veio de uma notificação clicada: já abre o registro
+  if (window.__ABRIR_PONTO_INC) {
+    const alvoInc = lista.find(r => r.id === window.__ABRIR_PONTO_INC)
+    window.__ABRIR_PONTO_INC = null
+    if (alvoInc) detalhePontoInconsistencia(alvoInc, recarregar)
+  }
+}
+
+// =================================================================
+// Abrir uma inconsistência: quem é responsável responde, o DP dá baixa
+// =================================================================
+async function detalhePontoInconsistencia (reg, aoAtualizar = () => {}) {
+  if (!reg) return
+  const anexos = await anexosPonto('PONTO_INCONSISTENCIA', reg.id)
+  const souResponsavel = reg.responsavel_id && reg.responsavel_id === PERFIL.pessoaId
+  const souDp = podeEditar('dp')
+  const podeResponder = (souResponsavel || souDp) && ['ABERTA', 'RESPONDIDA'].includes(reg.status)
+  const podeBaixar = souDp && reg.status === 'RESPONDIDA'
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal modal-largo">
+    <div class="cabeca-secao">
+      <h3>Inconsistência de ponto</h3>
+      <span class="${COR_STATUS_PONTO[reg.status] || 'chip'}">${esc(ROTULO_STATUS_PONTO[reg.status] ?? reg.status)}</span>
+    </div>
+
+    <div class="panel" style="padding:14px 16px;margin-bottom:14px;background:var(--surface2);">
+      <div class="mini-kv"><span class="texto-dim">Funcionário</span><b>${esc(reg.pessoa?.nome ?? '—')}</b></div>
+      ${reg.pessoa?.cargo ? `<div class="mini-kv"><span class="texto-dim">Cargo</span><span>${esc(reg.pessoa.cargo)}</span></div>` : ''}
+      <div class="mini-kv"><span class="texto-dim">Período</span><b>${periodoPonto(reg)}</b></div>
+      <div class="mini-kv"><span class="texto-dim">Tipo</span><span>${esc(reg.tipo)}</span></div>
+      <div class="mini-kv"><span class="texto-dim">Responsável</span><b>${esc(reg.responsavel?.nome ?? '—')}</b></div>
+      <div class="mini-kv"><span class="texto-dim">Aberta por</span><span>${esc(reg.criador?.nome ?? '—')} em ${fmtQuando(reg.criado_em) ?? '—'}</span></div>
+    </div>
+
+    ${reg.descricao ? `<div class="campo"><label>O que foi apontado</label>
+      <p style="font-size:13.5px;white-space:pre-wrap;line-height:1.6;margin:4px 0 0;">${esc(reg.descricao)}</p></div>` : ''}
+
+    <div class="campo" style="margin-top:12px;"><label>Arquivos anexados</label>
+      <div id="pti-anexos" style="margin-top:4px;">${listaAnexosPontoHtml(anexos)}</div></div>
+
+    ${reg.justificativa ? `<div class="caixa-texto" style="margin-top:14px;border:1px solid var(--line2);border-radius:8px;padding:12px 14px;background:var(--surface2);">
+      <div class="texto-dim2" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;font-weight:700;">Justificativa</div>
+      <p style="font-size:13.5px;white-space:pre-wrap;line-height:1.6;margin:6px 0 0;">${esc(reg.justificativa)}</p>
+      <p class="texto-dim2" style="font-size:11px;margin:8px 0 0;">${esc(reg.respondedor?.nome ?? '—')} · ${fmtQuando(reg.respondido_em) ?? '—'}</p>
+    </div>` : ''}
+
+    ${reg.baixa_observacao || reg.baixado_em ? `<div class="caixa-texto" style="margin-top:12px;border:1px solid var(--good-text);border-radius:8px;padding:12px 14px;">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;font-weight:700;color:var(--good-text);">Baixa</div>
+      ${reg.baixa_observacao ? `<p style="font-size:13px;white-space:pre-wrap;margin:6px 0 0;">${esc(reg.baixa_observacao)}</p>` : ''}
+      <p class="texto-dim2" style="font-size:11px;margin:8px 0 0;">${esc(reg.baixador?.nome ?? '—')} · ${fmtQuando(reg.baixado_em) ?? '—'}</p>
+    </div>` : ''}
+
+    ${podeResponder ? `<div class="campo" style="margin-top:16px;">
+      <label>${reg.justificativa ? 'Corrigir a justificativa' : 'Sua justificativa'} *</label>
+      <textarea id="pti-just" style="min-height:90px;" placeholder="Explique o que aconteceu nesse dia.">${esc(reg.justificativa ?? '')}</textarea></div>
+      <div class="campo"><label>Anexar arquivo (opcional)</label>
+        <input type="file" id="pti-arquivos" multiple></div>` : ''}
+
+    ${podeBaixar ? `<div class="campo" style="margin-top:12px;">
+      <label>Observação da baixa (opcional)</label>
+      <input id="pti-obs" placeholder="ex: justificativa aceita, abonado"></div>` : ''}
+
+    <div class="acoes" style="margin-top:16px;">
+      ${podeResponder ? `<button class="btn" id="pti-responder">${icDp('salvar')}Enviar justificativa</button>` : ''}
+      ${podeBaixar ? `<button class="btn" id="pti-concluir">${icDp('concluir')}Concluir</button>
+        <button class="btn-secundario" id="pti-nao-procede">Não procede</button>` : ''}
+      ${souDp && reg.status !== 'ABERTA' ? `<button class="btn-secundario mini" id="pti-reabrir">reabrir</button>` : ''}
+      <button class="btn-secundario" id="pti-fechar">${icDp('fechar')}Fechar</button>
+    </div>
+    <div class="recado oculto" id="pti-recado"></div>
+  </div>`
+
+  document.body.appendChild(fundo)
+  const q = s => fundo.querySelector(s)
+  const fechar = () => fundo.remove()
+  q('#pti-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  ligarAnexosPonto(fundo)
+
+  const aviso = t => { const el = q('#pti-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+
+  if (podeResponder) q('#pti-responder').onclick = async () => {
+    const just = q('#pti-just').value.trim()
+    if (just.length < 5) { aviso('Escreva a justificativa.'); return }
+    const btn = q('#pti-responder'); btn.disabled = true; btn.textContent = 'Enviando...'
+    const { error } = await db.from('ponto_inconsistencia').update({
+      justificativa: just, status: 'RESPONDIDA',
+      respondido_por: PERFIL.pessoaId, respondido_em: new Date().toISOString()
+    }).eq('id', reg.id)
+    if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Enviar justificativa'; return }
+    try { await subirAnexosPonto(q('#pti-arquivos'), 'PONTO_INCONSISTENCIA', reg.id, 'ponto') } catch (e) { console.warn(e) }
+    // avisa quem abriu que já tem resposta
+    if (reg.criado_por && reg.criado_por !== PERFIL.pessoaId) {
+      await db.from('notificacao_pessoal').insert({
+        destinatario_id: reg.criado_por,
+        titulo: '⏱️ Inconsistência de ponto respondida',
+        mensagem: `${reg.pessoa?.nome ?? ''} — ${reg.tipo} em ${periodoPonto(reg)}`,
+        entidade: 'ponto_inconsistencia', entidade_id: reg.id
+      })
+    }
+    fechar(); aoAtualizar()
+  }
+
+  const darBaixa = async (status) => {
+    const { error } = await db.from('ponto_inconsistencia').update({
+      status, baixa_observacao: q('#pti-obs')?.value.trim() || null,
+      baixado_por: PERFIL.pessoaId, baixado_em: new Date().toISOString()
+    }).eq('id', reg.id)
+    if (error) { aviso(error.message); return }
+    fechar(); aoAtualizar()
+  }
+  if (podeBaixar) {
+    q('#pti-concluir').onclick = () => darBaixa('CONCLUIDA')
+    q('#pti-nao-procede').onclick = () => darBaixa('NAO_PROCEDE')
+  }
+  if (souDp && reg.status !== 'ABERTA') q('#pti-reabrir').onclick = async () => {
+    if (!confirm('Reabrir essa inconsistência? Ela volta a aparecer como pendência do responsável.')) return
+    const { error } = await db.from('ponto_inconsistencia').update({
+      status: 'ABERTA', baixado_por: null, baixado_em: null, baixa_observacao: null
+    }).eq('id', reg.id)
+    if (error) { aviso(error.message); return }
+    fechar(); aoAtualizar()
+  }
+}
+
+// abre pelo id (usado pela notificação e pela Central de atenção)
+async function abrirPontoInconsistenciaPorId (id) {
+  const { data } = await db.from('ponto_inconsistencia').select(SELECT_PONTO_INC).eq('id', id).maybeSingle()
+  if (!data) { alert('Essa inconsistência não existe mais.'); return }
+  detalhePontoInconsistencia(data, () => {})
+}
+
+// =================================================================
+// Formulário de inconsistência
+// =================================================================
+function formPontoInconsistencia (reg, aoSalvar) {
+  const pessoas = window.__DP_PESSOAS || []
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  const opcPessoa = (atual) => '<option value="">selecione…</option>' +
+    pessoas.map(p => `<option value="${p.id}" ${p.id === atual ? 'selected' : ''}>${esc(p.nome)}</option>`).join('')
+
+  fundo.innerHTML = `<div class="modal">
+    <h3>${reg ? 'Editar' : 'Registrar'} inconsistência de ponto</h3>
+    <div class="form-grade">
+      <div class="campo" style="grid-column:1/-1;"><label>Funcionário do ponto *</label>
+        <select id="pi-pessoa">${opcPessoa(reg?.pessoa_id)}</select></div>
+      <div class="campo" style="grid-column:1/-1;"><label>Responsável por justificar *</label>
+        <select id="pi-resp">${opcPessoa(reg?.responsavel_id)}</select>
+        <span class="texto-dim2" style="font-size:11px;">Recebe a notificação e responde. Normalmente quem cuida do ponto.</span></div>
+      <div class="campo"><label>Data (ou início do período) *</label>
+        <input type="date" id="pi-ini" value="${reg?.data_inicio ?? hojeISO()}"></div>
+      <div class="campo"><label>Fim do período</label>
+        <input type="date" id="pi-fim" value="${reg?.data_fim ?? ''}">
+        <span class="texto-dim2" style="font-size:11px;">deixe vazio se for um dia só</span></div>
+      <div class="campo" style="grid-column:1/-1;"><label>Tipo *</label>
+        <select id="pi-tipo">${TIPOS_INCONSISTENCIA_PONTO.map(t =>
+          `<option ${reg?.tipo === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></div>
+    </div>
+    <div class="campo" style="margin-top:12px;"><label>O que aconteceu *</label>
+      <textarea id="pi-desc" style="min-height:80px;" placeholder="Descreva a inconsistência do jeito que o responsável precisa entender.">${esc(reg?.descricao ?? '')}</textarea></div>
+    ${reg ? '' : `<div class="campo"><label>Anexar espelho do ponto / comprovante</label>
+      <input type="file" id="pi-arquivos" multiple></div>`}
+    <div class="acoes">
+      <button class="btn" id="pi-salvar">${icDp('salvar')}${reg ? 'Salvar' : 'Registrar e notificar'}</button>
+      <button class="btn-secundario" id="pi-cancelar">${icDp('fechar')}Cancelar</button>
+    </div>
+    <div class="recado oculto" id="pi-recado"></div>
+  </div>`
+
+  document.body.appendChild(fundo)
+  const q = s => fundo.querySelector(s)
+  const fechar = () => fundo.remove()
+  q('#pi-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  if (reg?.tipo) q('#pi-tipo').value = reg.tipo
+  const aviso = t => { const el = q('#pi-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+
+  q('#pi-salvar').onclick = async () => {
+    const pessoa_id = q('#pi-pessoa').value
+    const responsavel_id = q('#pi-resp').value
+    const data_inicio = q('#pi-ini').value
+    const data_fim = q('#pi-fim').value || null
+    const descricao = q('#pi-desc').value.trim()
+    if (!pessoa_id) { aviso('Escolha o funcionário.'); return }
+    if (!responsavel_id) { aviso('Escolha quem vai justificar.'); return }
+    if (!data_inicio) { aviso('Informe a data.'); return }
+    if (data_fim && data_fim < data_inicio) { aviso('O fim do período não pode ser antes do início.'); return }
+    if (descricao.length < 5) { aviso('Descreva o que aconteceu.'); return }
+
+    const btn = q('#pi-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const corpo = { pessoa_id, responsavel_id, data_inicio, data_fim, tipo: q('#pi-tipo').value, descricao }
+
+    if (reg) {
+      const { error } = await db.from('ponto_inconsistencia').update(corpo).eq('id', reg.id)
+      if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Salvar'; return }
+      fechar(); aoSalvar(); return
+    }
+
+    const { data: nova, error } = await db.from('ponto_inconsistencia')
+      .insert({ ...corpo, criado_por: PERFIL.pessoaId }).select('id').single()
+    if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Registrar e notificar'; return }
+
+    try { await subirAnexosPonto(q('#pi-arquivos'), 'PONTO_INCONSISTENCIA', nova.id, 'ponto') }
+    catch (e) { console.warn('anexo do ponto:', e) }
+
+    const nomePessoa = pessoas.find(p => p.id === pessoa_id)?.nome ?? ''
+    await db.from('notificacao_pessoal').insert({
+      destinatario_id: responsavel_id,
+      titulo: '⏱️ Inconsistência de ponto pra justificar',
+      mensagem: `${nomePessoa} — ${corpo.tipo} em ${data_fim && data_fim !== data_inicio ? fmtData(data_inicio) + ' a ' + fmtData(data_fim) : fmtData(data_inicio)}`,
+      entidade: 'ponto_inconsistencia', entidade_id: nova.id
+    })
+    fechar(); aoSalvar()
+  }
+}
+
+// =================================================================
+// Faltas — registro e documento pra assinar
+// =================================================================
+function formPontoFalta (reg, aoSalvar) {
+  const pessoas = window.__DP_PESSOAS || []
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>${reg ? 'Editar' : 'Registrar'} falta</h3>
+    <div class="form-grade">
+      <div class="campo" style="grid-column:1/-1;"><label>Funcionário *</label>
+        <select id="pf-pessoa"><option value="">selecione…</option>
+          ${pessoas.map(p => `<option value="${p.id}" ${p.id === reg?.pessoa_id ? 'selected' : ''}>${esc(p.nome)}</option>`).join('')}</select></div>
+      <div class="campo"><label>Data da falta *</label>
+        <input type="date" id="pf-data" value="${reg?.data_falta ?? hojeISO()}"></div>
+      <div class="campo"><label>Documento a gerar *</label>
+        <select id="pf-tipo">
+          <option value="COMUNICADO" ${reg?.tipo_documento !== 'ADVERTENCIA' ? 'selected' : ''}>Comunicado de falta (pede justificativa)</option>
+          <option value="ADVERTENCIA" ${reg?.tipo_documento === 'ADVERTENCIA' ? 'selected' : ''}>Advertência (falta não justificada)</option>
+        </select></div>
+      <div class="campo"><label>Situação</label>
+        <select id="pf-status">
+          ${Object.entries(ROTULO_STATUS_FALTA).map(([k, v]) =>
+            `<option value="${k}" ${reg?.status === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}
+        </select></div>
+      <div class="campo"><label>Data da assinatura</label>
+        <input type="date" id="pf-assin" value="${reg?.assinado_em ?? ''}"></div>
+    </div>
+    <div class="campo" style="margin-top:12px;"><label>Observação (sai no documento)</label>
+      <textarea id="pf-desc" style="min-height:70px;" placeholder="ex: não comunicou o setor, não apresentou atestado">${esc(reg?.descricao ?? '')}</textarea></div>
+    <div class="campo"><label>Justificativa apresentada pelo funcionário</label>
+      <textarea id="pf-just" style="min-height:60px;" placeholder="preencha depois que ele justificar">${esc(reg?.justificativa ?? '')}</textarea></div>
+    <div class="acoes">
+      <button class="btn" id="pf-salvar">${icDp('salvar')}${reg ? 'Salvar' : 'Registrar'}</button>
+      <button class="btn-secundario" id="pf-cancelar">${icDp('fechar')}Cancelar</button>
+    </div>
+    <div class="recado oculto" id="pf-recado"></div>
+  </div>`
+
+  document.body.appendChild(fundo)
+  const q = s => fundo.querySelector(s)
+  const fechar = () => fundo.remove()
+  q('#pf-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  const aviso = t => { const el = q('#pf-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+
+  q('#pf-salvar').onclick = async () => {
+    const pessoa_id = q('#pf-pessoa').value
+    const data_falta = q('#pf-data').value
+    if (!pessoa_id) { aviso('Escolha o funcionário.'); return }
+    if (!data_falta) { aviso('Informe a data da falta.'); return }
+    const corpo = {
+      pessoa_id, data_falta,
+      tipo_documento: q('#pf-tipo').value,
+      status: q('#pf-status').value,
+      descricao: q('#pf-desc').value.trim() || null,
+      justificativa: q('#pf-just').value.trim() || null,
+      assinado_em: q('#pf-assin').value || null
+    }
+    const btn = q('#pf-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    let salvo
+    if (reg) {
+      const { error } = await db.from('ponto_falta').update(corpo).eq('id', reg.id)
+      if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Salvar'; return }
+      salvo = { ...reg, ...corpo }
+    } else {
+      const { data, error } = await db.from('ponto_falta')
+        .insert({ ...corpo, emitido_por: PERFIL.pessoaId, criado_por: PERFIL.pessoaId })
+        .select('*, pessoa:pessoa_id ( nome, cargo ), emissor:emitido_por ( nome )').single()
+      if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Registrar'; return }
+      salvo = data
+    }
+    fechar(); aoSalvar()
+    // já abre o documento pra imprimir e colher a assinatura
+    pdfPontoFalta(salvo)
+  }
+}
+
+// ----- o documento que o funcionário assina -----
+function pdfPontoFalta (f) {
+  if (!f) return
+  const ehAdvertencia = f.tipo_documento === 'ADVERTENCIA'
+  const emissor = f.emissor?.nome ?? PERFIL.nome ?? ''
+
+  const texto = ehAdvertencia
+    ? `Comunicamos que V.Sa. faltou ao serviço no dia <b>${fmtData(f.data_falta)}</b> sem apresentar
+       justificativa legal, descumprindo o dever de assiduidade previsto no contrato de trabalho.
+       Fica V.Sa. <b>ADVERTIDO(A)</b> por escrito, ficando ciente de que a reincidência poderá
+       resultar em penalidade mais grave, nos termos da legislação trabalhista vigente.`
+    : `Comunicamos que consta a sua ausência ao serviço no dia <b>${fmtData(f.data_falta)}</b>,
+       sem registro de marcação de ponto e sem justificativa apresentada até a presente data.
+       Solicitamos que apresente a justificativa no campo abaixo, com o documento comprobatório,
+       se houver. A ausência de justificativa implicará no desconto do dia e das repercussões legais.`
+
+  const corpo = `
+    <div class="grade-doc" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;">
+      ${docLinha('Funcionário', f.pessoa?.nome ?? '—')}${docLinha('Cargo', f.pessoa?.cargo ?? '—')}
+      ${docLinha('Data da falta', fmtData(f.data_falta))}${docLinha('Emitido em', fmtData(hojeISO()))}
+    </div>
+
+    <p style="font-size:13.5px;line-height:1.8;text-align:justify;margin:0 0 14px;">${texto}</p>
+
+    ${f.descricao ? `<div class="caixa-texto" style="margin-bottom:14px;">
+      <div class="rot">Observação</div><p>${esc(f.descricao)}</p></div>` : ''}
+
+    <div style="border:1px solid #d7e3da;border-radius:8px;padding:12px 14px;margin-bottom:10px;">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:.6px;font-weight:700;color:#1c5632;">
+        Justificativa do funcionário</div>
+      ${f.justificativa
+        ? `<p style="font-size:13px;white-space:pre-wrap;line-height:1.6;margin:8px 0 0;">${esc(f.justificativa)}</p>`
+        : `<div style="border-bottom:1px solid #98a89e;height:26px;margin-top:14px;"></div>
+           <div style="border-bottom:1px solid #98a89e;height:26px;"></div>
+           <div style="border-bottom:1px solid #98a89e;height:26px;"></div>`}
+    </div>
+
+    <p style="font-size:11.5px;color:#5b6b60;margin:0 0 4px;">
+      Declaro ter recebido a via deste documento e estar ciente do seu conteúdo.</p>
+
+    <div class="assinaturas" style="grid-template-columns:1fr 1fr;gap:50px;margin-top:6px;">
+      <div><div class="risco"></div>Funcionário<br><b>${esc(f.pessoa?.nome ?? '')}</b></div>
+      <div><div class="risco"></div>Responsável pela emissão<br><b>${esc(emissor)}</b></div>
+    </div>`
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = documentoPDF({
+    titulo: ehAdvertencia ? 'ADVERTÊNCIA' : 'COMUNICADO DE FALTA',
+    subtitulo: f.pessoa?.nome ?? '',
+    corpo,
+    acoes: `<button class="btn" id="pff-imprimir">${icDp('imprimir')}Baixar / imprimir</button>
+      <button class="btn-secundario" id="pff-fechar">${icDp('fechar')}Fechar</button>`
+  })
+  document.body.appendChild(fundo)
+  fundo.querySelector('#pff-fechar').onclick = () => fundo.remove()
+  fundo.querySelector('#pff-imprimir').onclick = () => window.print()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+}
+
 function dpGerarPdfOcorrencia (o) {
   if (!o) return
   const corpo = `
