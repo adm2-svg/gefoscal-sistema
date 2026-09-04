@@ -13968,6 +13968,126 @@ async function carregarAgendaLead (fundo, l, editavel) {
   }
 }
 
+// ----- Pessoas relacionadas ao lead (sócio, gerente, financeiro, etc.) -----
+async function carregarPessoasLead (fundo, l, editavel) {
+  const alvoLista = fundo.querySelector('#ld-pessoas-lista')
+  const { data, error } = await db.from('lead_pessoa_relacionada').select('id,nome,funcao,contato')
+    .eq('lead_id', l.id).order('criado_em', { ascending: true })
+  if (error) { alvoLista.innerHTML = `<p class="vazio" style="font-size:12px;">${esc(error.message)}</p>`; return }
+
+  const itens = data || []
+  alvoLista.innerHTML = itens.length ? itens.map(p => `
+    <div class="passo" style="align-items:center;">
+      <span style="flex:1;"><b>${esc(p.nome)}</b>${p.funcao ? ' — ' + esc(p.funcao) : ''}${p.contato ? ' · ' + esc(p.contato) : ''}</span>
+      ${editavel ? `<button type="button" class="btn-secundario mini" data-excluir-pessoa="${p.id}" style="padding:2px 8px;">✕</button>` : ''}
+    </div>`).join('') : `<p class="texto-dim2" style="font-size:12px;">Nenhuma pessoa cadastrada ainda.</p>`
+
+  alvoLista.querySelectorAll('[data-excluir-pessoa]').forEach(btn => {
+    btn.onclick = async () => {
+      if (!confirm('Excluir essa pessoa?')) return
+      await db.from('lead_pessoa_relacionada').delete().eq('id', btn.dataset.excluirPessoa)
+      carregarPessoasLead(fundo, l, editavel)
+    }
+  })
+
+  const btnAdd = fundo.querySelector('#pr-adicionar')
+  if (btnAdd) btnAdd.onclick = async () => {
+    const nome = fundo.querySelector('#pr-nome').value.trim()
+    const funcao = fundo.querySelector('#pr-funcao').value.trim()
+    const contato = fundo.querySelector('#pr-contato').value.trim()
+    if (!nome) { alert('Informe ao menos o nome da pessoa.'); return }
+    const { error: e1 } = await db.from('lead_pessoa_relacionada').insert({
+      lead_id: l.id, nome, funcao: funcao || null, contato: contato || null, criado_por: PERFIL.pessoaId
+    })
+    if (e1) { alert('Não consegui salvar: ' + e1.message); return }
+    fundo.querySelector('#pr-nome').value = ''
+    fundo.querySelector('#pr-funcao').value = ''
+    fundo.querySelector('#pr-contato').value = ''
+    carregarPessoasLead(fundo, l, editavel)
+  }
+}
+
+// ----- Fazendas / regiões do lead (cliente pode ter mais de uma) -----
+async function carregarFazendasLead (fundo, l, editavel) {
+  const alvoLista = fundo.querySelector('#ld-fazendas-lista')
+  const { data, error } = await db.from('lead_fazenda').select('id,fazenda,regiao,area_ha,pivos')
+    .eq('lead_id', l.id).order('criado_em', { ascending: true })
+  if (error) { alvoLista.innerHTML = `<p class="vazio" style="font-size:12px;">${esc(error.message)}</p>`; return }
+
+  const itens = data || []
+  alvoLista.innerHTML = itens.length ? itens.map(f => `
+    <div class="passo" style="align-items:center;">
+      <span style="flex:1;"><b>${esc(f.fazenda)}</b>${f.regiao ? ' — ' + esc(f.regiao) : ''}${f.area_ha != null ? ' · ' + fmtNum(f.area_ha) + ' ha' : ''}${f.pivos != null ? ' · ' + f.pivos + ' pivôs' : ''}</span>
+      ${editavel ? `<button type="button" class="btn-secundario mini" data-excluir-fazenda="${f.id}" style="padding:2px 8px;">✕</button>` : ''}
+    </div>`).join('') : `<p class="texto-dim2" style="font-size:12px;">Nenhuma fazenda cadastrada ainda.</p>`
+
+  alvoLista.querySelectorAll('[data-excluir-fazenda]').forEach(btn => {
+    btn.onclick = async () => {
+      if (!confirm('Excluir essa fazenda?')) return
+      await db.from('lead_fazenda').delete().eq('id', btn.dataset.excluirFazenda)
+      carregarFazendasLead(fundo, l, editavel)
+    }
+  })
+
+  const btnAdd = fundo.querySelector('#fz-adicionar')
+  if (btnAdd) btnAdd.onclick = async () => {
+    const fazenda = fundo.querySelector('#fz-fazenda').value.trim()
+    const regiao = fundo.querySelector('#fz-regiao').value.trim()
+    const area = fundo.querySelector('#fz-area').value
+    const pivos = fundo.querySelector('#fz-pivos').value
+    if (!fazenda) { alert('Informe ao menos o nome da fazenda.'); return }
+    const { error: e1 } = await db.from('lead_fazenda').insert({
+      lead_id: l.id, fazenda, regiao: regiao || null,
+      area_ha: area ? Number(area) : null, pivos: pivos ? Number(pivos) : null, criado_por: PERFIL.pessoaId
+    })
+    if (e1) { alert('Não consegui salvar: ' + e1.message); return }
+    fundo.querySelector('#fz-fazenda').value = ''
+    fundo.querySelector('#fz-regiao').value = ''
+    fundo.querySelector('#fz-area').value = ''
+    fundo.querySelector('#fz-pivos').value = ''
+    carregarFazendasLead(fundo, l, editavel)
+  }
+}
+
+// ----- Culturas do lead (cliente pode plantar mais de uma) -----
+async function carregarCulturasLead (fundo, l, editavel) {
+  const alvoLista = fundo.querySelector('#ld-culturas-lista')
+  const { data, error } = await db.from('lead_cultura').select('id,cultura,area_ha,observacao')
+    .eq('lead_id', l.id).order('criado_em', { ascending: true })
+  if (error) { alvoLista.innerHTML = `<p class="vazio" style="font-size:12px;">${esc(error.message)}</p>`; return }
+
+  const itens = data || []
+  alvoLista.innerHTML = itens.length ? itens.map(c => `
+    <div class="passo" style="align-items:center;">
+      <span style="flex:1;"><b>${esc(c.cultura)}</b>${c.area_ha != null ? ' — ' + fmtNum(c.area_ha) + ' ha' : ''}${c.observacao ? ' · ' + esc(c.observacao) : ''}</span>
+      ${editavel ? `<button type="button" class="btn-secundario mini" data-excluir-cultura="${c.id}" style="padding:2px 8px;">✕</button>` : ''}
+    </div>`).join('') : `<p class="texto-dim2" style="font-size:12px;">Nenhuma cultura cadastrada ainda.</p>`
+
+  alvoLista.querySelectorAll('[data-excluir-cultura]').forEach(btn => {
+    btn.onclick = async () => {
+      if (!confirm('Excluir essa cultura?')) return
+      await db.from('lead_cultura').delete().eq('id', btn.dataset.excluirCultura)
+      carregarCulturasLead(fundo, l, editavel)
+    }
+  })
+
+  const btnAdd = fundo.querySelector('#cu-adicionar')
+  if (btnAdd) btnAdd.onclick = async () => {
+    const cultura = fundo.querySelector('#cu-cultura').value.trim()
+    const area = fundo.querySelector('#cu-area').value
+    const obs = fundo.querySelector('#cu-obs').value.trim()
+    if (!cultura) { alert('Informe ao menos o nome da cultura.'); return }
+    const { error: e1 } = await db.from('lead_cultura').insert({
+      lead_id: l.id, cultura, area_ha: area ? Number(area) : null, observacao: obs || null, criado_por: PERFIL.pessoaId
+    })
+    if (e1) { alert('Não consegui salvar: ' + e1.message); return }
+    fundo.querySelector('#cu-cultura').value = ''
+    fundo.querySelector('#cu-area').value = ''
+    fundo.querySelector('#cu-obs').value = ''
+    carregarCulturasLead(fundo, l, editavel)
+  }
+}
+
 // ----- Proposta dentro do card do lead -----
 async function carregarPropostaLead (fundo, l, editavel) {
   const alvo = fundo.querySelector('#ld-proposta-area')
@@ -14251,6 +14371,41 @@ function formLead (l, editavel, gerencia, aoFechar) {
       <div class="campo"><label>Valor estimado (R$)</label>
         <input id="ld-valor" type="number" step="0.01" value="${l?.valor_estimado ?? ''}" ${editavel ? '' : 'disabled'}></div>
     </div>
+    ${l ? `
+    <div class="cabeca-secao" style="margin-top:16px;margin-bottom:4px;">
+      <h3 style="font-family:var(--serif);font-size:14px;">👥 Pessoas relacionadas</h3></div>
+    <p class="texto-dim2" style="font-size:11.5px;margin:-2px 0 8px;">Sócio, filho, gerente, financeiro, esposa... qualquer contato ligado a esse cliente.</p>
+    <div id="ld-pessoas-lista" style="margin-bottom:8px;"><p class="texto-dim2" style="font-size:12px;">carregando...</p></div>
+    ${editavel ? `<div class="form-grade" style="grid-template-columns:1.2fr 1fr 1.2fr auto;align-items:end;">
+      <div class="campo"><label>Nome</label><input id="pr-nome" placeholder="nome da pessoa"></div>
+      <div class="campo"><label>Função</label><input id="pr-funcao" placeholder="ex: decisor, gerente, financeiro..."></div>
+      <div class="campo"><label>Contato</label><input id="pr-contato" placeholder="telefone ou e-mail"></div>
+      <button class="btn-secundario mini" id="pr-adicionar" type="button" style="height:38px;">+ Adicionar</button>
+    </div>` : ''}
+
+    <div class="cabeca-secao" style="margin-top:16px;margin-bottom:4px;">
+      <h3 style="font-family:var(--serif);font-size:14px;">🚜 Fazendas / regiões</h3></div>
+    <p class="texto-dim2" style="font-size:11.5px;margin:-2px 0 8px;">Se o cliente trabalha com mais de uma fazenda, cadastra cada uma aqui.</p>
+    <div id="ld-fazendas-lista" style="margin-bottom:8px;"><p class="texto-dim2" style="font-size:12px;">carregando...</p></div>
+    ${editavel ? `<div class="form-grade" style="grid-template-columns:1.3fr 1fr .8fr .7fr auto;align-items:end;">
+      <div class="campo"><label>Fazenda</label><input id="fz-fazenda" placeholder="nome da fazenda"></div>
+      <div class="campo"><label>Região</label><input id="fz-regiao" placeholder="ex: oeste da Bahia"></div>
+      <div class="campo"><label>Área (ha)</label><input id="fz-area" type="number" step="0.01"></div>
+      <div class="campo"><label>Pivôs</label><input id="fz-pivos" type="number" step="1"></div>
+      <button class="btn-secundario mini" id="fz-adicionar" type="button" style="height:38px;">+ Adicionar</button>
+    </div>` : ''}
+
+    <div class="cabeca-secao" style="margin-top:16px;margin-bottom:4px;">
+      <h3 style="font-family:var(--serif);font-size:14px;">🌱 Culturas</h3></div>
+    <p class="texto-dim2" style="font-size:11.5px;margin:-2px 0 8px;">Se o cliente trabalha com mais de uma cultura, cadastra cada uma aqui.</p>
+    <div id="ld-culturas-lista" style="margin-bottom:8px;"><p class="texto-dim2" style="font-size:12px;">carregando...</p></div>
+    ${editavel ? `<div class="form-grade" style="grid-template-columns:1fr .8fr 1.4fr auto;align-items:end;">
+      <div class="campo"><label>Cultura</label><input id="cu-cultura" placeholder="ex: soja, milho, algodão..."></div>
+      <div class="campo"><label>Área (ha)</label><input id="cu-area" type="number" step="0.01"></div>
+      <div class="campo"><label>Obs</label><input id="cu-obs" placeholder="safrinha, irrigado, sequeiro..."></div>
+      <button class="btn-secundario mini" id="cu-adicionar" type="button" style="height:38px;">+ Adicionar</button>
+    </div>` : ''}
+    ` : ''}
     <div class="campo" style="margin-top:10px;">
       <label>Observações</label>
       ${editavel ? `<div style="display:flex;gap:6px;margin-bottom:6px;">
@@ -14390,6 +14545,9 @@ function formLead (l, editavel, gerencia, aoFechar) {
   }
 
   if (l) carregarAgendaLead(fundo, l, editavel)
+  if (l) carregarPessoasLead(fundo, l, editavel)
+  if (l) carregarFazendasLead(fundo, l, editavel)
+  if (l) carregarCulturasLead(fundo, l, editavel)
   if (l) montarBomDia(fundo.querySelector('#ld-bomdia'), 'ld', 'lead', l)
   if (l) montarBloqueioLgpd(fundo.querySelector('#ld-lgpd'), 'lead', l, () => {
     aoFechar()
