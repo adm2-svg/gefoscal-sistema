@@ -4937,6 +4937,14 @@ async function subUsuarios (alvo, editavel) {
             <input type="checkbox" id="u-pode-vender" ${editavel ? '' : 'disabled'}>
             Também pode atuar com vendas (libera o CRM, mesmo não sendo vendedor de cargo)
           </label></div>
+        <div class="campo"><label>&nbsp;</label>
+          <label style="display:flex;align-items:center;gap:7px;font-size:13px;font-weight:400;padding-top:7px;">
+            <input type="checkbox" id="u-perfil-vendedor" ${editavel ? '' : 'disabled'}>
+            <b>Perfil de vendedor</b> — emite pedido e cadastra cliente
+          </label>
+          <span class="texto-dim2" style="font-size:11px;">
+            Libera CRM Comercial, Banco de Informações e Cadastro, e o direito de emitir pedido.
+            Não dá aprovação de crédito nem exclusão de pedido.</span></div>
         ${editavel ? `<div class="campo"><label>Senha de acesso</label>
           <input id="u-senha" type="text" autocomplete="off" placeholder="mínimo 8 caracteres">
           <span class="texto-dim2" style="font-size:11px;">deixe vazio para não mexer na senha</span>
@@ -5050,6 +5058,7 @@ async function subUsuarios (alvo, editavel) {
       $('#u-nivel').value = (pc?.papeis || []).includes('ADMIN') ? 'administrador' : 'usuario'
       $('#u-gestor-comercial').checked = (pc?.papeis || []).includes('GESTOR_COMERCIAL')
       $('#u-pode-vender').checked = !!p.eh_vendedor
+      $('#u-perfil-vendedor').checked = (pc?.papeis || []).includes('VENDEDOR')
       const meus = (perms || []).filter(x => x.pessoa_id === p.id)
       $('#u-modulos').querySelectorAll('[data-ver]').forEach(c => {
         const r = meus.find(x => x.modulo_id === c.dataset.ver)
@@ -5161,6 +5170,7 @@ async function subUsuarios (alvo, editavel) {
     $('#u-nivel').value = 'usuario'
     $('#u-gestor-comercial').checked = false
     $('#u-pode-vender').checked = false
+    $('#u-perfil-vendedor').checked = false
     $('#u-modulos').querySelectorAll('input').forEach(c => c.checked = false)
     $('#u-recado').classList.add('oculto')
   }
@@ -5184,6 +5194,7 @@ async function subUsuarios (alvo, editavel) {
 
     const papeis = $('#u-nivel').value === 'administrador' ? ['ADMIN', 'DIRETORIA'] : ['LEITOR']
     if ($('#u-gestor-comercial').checked) papeis.push('GESTOR_COMERCIAL')
+    if ($('#u-perfil-vendedor').checked) papeis.push('VENDEDOR')
     const { error: e2 } = await db.from('usuario_precadastro').upsert({
       email, papeis, pessoa_id: pessoa.id, setor_id: pessoa.setor_id
     }, { onConflict: 'email' })
@@ -5196,6 +5207,11 @@ async function subUsuarios (alvo, editavel) {
       await db.from('usuario_papel').delete().eq('user_id', perfilAtivo.user_id).eq('papel', 'GESTOR_COMERCIAL')
       if ($('#u-gestor-comercial').checked) {
         await db.from('usuario_papel').insert({ user_id: perfilAtivo.user_id, papel: 'GESTOR_COMERCIAL' })
+      }
+      // perfil de vendedor: vale na hora pra quem já está logado
+      await db.from('usuario_papel').delete().eq('user_id', perfilAtivo.user_id).eq('papel', 'VENDEDOR')
+      if ($('#u-perfil-vendedor').checked) {
+        await db.from('usuario_papel').insert({ user_id: perfilAtivo.user_id, papel: 'VENDEDOR' })
       }
     }
 
@@ -5210,6 +5226,19 @@ async function subUsuarios (alvo, editavel) {
         if (verCrm) verCrm.checked = true
         if (editarCrm) editarCrm.checked = true
       }
+    }
+
+    // Perfil de vendedor: marca de uma vez as abas que ele precisa, pra
+    // não depender de lembrar de marcar uma por uma na grade
+    if ($('#u-perfil-vendedor').checked) {
+      ;['crm', 'banco', 'cadastro'].forEach(chave => {
+        const mod = PERFIL.modulos.find(m => m.chave === chave)
+        if (!mod) return
+        const ver = $(`#u-modulos [data-ver="${mod.id}"]`)
+        const editar = $(`#u-modulos [data-editar="${mod.id}"]`)
+        if (ver) ver.checked = true
+        if (editar) editar.checked = true
+      })
     }
 
     // permissões: apaga as antigas e grava as marcadas
