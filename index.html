@@ -3747,7 +3747,7 @@ function textoPrazoSolicitacao (s) {
 const STATUS_SOLICITACAO = ['ABERTA', 'EM_ANDAMENTO', 'CONCLUIDA', 'CANCELADA']
 const ROTULO_STATUS_SOLICITACAO = { ABERTA: 'Aberta', EM_ANDAMENTO: 'Em andamento', CONCLUIDA: 'Concluída', CANCELADA: 'Cancelada' }
 
-let SOLIC_CACHE = { setores: [], pessoas: [] }
+let SOLIC_CACHE = { setores: [], pessoas: [], prestadores: [] }
 
 // ---------------------------------------------------------------
 // Progresso, agilidade e permissão de quem pode mexer numa solicitação
@@ -3757,22 +3757,41 @@ let SOLIC_CACHE = { setores: [], pessoas: [] }
 // mais uma "janela inteira" de prazo (do início até o prazo original).
 // Serve tanto pra pontuar quem já concluiu quanto pra mostrar o "ritmo
 // atual" de quem ainda está com a tarefa em mãos (não é salvo nesse caso).
-function calcularAgilidade (dataSolicitacao, prazoMs, fimMs) {
-  const inicioMs = new Date(dataSolicitacao).getTime()
+function calcularAgilidade (dataInicio, prazoMs, fimMs, pausadoMs = 0) {
+  const inicioMs = new Date(dataInicio).getTime()
   const janelaMs = Math.max(prazoMs - inicioMs, 3600000) // no mínimo 1h de janela
-  const atrasoMs = fimMs - prazoMs
+  const fimAjustadoMs = fimMs - pausadoMs // tempo parado esperando dependência/terceiro não conta contra quem está com a tarefa
+  const atrasoMs = fimAjustadoMs - prazoMs
   if (atrasoMs <= 0) return 100
   return Math.max(0, Math.round(100 - (atrasoMs / janelaMs) * 100))
 }
 function pontuacaoAgilidadeSolicitacao (s) {
   if (s.status === 'CANCELADA') return null
   const prazoMs = prazoSlaSolicitacao(s)
+  const inicio = s.assumido_em || s.data_solicitacao // desde a última vez que o responsável ATUAL assumiu -- não herda atraso de quem segurou antes
   if (s.status === 'CONCLUIDA') {
     if (s.pontuacao_agilidade != null) return s.pontuacao_agilidade
     if (!s.data_conclusao) return null
-    return calcularAgilidade(s.data_solicitacao, prazoMs, new Date(s.data_conclusao).getTime())
+    return calcularAgilidade(inicio, prazoMs, new Date(s.data_conclusao).getTime(), tempoPausadoTotalMs(s))
   }
-  return calcularAgilidade(s.data_solicitacao, prazoMs, Date.now()) // ritmo atual, ainda em aberto
+  return calcularAgilidade(inicio, prazoMs, Date.now(), tempoPausadoTotalMs(s)) // ritmo atual, ainda em aberto
+}
+// Soma o tempo já pausado (aguardando dependência/terceiro) mais o período
+// de pausa em andamento agora, se tiver -- descontado só da agilidade,
+// nunca do prazo/SLA real (que continua contando normalmente pra quem
+// olha "atrasada ou não" na lista).
+function tempoPausadoTotalMs (s) {
+  const acumulado = s.tempo_pausado_acumulado_ms || 0
+  const emAndamento = s.pausado_desde ? Math.max(0, Date.now() - new Date(s.pausado_desde).getTime()) : 0
+  return acumulado + emAndamento
+}
+// Pausada agora = esperando uma dependência ainda aberta, ou um Prestador
+// Atrelado que ainda não retornou. Enquanto isso, não pode ser concluída
+// (trava dura) e o tempo parado não pesa na agilidade de quem está com ela.
+function estaPausadaSolicitacao (s) {
+  const dependeAberta = !!(s.depende_de_id && s.dependeDe && !['CONCLUIDA', 'CANCELADA'].includes(s.dependeDe.status))
+  const terceiroAberto = !!(s.terceiro_id && !s.terceiro_retornou_em)
+  return dependeAberta || terceiroAberto
 }
 function corAgilidade (pts) {
   if (pts == null) return 'texto-dim2'
@@ -3840,21 +3859,22 @@ async function paginaSolicitacoes () {
   const area = areaLivre()
   area.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
-  const [{ data: setores }, { data: pessoas }, { data: deptos }, { data: vinculos }, { data: cargos }] = await Promise.all([
-    db.from('setor').select('id,nome').order('nome'),
+  const [{ data: setores }, { data: pessoas }, { data: deptos }, { data: vinculos }, { data: cargos }, { data: prestadores }] = await Promise.all([
+    db.from('setor').select('id,nome,gestor_id').order('nome'),
     db.from('pessoa').select('id,nome,setor_id,cargo,email').eq('status', 'ATIVO').order('nome'),
     db.from('departamento').select('id,nome,codigo,macro_area,setor_id').order('ordem'),
     db.from('vinculo_acesso').select('pessoa_id,dept_id'),
-    db.from('cargo').select('id,nome').order('nome')
+    db.from('cargo').select('id,nome').order('nome'),
+    db.from('fornecedor').select('id,nome,tipo_servico').eq('eh_prestador_atrelado', true).eq('status', 'ATIVO').order('nome')
   ])
   // "Responsável" só mostra quem tem e-mail cadastrado — é o mínimo pra
   // conseguir avisar a pessoa e ela acessar o sistema, mesmo que ainda
   // não tenha feito o primeiro login
   const pessoasComEmail = (pessoas || []).filter(p => p.email)
-  SOLIC_CACHE = { setores: setores || [], pessoas: pessoasComEmail, deptos: deptos || [], vinculos: vinculos || [] }
+  SOLIC_CACHE = { setores: setores || [], pessoas: pessoasComEmail, deptos: deptos || [], vinculos: vinculos || [], prestadores: prestadores || [] }
   SOLIC_CACHE.cargos = (cargos || []).map(c => c.nome)
 
-  const abas = [['painel', 'Painel'], ['minhas', 'Minhas'], ['nova', 'Nova solicitação'], ['meu-setor', 'Meu setor'], ['todas', 'Todas']]
+  const abas = [['painel', 'Painel'], ['minhas', 'Minhas'], ['nova', 'Nova solicitação'], ['meu-setor', 'Meu setor'], ['devolutiva', 'Devolutiva'], ['aguardando', 'Aguardando outros'], ['todas', 'Todas']]
   area.innerHTML = `
     <div class="subabas">
       ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
@@ -3880,7 +3900,56 @@ function abrirSolicitacoes (sub) {
   if (sub === 'minhas') solicLista(alvo, { minhas: true })
   if (sub === 'nova') solicNova(alvo)
   if (sub === 'meu-setor') solicLista(alvo, { meuSetor: true })
+  if (sub === 'devolutiva') solicDevolvidas(alvo)
+  if (sub === 'aguardando') solicAguardandoOutros(alvo)
   if (sub === 'todas') solicLista(alvo, { meuSetor: false })
+}
+
+// ----- Aguardando outros -----
+// Visão cross-setor de tudo que está pausado agora (esperando outra
+// solicitação ou um Prestador Atrelado) -- pra diretoria enxergar gargalo
+// sem precisar abrir uma por uma. Não é punitivo: só mostra onde a
+// informação está parada e há quanto tempo.
+async function solicAguardandoOutros (alvo) {
+  const { data, error } = await db.from('solicitacao_interna').select(`
+    id, codigo, titulo, status, pausado_desde, terceiro_id, terceiro_sla_data, terceiro_retornou_em, depende_de_id,
+    responsavel:responsavel_id(nome), setor:setor_destino_id(nome),
+    dependeDe:depende_de_id(id,codigo,titulo,status),
+    terceiro:terceiro_id(nome,tipo_servico)
+  `).not('status', 'in', '(CONCLUIDA,CANCELADA)')
+    .or('depende_de_id.not.is.null,terceiro_id.not.is.null')
+    .order('pausado_desde', { ascending: true })
+
+  if (faltaMigracao(error)) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  const pausadas = (data || []).filter(estaPausadaSolicitacao)
+
+  alvo.innerHTML = `
+    <p class="texto-dim2" style="font-size:12.5px;margin:0 0 14px;">
+      ${pausadas.length} solicitaç${pausadas.length === 1 ? 'ão' : 'ões'} parada${pausadas.length === 1 ? '' : 's'} esperando
+      outra solicitação ou um Prestador Atrelado. O tempo parado aqui não pesa na agilidade de quem está segurando.</p>
+    ${pausadas.length ? pausadas.map(s => {
+      const esperandoDep = s.dependeDe && !['CONCLUIDA', 'CANCELADA'].includes(s.dependeDe.status)
+      const esperandoTerceiro = s.terceiro_id && !s.terceiro_retornou_em
+      const slaEstourado = esperandoTerceiro && s.terceiro_sla_data && new Date(s.terceiro_sla_data) < new Date()
+      const desde = s.pausado_desde ? fmtQuando(s.pausado_desde) : null
+      return `<div class="panel" style="padding:14px 16px;margin-bottom:10px;cursor:pointer;" data-abrir-aguardando="${s.id}">
+        <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+          <div>
+            <b>${esc(s.codigo)}</b> — ${esc(s.titulo)}
+            <div class="texto-dim2" style="font-size:11.5px;margin-top:2px;">${esc(s.setor?.nome ?? '—')} · com ${esc(s.responsavel?.nome ?? 'ninguém')}${desde ? ' · pausada desde ' + desde : ''}</div>
+          </div>
+          <div style="text-align:right;">
+            ${esperandoDep ? `<span class="chip" style="font-size:10.5px;">🔗 aguarda ${esc(s.dependeDe.codigo)}</span>` : ''}
+            ${esperandoTerceiro ? `<span class="${slaEstourado ? 'badge-alerta' : 'chip'}" style="font-size:10.5px;">🏢 aguarda ${esc(s.terceiro?.nome ?? 'Prestador Atrelado')}${s.terceiro_sla_data ? ' até ' + fmtData(s.terceiro_sla_data) : ''}${slaEstourado ? ' — estourado' : ''}</span>` : ''}
+          </div>
+        </div>
+      </div>`
+    }).join('') : `<p class="vazio">Nada parado no momento. 🎉</p>`}`
+
+  alvo.querySelectorAll('[data-abrir-aguardando]').forEach(el => {
+    el.onclick = () => detalheSolicitacao({ id: el.dataset.abrirAguardando }, () => abrirSolicitacoes('aguardando'))
+  })
 }
 
 // ----- Painel -----
@@ -3931,10 +4000,23 @@ async function solicNova (alvo) {
   alvo.innerHTML = `
     <div class="panel" style="padding:20px;max-width:760px;">
       <h3 style="font-family:var(--serif);font-size:18px;margin:0 0 14px;">Nova solicitação</h3>
+      <div class="campo" style="margin-bottom:10px;">
+        <label>Pra quem vai?</label>
+        <div style="display:flex;gap:16px;margin-top:4px;">
+          <label style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:13px;">
+            <input type="radio" name="sn-modo" id="sn-modo-pessoa" checked> Uma pessoa específica</label>
+          <label style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:13px;">
+            <input type="radio" name="sn-modo" id="sn-modo-setor"> Só sei o setor</label>
+        </div>
+      </div>
       <div class="form-grade">
-        <div class="campo" style="grid-column:span 2;"><label>Responsável *</label>
+        <div class="campo" style="grid-column:span 2;" id="sn-linha-pessoa"><label>Responsável *</label>
           <select id="sn-responsavel"><option value="">selecione a pessoa...</option>
             ${SOLIC_CACHE.pessoas.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')}</select></div>
+        <div class="campo oculto" style="grid-column:span 2;" id="sn-linha-setor"><label>Setor *</label>
+          <select id="sn-setor"><option value="">selecione o setor...</option>
+            ${SOLIC_CACHE.setores.map(s => `<option value="${s.id}">${esc(s.nome)}</option>`).join('')}</select>
+          <span class="texto-dim2" style="font-size:11px;" id="sn-setor-info"></span></div>
         <div class="campo"><label>Cargo</label><input id="sn-cargo-mostrar" disabled placeholder="—"></div>
         <div class="campo"><label>Setor</label><input id="sn-setor-mostrar" disabled placeholder="—"></div>
         <div class="campo"><label>Urgência</label>
@@ -3953,6 +4035,24 @@ async function solicNova (alvo) {
       <div class="acoes"><button class="btn" id="sn-salvar">Enviar solicitação</button></div>
       <div class="recado oculto" id="sn-recado"></div>
     </div>`
+
+  const alternarModoDestino = () => {
+    const porSetor = $('#sn-modo-setor').checked
+    $('#sn-linha-pessoa').classList.toggle('oculto', porSetor)
+    $('#sn-linha-setor').classList.toggle('oculto', !porSetor)
+  }
+  $('#sn-modo-pessoa').onchange = alternarModoDestino
+  $('#sn-modo-setor').onchange = alternarModoDestino
+
+  const atualizarInfoSetor = () => {
+    const s = SOLIC_CACHE.setores.find(x => x.id === $('#sn-setor').value)
+    if (!s) { $('#sn-setor-info').textContent = ''; return }
+    const resp = SOLIC_CACHE.pessoas.find(p => p.id === s.gestor_id)
+    $('#sn-setor-info').textContent = resp
+      ? `vai automaticamente pra ${resp.nome}, responsável pelo setor`
+      : 'esse setor ainda não tem responsável definido — vai ficar em aberto pra qualquer um do setor pegar'
+  }
+  $('#sn-setor').onchange = atualizarInfoSetor
 
   // escolhe a pessoa primeiro — cargo e setor aparecem sozinhos,
   // puxados do cadastro dela (a função que ela tem é o que fica gravado)
@@ -3980,35 +4080,50 @@ async function solicNova (alvo) {
   $('#sn-salvar').onclick = async () => {
     const titulo = $('#sn-titulo').value.trim()
     if (!titulo) { aviso('Escreva um título.'); return }
-    if (!$('#sn-responsavel').value) { aviso('Escolha o responsável.'); return }
+    const porSetor = $('#sn-modo-setor').checked
+    if (!porSetor && !$('#sn-responsavel').value) { aviso('Escolha o responsável.'); return }
+    if (porSetor && !$('#sn-setor').value) { aviso('Escolha o setor.'); return }
     const btn = $('#sn-salvar'); btn.disabled = true; btn.textContent = 'Enviando...'
 
-    // herda setor/departamento de quem foi escolhido como responsável
-    // (a pessoa já é o dono verdadeiro do vínculo, não precisa escolher setor à parte)
-    const responsavelEscolhido = SOLIC_CACHE.pessoas.find(p => p.id === $('#sn-responsavel').value)
-    const setorId = responsavelEscolhido?.setor_id ?? null
+    // Dois jeitos de endereçar: escolheu a pessoa (herda setor/departamento
+    // dela) ou escolheu só o setor (sistema atribui ao responsável daquele
+    // setor automaticamente — setor.gestor_id, definido em Administração →
+    // Cargos e setores). Setor sem responsável fica em aberto pro setor.
+    let setorId, responsavelId
+    if (porSetor) {
+      setorId = $('#sn-setor').value
+      responsavelId = SOLIC_CACHE.setores.find(s => s.id === setorId)?.gestor_id || null
+    } else {
+      const responsavelEscolhido = SOLIC_CACHE.pessoas.find(p => p.id === $('#sn-responsavel').value)
+      setorId = responsavelEscolhido?.setor_id ?? null
+      responsavelId = $('#sn-responsavel').value || null
+    }
     const deptoCorrespondente = setorId ? SOLIC_CACHE.deptos.find(d => d.setor_id === setorId) : null
+    const agora = new Date().toISOString()
 
     const { data: nova, error } = await db.from('solicitacao_interna').insert({
       solicitante_id: PERFIL.pessoaId,
       setor_destino_id: setorId,
       departamento_id: deptoCorrespondente?.id ?? null,
-      responsavel_id: $('#sn-responsavel').value || null,
-      status: $('#sn-responsavel').value ? 'EM_ANDAMENTO' : 'ABERTA',
+      responsavel_id: responsavelId,
+      status: responsavelId ? 'EM_ANDAMENTO' : 'ABERTA',
       titulo, descricao: $('#sn-descricao').value.trim() || null,
       urgencia: $('#sn-urgencia').value,
-      data_limite: $('#sn-prazo').value || null
+      data_limite: $('#sn-prazo').value || null,
+      assumido_em: agora
     }).select('id').single()
 
     if (error) { btn.disabled = false; btn.textContent = 'Enviar solicitação'; aviso(error.message); return }
 
     // avisa o responsável que tem uma solicitação nova esperando ele —
     // mesmo sino usado em Compras, clique já leva direto pro detalhe
-    if ($('#sn-responsavel').value && $('#sn-responsavel').value !== PERFIL.pessoaId) {
+    if (responsavelId && responsavelId !== PERFIL.pessoaId) {
       await db.from('notificacao_pessoal').insert({
-        destinatario_id: $('#sn-responsavel').value,
+        destinatario_id: responsavelId,
         titulo: 'Nova solicitação pra você',
-        mensagem: `"${titulo}" — aberta por ${PERFIL.nome}.`,
+        mensagem: porSetor
+          ? `"${titulo}" — aberta por ${PERFIL.nome} pro setor que você responde.`
+          : `"${titulo}" — aberta por ${PERFIL.nome}.`,
         entidade: 'solicitacao_interna', entidade_id: nova.id
       })
     }
@@ -4130,15 +4245,101 @@ async function solicLista (alvo, { meuSetor, minhas } = {}) {
   buscar()
 }
 
+// ----- Devolutiva -----
+// Solicitações que voltaram pra mim depois que alguém já fez a parte
+// dela (devolveu) — a tarefa continua em aberto comigo pra eu fechar,
+// prosseguir ou encaminhar pra outro setor, agora com o histórico de
+// tudo que já foi feito antes visível ali dentro.
+async function solicDevolvidas (alvo) {
+  const { data: repasses } = await db.from('solicitacao_repasse').select('solicitacao_id')
+  const idsComRepasse = [...new Set((repasses || []).map(r => r.solicitacao_id))]
+  if (!idsComRepasse.length) { alvo.innerHTML = `<p class="vazio">Nenhuma devolutiva registrada ainda.</p>`; return }
+
+  const { data, error } = await db.from('solicitacao_interna').select(`
+    id, codigo, titulo, status, data_solicitacao, urgencia, progresso_pct,
+    setor:setor_destino_id(nome), solicitante:solicitante_id(nome)
+  `).in('id', idsComRepasse).eq('responsavel_id', PERFIL.pessoaId)
+    .not('status', 'in', '(CONCLUIDA,CANCELADA)').order('data_solicitacao', { ascending: false })
+
+  if (faltaMigracao(error)) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  const lista = data || []
+
+  alvo.innerHTML = `
+    <p class="texto-dim2" style="font-size:12.5px;margin:0 0 14px;">
+      ${lista.length} solicitaç${lista.length === 1 ? 'ão' : 'ões'} devolvida${lista.length === 1 ? '' : 's'} pra você —
+      quem tratou já fez a parte dele e pontuou normalmente. Agora é decidir: fechar, prosseguir ou encaminhar.</p>
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr><th>Código</th><th>Quando</th><th>Setor de origem</th><th>Título</th>
+        <th>Urgência</th><th>Progresso</th><th>Status</th></tr></thead><tbody>
+        ${lista.map(s => `<tr style="cursor:pointer;" data-abrir="${s.id}">
+          <td><b>${esc(s.codigo)}</b></td>
+          <td class="texto-dim">${fmtQuando(s.data_solicitacao) ?? '—'}</td>
+          <td class="texto-dim2">${esc(s.setor?.nome ?? '—')}</td>
+          <td>${esc(s.titulo)}</td>
+          <td><span class="${corUrgenciaSolicitacao(s.urgencia)}">${esc(ROTULO_URGENCIA_SOLICITACAO[s.urgencia])}</span></td>
+          <td class="texto-dim2" style="font-size:11px;">${s.progresso_pct ?? 0}%</td>
+          <td><span class="${corStatusSolicitacao(s.status)}">${esc(ROTULO_STATUS_SOLICITACAO[s.status])}</span></td>
+        </tr>`).join('') || `<tr><td colspan="7" class="vazio">Nenhuma devolutiva esperando você agora.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+
+  alvo.querySelectorAll('[data-abrir]').forEach(tr => {
+    tr.onclick = () => {
+      const s = lista.find(x => x.id === tr.dataset.abrir)
+      if (s) detalheSolicitacao(s, () => solicDevolvidas(alvo))
+    }
+  })
+}
+
 // ----- Detalhe / responder -----
-function detalheSolicitacao (s, aoFechar) {
+// Modal de detalhe: sempre busca a linha fresca no banco pela id (não
+// confia no objeto parcial que veio da lista que abriu), porque agora tem
+// bastante coisa que só existe no registro completo (dependência, terceiro,
+// pausa) e listas diferentes selecionam colunas diferentes.
+const SEL_DETALHE_SOLICITACAO = `
+  id, codigo, titulo, descricao, urgencia, status, solicitante_id, setor_destino_id,
+  departamento_id, responsavel_id, data_solicitacao, data_limite, data_conclusao,
+  resposta, progresso_pct, pontuacao_agilidade, setor_envolvido_id, solicitacao_pai_id,
+  data_planejada, hora_planejada, assumido_em, depende_de_id, pausado_desde,
+  tempo_pausado_acumulado_ms, terceiro_id, terceiro_sla_data, terceiro_retornou_em,
+  setor:setor_destino_id(id,nome), solicitante:solicitante_id(nome),
+  responsavel:responsavel_id(nome), setorEnvolvido:setor_envolvido_id(nome),
+  dependeDe:depende_de_id(id,codigo,titulo,status),
+  terceiro:terceiro_id(nome,tipo_servico)`
+
+const ROTULO_EVENTO_SOLIC = {
+  TRANSFERENCIA: '🔀 Transferência', DEVOLUCAO: '↩️ Devolutiva', CONCLUSAO: '✓ Concluída',
+  CANCELAMENTO: '✗ Cancelada', REABERTURA: '↩️ Reaberta',
+  DEPENDENCIA_VINCULADA: '🔗 Dependência vinculada', DEPENDENCIA_REMOVIDA: '🔗 Dependência removida',
+  DEPENDENCIA_RESOLVIDA: '🔗 Dependência resolvida',
+  PRESTADOR_ATRIBUIDO: '🏢 Delegado a Prestador Atrelado', PRESTADOR_RETORNOU: '🏢 Prestador retornou'
+}
+
+async function detalheSolicitacao (sParcial, aoFechar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal"><p class="texto-dim2">carregando...</p></div>`
+  document.body.appendChild(fundo)
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+
+  const { data: s, error: erroCarregar } = await db.from('solicitacao_interna')
+    .select(SEL_DETALHE_SOLICITACAO).eq('id', sParcial.id).single()
+  if (erroCarregar || !s) {
+    fundo.querySelector('.modal').innerHTML = `<p class="vazio">${esc(erroCarregar?.message || 'Não encontrei essa solicitação.')}</p>
+      <div class="acoes"><button class="btn-secundario" id="ds-fechar-erro">Fechar</button></div>`
+    fundo.querySelector('#ds-fechar-erro').onclick = () => fundo.remove()
+    return
+  }
+
   const prazo = textoPrazoSolicitacao(s)
   const editavel = podeAtualizarSolicitacao(s)
   const pts = pontuacaoAgilidadeSolicitacao(s)
+  const pausadaAgora = estaPausadaSolicitacao(s)
+  const souResponsavel = s.responsavel_id && s.responsavel_id === PERFIL.pessoaId
+  const podeDevolver = editavel && souResponsavel && s.solicitante_id && s.solicitante_id !== PERFIL.pessoaId
+    && !['CONCLUIDA', 'CANCELADA'].includes(s.status)
   let progressoAtual = s.progresso_pct ?? 0
 
-  const fundo = document.createElement('div')
-  fundo.className = 'modal-fundo'
   fundo.innerHTML = `<div class="modal">
     <div class="cabeca-secao">
       <h3>${esc(s.codigo)}</h3>
@@ -4146,12 +4347,17 @@ function detalheSolicitacao (s, aoFechar) {
     </div>
     <p class="texto-dim2" style="font-size:12px;margin:-8px 0 14px;">
       ${esc(s.setor?.nome ?? '—')} · aberta por ${esc(s.solicitante?.nome ?? '—')} em ${fmtQuando(s.data_solicitacao) ?? '—'}
+      · com <b>${esc(s.responsavel?.nome ?? 'ninguém ainda')}</b>
       · urgência <span class="${corUrgenciaSolicitacao(s.urgencia)}" style="font-size:10px;">${esc(ROTULO_URGENCIA_SOLICITACAO[s.urgencia])}</span>
       ${prazo ? ` · <span class="${prazo.atrasada ? 'badge-alerta' : ''}" style="font-size:11px;">${prazo.texto}</span>` : ''}
       ${s.data_limite ? ` · prazo manual ${fmtData(s.data_limite)}` : ''}
       ${pts != null ? ` · agilidade <span class="${corAgilidade(pts)}" style="font-size:10px;">${pts} pts${s.status !== 'CONCLUIDA' ? ' (ritmo atual)' : ''}</span>` : ''}
       ${s.setorEnvolvido?.nome ? ` · também envolve <b>${esc(s.setorEnvolvido.nome)}</b>` : ''}
       ${!editavel ? ' · <span class="texto-dim2">somente leitura pra você</span>' : ''}</p>
+
+    ${pausadaAgora ? `<div class="recado" style="border-color:var(--warn-text);color:var(--warn-text);margin-bottom:12px;">
+      ⏸️ Pausada${s.dependeDe && !['CONCLUIDA', 'CANCELADA'].includes(s.dependeDe.status) ? ` aguardando <b>${esc(s.dependeDe.codigo)}</b> — ${esc(s.dependeDe.titulo)}` : ''}${s.terceiro_id && !s.terceiro_retornou_em ? `${s.dependeDe ? ' e' : ''} aguardando retorno de <b>${esc(s.terceiro?.nome ?? 'Prestador Atrelado')}</b>${s.terceiro_sla_data ? ' até ' + fmtData(s.terceiro_sla_data) : ''}` : ''}.
+      O tempo parado não pesa na agilidade de quem está com ela, e ela não pode ser marcada como Concluída enquanto isso.</div>` : ''}
 
     ${s.data_planejada ? `<div class="chip" style="margin-bottom:12px;display:inline-block;">
       📅 Planejado pra ${fmtData(s.data_planejada)}${s.hora_planejada ? ' às ' + s.hora_planejada.slice(0, 5) : ''}</div>` : ''}
@@ -4179,23 +4385,77 @@ function detalheSolicitacao (s, aoFechar) {
     <div class="form-grade">
       <div class="campo"><label>Status</label>
         <select id="ds-status" ${editavel ? '' : 'disabled'}>${STATUS_SOLICITACAO.map(st => `<option value="${st}" ${st === s.status ? 'selected' : ''}>${ROTULO_STATUS_SOLICITACAO[st]}</option>`).join('')}</select></div>
-      <div class="campo"><label>Responsável</label>
-        <select id="ds-resp" ${editavel ? '' : 'disabled'}><option value="">—</option>${SOLIC_CACHE.pessoas.map(p => `<option value="${p.id}" ${p.nome === s.responsavel?.nome ? 'selected' : ''}>${esc(p.nome)}</option>`).join('')}</select></div>
     </div>
     <div class="campo" style="margin-top:10px;"><label>Resposta / retorno</label>
       <textarea id="ds-resposta" style="min-height:70px;" ${editavel ? '' : 'disabled'}>${esc(s.resposta ?? '')}</textarea></div>
+    ${s.status === 'CONCLUIDA' ? `<div class="acoes" style="margin-top:8px;">
+      <button class="btn-secundario mini" id="ds-reabrir" type="button" style="color:var(--warn-text);">↩️ Reabrir (concluída por engano)</button>
+    </div>` : ''}
 
     ${editavel ? `<div class="campo" style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px;">
-      <label>Precisa de outro setor pra resolver isso?</label>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <select id="ds-setor-envolvido" style="flex:1;min-width:180px;">
-          <option value="">— escolher setor —</option>
-          ${SOLIC_CACHE.setores.filter(st => st.id !== s.setor_destino_id).map(st => `<option value="${st.id}">${esc(st.nome)}</option>`).join('')}
-        </select>
-        <button class="btn-secundario mini" id="ds-chamar-setor" type="button">Chamar setor</button>
+      <label>🔀 Transferir</label>
+      <p class="texto-dim2" style="font-size:11px;margin:2px 0 8px;">Não é você quem deveria tratar isso? Transfere pra pessoa certa ou só pro setor — o sistema acha o responsável de lá.</p>
+      <div style="display:flex;gap:16px;margin-bottom:8px;">
+        <label style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:12.5px;">
+          <input type="radio" name="ds-modo-transf" id="ds-modo-transf-pessoa" checked> Pessoa</label>
+        <label style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:12.5px;">
+          <input type="radio" name="ds-modo-transf" id="ds-modo-transf-setor"> Setor</label>
       </div>
-      <span class="texto-dim2" style="font-size:11px;">cria uma solicitação vinculada pro outro setor e marca aqui que o pedido envolve os dois</span>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+        <select id="ds-transf-pessoa" style="flex:1;min-width:180px;"><option value="">— escolher pessoa —</option>
+          ${SOLIC_CACHE.pessoas.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')}</select>
+        <select id="ds-transf-setor" class="oculto" style="flex:1;min-width:180px;"><option value="">— escolher setor —</option>
+          ${SOLIC_CACHE.setores.map(st => `<option value="${st.id}">${esc(st.nome)}</option>`).join('')}</select>
+      </div>
+      <div class="campo" style="margin-bottom:8px;"><label style="font-size:11px;">Motivo da transferência *</label>
+        <input id="ds-transf-motivo" placeholder="por que está transferindo?"></div>
+      <button class="btn-secundario mini" id="ds-transferir" type="button">Transferir</button>
     </div>` : ''}
+
+    ${podeDevolver ? `<div class="campo" style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px;">
+      <label>↩️ Devolutiva</label>
+      <p class="texto-dim2" style="font-size:11px;margin:2px 0 8px;">
+        Já fez sua parte? Devolve pra ${esc(s.solicitante?.nome ?? 'quem abriu')} — pontua sua agilidade normalmente, como uma conclusão, e a solicitação continua aberta com ela pra prosseguir ou fechar.</p>
+      <button class="btn-secundario mini" id="ds-devolver" type="button">↩️ Devolver pra ${esc(s.solicitante?.nome ?? 'quem abriu')}</button>
+    </div>` : ''}
+
+    <div class="campo" style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px;">
+      <label>🔗 Depende de outra solicitação</label>
+      ${s.dependeDe ? `
+        <p style="font-size:12.5px;margin:4px 0 8px;">
+          <b>${esc(s.dependeDe.codigo)}</b> — ${esc(s.dependeDe.titulo)}
+          <span class="${corStatusSolicitacao(s.dependeDe.status)}" style="font-size:10px;">${esc(ROTULO_STATUS_SOLICITACAO[s.dependeDe.status])}</span>
+          ${!['CONCLUIDA', 'CANCELADA'].includes(s.dependeDe.status) ? '<br><span class="texto-dim2" style="font-size:11px;">enquanto não for concluída/cancelada, essa aqui não pode ser marcada como Concluída</span>' : ''}</p>
+        ${editavel ? `<button class="btn-secundario mini" id="ds-remover-dependencia" type="button">Remover vínculo</button>` : ''}
+      ` : (editavel ? `
+        <p class="texto-dim2" style="font-size:11px;margin:2px 0 8px;">Só consegue concluir depois que outra solicitação for resolvida? Vincula pelo código dela.</p>
+        <div style="display:flex;gap:8px;">
+          <input id="ds-dependencia-codigo" placeholder="código (ex: SOL-0123)" style="flex:1;">
+          <button class="btn-secundario mini" id="ds-vincular-dependencia" type="button">Vincular</button>
+        </div>` : `<p class="texto-dim2" style="font-size:12px;">Nenhuma.</p>`)}
+    </div>
+
+    <div class="campo" style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px;">
+      <label>🏢 Prestador Atrelado (terceiro)</label>
+      ${s.terceiro_id ? `
+        <p style="font-size:12.5px;margin:4px 0 8px;">
+          Delegado a <b>${esc(s.terceiro?.nome ?? '—')}</b>${s.terceiro?.tipo_servico ? ' (' + esc(s.terceiro.tipo_servico) + ')' : ''} —
+          prazo combinado: <b>${s.terceiro_sla_data ? fmtData(s.terceiro_sla_data) : '—'}</b>
+          ${s.terceiro_retornou_em ? `<br><span class="texto-dim2">retornou em ${fmtQuando(s.terceiro_retornou_em)}</span>` : ''}</p>
+        ${editavel && !s.terceiro_retornou_em ? `<button class="btn-secundario mini" id="ds-terceiro-retornou" type="button">✓ Prestador retornou</button>` : ''}
+      ` : (editavel ? `
+        <p class="texto-dim2" style="font-size:11px;margin:2px 0 8px;">
+          Vai depender de alguém de fora (advogado, contador, mecânico...)? O setor continua responsável, mas o atraso do prazo combinado abaixo não pesa na agilidade de quem está com a solicitação.</p>
+        ${SOLIC_CACHE.prestadores?.length ? `<div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <select id="ds-terceiro-select" style="flex:1;min-width:200px;"><option value="">— escolher Prestador Atrelado —</option>
+            ${SOLIC_CACHE.prestadores.map(f => `<option value="${f.id}">${f.tipo_servico ? esc(f.tipo_servico) + ' — ' : ''}${esc(f.nome)}</option>`).join('')}</select>
+          <input type="date" id="ds-terceiro-sla">
+          <button class="btn-secundario mini" id="ds-delegar-terceiro" type="button">Delegar</button>
+        </div>
+        <span class="texto-dim2" style="font-size:10.5px;">o prazo combinado é obrigatório</span>`
+          : `<p class="texto-dim2" style="font-size:12px;">Nenhum Prestador Atrelado cadastrado ainda — cadastre em Cadastro → Fornecedores, marcando "É um Prestador Atrelado".</p>`}
+      ` : `<p class="texto-dim2" style="font-size:12px;">Nenhum.</p>`)}
+    </div>
 
     <div class="cabeca-secao" style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px;">
       <h3 style="font-family:var(--serif);font-size:14px;margin:0;">Quem participa</h3>
@@ -4208,14 +4468,28 @@ function detalheSolicitacao (s, aoFechar) {
       <button class="btn-secundario mini" id="ds-citar-add" type="button">Citar</button>
     </div>` : ''}
 
+    ${editavel ? `<div class="campo" style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px;">
+      <label>Precisa de outro setor pra resolver isso, sem travar essa aqui?</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <select id="ds-setor-envolvido" style="flex:1;min-width:180px;">
+          <option value="">— escolher setor —</option>
+          ${SOLIC_CACHE.setores.filter(st => st.id !== s.setor_destino_id).map(st => `<option value="${st.id}">${esc(st.nome)}</option>`).join('')}
+        </select>
+        <button class="btn-secundario mini" id="ds-chamar-setor" type="button">Chamar setor</button>
+      </div>
+      <span class="texto-dim2" style="font-size:11px;">cria uma solicitação separada pro outro setor; se precisar travar a conclusão desta até aquela resolver, use "Depende de outra solicitação" acima</span>
+    </div>` : ''}
+
+    <div class="cabeca-secao" style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px;">
+      <h3 style="font-family:var(--serif);font-size:14px;margin:0;">📜 Histórico</h3></div>
+    <div id="ds-historico-eventos"><p class="texto-dim2" style="font-size:12px;">carregando...</p></div>
+
     <div class="acoes" style="margin-top:12px;"><button class="btn" id="ds-salvar" ${editavel ? '' : 'disabled'}>Salvar</button>
       <button class="btn-secundario" id="ds-fechar">Fechar</button></div>
     <div class="recado oculto" id="ds-recado"></div>
   </div>`
-  document.body.appendChild(fundo)
   const fechar = () => fundo.remove()
   fundo.querySelector('#ds-fechar').onclick = fechar
-  fundo.onclick = e => { if (e.target === fundo) fechar() }
 
   const btnProgramar = fundo.querySelector('#ds-programar')
   if (btnProgramar) btnProgramar.onclick = () => abrirProgramarSolicitacao(s, () => { fechar(); aoFechar() })
@@ -4248,6 +4522,27 @@ function detalheSolicitacao (s, aoFechar) {
       </div>`).join('')}`
   }
   carregarHistoricoPrazoSolicitacao()
+
+  const carregarHistoricoEventos = async () => {
+    const alvoHist = fundo.querySelector('#ds-historico-eventos')
+    if (!alvoHist) return
+    const { data: eventos } = await db.from('solicitacao_interna_evento')
+      .select('id,tipo,motivo,criado_em,dePessoa:de_pessoa_id(nome),paraPessoa:para_pessoa_id(nome),deSetor:de_setor_id(nome),paraSetor:para_setor_id(nome),criadoPor:criado_por(nome)')
+      .eq('solicitacao_id', s.id).order('criado_em', { ascending: false })
+    const lista = eventos || []
+    alvoHist.innerHTML = lista.length ? lista.map(ev => `
+      <div class="passo" style="align-items:flex-start;">
+        <span class="quando">${fmtQuando(ev.criado_em) ?? '—'}</span>
+        <span>
+          <b>${ROTULO_EVENTO_SOLIC[ev.tipo] ?? ev.tipo}</b>
+          ${ev.dePessoa || ev.paraPessoa ? `<br><span class="texto-dim2" style="font-size:11.5px;">${esc(ev.dePessoa?.nome ?? '—')} → ${esc(ev.paraPessoa?.nome ?? '—')}</span>` : ''}
+          ${ev.deSetor || ev.paraSetor ? `<br><span class="texto-dim2" style="font-size:11.5px;">setor ${esc(ev.deSetor?.nome ?? '—')} → ${esc(ev.paraSetor?.nome ?? '—')}</span>` : ''}
+          ${ev.motivo ? `<br><span class="texto-dim" style="font-size:12px;">"${esc(ev.motivo)}"</span>` : ''}
+          <br><span class="texto-dim2" style="font-size:11px;">por ${esc(ev.criadoPor?.nome ?? 'sistema')}</span>
+        </span>
+      </div>`).join('') : `<p class="texto-dim2" style="font-size:12px;">Nenhuma transferência, devolutiva ou vínculo registrado ainda.</p>`
+  }
+  carregarHistoricoEventos()
 
   const carregarParticipantes = async () => {
     const { data } = await db.from('solicitacao_participante').select('id,pessoa_id,pessoa:pessoa_id(nome)').eq('solicitacao_id', s.id)
@@ -4348,21 +4643,216 @@ function detalheSolicitacao (s, aoFechar) {
     fundo.querySelector('#ds-setor-envolvido').value = ''
   }
 
+  // ---- Transferir (pessoa ou setor, com motivo obrigatório) ----
+  const alternarModoTransferencia = () => {
+    const porSetor = fundo.querySelector('#ds-modo-transf-setor')?.checked
+    fundo.querySelector('#ds-transf-pessoa')?.classList.toggle('oculto', porSetor)
+    fundo.querySelector('#ds-transf-setor')?.classList.toggle('oculto', !porSetor)
+  }
+  fundo.querySelector('#ds-modo-transf-pessoa')?.addEventListener('change', alternarModoTransferencia)
+  fundo.querySelector('#ds-modo-transf-setor')?.addEventListener('change', alternarModoTransferencia)
+
+  const btnTransferir = fundo.querySelector('#ds-transferir')
+  if (btnTransferir) btnTransferir.onclick = async () => {
+    const porSetor = fundo.querySelector('#ds-modo-transf-setor').checked
+    const motivo = fundo.querySelector('#ds-transf-motivo').value.trim()
+    if (!motivo) { aviso('Escreva o motivo da transferência.'); return }
+    let novoResponsavelId, novoSetorId, novoSetorNome
+    if (porSetor) {
+      novoSetorId = fundo.querySelector('#ds-transf-setor').value
+      if (!novoSetorId) { aviso('Escolha o setor.'); return }
+      const setorInfo = SOLIC_CACHE.setores.find(st => st.id === novoSetorId)
+      novoResponsavelId = setorInfo?.gestor_id || null
+      novoSetorNome = setorInfo?.nome ?? '—'
+    } else {
+      novoResponsavelId = fundo.querySelector('#ds-transf-pessoa').value
+      if (!novoResponsavelId) { aviso('Escolha a pessoa.'); return }
+      const pessoaInfo = SOLIC_CACHE.pessoas.find(p => p.id === novoResponsavelId)
+      novoSetorId = pessoaInfo?.setor_id ?? s.setor_destino_id
+      novoSetorNome = SOLIC_CACHE.setores.find(st => st.id === novoSetorId)?.nome ?? '—'
+    }
+    const btn = fundo.querySelector('#ds-transferir'); btn.disabled = true; btn.textContent = 'Transferindo...'
+    const agora = new Date().toISOString()
+    const { error } = await db.from('solicitacao_interna').update({
+      responsavel_id: novoResponsavelId, setor_destino_id: novoSetorId,
+      status: novoResponsavelId ? 'EM_ANDAMENTO' : 'ABERTA', assumido_em: agora
+    }).eq('id', s.id)
+    btn.disabled = false; btn.textContent = 'Transferir'
+    if (error) { aviso(error.message); return }
+
+    await db.from('solicitacao_interna_evento').insert({
+      solicitacao_id: s.id, tipo: 'TRANSFERENCIA',
+      de_pessoa_id: s.responsavel_id, para_pessoa_id: novoResponsavelId,
+      de_setor_id: s.setor_destino_id, para_setor_id: novoSetorId,
+      motivo, criado_por: PERFIL.pessoaId
+    })
+    if (novoResponsavelId && novoResponsavelId !== PERFIL.pessoaId) {
+      await db.from('notificacao_pessoal').insert({
+        destinatario_id: novoResponsavelId,
+        titulo: 'Solicitação transferida pra você',
+        mensagem: `"${s.titulo}" (${s.codigo}) foi transferida por ${PERFIL.nome}. Motivo: ${motivo}`,
+        entidade: 'solicitacao_interna', entidade_id: s.id
+      })
+    }
+    fechar(); aoFechar()
+  }
+
+  // ---- Devolutiva: pontua quem devolveu (igual a uma conclusão normal),
+  // sem fechar a solicitação -- volta pro solicitante original ----
+  const btnDevolver = fundo.querySelector('#ds-devolver')
+  if (btnDevolver) btnDevolver.onclick = async () => {
+    if (!confirm(`Devolver essa solicitação pra ${s.solicitante?.nome ?? 'quem abriu'}? Sua parte pontua normalmente na sua agilidade.`)) return
+    const btn = fundo.querySelector('#ds-devolver'); btn.disabled = true; btn.textContent = 'Devolvendo...'
+    const agora = new Date().toISOString()
+    const inicioLeg = s.assumido_em || s.data_solicitacao
+    const pontuacaoLeg = calcularAgilidade(inicioLeg, prazoSlaSolicitacao(s), Date.now(), tempoPausadoTotalMs(s))
+
+    const { error: e1 } = await db.from('solicitacao_repasse').insert({
+      solicitacao_id: s.id, pessoa_id: s.responsavel_id,
+      assumida_em: inicioLeg, encerrada_em: agora, pontuacao: pontuacaoLeg
+    })
+    const { error: e2 } = await db.from('solicitacao_interna').update({
+      responsavel_id: s.solicitante_id, status: 'EM_ANDAMENTO', assumido_em: agora, progresso_pct: progressoAtual
+    }).eq('id', s.id)
+    btn.disabled = false; btn.textContent = `↩️ Devolver pra ${s.solicitante?.nome ?? 'quem abriu'}`
+    if (e1 || e2) { aviso((e1 || e2).message); return }
+
+    await db.from('solicitacao_interna_evento').insert({
+      solicitacao_id: s.id, tipo: 'DEVOLUCAO', de_pessoa_id: s.responsavel_id, para_pessoa_id: s.solicitante_id,
+      criado_por: PERFIL.pessoaId
+    })
+    if (s.solicitante_id && s.solicitante_id !== PERFIL.pessoaId) {
+      await db.from('notificacao_pessoal').insert({
+        destinatario_id: s.solicitante_id,
+        titulo: 'Devolveram uma solicitação pra você',
+        mensagem: `${PERFIL.nome} fez a parte dele em "${s.titulo}" (${s.codigo}) e devolveu — dá uma olhada pra prosseguir ou fechar.`,
+        entidade: 'solicitacao_interna', entidade_id: s.id
+      })
+    }
+    fechar(); aoFechar()
+  }
+
+  // ---- Dependência bloqueante ----
+  const btnVincularDep = fundo.querySelector('#ds-vincular-dependencia')
+  if (btnVincularDep) btnVincularDep.onclick = async () => {
+    const codigo = fundo.querySelector('#ds-dependencia-codigo').value.trim()
+    if (!codigo) { aviso('Digite o código da solicitação.'); return }
+    const btn = btnVincularDep; btn.disabled = true; btn.textContent = 'Vinculando...'
+    const { data: alvo, error: eBusca } = await db.from('solicitacao_interna')
+      .select('id,codigo,titulo,status').ilike('codigo', codigo).maybeSingle()
+    if (eBusca || !alvo) { btn.disabled = false; btn.textContent = 'Vincular'; aviso('Não achei nenhuma solicitação com esse código.'); return }
+    if (alvo.id === s.id) { btn.disabled = false; btn.textContent = 'Vincular'; aviso('Não pode depender dela mesma.'); return }
+    const patch = { depende_de_id: alvo.id }
+    if (!estaPausadaSolicitacao(s) && !['CONCLUIDA', 'CANCELADA'].includes(alvo.status)) patch.pausado_desde = new Date().toISOString()
+    const { error } = await db.from('solicitacao_interna').update(patch).eq('id', s.id)
+    btn.disabled = false; btn.textContent = 'Vincular'
+    if (error) { aviso(error.message); return }
+    await db.from('solicitacao_interna_evento').insert({
+      solicitacao_id: s.id, tipo: 'DEPENDENCIA_VINCULADA', motivo: `depende de ${alvo.codigo} — ${alvo.titulo}`, criado_por: PERFIL.pessoaId
+    })
+    fechar(); aoFechar()
+  }
+  const btnRemoverDep = fundo.querySelector('#ds-remover-dependencia')
+  if (btnRemoverDep) btnRemoverDep.onclick = async () => {
+    if (!confirm('Remover o vínculo de dependência?')) return
+    const patch = { depende_de_id: null }
+    if (!(s.terceiro_id && !s.terceiro_retornou_em)) { // só encerra a pausa se não tiver outro motivo (terceiro) ainda ativo
+      patch.pausado_desde = null
+      patch.tempo_pausado_acumulado_ms = tempoPausadoTotalMs(s)
+    }
+    const { error } = await db.from('solicitacao_interna').update(patch).eq('id', s.id)
+    if (error) { aviso(error.message); return }
+    await db.from('solicitacao_interna_evento').insert({
+      solicitacao_id: s.id, tipo: 'DEPENDENCIA_REMOVIDA', motivo: s.dependeDe ? `era ${s.dependeDe.codigo}` : null, criado_por: PERFIL.pessoaId
+    })
+    fechar(); aoFechar()
+  }
+
+  // ---- Prestador Atrelado ----
+  const btnDelegarTerceiro = fundo.querySelector('#ds-delegar-terceiro')
+  if (btnDelegarTerceiro) btnDelegarTerceiro.onclick = async () => {
+    const terceiroId = fundo.querySelector('#ds-terceiro-select').value
+    const slaData = fundo.querySelector('#ds-terceiro-sla').value
+    if (!terceiroId) { aviso('Escolha o Prestador Atrelado.'); return }
+    if (!slaData) { aviso('O prazo combinado (SLA) é obrigatório pra delegar a um terceiro.'); return }
+    const btn = btnDelegarTerceiro; btn.disabled = true; btn.textContent = 'Delegando...'
+    const patch = { terceiro_id: terceiroId, terceiro_sla_data: slaData, terceiro_retornou_em: null, terceiro_atrasado_notificado: false }
+    if (!estaPausadaSolicitacao(s)) patch.pausado_desde = new Date().toISOString()
+    const { error } = await db.from('solicitacao_interna').update(patch).eq('id', s.id)
+    btn.disabled = false; btn.textContent = 'Delegar'
+    if (error) { aviso(error.message); return }
+    const nomeTerceiro = SOLIC_CACHE.prestadores.find(f => f.id === terceiroId)?.nome ?? '—'
+    await db.from('solicitacao_interna_evento').insert({
+      solicitacao_id: s.id, tipo: 'PRESTADOR_ATRIBUIDO', motivo: `${nomeTerceiro} — prazo ${fmtData(slaData)}`, criado_por: PERFIL.pessoaId
+    })
+    fechar(); aoFechar()
+  }
+  const btnTerceiroRetornou = fundo.querySelector('#ds-terceiro-retornou')
+  if (btnTerceiroRetornou) btnTerceiroRetornou.onclick = async () => {
+    const btn = btnTerceiroRetornou; btn.disabled = true; btn.textContent = 'Registrando...'
+    const patch = { terceiro_retornou_em: new Date().toISOString() }
+    if (!(s.depende_de_id && s.dependeDe && !['CONCLUIDA', 'CANCELADA'].includes(s.dependeDe.status))) {
+      patch.pausado_desde = null
+      patch.tempo_pausado_acumulado_ms = tempoPausadoTotalMs(s)
+    }
+    const { error } = await db.from('solicitacao_interna').update(patch).eq('id', s.id)
+    btn.disabled = false; btn.textContent = '✓ Prestador retornou'
+    if (error) { aviso(error.message); return }
+    await db.from('solicitacao_interna_evento').insert({ solicitacao_id: s.id, tipo: 'PRESTADOR_RETORNOU', criado_por: PERFIL.pessoaId })
+    fechar(); aoFechar()
+  }
+
+  // ---- Reabrir (concluída por engano) ----
+  const btnReabrir = fundo.querySelector('#ds-reabrir')
+  if (btnReabrir) btnReabrir.onclick = async () => {
+    const motivo = prompt('Por que está reabrindo essa solicitação?')
+    if (!motivo || !motivo.trim()) return
+    const btn = btnReabrir; btn.disabled = true; btn.textContent = 'Reabrindo...'
+    const { error } = await db.from('solicitacao_interna').update({
+      status: s.responsavel_id ? 'EM_ANDAMENTO' : 'ABERTA',
+      data_conclusao: null, pontuacao_agilidade: null,
+      reaberta_em: new Date().toISOString(), reaberta_motivo: motivo.trim(), reaberta_por: PERFIL.pessoaId,
+      assumido_em: new Date().toISOString()
+    }).eq('id', s.id)
+    btn.disabled = false; btn.textContent = '↩️ Reabrir (concluída por engano)'
+    if (error) { aviso(error.message); return }
+    await db.from('solicitacao_interna_evento').insert({ solicitacao_id: s.id, tipo: 'REABERTURA', motivo: motivo.trim(), criado_por: PERFIL.pessoaId })
+    fechar(); aoFechar()
+  }
+
   fundo.querySelector('#ds-salvar').onclick = async () => {
     const status = fundo.querySelector('#ds-status').value
+    if (status === 'CONCLUIDA' && estaPausadaSolicitacao(s)) {
+      aviso(s.dependeDe && !['CONCLUIDA', 'CANCELADA'].includes(s.dependeDe.status)
+        ? `Essa solicitação depende de ${s.dependeDe.codigo} — ${s.dependeDe.titulo}, que ainda não foi concluída/cancelada. Resolve aquela primeiro, ou remove o vínculo.`
+        : `Ainda está aguardando o retorno de ${s.terceiro?.nome ?? 'um Prestador Atrelado'}. Registre o retorno antes de concluir.`)
+      return
+    }
     const dataConclusao = status === 'CONCLUIDA' ? new Date().toISOString() : null
+    const inicioNota = s.assumido_em || s.data_solicitacao
     const pontuacao = status === 'CONCLUIDA'
-      ? calcularAgilidade(s.data_solicitacao, prazoSlaSolicitacao(s), new Date(dataConclusao).getTime())
+      ? calcularAgilidade(inicioNota, prazoSlaSolicitacao(s), new Date(dataConclusao).getTime(), tempoPausadoTotalMs(s))
       : null
-    const { error } = await db.from('solicitacao_interna').update({
+    const patch = {
       status,
       progresso_pct: status === 'CONCLUIDA' ? 100 : progressoAtual,
-      responsavel_id: fundo.querySelector('#ds-resp').value || null,
       resposta: fundo.querySelector('#ds-resposta').value.trim() || null,
       data_conclusao: dataConclusao,
       pontuacao_agilidade: pontuacao
-    }).eq('id', s.id)
+    }
+    if (['CONCLUIDA', 'CANCELADA'].includes(status)) {
+      patch.pausado_desde = null
+      patch.tempo_pausado_acumulado_ms = tempoPausadoTotalMs(s)
+    }
+    const { error } = await db.from('solicitacao_interna').update(patch).eq('id', s.id)
     if (error) { aviso(error.message); return }
+
+    const fechouAgora = ['CONCLUIDA', 'CANCELADA'].includes(status) && status !== s.status
+    if (fechouAgora) {
+      await db.from('solicitacao_interna_evento').insert({
+        solicitacao_id: s.id, tipo: status === 'CONCLUIDA' ? 'CONCLUSAO' : 'CANCELAMENTO', criado_por: PERFIL.pessoaId
+      })
+    }
 
     // Avisa quem abriu a solicitação, quando ela é concluída — só se
     // não foi ela mesma quem concluiu (não precisa se avisar sozinha).
@@ -4373,6 +4863,33 @@ function detalheSolicitacao (s, aoFechar) {
         mensagem: `"${s.titulo}" foi marcada como concluída por ${PERFIL.nome}.${fundo.querySelector('#ds-resposta').value.trim() ? ' Resposta: ' + fundo.querySelector('#ds-resposta').value.trim() : ''}`,
         entidade: 'solicitacao_interna', entidade_id: s.id
       })
+    }
+
+    // Libera quem estava esperando esta solicitação terminar (dependência)
+    if (fechouAgora) {
+      const { data: dependentes } = await db.from('solicitacao_interna')
+        .select('id,titulo,codigo,responsavel_id,pausado_desde,tempo_pausado_acumulado_ms,terceiro_id,terceiro_retornou_em')
+        .eq('depende_de_id', s.id).is('data_conclusao', null)
+      for (const dep of (dependentes || [])) {
+        const aindaTemOutraPausa = dep.terceiro_id && !dep.terceiro_retornou_em
+        const patchDep = {}
+        if (!aindaTemOutraPausa && dep.pausado_desde) {
+          patchDep.pausado_desde = null
+          patchDep.tempo_pausado_acumulado_ms = (dep.tempo_pausado_acumulado_ms || 0) + Math.max(0, Date.now() - new Date(dep.pausado_desde).getTime())
+        }
+        if (Object.keys(patchDep).length) await db.from('solicitacao_interna').update(patchDep).eq('id', dep.id)
+        await db.from('solicitacao_interna_evento').insert({
+          solicitacao_id: dep.id, tipo: 'DEPENDENCIA_RESOLVIDA', motivo: `${s.codigo} foi ${status === 'CONCLUIDA' ? 'concluída' : 'cancelada'}`
+        })
+        if (dep.responsavel_id && dep.responsavel_id !== PERFIL.pessoaId) {
+          await db.from('notificacao_pessoal').insert({
+            destinatario_id: dep.responsavel_id,
+            titulo: 'Dependência resolvida',
+            mensagem: `"${s.titulo}" (${s.codigo}), da qual "${dep.titulo}" (${dep.codigo}) dependia, foi ${status === 'CONCLUIDA' ? 'concluída' : 'cancelada'}. Pode prosseguir.`,
+            entidade: 'solicitacao_interna', entidade_id: dep.id
+          })
+        }
+      }
     }
 
     fechar(); aoFechar()
@@ -5281,9 +5798,10 @@ async function subUsuarios (alvo, editavel) {
 
 // ----- Administração › Cargos e setores -----
 async function subApoio (alvo, editavel) {
-  const [{ data: cargos, error: erroCargo }, { data: setores }] = await Promise.all([
+  const [{ data: cargos, error: erroCargo }, { data: setores }, { data: pessoasAtivas }] = await Promise.all([
     db.from('cargo').select('id,nome').order('nome'),
-    db.from('setor').select('id,nome').order('nome')
+    db.from('setor').select('id,nome,gestor_id').order('nome'),
+    db.from('pessoa').select('id,nome').eq('status', 'ATIVO').order('nome')
   ])
 
   if (faltaMigracao(erroCargo)) {
@@ -5305,10 +5823,41 @@ async function subApoio (alvo, editavel) {
       </tr>`).join('') || `<tr><td class="vazio">Nada cadastrado ainda.</td></tr>`}</tbody></table>
     </div>`
 
+  // Responsável do setor: pra quem manda uma solicitação interna só pro
+  // setor (sem saber quem é a pessoa), o sistema atribui automaticamente
+  // a essa pessoa. A mesma pessoa pode ser responsável por vários setores.
+  const blocoSetorGestor = `
+    <div class="panel" style="padding:18px;">
+      <h3>Responsável de cada setor</h3>
+      <p class="texto-dim2" style="font-size:11.5px;margin:-4px 0 12px;">
+        Quando uma solicitação interna é endereçada só ao setor (sem escolher pessoa),
+        vai automaticamente pra essa pessoa distribuir. A mesma pessoa pode responder por mais de um setor.
+        Setor sem responsável definido fica em aberto pra qualquer um do setor pegar.</p>
+      <table><tbody>${(setores || []).map(s => `<tr>
+        <td>${esc(s.nome)}</td>
+        <td style="text-align:right;">
+          <select data-setor-gestor="${s.id}" ${editavel ? '' : 'disabled'} style="min-width:220px;">
+            <option value="">— sem responsável —</option>
+            ${(pessoasAtivas || []).map(p => `<option value="${p.id}" ${p.id === s.gestor_id ? 'selected' : ''}>${esc(p.nome)}</option>`).join('')}
+          </select>
+        </td>
+      </tr>`).join('') || `<tr><td class="vazio">Nenhum setor cadastrado.</td></tr>`}</tbody></table>
+    </div>`
+
   alvo.innerHTML = `<div class="duas-colunas">
     ${bloco('Cargos', 'cargo', cargos)}
     ${bloco('Setores', 'setor', setores)}
-  </div>`
+  </div>
+  ${blocoSetorGestor}`
+
+  alvo.querySelectorAll('[data-setor-gestor]').forEach(sel => {
+    sel.onchange = async () => {
+      sel.disabled = true
+      const { error } = await db.from('setor').update({ gestor_id: sel.value || null }).eq('id', sel.dataset.setorGestor)
+      sel.disabled = false
+      if (error) { alert('Não consegui salvar: ' + error.message); return }
+    }
+  })
 
   if (!editavel) return
 
@@ -9436,7 +9985,7 @@ function telaDecisao (s, nomeEtapa) {
 // ----- Compras › Fornecedores -----
 async function comprasFornecedores (alvo, editavel) {
   const { data, error } = await db.from('fornecedor')
-    .select('id,nome,cnpj_cpf,contato,status,criado_em,criado:criado_por(nome)').order('nome')
+    .select('id,nome,cnpj_cpf,contato,status,criado_em,eh_prestador_atrelado,tipo_servico,criado:criado_por(nome)').order('nome')
   if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
 
   alvo.innerHTML = `
@@ -9447,26 +9996,34 @@ async function comprasFornecedores (alvo, editavel) {
         <div class="campo"><label>CNPJ ou CPF</label><input id="fo-doc"></div>
         <div class="campo"><label>Contato</label><input id="fo-contato" placeholder="telefone ou e-mail"></div>
       </div>
+      <label style="display:flex;align-items:center;gap:7px;font-size:12.5px;margin-top:10px;">
+        <input type="checkbox" id="fo-prestador">
+        <b>É um Prestador Atrelado</b> — terceiro de confiança (advogado, contador, mecânico, comunicação visual...)</label>
+      <div class="campo oculto" id="fo-linha-tipo-servico" style="margin-top:8px;">
+        <label>Tipo de serviço</label><input id="fo-tipo-servico" placeholder="ex: Advogado, Contador, Mecânico..."></div>
       <div class="acoes"><button class="btn" id="fo-salvar">Adicionar</button></div>
       <div class="recado oculto" id="fo-recado"></div>
     </div>` : ''}
 
     <div class="panel" style="padding:0;"><div class="tabela-scroll">
-      <table><thead><tr><th>Nome</th><th>CNPJ / CPF</th><th>Contato</th>
+      <table><thead><tr><th>Nome</th><th>CNPJ / CPF</th><th>Contato</th><th>Prestador Atrelado</th>
         <th>Cadastrado por</th><th>Situação</th>${editavel ? '<th></th>' : ''}</tr></thead>
       <tbody>${(data || []).map(f => `<tr>
         <td>${esc(f.nome)}</td>
         <td class="texto-dim">${esc(f.cnpj_cpf ?? '—')}</td>
         <td>${esc(f.contato ?? '—')}</td>
+        <td>${f.eh_prestador_atrelado ? `<span class="chip">🏢 ${esc(f.tipo_servico ?? 'sim')}</span>` : '<span class="texto-dim2">—</span>'}</td>
         <td class="texto-dim2">${esc(f.criado?.nome ?? '—')}
           ${f.criado_em ? '<br>' + fmtQuando(f.criado_em) : ''}</td>
         <td><span class="chip">${esc(f.status)}</span></td>
         ${editavel ? `<td style="text-align:right;"><button class="btn-secundario mini" data-editar-forn="${f.id}">editar</button></td>` : ''}
-      </tr>`).join('') || `<tr><td colspan="${editavel ? 6 : 5}" class="vazio">Nenhum fornecedor cadastrado.</td></tr>`}
+      </tr>`).join('') || `<tr><td colspan="${editavel ? 7 : 6}" class="vazio">Nenhum fornecedor cadastrado.</td></tr>`}
       </tbody></table>
     </div></div>`
 
   if (!editavel) return
+
+  $('#fo-prestador').onchange = () => $('#fo-linha-tipo-servico').classList.toggle('oculto', !$('#fo-prestador').checked)
 
   $('#fo-salvar').onclick = async () => {
     const nome = $('#fo-nome').value.trim()
@@ -9480,6 +10037,8 @@ async function comprasFornecedores (alvo, editavel) {
       nome,
       cnpj_cpf: $('#fo-doc').value.trim() || null,
       contato: $('#fo-contato').value.trim() || null,
+      eh_prestador_atrelado: $('#fo-prestador').checked,
+      tipo_servico: $('#fo-prestador').checked ? ($('#fo-tipo-servico').value.trim() || null) : null,
       criado_por: PERFIL.pessoaId
     })
     if (error) {
@@ -9520,6 +10079,11 @@ function formEditarFornecedor (f) {
             <option value="INATIVO" ${f.status === 'INATIVO' ? 'selected' : ''}>Inativo</option>
           </select></div>
       </div>
+      <label style="display:flex;align-items:center;gap:7px;font-size:12.5px;margin-top:10px;">
+        <input type="checkbox" id="ef-prestador" ${f.eh_prestador_atrelado ? 'checked' : ''}>
+        <b>É um Prestador Atrelado</b> — terceiro de confiança (advogado, contador, mecânico, comunicação visual...)</label>
+      <div class="campo ${f.eh_prestador_atrelado ? '' : 'oculto'}" id="ef-linha-tipo-servico" style="margin-top:8px;">
+        <label>Tipo de serviço</label><input id="ef-tipo-servico" value="${esc(f.tipo_servico ?? '')}" placeholder="ex: Advogado, Contador, Mecânico..."></div>
       <div class="acoes">
         <button class="btn" id="ef-salvar">Salvar</button>
         <button class="btn-secundario" id="ef-cancelar">Cancelar</button>
@@ -9532,6 +10096,7 @@ function formEditarFornecedor (f) {
   fundo.onclick = e => { if (e.target === fundo) fechar() }
 
   const q = id => fundo.querySelector(id)
+  q('#ef-prestador').onchange = () => q('#ef-linha-tipo-servico').classList.toggle('oculto', !q('#ef-prestador').checked)
   const aviso = t => {
     const el = q('#ef-recado'); el.textContent = t; el.classList.remove('oculto')
     el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
@@ -9545,7 +10110,9 @@ function formEditarFornecedor (f) {
       nome,
       cnpj_cpf: q('#ef-doc').value.trim() || null,
       contato: q('#ef-contato').value.trim() || null,
-      status: q('#ef-status').value
+      status: q('#ef-status').value,
+      eh_prestador_atrelado: q('#ef-prestador').checked,
+      tipo_servico: q('#ef-prestador').checked ? (q('#ef-tipo-servico').value.trim() || null) : null
     }).eq('id', f.id)
     if (error) {
       aviso(error.message.includes('policy') || error.message.includes('permission')
@@ -30507,7 +31074,7 @@ async function paginaDesempenho () {
 
   const abas = [
     ['painel', '📊', 'Painel'], ['especialista', '🎯', 'Especialista RH'], ['agilidade', '⚡', 'Agilidade e prazos'],
-    ['individual', '👤', 'Acompanhamento Individual'], ['recrutamento', '🗂️', 'Recrutamento e Seleção'],
+    ['individual', '👤', 'Acompanhamento Individual'], ['prestadores', '🏢', 'Prestadores Atrelados'], ['recrutamento', '🗂️', 'Recrutamento e Seleção'],
     ['360', '🔄', 'Avaliação 360'], ['pdi', '🌱', 'Planos de desenvolvimento'],
     ['trilhas', '🎓', 'Trilhas'], ['meu', '🙋', 'Meu RH']
   ]
@@ -30540,6 +31107,7 @@ function abrirDesempenho (sub, editavel) {
   if (sub === 'painel') desempPainel(alvo, editavel)
   if (sub === 'agilidade') desempAgilidade(alvo, editavel)
   if (sub === 'individual') desempIndividual(alvo, editavel)
+  if (sub === 'prestadores') desempPrestadores(alvo, editavel)
   if (sub === 'recrutamento') desempRecrutamento(alvo, editavel)
   if (sub === 'solicitacoes') desempSolicitacoes(alvo, editavel)
   if (sub === 'conduta') desempConduta(alvo, editavel)
@@ -31058,7 +31626,8 @@ async function desempPainel (alvo, editavel) {
     editavel ? db.from('pontuacao_bonus').select('pontos,pessoa:pessoa_id(nome)').limit(2000) : Promise.resolve({ data: [] }),
     editavel ? db.from('solicitacao_interna').select(`
       id, status, data_solicitacao, data_limite, data_conclusao, progresso_pct, pontuacao_agilidade,
-      setor_destino_id, responsavel_id, setor:setor_destino_id ( nome ), responsavel:responsavel_id ( nome )
+      setor_destino_id, responsavel_id, pausado_desde, tempo_pausado_acumulado_ms,
+      setor:setor_destino_id ( nome ), responsavel:responsavel_id ( nome )
     `).gte('data_solicitacao', de90).not('responsavel_id', 'is', null).limit(2000) : Promise.resolve({ data: [] }),
     editavel ? resumoAgilidadeIndividual() : Promise.resolve({ media: null, top3: [] })
   ])
@@ -31167,11 +31736,16 @@ let DESEMP_INDIVIDUAL_MES = new Date(new Date().getFullYear(), new Date().getMon
 
 async function recalcularAgilidadeMensal () {
   const inicio12m = new Date(Date.now() - 365 * 864e5).toISOString().slice(0, 10)
-  const { data: solicitacoes } = await db.from('solicitacao_interna')
-    .select('id,status,data_solicitacao,data_limite,data_conclusao,progresso_pct,pontuacao_agilidade,responsavel_id')
-    .gte('data_solicitacao', inicio12m)
-    .not('responsavel_id', 'is', null)
-    .limit(5000)
+  const [{ data: solicitacoes }, { data: repasses }] = await Promise.all([
+    db.from('solicitacao_interna')
+      .select('id,status,data_solicitacao,data_limite,data_conclusao,progresso_pct,pontuacao_agilidade,responsavel_id,assumido_em,tempo_pausado_acumulado_ms,pausado_desde')
+      .gte('data_solicitacao', inicio12m)
+      .not('responsavel_id', 'is', null)
+      .limit(5000),
+    // devolutivas: pontuam a pessoa que devolveu, no mês em que devolveu,
+    // sem exigir que a solicitação como um todo já tenha sido concluída
+    db.from('solicitacao_repasse').select('pessoa_id,encerrada_em,pontuacao').gte('encerrada_em', inicio12m).limit(5000)
+  ])
 
   const porPessoaMes = {}
   const garante = (pessoaId, anoMes) => {
@@ -31190,6 +31764,17 @@ async function recalcularAgilidadeMensal () {
       if (!estaAtrasadaConcluida(s)) v.noPrazo++
       const pts = pontuacaoAgilidadeSolicitacao(s)
       if (pts != null) v.pontos.push(pts)
+    }
+  })
+
+  ;(repasses || []).forEach(r => {
+    if (!r.encerrada_em || !r.pessoa_id) return
+    const v = garante(r.pessoa_id, r.encerrada_em.slice(0, 7))
+    v.total++
+    v.concluidas++
+    if (r.pontuacao != null) {
+      if (r.pontuacao >= 100) v.noPrazo++
+      v.pontos.push(r.pontuacao)
     }
   })
 
@@ -31334,6 +31919,88 @@ async function desenharDesempIndividual (alvo, editavel) {
   alvo.querySelectorAll('[data-abrir-pessoa]').forEach(card => {
     card.onclick = () => abrirDetalheIndividualRh(linhas.find(l => l.pessoa.id === card.dataset.abrirPessoa).pessoa, editavel, alvo)
   })
+}
+
+// ---------------------------------------------------------------
+// RH → Prestadores Atrelados: mesmo espírito do Acompanhamento
+// Individual, só que aplicado a terceiros (advogado, contador, mecânico,
+// comunicação visual...) em vez de gente da empresa. Mede se o Prestador
+// cumpriu o prazo (SLA) combinado em cada solicitação delegada a ele --
+// não mexe na nota de ninguém interno, é só visibilidade.
+// ---------------------------------------------------------------
+let DESEMP_PRESTADORES_MES = new Date(new Date().getFullYear(), new Date().getMonth(), 1)
+
+async function desempPrestadores (alvo, editavel) {
+  if (!editavel) { alvo.innerHTML = `<div class="panel" style="padding:22px;">
+    <p class="texto-dim">Esse painel é sensível e só quem edita o módulo de RH enxerga.</p></div>`; return }
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  await desenharDesempPrestadores(alvo)
+}
+
+async function desenharDesempPrestadores (alvo) {
+  const inicioMes = DESEMP_PRESTADORES_MES
+  const fimMes = new Date(inicioMes.getFullYear(), inicioMes.getMonth() + 1, 1)
+
+  const [{ data: prestadores }, { data: solicitacoes }] = await Promise.all([
+    db.from('fornecedor').select('id,nome,tipo_servico,status').eq('eh_prestador_atrelado', true).order('nome'),
+    db.from('solicitacao_interna')
+      .select('id,codigo,titulo,terceiro_id,terceiro_sla_data,terceiro_retornou_em')
+      .not('terceiro_id', 'is', null)
+      .gte('data_solicitacao', inicioMes.toISOString()).lt('data_solicitacao', fimMes.toISOString())
+  ])
+
+  const porPrestador = {}
+  const garante = id => (porPrestador[id] = porPrestador[id] || { total: 0, retornadas: 0, noPrazo: 0, atrasoDiasSoma: 0, pendentes: 0 })
+  ;(solicitacoes || []).forEach(s => {
+    const v = garante(s.terceiro_id)
+    v.total++
+    if (s.terceiro_retornou_em) {
+      v.retornadas++
+      const noPrazo = !s.terceiro_sla_data || new Date(s.terceiro_retornou_em) <= new Date(s.terceiro_sla_data + 'T23:59:59')
+      if (noPrazo) v.noPrazo++
+      else if (s.terceiro_sla_data) v.atrasoDiasSoma += Math.max(0, Math.round((new Date(s.terceiro_retornou_em) - new Date(s.terceiro_sla_data)) / 864e5))
+    } else {
+      v.pendentes++
+    }
+  })
+
+  const linhas = (prestadores || []).map(f => {
+    const v = porPrestador[f.id] || { total: 0, retornadas: 0, noPrazo: 0, atrasoDiasSoma: 0, pendentes: 0 }
+    const pctNoPrazo = v.retornadas ? Math.round((v.noPrazo / v.retornadas) * 100) : null
+    const atrasoAtrasadas = v.retornadas - v.noPrazo
+    return { fornecedor: f, ...v, pctNoPrazo, atrasoMedioDias: atrasoAtrasadas ? Math.round(v.atrasoDiasSoma / atrasoAtrasadas) : 0 }
+  }).sort((a, b) => (b.pctNoPrazo ?? -1) - (a.pctNoPrazo ?? -1))
+
+  alvo.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:16px;">
+      ${navMesDesempHtml(DESEMP_PRESTADORES_MES)}
+    </div>
+    <p class="texto-dim2" style="font-size:12px;margin:0 0 16px;">
+      Desempenho dos Prestadores Atrelados (terceiros) nas solicitações delegadas a eles nesse mês.
+      Não afeta a agilidade de ninguém da empresa — é só acompanhamento de fornecedor externo.</p>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px;">
+      ${linhas.map(l => `
+        <div class="panel" style="padding:16px;">
+          <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;">
+            <div style="min-width:0;flex:1;">
+              <div style="font-weight:600;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(l.fornecedor.nome)}</div>
+              <div class="texto-dim2" style="font-size:11px;">${esc(l.fornecedor.tipo_servico || 'Prestador Atrelado')}</div>
+            </div>
+            ${l.fornecedor.status === 'INATIVO' ? '<span class="chip" style="font-size:10px;">inativo</span>' : ''}
+          </div>
+          <div style="font-size:12px;">
+            <div style="margin-bottom:4px;"><span class="texto-dim2">Delegadas no mês:</span> <b>${l.total}</b></div>
+            <div style="margin-bottom:4px;"><span class="texto-dim2">Retornadas:</span> <b>${l.retornadas}</b>${l.pendentes ? ` <span class="texto-dim2">(${l.pendentes} aguardando)</span>` : ''}</div>
+            <div style="margin-bottom:4px;">${l.pctNoPrazo != null ? `<span class="${l.pctNoPrazo >= 80 ? 'badge-bom' : l.pctNoPrazo >= 50 ? 'chip' : 'badge-alerta'}" style="font-size:10px;">${l.pctNoPrazo}% dentro do prazo combinado</span>` : '<span class="texto-dim2">sem retorno ainda</span>'}</div>
+            ${l.atrasoMedioDias ? `<div class="texto-dim2" style="font-size:11px;">atraso médio quando estoura: ${l.atrasoMedioDias} dia(s)</div>` : ''}
+          </div>
+        </div>`).join('') || `<p class="vazio">Nenhum Prestador Atrelado cadastrado ainda — cadastre em Cadastro → Fornecedores, marcando "É um Prestador Atrelado".</p>`}
+    </div>`
+
+  $('#dsi-mes-menos').onclick = () => { DESEMP_PRESTADORES_MES = new Date(DESEMP_PRESTADORES_MES.getFullYear(), DESEMP_PRESTADORES_MES.getMonth() - 1, 1); desenharDesempPrestadores(alvo) }
+  $('#dsi-mes-mais').onclick = () => { DESEMP_PRESTADORES_MES = new Date(DESEMP_PRESTADORES_MES.getFullYear(), DESEMP_PRESTADORES_MES.getMonth() + 1, 1); desenharDesempPrestadores(alvo) }
+  $('#dsi-mes-hoje').onclick = () => { DESEMP_PRESTADORES_MES = new Date(new Date().getFullYear(), new Date().getMonth(), 1); desenharDesempPrestadores(alvo) }
 }
 
 async function abrirDetalheIndividualRh (pessoa, editavel, alvoLista) {
@@ -32089,7 +32756,7 @@ async function desempAgilidade (alvo, editavel) {
   const buscar = async () => {
     const { data, error } = await db.from('solicitacao_interna').select(`
       id, urgencia, status, data_solicitacao, data_limite, data_conclusao,
-      progresso_pct, pontuacao_agilidade, setor_destino_id, responsavel_id,
+      progresso_pct, pontuacao_agilidade, setor_destino_id, responsavel_id, pausado_desde, tempo_pausado_acumulado_ms,
       setor:setor_destino_id ( nome ), responsavel:responsavel_id ( nome )
     `).gte('data_solicitacao', $('#ag-de').value).lte('data_solicitacao', $('#ag-ate').value + 'T23:59:59')
       .not('responsavel_id', 'is', null).limit(2000)
@@ -32245,7 +32912,7 @@ async function desempSolicitacoes (alvo, editavel) {
 
 function estaAtrasadaConcluida (s) {
   if (!s.data_conclusao) return false
-  return new Date(s.data_conclusao).getTime() > prazoSlaSolicitacao(s)
+  return (new Date(s.data_conclusao).getTime() - tempoPausadoTotalMs(s)) > prazoSlaSolicitacao(s)
 }
 
 // ----- Avaliar conduta -----
