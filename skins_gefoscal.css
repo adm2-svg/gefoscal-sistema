@@ -462,3 +462,123 @@ html[data-skin="grey"] {
   --warn-rgb: 217, 164, 65;
   --serif: 'Roboto', system-ui, sans-serif;
 }
+
+/* =========================================================
+   Campo de seleção com busca (combo-busca)
+
+   Substitui visualmente o <select> nativo, que só localiza pelo
+   começo do texto. O select continua ali, escondido, guardando o
+   valor — quem lê .value no JavaScript não percebe diferença.
+
+   Tudo aqui usa as variáveis de tema, então funciona igual nas
+   cinco skins (sofisticado, plataforma, plataforma-claro, grey,
+   daylight) sem nenhuma cor fixa.
+   ========================================================= */
+
+.combo-busca {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-width: 120px;
+}
+
+/* o select de verdade: presente no DOM, invisível na tela */
+.combo-busca > select { display: none !important; }
+
+.combo-busca > .combo-campo {
+  width: 100%;
+  padding-right: 28px;          /* espaço da setinha */
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.combo-busca.aberto > .combo-campo { cursor: text; }
+.combo-busca.desabilitado > .combo-campo { opacity: .55; cursor: not-allowed; }
+
+/* setinha desenhada em CSS, no mesmo lugar da do select nativo */
+.combo-busca > .combo-seta {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  margin-top: -5px;
+  border-right: 1.6px solid var(--dim2);
+  border-bottom: 1.6px solid var(--dim2);
+  transform: rotate(45deg);
+  transition: transform .15s ease, border-color .15s ease;
+  cursor: pointer;
+}
+.combo-busca.aberto > .combo-seta {
+  transform: rotate(-135deg);
+  margin-top: -2px;
+  border-color: var(--rust);
+}
+.combo-busca.desabilitado > .combo-seta { opacity: .4; cursor: not-allowed; }
+
+/* a lista fica no <body> e é posicionada por JavaScript, pra não
+   ser cortada pelo overflow dos modais e das tabelas roláveis */
+.combo-lista {
+  position: fixed;
+  z-index: 9999;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--panel);
+  border: 1px solid var(--line2);
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .22);
+  padding: 4px;
+  font-size: 13.5px;
+}
+
+.combo-lista .combo-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--txt);
+}
+.combo-lista .combo-item:hover { background: var(--hover-bg); }
+.combo-lista .combo-item.marcado {
+  background: rgba(var(--rust-rgb), .16);
+  color: var(--rust);
+}
+.combo-lista .combo-item[aria-selected="true"] .combo-nome { font-weight: 600; }
+.combo-lista .combo-item.inativo { opacity: .45; cursor: not-allowed; }
+
+.combo-lista .combo-nome {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* segunda linha: CNPJ, contato, município — o que vier em data-info */
+.combo-lista .combo-info {
+  font-size: 11.5px;
+  color: var(--dim2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.combo-lista .combo-item.marcado .combo-info { color: var(--rust); opacity: .8; }
+
+/* trecho encontrado, em qualquer posição e em qualquer um dos termos */
+.combo-lista mark {
+  background: rgba(var(--gold-rgb), .30);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
+}
+
+.combo-lista .combo-vazio {
+  padding: 10px;
+  color: var(--dim2);
+  font-size: 12.5px;
+}
+
+/* no celular a lista ganha um respiro maior no toque */
+@media (max-width: 720px) {
+  .combo-lista .combo-item { padding: 10px 12px; }
+}
