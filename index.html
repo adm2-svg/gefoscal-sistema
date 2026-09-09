@@ -17778,7 +17778,8 @@ async function paginaSdrWhatsapp () {
   const area = areaLivre()
   area.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
-  const abas = [['leads', 'Leads'], ['funil', 'Funil'], ['regioes', 'Regiões'], ['treinar', 'Treinar IA'],
+  const abas = [['leads', 'Leads'], ['funil', 'Funil'], ['listas', 'Listas'], ['canais', 'Canais'],
+    ['regioes', 'Regiões'], ['treinar', 'Treinar IA'],
     ['documentos', 'Documentos'], ['links', 'Links'], ['analytics', 'Analytics']]
   area.innerHTML = `
     <div class="subabas">
@@ -17800,6 +17801,8 @@ function abrirSubAbaSdr (sub) {
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
   if (sub === 'leads') sdrAbaLeads(alvo)
   if (sub === 'funil') sdrAbaFunil(alvo)
+  if (sub === 'listas') sdrAbaListas(alvo)
+  if (sub === 'canais') sdrAbaCanais(alvo)
   if (sub === 'treinar') sdrAbaTreinar(alvo)
   if (sub === 'regioes') sdrAbaRegioes(alvo)
   if (sub === 'documentos') sdrAbaDocumentos(alvo)
@@ -17831,6 +17834,7 @@ async function sdrAbaLeads (alvo) {
     </div>`
 
   renderListaSdr()
+  faixaForaDaLista(alvo)   // avisa quem chamou e a IA não respondeu
 }
 
 function renderListaSdr () {
@@ -18639,6 +18643,521 @@ function renderTabelaRegioes () {
   })
 }
 
+
+// ---------------------------------------------------------------
+// Faixa "chegaram fora da lista"
+//
+// No canal do QR a IA só responde quem está numa lista ativa. Quem
+// não está tem a mensagem gravada com fora_da_lista = true, e o bot
+// fica calado de propósito. Se ninguém olhar, essa pessoa fica sem
+// resposta — então ela aparece aqui, em cima da lista de leads.
+// ---------------------------------------------------------------
+async function faixaForaDaLista (alvo) {
+  const desde = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString()
+  const { data, error } = await db.from('mensagens')
+    .select('telefone,telefone_norm,nome,conteudo,created_at')
+    .eq('fora_da_lista', true).eq('papel', 'user')
+    .gte('created_at', desde)
+    .order('created_at', { ascending: false }).limit(200)
+  if (error || !data?.length) return
+
+  // uma linha por pessoa, com a mensagem mais recente dela
+  const porPessoa = new Map()
+  for (const m of data) {
+    const chave = m.telefone_norm || m.telefone
+    if (!porPessoa.has(chave)) porPessoa.set(chave, { ...m, quantas: 0 })
+    porPessoa.get(chave).quantas++
+  }
+  const pessoas = [...porPessoa.values()]
+
+  const faixa = document.createElement('div')
+  faixa.className = 'caixa-texto'
+  faixa.style.cssText = 'margin:0 0 14px;border-color:rgba(var(--warn-rgb),.55);'
+  faixa.innerHTML = `
+    <div class="rot" style="color:var(--warn-text);">
+      ⚠️ ${pessoas.length} ${pessoas.length === 1 ? 'pessoa chamou' : 'pessoas chamaram'} fora da lista</div>
+    <p class="texto-dim2" style="font-size:12px;margin:6px 0 10px;">
+      A IA não respondeu, de propósito — elas não estão em nenhuma lista ativa.
+      Estão esperando atendimento humano. Últimos 7 dias.</p>
+    <div style="display:flex;flex-direction:column;gap:6px;">
+      ${pessoas.slice(0, 8).map(p => `
+        <div style="display:flex;gap:10px;align-items:baseline;font-size:13px;">
+          <b style="flex:none;">${esc(p.nome || p.telefone)}</b>
+          <span class="texto-dim2" style="flex:none;font-size:11.5px;">${esc(p.telefone)}</span>
+          <span class="texto-dim2" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+                white-space:nowrap;">${esc(p.conteudo || '')}</span>
+          <span class="texto-dim2" style="flex:none;font-size:11.5px;">${esc(fmtQuando(p.created_at) || '')}</span>
+        </div>`).join('')}
+      ${pessoas.length > 8 ? `<div class="texto-dim2" style="font-size:12px;">
+        e mais ${pessoas.length - 8}…</div>` : ''}
+    </div>
+    <div class="acoes" style="margin-top:10px;">
+      <button class="btn-secundario mini" id="fl-ir-listas">Abrir Listas</button>
+    </div>`
+  alvo.prepend(faixa)
+  faixa.querySelector('#fl-ir-listas').onclick = () => {
+    const b = document.querySelector('.subabas button[data-sub="listas"]')
+    if (b) b.click()
+  }
+}
+
+// ---------------------------------------------------------------
+// Aba Canais — os WhatsApps que o SDR atende
+//
+// São dois tipos, e eles se comportam diferente de propósito:
+//   'meta' → API oficial da Cloud API. Atende qualquer um que chamar.
+//   'qr'   → sessão lida por QR Code, como o WhatsApp Web. Só atende
+//            quem está numa lista ATIVA (ver aba Listas).
+//
+// Quem realmente conecta é o serviço de fora; esta tela só pede a
+// conexão (status vira 'aguardando_qr') e mostra o QR que o serviço
+// grava em config.qr_base64. Enquanto o serviço não estiver no ar,
+// o pedido fica parado aqui mesmo — e a tela diz isso.
+// ---------------------------------------------------------------
+const ROTULO_STATUS_CANAL = {
+  desconectado: 'desconectado', aguardando_qr: 'esperando leitura do QR',
+  conectado: 'conectado', erro: 'com erro'
+}
+let SDR_TIMER_QR = null
+
+async function sdrAbaCanais (alvo) {
+  const { data: canais, error } = await db.from('sdr_canal').select('*').order('tipo')
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  const podeMexer = ehTotal()
+  alvo.innerHTML = `
+    <p class="texto-dim2" style="margin-bottom:14px;">
+      Os números de WhatsApp que a IA atende. O oficial da Meta atende qualquer pessoa;
+      o do QR Code só fala com quem está numa lista ativa.</p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;">
+      ${(canais || []).map(c => cartaoCanal(c, podeMexer)).join('')}
+    </div>`
+
+  alvo.querySelectorAll('[data-conectar]').forEach(b => {
+    b.onclick = async () => {
+      const { error } = await db.from('sdr_canal')
+        .update({ status: 'aguardando_qr', status_em: new Date().toISOString(), status_detalhe: null })
+        .eq('id', b.dataset.conectar)
+      if (error) { alert('Não consegui pedir a conexão: ' + error.message); return }
+      sdrAbaCanais(alvo)
+    }
+  })
+  alvo.querySelectorAll('[data-desconectar]').forEach(b => {
+    b.onclick = async () => {
+      const { error } = await db.from('sdr_canal')
+        .update({ status: 'desconectado', status_em: new Date().toISOString(), status_detalhe: null })
+        .eq('id', b.dataset.desconectar)
+      if (error) { alert('Não consegui desconectar: ' + error.message); return }
+      sdrAbaCanais(alvo)
+    }
+  })
+  alvo.querySelectorAll('[data-editar-canal]').forEach(b => {
+    b.onclick = () => abrirEdicaoCanal((canais || []).find(c => c.id === b.dataset.editarCanal), () => sdrAbaCanais(alvo))
+  })
+
+  // enquanto alguém espera o QR, recarrega sozinho pra ele aparecer
+  clearInterval(SDR_TIMER_QR)
+  if ((canais || []).some(c => c.status === 'aguardando_qr')) {
+    SDR_TIMER_QR = setInterval(() => {
+      if (!document.body.contains(alvo)) { clearInterval(SDR_TIMER_QR); return }
+      sdrAbaCanais(alvo)
+    }, 4000)
+  }
+}
+
+function cartaoCanal (c, podeMexer) {
+  const oficial = c.tipo === 'meta'
+  const cor = { conectado: 'var(--good-text)', erro: 'var(--critico-text)',
+                aguardando_qr: 'var(--warn-text)' }[c.status] || 'var(--dim2)'
+  const qr = c.config?.qr_base64
+  return `
+    <div class="panel" style="padding:18px;display:flex;flex-direction:column;gap:12px;">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;">
+        <div>
+          <div style="font-family:var(--serif);font-size:16px;">${esc(c.nome)}</div>
+          <div class="texto-dim2" style="font-size:12px;margin-top:2px;">
+            ${esc(c.numero || 'número ainda não informado')}</div>
+        </div>
+        <span class="chip" style="flex:none;">${oficial ? 'oficial' : 'QR Code'}</span>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:7px;font-size:13px;">
+        <span style="width:8px;height:8px;border-radius:50%;background:${cor};flex:none;"></span>
+        <span style="color:${cor};">${esc(ROTULO_STATUS_CANAL[c.status] || c.status)}</span>
+        ${!c.ativo ? '<span class="texto-dim2" style="font-size:12px;">· desligado</span>' : ''}
+      </div>
+      ${c.status_detalhe ? `<p class="texto-dim2" style="font-size:12px;margin:0;">${esc(c.status_detalhe)}</p>` : ''}
+
+      ${c.status === 'aguardando_qr' ? (qr
+        ? `<div style="background:#fff;padding:12px;border-radius:10px;align-self:center;">
+             <img src="${esc(qr)}" alt="QR Code do WhatsApp" style="width:212px;height:212px;display:block;">
+           </div>
+           <p class="texto-dim2" style="font-size:12px;margin:0;text-align:center;">
+             No celular: WhatsApp → Aparelhos conectados → Conectar aparelho.</p>`
+        : `<div class="caixa-texto" style="margin:0;">
+             <p style="font-size:12.5px;margin:0;color:var(--warn-text);">
+               Pedido registrado, esperando o serviço gerar o QR.</p>
+             <p class="texto-dim2" style="font-size:12px;margin:6px 0 0;">
+               Se ele não aparecer, o serviço de WhatsApp ainda não está no ar —
+               é ele quem lê este pedido e devolve o código.</p>
+           </div>`) : ''}
+
+      ${oficial ? `<p class="texto-dim2" style="font-size:12px;margin:0;">
+          Conecta sozinho pela Cloud API, sem QR. Depende da liberação do número na Meta.</p>` : ''}
+
+      ${podeMexer ? `<div class="acoes" style="margin-top:2px;">
+        ${!oficial && c.status !== 'aguardando_qr' && c.status !== 'conectado'
+          ? `<button class="btn mini" data-conectar="${c.id}">Conectar por QR</button>` : ''}
+        ${c.status !== 'desconectado'
+          ? `<button class="btn-secundario mini" data-desconectar="${c.id}">Desconectar</button>` : ''}
+        <button class="btn-secundario mini" data-editar-canal="${c.id}">Editar</button>
+      </div>` : ''}
+    </div>`
+}
+
+function abrirEdicaoCanal (c, aoSalvar) {
+  if (!c) return
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal" style="max-width:460px;">
+      <div class="cabeca-secao"><h3>Editar canal</h3></div>
+      <div class="form-grade">
+        <div class="campo"><label>Nome</label><input id="cn-nome" value="${esc(c.nome)}"></div>
+        <div class="campo"><label>Número do WhatsApp</label>
+          <input id="cn-numero" value="${esc(c.numero || '')}" placeholder="63 99999-8888"></div>
+        <div class="campo"><label>Instância no serviço</label>
+          <input id="cn-inst" value="${esc(c.instancia || '')}" placeholder="gefoscal-qr"></div>
+        <div class="campo"><label>Ligado</label>
+          <select id="cn-ativo"><option value="sim" ${c.ativo ? 'selected' : ''}>sim</option>
+            <option value="nao" ${!c.ativo ? 'selected' : ''}>não</option></select></div>
+      </div>
+      <div class="acoes">
+        <button class="btn" id="cn-salvar">Salvar</button>
+        <button class="btn-secundario" id="cn-fechar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="cn-recado"></div>
+    </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  fundo.querySelector('#cn-fechar').onclick = fechar
+  fundo.querySelector('#cn-salvar').onclick = async () => {
+    const patch = {
+      nome: fundo.querySelector('#cn-nome').value.trim(),
+      numero: fundo.querySelector('#cn-numero').value.trim() || null,
+      instancia: fundo.querySelector('#cn-inst').value.trim() || null,
+      ativo: fundo.querySelector('#cn-ativo').value === 'sim'
+    }
+    if (!patch.nome) { alert('O canal precisa de um nome.'); return }
+    const { error } = await db.from('sdr_canal').update(patch).eq('id', c.id)
+    if (error) { alert('Não consegui salvar: ' + error.message); return }
+    fechar(); aoSalvar()
+  }
+}
+
+// ---------------------------------------------------------------
+// Aba Listas — a carteira fechada em que a IA pode tocar
+//
+// Regra que dá sentido a tudo: no canal do QR, a IA só responde quem
+// está numa lista ATIVA. Lista em rascunho ou pausada não libera
+// ninguém. É o que segura o número de ser derrubado por spam.
+// ---------------------------------------------------------------
+const ROTULO_SITUACAO_LISTA = {
+  rascunho: 'rascunho', ativa: 'ativa', pausada: 'pausada', concluida: 'concluída'
+}
+const ROTULO_SITUACAO_CONTATO = {
+  aguardando: 'na fila', enviado: 'mensagem enviada', respondeu: 'respondeu',
+  erro: 'deu erro', cancelado: 'cancelado'
+}
+
+// espelho em JavaScript da função sdr_normaliza_telefone do banco.
+// Serve só pra mostrar na tela como o número vai ficar antes de salvar —
+// quem vale de verdade é a coluna gerada telefone_norm.
+function previewTelefoneNorm (t) {
+  let d = String(t ?? '').replace(/\D/g, '').replace(/^0+/, '')
+  if (!d) return null
+  if (d.length === 10 || d.length === 11) d = '55' + d
+  if (d.slice(0, 2) === '55' && d.length === 12 && '6789'.includes(d[4])) d = d.slice(0, 4) + '9' + d.slice(4)
+  return d
+}
+
+async function sdrAbaListas (alvo) {
+  const [{ data: listas, error }, { data: canais }, { data: pessoas }] = await Promise.all([
+    db.from('sdr_lista').select('*, canal:canal_id(nome,tipo), vendedor:vendedor_id(nome)')
+      .order('criado_em', { ascending: false }),
+    db.from('sdr_canal').select('id,nome,tipo').eq('ativo', true).order('tipo'),
+    db.from('pessoa').select('id,nome,eh_vendedor').eq('status', 'ATIVO').order('nome')
+  ])
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  const vendedores = (pessoas || []).filter(p => p.eh_vendedor).length
+    ? (pessoas || []).filter(p => p.eh_vendedor) : (pessoas || [])
+
+  // quantos contatos em cada lista, e quantos já saíram
+  const ids = (listas || []).map(l => l.id)
+  let porLista = {}
+  if (ids.length) {
+    const { data: cts } = await db.from('sdr_lista_contato').select('lista_id,situacao').in('lista_id', ids)
+    ;(cts || []).forEach(c => {
+      const p = porLista[c.lista_id] || (porLista[c.lista_id] = { total: 0, feitos: 0 })
+      p.total++
+      if (c.situacao === 'enviado' || c.situacao === 'respondeu') p.feitos++
+    })
+  }
+
+  alvo.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;margin-bottom:14px;flex-wrap:wrap;">
+      <p class="texto-dim2" style="margin:0;max-width:62ch;">
+        A IA só fala com quem está numa lista <b>ativa</b>. Quem não estiver na lista tem a mensagem
+        registrada e vai pro atendimento humano — o bot não responde.</p>
+      <button class="btn mini" id="sl-nova" style="flex:none;">+ Nova lista</button>
+    </div>
+    ${(listas || []).length ? `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;">
+        ${listas.map(l => {
+          const p = porLista[l.id] || { total: 0, feitos: 0 }
+          const cor = l.situacao === 'ativa' ? 'var(--good-text)'
+                    : l.situacao === 'pausada' ? 'var(--warn-text)' : 'var(--dim2)'
+          return `
+          <div class="panel" style="padding:16px;display:flex;flex-direction:column;gap:9px;cursor:pointer;"
+               data-abrir-lista="${l.id}">
+            <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">
+              <div style="font-family:var(--serif);font-size:15.5px;">${esc(l.nome)}</div>
+              <span class="chip" style="flex:none;color:${cor};">${esc(ROTULO_SITUACAO_LISTA[l.situacao])}</span>
+            </div>
+            <div class="texto-dim2" style="font-size:12px;">
+              ${esc(l.canal?.nome || '—')}${l.vendedor?.nome ? ' · ' + esc(l.vendedor.nome) : ''}</div>
+            <div style="font-size:13px;">
+              <b>${p.feitos}</b> de <b>${p.total}</b> contatos abordados</div>
+            <div style="height:5px;background:var(--surface3);border-radius:3px;overflow:hidden;">
+              <div style="height:100%;width:${p.total ? Math.round(p.feitos / p.total * 100) : 0}%;
+                          background:var(--rust);"></div></div>
+            <div class="texto-dim2" style="font-size:11.5px;">
+              ${esc(String(l.janela_inicio).slice(0, 5))}–${esc(String(l.janela_fim).slice(0, 5))} ·
+              1 a cada ${l.intervalo_minutos} min · até ${l.teto_diario}/dia
+              ${l.apenas_dias_uteis ? ' · dias úteis' : ''}</div>
+          </div>`
+        }).join('')}
+      </div>` : `<p class="vazio">Nenhuma lista ainda. Crie uma pra a IA ter com quem falar.</p>`}`
+
+  $('#sl-nova').onclick = () => abrirFormLista(null, canais || [], vendedores, () => sdrAbaListas(alvo))
+  alvo.querySelectorAll('[data-abrir-lista]').forEach(el => {
+    el.onclick = () => abrirLista((listas || []).find(l => l.id === el.dataset.abrirLista),
+                                  canais || [], vendedores, () => sdrAbaListas(alvo))
+  })
+}
+
+function abrirFormLista (lista, canais, vendedores, aoSalvar) {
+  const ehNova = !lista
+  const l = lista || {
+    nome: '', canal_id: (canais.find(c => c.tipo === 'qr') || canais[0] || {}).id, vendedor_id: '',
+    janela_inicio: '07:00', janela_fim: '18:00', intervalo_minutos: 60,
+    variacao_minutos: 7, teto_diario: 10, apenas_dias_uteis: true, mensagem_abertura: ''
+  }
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal" style="max-width:640px;">
+      <div class="cabeca-secao"><h3>${ehNova ? 'Nova lista de prospecção' : 'Editar lista'}</h3></div>
+      <div class="form-grade">
+        <div class="campo"><label>Nome da lista *</label>
+          <input id="sl-nome" value="${esc(l.nome)}" placeholder="Arraias — semana de 15/09"></div>
+        <div class="campo"><label>Canal *</label>
+          <select id="sl-canal">${canais.map(c =>
+            `<option value="${c.id}" ${c.id === l.canal_id ? 'selected' : ''}>${esc(c.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Dono dos leads</label>
+          <select id="sl-vend"><option value="">— ninguém —</option>${vendedores.map(v =>
+            `<option value="${v.id}" ${v.id === l.vendedor_id ? 'selected' : ''}>${esc(v.nome)}</option>`).join('')}</select></div>
+      </div>
+
+      <div class="secao" style="margin-top:18px;">
+        <h3 style="font-size:15px;">Ritmo dos primeiros contatos</h3>
+        <p class="texto-dim2" style="font-size:12px;margin:0 0 10px;">
+          É o que evita cair como spam. Um por hora, em horário comercial, parece gente trabalhando.</p>
+        <div class="form-grade">
+          <div class="campo"><label>Começa às</label>
+            <input id="sl-ini" type="time" value="${esc(String(l.janela_inicio).slice(0, 5))}"></div>
+          <div class="campo"><label>Para às</label>
+            <input id="sl-fim" type="time" value="${esc(String(l.janela_fim).slice(0, 5))}"></div>
+          <div class="campo"><label>Um a cada (minutos)</label>
+            <input id="sl-int" type="number" min="5" value="${l.intervalo_minutos}"></div>
+          <div class="campo"><label>Variação (minutos)</label>
+            <input id="sl-var" type="number" min="0" max="60" value="${l.variacao_minutos}"></div>
+          <div class="campo"><label>No máximo por dia</label>
+            <input id="sl-teto" type="number" min="1" value="${l.teto_diario}"></div>
+          <div class="campo"><label>Só em dias úteis</label>
+            <select id="sl-uteis"><option value="sim" ${l.apenas_dias_uteis ? 'selected' : ''}>sim</option>
+              <option value="nao" ${!l.apenas_dias_uteis ? 'selected' : ''}>não</option></select></div>
+        </div>
+        <div class="campo" style="margin-top:10px;"><label>Mensagem de abertura (opcional)</label>
+          <textarea id="sl-abertura" style="min-height:70px;"
+            placeholder="Deixe em branco pra IA escrever sozinha, com o treino dela.">${esc(l.mensagem_abertura || '')}</textarea></div>
+      </div>
+
+      <div class="acoes">
+        <button class="btn" id="sl-salvar">${ehNova ? 'Criar lista' : 'Salvar'}</button>
+        <button class="btn-secundario" id="sl-cancelar">Cancelar</button>
+      </div>
+    </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  fundo.querySelector('#sl-cancelar').onclick = fechar
+
+  fundo.querySelector('#sl-salvar').onclick = async () => {
+    const q = id => fundo.querySelector(id)
+    const corpo = {
+      nome: q('#sl-nome').value.trim(),
+      canal_id: q('#sl-canal').value || null,
+      vendedor_id: q('#sl-vend').value || null,
+      janela_inicio: q('#sl-ini').value || '07:00',
+      janela_fim: q('#sl-fim').value || '18:00',
+      intervalo_minutos: Number(q('#sl-int').value) || 60,
+      variacao_minutos: Number(q('#sl-var').value) || 0,
+      teto_diario: Number(q('#sl-teto').value) || 10,
+      apenas_dias_uteis: q('#sl-uteis').value === 'sim',
+      mensagem_abertura: q('#sl-abertura').value.trim() || null
+    }
+    if (!corpo.nome) { alert('A lista precisa de um nome.'); return }
+    if (!corpo.canal_id) { alert('Escolha por qual WhatsApp essa lista vai falar.'); return }
+    if (corpo.janela_fim <= corpo.janela_inicio) { alert('A hora de parar tem que ser depois da de começar.'); return }
+
+    const { error } = ehNova
+      ? await db.from('sdr_lista').insert({ ...corpo, criado_por: PERFIL.pessoaId })
+      : await db.from('sdr_lista').update(corpo).eq('id', lista.id)
+    if (error) { alert('Não consegui salvar: ' + error.message); return }
+    fechar(); aoSalvar()
+  }
+}
+
+async function abrirLista (lista, canais, vendedores, aoFechar) {
+  if (!lista) return
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal"><p class="texto-dim2">carregando contatos...</p></div>`
+  document.body.appendChild(fundo)
+  const fechar = () => { fundo.remove(); aoFechar() }
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const recarregar = async () => {
+    const { data: contatos } = await db.from('sdr_lista_contato')
+      .select('*').eq('lista_id', lista.id).order('criado_em')
+    desenhar(contatos || [])
+  }
+
+  const desenhar = contatos => {
+    const cor = lista.situacao === 'ativa' ? 'var(--good-text)'
+              : lista.situacao === 'pausada' ? 'var(--warn-text)' : 'var(--dim2)'
+    fundo.innerHTML = `
+      <div class="modal" style="max-width:880px;">
+        <div class="cabeca-secao">
+          <h3>${esc(lista.nome)}</h3>
+          <span class="chip" style="color:${cor};">${esc(ROTULO_SITUACAO_LISTA[lista.situacao])}</span>
+        </div>
+        <p class="texto-dim2" style="font-size:12.5px;margin:0 0 14px;">
+          ${esc(lista.canal?.nome || '')} ·
+          ${esc(String(lista.janela_inicio).slice(0, 5))}–${esc(String(lista.janela_fim).slice(0, 5))} ·
+          1 a cada ${lista.intervalo_minutos} min · até ${lista.teto_diario}/dia
+          ${lista.apenas_dias_uteis ? ' · dias úteis' : ''}</p>
+
+        ${lista.situacao === 'ativa' ? `
+          <div class="caixa-texto" style="margin:0 0 14px;border-color:rgba(var(--good-rgb),.5);">
+            <p style="font-size:12.5px;margin:0;color:var(--good-text);">
+              Lista ativa: a IA está liberada pra falar com estes ${contatos.length} contatos, e só com eles.</p>
+          </div>` : ''}
+
+        <div class="panel" style="padding:0;margin-bottom:16px;max-height:44vh;overflow:auto;">
+          <table><thead><tr>
+            <th>Nome</th><th>Telefone</th><th>Como o robô compara</th>
+            <th>Situação</th><th></th>
+          </tr></thead><tbody>
+            ${contatos.map(c => `<tr>
+              <td>${esc(c.nome || '—')}</td>
+              <td>${esc(c.telefone)}</td>
+              <td class="texto-dim2" style="font-size:12px;">${esc(c.telefone_norm || '—')}</td>
+              <td>${c.situacao === 'respondeu'
+                    ? '<span class="badge-bom">respondeu</span>'
+                    : c.situacao === 'erro'
+                      ? `<span class="badge-alerta">deu erro</span>`
+                      : `<span class="texto-dim2">${esc(ROTULO_SITUACAO_CONTATO[c.situacao] || c.situacao)}</span>`}
+                  ${c.enviado_em ? `<br><span class="texto-dim2" style="font-size:11px;">${esc(fmtQuando(c.enviado_em) || '')}</span>` : ''}</td>
+              <td style="text-align:right;">
+                <button class="btn-secundario mini" data-tirar="${c.id}">tirar</button></td>
+            </tr>`).join('') || `<tr><td colspan="5" class="vazio">
+              Nenhum contato ainda. Cole a lista abaixo.</td></tr>`}
+          </tbody></table>
+        </div>
+
+        <div class="secao">
+          <h3 style="font-size:15px;">Acrescentar contatos</h3>
+          <p class="texto-dim2" style="font-size:12px;margin:0 0 8px;">
+            Um por linha. Aceita <b>nome; telefone</b> ou só o telefone. O formato não importa —
+            o robô normaliza sozinho.</p>
+          <textarea id="sl-colar" style="min-height:120px;font-family:inherit;font-size:13px;"
+            placeholder="Carlos Cardoso; 5562981423428&#10;Eraldo Pereira Maia; (11) 96816-9842&#10;5517997392894"></textarea>
+          <div class="acoes"><button class="btn mini" id="sl-add">Acrescentar</button>
+            <span class="texto-dim2" style="font-size:12px;" id="sl-add-status"></span></div>
+        </div>
+
+        <div class="acoes" style="border-top:1px solid var(--line);padding-top:14px;">
+          ${lista.situacao !== 'ativa'
+            ? `<button class="btn" id="sl-ativar" ${!contatos.length ? 'disabled title="Acrescente contatos antes de ativar"' : ''}>Ativar lista</button>`
+            : `<button class="btn-secundario" id="sl-pausar">Pausar lista</button>`}
+          <button class="btn-secundario" id="sl-editar">Editar regras</button>
+          <button class="btn-secundario" id="sl-fechar">Fechar</button>
+        </div>
+      </div>`
+
+    const q = id => fundo.querySelector(id)
+    q('#sl-fechar').onclick = fechar
+    q('#sl-editar').onclick = () => { fundo.remove(); abrirFormLista(lista, canais, vendedores, aoFechar) }
+
+    const mudarSituacao = async nova => {
+      const { error } = await db.from('sdr_lista').update({ situacao: nova }).eq('id', lista.id)
+      if (error) { alert('Não consegui mudar: ' + error.message); return }
+      lista.situacao = nova
+      recarregar()
+    }
+    q('#sl-ativar')?.addEventListener('click', () => mudarSituacao('ativa'))
+    q('#sl-pausar')?.addEventListener('click', () => mudarSituacao('pausada'))
+
+    fundo.querySelectorAll('[data-tirar]').forEach(b => {
+      b.onclick = async () => {
+        await db.from('sdr_lista_contato').delete().eq('id', b.dataset.tirar)
+        recarregar()
+      }
+    })
+
+    q('#sl-add').onclick = async () => {
+      const linhas = q('#sl-colar').value.split('\n').map(x => x.trim()).filter(Boolean)
+      if (!linhas.length) return
+      const jaTem = new Set(contatos.map(c => c.telefone_norm))
+      const novos = []
+      const problemas = []
+      for (const linha of linhas) {
+        const partes = linha.split(/[;,\t]/).map(x => x.trim())
+        const telefone = partes.length > 1 ? partes[partes.length - 1] : partes[0]
+        const nome = partes.length > 1 ? partes.slice(0, -1).join(' ') : null
+        const norm = previewTelefoneNorm(telefone)
+        if (!norm || norm.length < 12) { problemas.push(linha + ' (telefone não parece válido)'); continue }
+        if (jaTem.has(norm)) { problemas.push(linha + ' (já está na lista)'); continue }
+        jaTem.add(norm)
+        novos.push({ lista_id: lista.id, telefone, nome })
+      }
+      if (novos.length) {
+        const { error } = await db.from('sdr_lista_contato').insert(novos)
+        if (error) { alert('Não consegui acrescentar: ' + error.message); return }
+      }
+      q('#sl-colar').value = problemas.join('\n')
+      q('#sl-add-status').textContent = `${novos.length} acrescentado(s)` +
+        (problemas.length ? ` · ${problemas.length} ficaram na caixa pra você conferir` : '')
+      recarregar()
+    }
+  }
+
+  recarregar()
+}
 
 // ----- Aba Treinar IA: editar o SYSTEM_PROMPT do bot, com histórico,
 // mais as bibliotecas de conhecimento (categoria + cultura/UF) que
