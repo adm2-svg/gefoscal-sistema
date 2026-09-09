@@ -1511,6 +1511,345 @@ const esc = t => String(t ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const iniciais = n => String(n ?? '').split(' ').filter(Boolean).slice(0, 2).map(x => x[0]).join('').toUpperCase()
 
 // ---------------------------------------------------------------
+// Busca dentro dos campos de seleção (combo com busca)
+//
+// O <select> do HTML só localiza digitando o COMEÇO do texto, e ainda
+// zera o que foi digitado depois de uma pausa curta. Quem procurava
+// "gama" numa lista com "Agro Gama Ltda" não achava nada.
+//
+// Aqui o select continua existindo, no mesmo lugar, com o mesmo id e
+// o mesmo name — só fica escondido. Por cima dele entra um campo de
+// texto que filtra a lista, e ao escolher o valor volta pro select de
+// verdade e o evento 'change' é disparado normalmente. Por isso nada
+// no resto do sistema precisou mudar: quem lê $('#o-forn').value
+// continua lendo do mesmo jeito, e quem escuta onchange é avisado.
+//
+// COMO A BUSCA FUNCIONA
+//   - acha o trecho em QUALQUER posição, não só no começo;
+//   - ignora acento e maiúscula ("sao" acha "São", "jose" acha "José");
+//   - aceita VÁRIOS TERMOS, em qualquer ordem: cada palavra digitada
+//     precisa aparecer em algum lugar. "gama ltda" acha "Agro Gama
+//     Ltda"; "ltda gama" acha também.
+//
+// DOIS ATRIBUTOS OPCIONAIS NA <option>
+//   data-busca="..."  texto extra que ENTRA na busca sem aparecer na
+//                     tela — CNPJ, telefone, apelido, código.
+//   data-info="..."   texto extra que APARECE embaixo do nome na lista,
+//                     pra distinguir dois cadastros de nome parecido.
+//
+//   <option value="7" data-busca="12.345.678/0001-90 Maria"
+//                     data-info="CNPJ 12.345.678/0001-90 · Maria">
+//     Agro Gama Ltda</option>
+//
+//   Assim dá pra achar o fornecedor pelo CNPJ ou pelo nome do contato,
+//   e não só pela razão social.
+//
+// Como pedir pra um campo específico NÃO virar busca:
+//   <select data-sem-busca> ... </select>
+// ---------------------------------------------------------------
+
+// A partir de quantas opções o campo vira busca. Em 0, vale pra todos.
+// Subindo pra 8, por exemplo, listas curtas (status, turno, sim/não)
+// continuam com o seletor nativo do celular, que é mais confortável.
+const MIN_OPCOES_BUSCA = 0
+
+// tira acento e caixa: "São João" e "sao joao" viram a mesma coisa
+const semAcento = t => String(t ?? '')
+  .normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+
+// o que é levado em conta na busca de uma opção: o que está escrito
+// nela, mais o texto escondido de data-busca
+const textoBuscavelOpcao = o => semAcento(`${o.text} ${o.dataset.busca || ''}`)
+
+// "gama ltda" -> ['gama','ltda']; cada termo precisa bater em algum lugar
+const termosDe = t => semAcento(t).split(/\s+/).filter(Boolean)
+
+const DESCRITOR_VALUE_SELECT = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')
+const COMBOS = []
+const fecharCombos = () => COMBOS.forEach(c => c.fechar())
+
+function selectElegivel (sel) {
+  if (!(sel instanceof HTMLSelectElement)) return false
+  if (sel.multiple || sel.size > 1) return false
+  if (sel.dataset.semBusca !== undefined) return false
+  if (sel.dataset.comBusca === 'sim') return false          // já convertido
+  if (sel.closest('.combo-busca')) return false
+  return sel.options.length >= MIN_OPCOES_BUSCA
+}
+
+// marca os pedaços encontrados no texto exibido, um por termo
+function destacar (texto, termos) {
+  if (!termos.length) return esc(texto)
+  const normal = semAcento(texto)
+  const marcas = []
+  for (const t of termos) {
+    let de = normal.indexOf(t)
+    while (de >= 0) {
+      marcas.push([de, de + t.length])
+      de = normal.indexOf(t, de + 1)
+    }
+  }
+  if (!marcas.length) return esc(texto)
+  marcas.sort((a, b) => a[0] - b[0])
+  const juntas = [marcas[0]]
+  for (const [de, ate] of marcas.slice(1)) {
+    const ultima = juntas[juntas.length - 1]
+    if (de <= ultima[1]) ultima[1] = Math.max(ultima[1], ate)
+    else juntas.push([de, ate])
+  }
+  let saida = '', pos = 0
+  for (const [de, ate] of juntas) {
+    if (de > texto.length) break
+    saida += esc(texto.slice(pos, de)) + '<mark>' + esc(texto.slice(de, ate)) + '</mark>'
+    pos = ate
+  }
+  return saida + esc(texto.slice(pos))
+}
+
+function darBuscaAoSelect (sel) {
+  if (!selectElegivel(sel)) return
+  sel.dataset.comBusca = 'sim'
+
+  const caixa = document.createElement('div')
+  caixa.className = 'combo-busca'
+  sel.parentNode.insertBefore(caixa, sel)
+  caixa.appendChild(sel)
+
+  const campo = document.createElement('input')
+  campo.type = 'text'
+  campo.className = 'combo-campo'
+  campo.autocomplete = 'off'
+  campo.setAttribute('role', 'combobox')
+  campo.setAttribute('aria-expanded', 'false')
+  campo.setAttribute('aria-autocomplete', 'list')
+  if (sel.title) campo.title = sel.title
+  // estilo escrito direto na tag do select (fonte menor dentro de tabela,
+  // largura fixa etc.) vale pro campo visível, senão ele sai do tamanho
+  if (sel.style.cssText) {
+    campo.style.cssText = sel.style.cssText
+    campo.style.paddingRight = '26px'   // devolve o espaço da setinha
+  }
+  caixa.appendChild(campo)
+
+  const seta = document.createElement('span')
+  seta.className = 'combo-seta'
+  seta.setAttribute('aria-hidden', 'true')
+  caixa.appendChild(seta)
+
+  // a lista mora no <body> pra não ser cortada pelo overflow do modal
+  const lista = document.createElement('div')
+  lista.className = 'combo-lista oculto'
+  lista.setAttribute('role', 'listbox')
+
+  let aberto = false
+  let marcado = -1        // item destacado pelas setas do teclado
+  let visiveis = []       // opções que passaram no filtro
+
+  const opcaoAtual = () => sel.options[sel.selectedIndex] || null
+  const mostrarEscolhido = () => { campo.value = opcaoAtual()?.text ?? '' }
+
+  const espelharEstado = () => {
+    campo.disabled = sel.disabled
+    campo.placeholder = sel.disabled ? '' : 'buscar...'
+    caixa.classList.toggle('desabilitado', sel.disabled)
+  }
+
+  // ----- posição da lista (fixa na tela, acompanha rolagem) -----
+  const posicionar = () => {
+    const r = campo.getBoundingClientRect()
+    const espacoAbaixo = window.innerHeight - r.bottom
+    const paraCima = espacoAbaixo < 180 && r.top > espacoAbaixo
+    lista.style.left = r.left + 'px'
+    lista.style.width = r.width + 'px'
+    if (paraCima) {
+      lista.style.top = 'auto'
+      lista.style.bottom = (window.innerHeight - r.top + 4) + 'px'
+      lista.style.maxHeight = Math.min(300, r.top - 16) + 'px'
+    } else {
+      lista.style.bottom = 'auto'
+      lista.style.top = (r.bottom + 4) + 'px'
+      lista.style.maxHeight = Math.min(300, Math.max(120, espacoAbaixo - 16)) + 'px'
+    }
+  }
+
+  // ----- desenhar a lista já filtrada -----
+  const filtrar = termo => {
+    const termos = termosDe(termo)
+    const todas = Array.from(sel.options)
+    visiveis = termos.length
+      ? todas.filter(o => { const t = textoBuscavelOpcao(o); return termos.every(x => t.includes(x)) })
+      : todas
+
+    if (!visiveis.length) {
+      lista.innerHTML = `<div class="combo-vazio">nada encontrado para “${esc(String(termo).trim())}”</div>`
+      marcado = -1
+      return
+    }
+
+    // sem digitação, começa destacando o que já está escolhido
+    if (marcado < 0 || marcado >= visiveis.length) {
+      const i = visiveis.indexOf(opcaoAtual())
+      marcado = i >= 0 ? i : 0
+    }
+
+    const escolhida = opcaoAtual()
+    lista.innerHTML = visiveis.map((o, i) => {
+      const info = o.dataset.info
+      return `<div class="combo-item${i === marcado ? ' marcado' : ''}${o.disabled ? ' inativo' : ''}"
+        role="option" aria-selected="${o === escolhida}" data-i="${i}"><span class="combo-nome">${
+          destacar(o.text || '—', termos)}</span>${
+          info ? `<span class="combo-info">${destacar(info, termos)}</span>` : ''}</div>`
+    }).join('')
+
+    lista.querySelector('.combo-item.marcado')?.scrollIntoView({ block: 'nearest' })
+  }
+
+  const abrir = () => {
+    if (aberto || sel.disabled) return
+    fecharCombos()
+    aberto = true
+    marcado = -1
+    caixa.classList.add('aberto')
+    campo.setAttribute('aria-expanded', 'true')
+    if (!lista.isConnected) document.body.appendChild(lista)
+    lista.classList.remove('oculto')
+    posicionar()
+    filtrar('')
+    campo.select()
+  }
+
+  const fechar = (restaurarTexto = true) => {
+    if (!aberto) return
+    aberto = false
+    caixa.classList.remove('aberto')
+    campo.setAttribute('aria-expanded', 'false')
+    lista.classList.add('oculto')
+    if (restaurarTexto) mostrarEscolhido()
+  }
+
+  const escolher = i => {
+    const op = visiveis[i]
+    if (!op || op.disabled) return
+    if (sel.value !== op.value) {
+      sel.value = op.value
+      sel.dispatchEvent(new Event('input', { bubbles: true }))
+      sel.dispatchEvent(new Event('change', { bubbles: true }))
+    }
+    fechar()
+  }
+
+  // ----- interação -----
+  campo.addEventListener('focus', abrir)
+  campo.addEventListener('mousedown', e => { if (!aberto) { e.preventDefault(); campo.focus() } })
+  seta.addEventListener('mousedown', e => { e.preventDefault(); aberto ? fechar() : campo.focus() })
+
+  campo.addEventListener('input', () => {
+    if (!aberto) abrir()
+    marcado = -1
+    filtrar(campo.value)
+    posicionar()
+  })
+
+  campo.addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      if (!aberto) return abrir()
+      if (!visiveis.length) return
+      marcado = e.key === 'ArrowDown'
+        ? (marcado + 1) % visiveis.length
+        : (marcado - 1 + visiveis.length) % visiveis.length
+      filtrar(campo.value)
+    } else if (e.key === 'Enter') {
+      if (aberto) { e.preventDefault(); escolher(marcado) }
+    } else if (e.key === 'Escape') {
+      if (aberto) { e.stopPropagation(); fechar() }   // 1º Esc fecha a lista, não o modal
+    } else if (e.key === 'Tab') {
+      fechar()
+    }
+  })
+
+  campo.addEventListener('blur', () => setTimeout(() => { if (!lista.matches(':hover')) fechar() }, 120))
+
+  lista.addEventListener('mousedown', e => {
+    const item = e.target.closest('.combo-item')
+    if (!item) return
+    e.preventDefault()
+    escolher(Number(item.dataset.i))
+  })
+
+  // ----- manter em dia com o que o resto do sistema faz no select -----
+
+  // valor trocado por código: sel.value = x
+  if (DESCRITOR_VALUE_SELECT) {
+    Object.defineProperty(sel, 'value', {
+      configurable: true,
+      get () { return DESCRITOR_VALUE_SELECT.get.call(this) },
+      set (v) { DESCRITOR_VALUE_SELECT.set.call(this, v); if (!aberto) mostrarEscolhido() }
+    })
+  }
+  sel.addEventListener('change', () => { if (!aberto) mostrarEscolhido() })
+
+  // opções repovoadas depois (popularMunicipios, add(new Option(...)), innerHTML novo)
+  new MutationObserver(() => {
+    mostrarEscolhido()
+    if (aberto) filtrar(campo.value)
+  }).observe(sel, { childList: true, subtree: true })
+
+  // select ligado/desligado por código
+  new MutationObserver(espelharEstado).observe(sel, { attributes: true, attributeFilter: ['disabled'] })
+
+  COMBOS.push({
+    fechar,
+    posicionar,
+    estaAberto: () => aberto,
+    vivo: () => caixa.isConnected,
+    descartar: () => { fechar(false); lista.remove() }
+  })
+
+  espelharEstado()
+  mostrarEscolhido()
+}
+
+// campo saiu da tela (modal fechado, página trocada): a lista dele vai junto
+function limparCombosMortos () {
+  for (let i = COMBOS.length - 1; i >= 0; i--) {
+    if (!COMBOS[i].vivo()) { COMBOS[i].descartar(); COMBOS.splice(i, 1) }
+  }
+}
+
+window.addEventListener('scroll', () => COMBOS.forEach(c => c.estaAberto() && c.posicionar()), true)
+window.addEventListener('resize', () => COMBOS.forEach(c => c.estaAberto() && c.posicionar()))
+
+// ----- instalação automática: os selects que já existem e os que aparecerem -----
+function instalarBuscaSelects () {
+  const varrer = raiz => {
+    if (raiz instanceof HTMLSelectElement) return darBuscaAoSelect(raiz)
+    raiz.querySelectorAll?.('select').forEach(darBuscaAoSelect)
+  }
+  varrer(document)
+  let pendente = false
+  new MutationObserver(muts => {
+    for (const m of muts) for (const no of m.addedNodes) if (no.nodeType === 1) varrer(no)
+    if (!pendente) {   // limpeza agrupada, pra não varrer a lista a cada nó
+      pendente = true
+      requestAnimationFrame(() => { pendente = false; limparCombosMortos() })
+    }
+  }).observe(document.documentElement, { childList: true, subtree: true })
+}
+instalarBuscaSelects()
+
+// <option> de fornecedor com CNPJ e contato juntos: os dois entram na
+// busca (data-busca) e aparecem como segunda linha da lista (data-info),
+// pra separar cadastros de nome parecido. Só funciona onde o cache traz
+// esses campos — COMPRAS_CACHE e MANUT_CACHE trazem; FROTA e COMB, não.
+const opcaoFornecedor = (f, selecionadoId = null) => {
+  const extras = [f.cnpj_cpf, f.contato].filter(Boolean)
+  return `<option value="${f.id}"${f.id === selecionadoId ? ' selected' : ''}${
+    extras.length ? ` data-busca="${esc(extras.join(' '))}" data-info="${esc(extras.join(' · '))}"` : ''
+  }>${esc(f.nome)}</option>`
+}
+
+// ---------------------------------------------------------------
 // Estratégia do Bom Dia — mensagem sem resposta? avisa 3 dias úteis
 // depois, no turno oposto, pra mandar só um "bom dia"/"boa tarde".
 // Exceção: se o 3º dia útil cair numa sexta, pula pro próximo dia
@@ -9554,8 +9893,7 @@ async function telaCotacao (s) {
           <div class="form-grade" style="margin-top:10px;">
             <div class="campo"><label>Fornecedor</label>
               <select id="o-forn"><option value="">— digitar abaixo —</option>
-                ${COMPRAS_CACHE.fornecedores.map(f =>
-                  `<option value="${f.id}">${esc(f.nome)}</option>`).join('')}</select></div>
+                ${COMPRAS_CACHE.fornecedores.map(f => opcaoFornecedor(f)).join('')}</select></div>
             <div class="campo"><label>ou nome do fornecedor</label><input id="o-avulso"></div>
             <div class="campo"><label>Valor (R$) *</label><input id="o-valor" inputmode="decimal" placeholder="1.250,00"></div>
             <div class="campo"><label>Prazo de entrega</label><input id="o-prazo" placeholder="5 dias úteis"></div>
@@ -26863,10 +27201,10 @@ function campoOrcamentosAdministrativo (prefixo, os) {
         <div><b>Área administrativa/comercial exige 2 orçamentos antes de aprovar</b></div>
         <div class="form-grade" style="margin-top:8px;">
           <div class="campo"><label>Orçamento 1 — fornecedor</label>
-            <select id="${prefixo}-orc1-forn"><option value="">—</option>${MANUT_CACHE.fornecedores.map(f => `<option value="${f.id}" ${f.id === os?.orcamento1_fornecedor_id ? 'selected' : ''}>${esc(f.nome)}</option>`).join('')}</select></div>
+            <select id="${prefixo}-orc1-forn"><option value="">—</option>${MANUT_CACHE.fornecedores.map(f => opcaoFornecedor(f, os?.orcamento1_fornecedor_id)).join('')}</select></div>
           <div class="campo"><label>Orçamento 1 — valor (R$)</label><input id="${prefixo}-orc1-valor" inputmode="decimal" value="${os?.orcamento1_valor ?? ''}"></div>
           <div class="campo"><label>Orçamento 2 — fornecedor</label>
-            <select id="${prefixo}-orc2-forn"><option value="">—</option>${MANUT_CACHE.fornecedores.map(f => `<option value="${f.id}" ${f.id === os?.orcamento2_fornecedor_id ? 'selected' : ''}>${esc(f.nome)}</option>`).join('')}</select></div>
+            <select id="${prefixo}-orc2-forn"><option value="">—</option>${MANUT_CACHE.fornecedores.map(f => opcaoFornecedor(f, os?.orcamento2_fornecedor_id)).join('')}</select></div>
           <div class="campo"><label>Orçamento 2 — valor (R$)</label><input id="${prefixo}-orc2-valor" inputmode="decimal" value="${os?.orcamento2_valor ?? ''}"></div>
           <div class="campo"><label>Prazo de entrega *</label><input type="date" id="${prefixo}-prazo-entrega" value="${os?.prazo_entrega ?? ''}"></div>
           <div class="campo"><label>Nº da nota fiscal *</label><input id="${prefixo}-nf-numero" value="${esc(os?.numero_nota_fiscal ?? '')}"></div>
@@ -26930,7 +27268,7 @@ function manutLancar (alvo, editavel, escopo) {
         <div class="campo"><label>Status</label>
           <select id="ml-status">${STATUS_OS.filter(s => s !== 'CANCELADA').map(s => `<option value="${s}">${ROTULO_STATUS_OS[s]}</option>`).join('')}</select></div>
         <div class="campo oculto" id="ml-campo-fornecedor"><label>Terceiro / fornecedor</label>
-          <select id="ml-fornecedor"><option value="">—</option>${MANUT_CACHE.fornecedores.map(f => `<option value="${f.id}">${esc(f.nome)}</option>`).join('')}</select></div>
+          <select id="ml-fornecedor"><option value="">—</option>${MANUT_CACHE.fornecedores.map(f => opcaoFornecedor(f)).join('')}</select></div>
         <div class="campo"><label>Data/hora *</label><input type="datetime-local" id="ml-data" value="${agora}"></div>
         <div class="campo"><label>Prazo</label><input type="date" id="ml-prazo"></div>
         <div class="campo"><label>Data de conclusão</label><input type="date" id="ml-conclusao"></div>
@@ -27071,7 +27409,7 @@ async function manutLancarCorporativo (alvo, editavel, escopo) {
         <div class="campo" style="grid-column:1/-1;"><label id="mlc-label-feito">O que foi feito *</label>
           <textarea id="mlc-feito" style="min-height:70px;" placeholder="Ex.: troca dos 4 pneus, revisão dos 10 mil km..."></textarea></div>
         <div class="campo"><label>Oficina / mecânico</label>
-          <select id="mlc-fornecedor"><option value="">selecionar da lista...</option>${MANUT_CACHE.fornecedores.map(f => `<option value="${f.id}">${esc(f.nome)}</option>`).join('')}</select></div>
+          <select id="mlc-fornecedor"><option value="">selecionar da lista...</option>${MANUT_CACHE.fornecedores.map(f => opcaoFornecedor(f)).join('')}</select></div>
         <div class="campo" style="align-self:end;"><button type="button" class="btn-secundario mini" id="mlc-fornecedor-novo">+ nova oficina</button></div>
         <div class="campo"><label id="mlc-label-data">Data *</label><input type="date" id="mlc-data" value="${hoje}"></div>
         <div class="campo"><label id="mlc-label-valor">Valor (R$) *</label><input id="mlc-valor" inputmode="decimal" placeholder="0,00"></div>
@@ -27084,10 +27422,10 @@ async function manutLancarCorporativo (alvo, editavel, escopo) {
           <div><b>Valor acima de R$ ${fmtNum(VALOR_LIMITE_ORCAMENTO_CORPORATIVO)} — exige 2 orçamentos antes de aprovar</b></div>
           <div class="form-grade" style="margin-top:8px;">
             <div class="campo"><label>Orçamento 1 — fornecedor</label>
-              <select id="mlc-orc1-forn"><option value="">—</option>${MANUT_CACHE.fornecedores.map(f => `<option value="${f.id}">${esc(f.nome)}</option>`).join('')}</select></div>
+              <select id="mlc-orc1-forn"><option value="">—</option>${MANUT_CACHE.fornecedores.map(f => opcaoFornecedor(f)).join('')}</select></div>
             <div class="campo"><label>Orçamento 1 — valor (R$)</label><input id="mlc-orc1-valor" inputmode="decimal"></div>
             <div class="campo"><label>Orçamento 2 — fornecedor</label>
-              <select id="mlc-orc2-forn"><option value="">—</option>${MANUT_CACHE.fornecedores.map(f => `<option value="${f.id}">${esc(f.nome)}</option>`).join('')}</select></div>
+              <select id="mlc-orc2-forn"><option value="">—</option>${MANUT_CACHE.fornecedores.map(f => opcaoFornecedor(f)).join('')}</select></div>
             <div class="campo"><label>Orçamento 2 — valor (R$)</label><input id="mlc-orc2-valor" inputmode="decimal"></div>
           </div>
         </div>
@@ -27190,7 +27528,7 @@ async function manutLancarCorporativo (alvo, editavel, escopo) {
       if (error) { erroMsg(error.message); return }
       MANUT_CACHE.fornecedores.push(novoForn)
       MANUT_CACHE.fornecedores.sort((a, b) => a.nome.localeCompare(b.nome))
-      const opcoesAtualizadas = MANUT_CACHE.fornecedores.map(f => `<option value="${f.id}">${esc(f.nome)}</option>`).join('')
+      const opcoesAtualizadas = MANUT_CACHE.fornecedores.map(f => opcaoFornecedor(f)).join('')
       $('#mlc-fornecedor').innerHTML = `<option value="">selecionar da lista...</option>${opcoesAtualizadas}`
       $('#mlc-fornecedor').value = novoForn.id
       $('#mlc-orc1-forn').innerHTML = `<option value="">—</option>${opcoesAtualizadas}`
@@ -27471,7 +27809,7 @@ async function detalheOS (os, editavel, aoFechar, escopo) {
             </select></div>
           <div class="campo"><label>Oficina / mecânico</label>
             <select id="do-fornecedor"><option value="">—</option>
-              ${MANUT_CACHE.fornecedores.map(f => `<option value="${f.id}" ${f.id === os.fornecedor_id ? 'selected' : ''}>${esc(f.nome)}</option>`).join('')}</select></div>
+              ${MANUT_CACHE.fornecedores.map(f => opcaoFornecedor(f, os.fornecedor_id)).join('')}</select></div>
           <div class="campo"><label>Concluída em</label><input type="date" id="do-conclusao" value="${os.data_conclusao ?? ''}"></div>
           <div class="campo"><label>Valor peças (R$)</label><input id="do-pecas" inputmode="decimal" value="${os.valor_pecas ?? ''}"></div>
           <div class="campo"><label>Valor terceiros / mão de obra (R$)</label><input id="do-terceiros" inputmode="decimal" value="${os.valor_terceiros ?? ''}"></div>
@@ -27486,10 +27824,10 @@ async function detalheOS (os, editavel, aoFechar, escopo) {
             <div><b>Valor acima de R$ ${fmtNum(VALOR_LIMITE_ORCAMENTO_CORPORATIVO)} — exige 2 orçamentos antes de aprovar</b></div>
             <div class="form-grade" style="margin-top:8px;">
               <div class="campo"><label>Orçamento 1 — fornecedor</label>
-                <select id="do-orc1-forn"><option value="">—</option>${MANUT_CACHE.fornecedores.map(f => `<option value="${f.id}" ${f.id === os.orcamento1_fornecedor_id ? 'selected' : ''}>${esc(f.nome)}</option>`).join('')}</select></div>
+                <select id="do-orc1-forn"><option value="">—</option>${MANUT_CACHE.fornecedores.map(f => opcaoFornecedor(f, os.orcamento1_fornecedor_id)).join('')}</select></div>
               <div class="campo"><label>Orçamento 1 — valor (R$)</label><input id="do-orc1-valor" inputmode="decimal" value="${os.orcamento1_valor ?? ''}"></div>
               <div class="campo"><label>Orçamento 2 — fornecedor</label>
-                <select id="do-orc2-forn"><option value="">—</option>${MANUT_CACHE.fornecedores.map(f => `<option value="${f.id}" ${f.id === os.orcamento2_fornecedor_id ? 'selected' : ''}>${esc(f.nome)}</option>`).join('')}</select></div>
+                <select id="do-orc2-forn"><option value="">—</option>${MANUT_CACHE.fornecedores.map(f => opcaoFornecedor(f, os.orcamento2_fornecedor_id)).join('')}</select></div>
               <div class="campo"><label>Orçamento 2 — valor (R$)</label><input id="do-orc2-valor" inputmode="decimal" value="${os.orcamento2_valor ?? ''}"></div>
             </div>
           </div>
@@ -27514,7 +27852,7 @@ async function detalheOS (os, editavel, aoFechar, escopo) {
               ${MANUT_CACHE.pessoas.map(p => `<option value="${p.id}" ${p.nome === os.responsavel?.nome ? 'selected' : ''}>${esc(p.nome)}</option>`).join('')}</select></div>
           <div class="campo"><label>Terceiro / fornecedor</label>
             <select id="do-fornecedor"><option value="">—</option>
-              ${MANUT_CACHE.fornecedores.map(f => `<option value="${f.id}" ${f.id === os.fornecedor_id ? 'selected' : ''}>${esc(f.nome)}</option>`).join('')}</select></div>
+              ${MANUT_CACHE.fornecedores.map(f => opcaoFornecedor(f, os.fornecedor_id)).join('')}</select></div>
           <div class="campo"><label>Prazo</label><input type="date" id="do-prazo" value="${os.data_limite ?? ''}"></div>
           <div class="campo"><label>Concluída em</label><input type="date" id="do-conclusao" value="${os.data_conclusao ?? ''}"></div>
           <div class="campo"><label>Valor peças (R$)</label><input id="do-pecas" inputmode="decimal" value="${os.valor_pecas ?? ''}"></div>
