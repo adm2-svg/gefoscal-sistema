@@ -23137,6 +23137,10 @@ function telaBaixaTitulo (t, contas, categorias, centros) {
       </div>
 
       <div class="form-grade">
+        <div class="campo"><label>Juros / multa (R$)</label>
+          <input id="bt-juros" inputmode="decimal" placeholder="0,00"></div>
+        <div class="campo"><label>Desconto / devolução (R$)</label>
+          <input id="bt-desconto" inputmode="decimal" placeholder="0,00"></div>
         <div class="campo"><label>Valor pago (R$) *</label>
           <input id="bt-valor" inputmode="decimal" value="${t.valor ?? ''}"></div>
         <div class="campo"><label>Data do pagamento</label>
@@ -23151,6 +23155,12 @@ function telaBaixaTitulo (t, contas, categorias, centros) {
           <select id="bt-centro"><option value="">—</option>
             ${centros.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('')}</select></div>
       </div>
+
+      <div class="campo" style="margin-top:10px;">
+        <label>Motivo da diferença</label>
+        <input id="bt-motivo" placeholder="ex: nota de devolução 1234, desconto comercial, juros por atraso">
+      </div>
+      <div class="aviso" id="bt-conta-fecha" style="margin-top:8px;"></div>
 
       <label class="linha-modulo" style="margin-top:12px;">
         <input type="checkbox" id="bt-lancar" checked>
@@ -23177,9 +23187,53 @@ function telaBaixaTitulo (t, contas, categorias, centros) {
     el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
   }
 
+  // A conta que tem que fechar: pago = título + juros/multa − desconto.
+  // O painel mostra ela montada, pra diferença aparecer antes de gravar e
+  // não seis meses depois, quando ninguém lembra por que saiu diferente.
+  const devido = Number(t.valor || 0)
+  const lerAjustes = () => ({
+    juros: numeroBR(q('#bt-juros').value) ?? 0,
+    desconto: numeroBR(q('#bt-desconto').value) ?? 0
+  })
+  const recalcular = (mexeuNoPago = false) => {
+    const { juros, desconto } = lerAjustes()
+    const esperado = devido + juros - desconto
+    if (!mexeuNoPago) q('#bt-valor').value = esperado.toFixed(2).replace('.', ',')
+    const pago = numeroBR(q('#bt-valor').value) ?? 0
+    const painel = q('#bt-conta-fecha')
+    const linha = `título R$ ${fmtNum(devido)}`
+      + (juros ? ` + juros/multa R$ ${fmtNum(juros)}` : '')
+      + (desconto ? ` − desconto/devolução R$ ${fmtNum(desconto)}` : '')
+      + ` = R$ ${fmtNum(esperado)}`
+    const fecha = Math.abs(pago - esperado) < 0.01
+    painel.innerHTML = fecha
+      ? linha
+      : `${linha}<br><b>Não fecha:</b> você informou R$ ${fmtNum(pago)}.
+         Ajuste o juros, o desconto ou o valor pago.`
+    painel.style.borderColor = fecha ? '' : 'var(--warn-text)'
+    painel.style.color = fecha ? '' : 'var(--warn-text)'
+    q('#bt-motivo').closest('.campo').style.display =
+      (juros || desconto) ? '' : 'none'
+  }
+  q('#bt-juros').oninput = () => recalcular()
+  q('#bt-desconto').oninput = () => recalcular()
+  q('#bt-valor').oninput = () => recalcular(true)
+  recalcular()
+
   q('#bt-confirmar').onclick = async () => {
     const valor = numeroBR(q('#bt-valor').value)
     if (valor === null) { aviso('Informe o valor pago.'); return }
+
+    const { juros, desconto } = lerAjustes()
+    const motivo = q('#bt-motivo').value.trim()
+    if (Math.abs(valor - (devido + juros - desconto)) >= 0.01) {
+      aviso('A conta não fecha: pago tem que ser o título mais juros/multa menos desconto.')
+      return
+    }
+    if ((juros || desconto) && motivo.length < 5) {
+      aviso('Escreva o motivo da diferença — nota de devolução, desconto, juros.')
+      return
+    }
 
     const btn = q('#bt-confirmar'); btn.disabled = true; btn.textContent = 'Registrando...'
     const dataPg = q('#bt-data').value || hoje
@@ -23195,7 +23249,12 @@ function telaBaixaTitulo (t, contas, categorias, centros) {
         categoria_id: q('#bt-categoria').value || null,
         centro_custo_id: q('#bt-centro').value || null,
         situacao: 'EFETIVADO',
-        observacao: 'Baixa de título do relatório contábil',
+        // o lançamento leva o valor que saiu do caixa, não o do título --
+        // e carrega o motivo, senão a diferença some do rastro
+        observacao: 'Baixa de título do relatório contábil'
+          + (juros ? ` · juros/multa R$ ${fmtNum(juros)}` : '')
+          + (desconto ? ` · desconto/devolução R$ ${fmtNum(desconto)}` : '')
+          + (motivo ? ` · ${motivo}` : ''),
         registrado_por: PERFIL.pessoaId
       }).select('id').single()
 
@@ -23210,6 +23269,9 @@ function telaBaixaTitulo (t, contas, categorias, centros) {
     const { data: atualizado, error } = await db.from('titulo_externo').update({
       situacao: 'PAGO',
       valor_pago: valor,
+      juros_multa: juros,
+      desconto,
+      motivo_baixa: motivo || null,
       pago_em: dataPg,
       pago_por_id: PERFIL.pessoaId,
       lancamento_id: lancamentoId
