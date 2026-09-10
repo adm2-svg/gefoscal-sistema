@@ -22183,6 +22183,25 @@ async function finLancamentos (alvo, editavel) {
 
   if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
 
+  // De qual compra veio cada lançamento.
+  //
+  // Dois lançamentos de baixa podem ficar idênticos na tela -- mesma
+  // descrição, mesmo valor, mesma data -- e um deles ser o bom e o outro
+  // sobra de uma baixa que não gravou. Sem essa marca não dá pra saber qual
+  // apagar, e apagar o errado devolve a compra pra fila de pagamento.
+  const ids = (data || []).map(l => l.id)
+  const daCompra = new Map()
+  if (ids.length) {
+    const { data: ligadas } = await db.from('solicitacao_compra')
+      .select('numero,lancamento_id').in('lancamento_id', ids)
+    for (const c of ligadas || []) daCompra.set(c.lancamento_id, c.numero)
+  }
+  // um lançamento que se chama "Compra: ..." e não tem compra apontando pra
+  // ele é órfão: a baixa não completou, e a despesa está contada sem dono
+  const orfaoDeCompra = l =>
+    String(l.descricao || '').startsWith('Compra:') && !daCompra.has(l.id)
+  const orfaos = (data || []).filter(orfaoDeCompra)
+
   const rec = (data || []).filter(l => l.tipo === 'ENTRADA').reduce((s, l) => s + Number(l.valor), 0)
   const des = (data || []).filter(l => l.tipo === 'SAIDA').reduce((s, l) => s + Number(l.valor), 0)
   const pend = (data || []).filter(l => l.situacao === 'PENDENTE').length
@@ -22202,6 +22221,13 @@ async function finLancamentos (alvo, editavel) {
     { rotulo: 'Compras aprovadas', valor: 'R$ ' + fmtNum(compras.valor),
       nota: `${compras.quantidade} no mês · ainda fora do caixa`, classe: 'destaque' }
   ]) + `
+    ${orfaos.length ? `<div class="aviso" style="border-color:var(--warn-text);color:var(--warn-text);">
+      <b>${orfaos.length} lançamento(s) de compra sem compra ligada</b>, somando
+      R$ ${fmtNum(orfaos.reduce((s, l) => s + Number(l.valor || 0), 0))}.
+      São sobras de baixas que não chegaram a gravar o status da compra: a despesa
+      está contada no mês, mas não pertence a nenhuma compra paga. Estão marcados na
+      tabela abaixo. Confira no extrato e exclua os que forem repetição.</div>` : ''}
+
     ${editavel ? `<div class="secao panel" style="padding:18px;">
       <h3>Novo lançamento</h3>
       <div class="form-grade">
@@ -22234,7 +22260,14 @@ async function finLancamentos (alvo, editavel) {
       </tr></thead><tbody>
       ${(data || []).map(l => `<tr>
         <td>${fmtData(l.data_lancamento)}</td>
-        <td>${esc(l.descricao)}</td>
+        <td>${esc(l.descricao)}
+          ${daCompra.has(l.id)
+            ? `<div class="texto-dim2" style="font-size:10.5px;margin-top:2px;">
+                 ligado à compra ${esc(daCompra.get(l.id))}</div>`
+            : orfaoDeCompra(l)
+              ? `<div class="badge-alerta" style="font-size:10.5px;margin-top:2px;display:inline-block;">
+                   sem compra ligada — sobra de baixa que não gravou</div>`
+              : ''}</td>
         <td class="texto-dim">${esc(l.conta?.nome ?? '—')}</td>
         <td class="texto-dim">${esc(l.categoria?.nome ?? '—')}</td>
         <td class="texto-dim">${esc(l.centro?.nome ?? '—')}</td>
@@ -22877,7 +22910,12 @@ function telaBaixa (s, contas, categorias, centros) {
     const { data: baixada, error } = await db.rpc('compra_dar_baixa', {
       p_id: s.id,
       p_valor: valor,
-      p_pago_em: new Date(q('#b-data').value || Date.now()).toISOString(),
+      // meio-dia, não meia-noite: "2026-09-03" sozinho é lido como meia-noite
+      // UTC, que aqui é 21h do dia 2 -- a baixa aparecia um dia antes da que
+      // foi digitada. Com T12:00:00 (hora local) a data não escorrega.
+      p_pago_em: q('#b-data').value
+        ? new Date(q('#b-data').value + 'T12:00:00').toISOString()
+        : new Date().toISOString(),
       p_comprovante_link: q('#b-comp').value.trim() || null,
       p_lancar: q('#b-lancar').checked,
       p_conta_id: q('#b-conta').value || null,
