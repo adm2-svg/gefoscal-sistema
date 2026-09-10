@@ -9741,6 +9741,9 @@ async function comprasDecidir (alvo, nomeEtapa) {
         <span class="titulo">${esc(s.produto_servico)}</span>
         ${s.urgencia === 'URGENTE_4H' ? '<span class="urgente">● urgente</span>' : ''}
         <div class="botoes">
+          ${nomeEtapa === 'aprovacao'
+            ? `<button class="btn-secundario mini" data-editar-aprov="${s.id}"
+                 title="editar o item antes de decidir">✏️</button>` : ''}
           <button class="btn-secundario mini" data-ficha="${s.id}">ficha</button>
           <button class="btn mini" data-decidir="${s.id}">decidir</button>
         </div>
@@ -9759,6 +9762,137 @@ async function comprasDecidir (alvo, nomeEtapa) {
   $('#c-fila').querySelectorAll('[data-decidir]').forEach(b => {
     b.onclick = () => telaDecisao(data.find(x => x.id === b.dataset.decidir), nomeEtapa)
   })
+  $('#c-fila').querySelectorAll('[data-editar-aprov]').forEach(b => {
+    b.onclick = () => telaEditarNaAprovacao(data.find(x => x.id === b.dataset.editarAprov))
+  })
+}
+
+// ----- Editar o pedido na hora de aprovar -----
+//
+// O caso que pediu esta tela: um pedido de "ipad 11a" já coordenado e
+// cotado, e a diretoria decide comprar um tablet da linha S. Sem isso, o
+// único caminho é reprovar e abrir outro pedido do zero, perdendo a
+// coordenação e a cotação que já foram feitas.
+//
+// Só aparece na fila de Aprovação, de propósito: quem cota ou quem só
+// acompanha não troca o item por aqui.
+async function telaEditarNaAprovacao (s) {
+  if (!s) return
+
+  // os orçamentos são do item ATUAL; se o item mudar, eles não valem mais
+  const { data: orcamentos } = await db.from('orcamento')
+    .select('id,valor,escolhido,fornecedor_avulso,fornecedor:fornecedor_id(nome)')
+    .eq('solicitacao_id', s.id).order('escolhido', { ascending: false })
+  const escolhido = (orcamentos || []).find(o => o.escolhido)
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal">
+      <h3>Editar antes de aprovar</h3>
+      <p class="texto-dim2" style="font-size:12.5px;margin-top:-4px;">
+        ${esc(s.numero ?? '')} · pedido por ${esc(s.solicitante?.nome ?? '—')}</p>
+
+      <div class="campo" style="margin-top:12px;">
+        <label>O que vai ser comprado *</label>
+        <input id="ea-produto" value="${esc(s.produto_servico ?? '')}"></div>
+
+      <div class="form-grade" style="margin-top:10px;">
+        <div class="campo"><label>Quantidade</label>
+          <input id="ea-qtd" value="${esc(s.quantidade ?? '')}"></div>
+        <div class="campo"><label>Unidade</label>
+          <input id="ea-un" value="${esc(s.unidade ?? '')}"></div>
+        <div class="campo"><label>Valor estimado (R$)</label>
+          <input id="ea-valor" inputmode="decimal" value="${s.valor_estimado ?? ''}"></div>
+      </div>
+
+      <div class="campo" style="margin-top:10px;">
+        <label>Motivo da alteração *</label>
+        <input id="ea-motivo" placeholder="ex: trocado por tablet Galaxy Tab S, iPad saiu de linha"></div>
+
+      <div style="margin-top:14px;">
+        <label class="linha-modulo">
+          <input type="radio" name="ea-destino" value="seguir" checked>
+          <span class="nome">Trocar e seguir — continua na sua fila, você decide agora</span></label>
+        <label class="linha-modulo">
+          <input type="radio" name="ea-destino" value="cotar">
+          <span class="nome">Trocar e voltar pra Cotação — o analista cota o item novo</span></label>
+      </div>
+
+      ${escolhido ? `<div class="aviso" id="ea-alerta" style="margin-top:10px;">
+        Esse pedido já tem orçamento escolhido: R$ ${fmtNum(escolhido.valor)}
+        (${esc(escolhido.fornecedor?.nome || escolhido.fornecedor_avulso || 'fornecedor não informado')}),
+        feito para <b>${esc(s.produto_servico ?? '')}</b>.</div>` : ''}
+
+      <div class="acoes">
+        <button class="btn" id="ea-salvar">Salvar</button>
+        <button class="btn-secundario" id="ea-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="ea-recado"></div>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#ea-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const aviso = t => {
+    const el = q('#ea-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+  const destino = () => fundo.querySelector('[name="ea-destino"]:checked').value
+
+  // avisa na hora certa: item trocado com orçamento velho é preço de outro produto
+  const alerta = q('#ea-alerta')
+  const revisarAlerta = () => {
+    if (!alerta) return
+    const mudou = q('#ea-produto').value.trim() !== (s.produto_servico ?? '').trim()
+    const vaiCotar = destino() === 'cotar'
+    alerta.style.borderColor = (mudou && !vaiCotar) ? 'var(--warn-text)' : ''
+    alerta.style.color = (mudou && !vaiCotar) ? 'var(--warn-text)' : ''
+    alerta.innerHTML = vaiCotar
+      ? `O orçamento escolhido (R$ ${fmtNum(escolhido.valor)}) vai ser solto,
+         porque foi feito para o item antigo. O analista escolhe de novo.`
+      : mudou
+        ? `<b>Atenção:</b> o orçamento escolhido é de R$ ${fmtNum(escolhido.valor)} e foi
+           feito para "${esc(s.produto_servico ?? '')}". Seguindo assim, você aprova o item
+           novo com o preço do antigo — confira o valor estimado antes de decidir.`
+        : `Orçamento escolhido: R$ ${fmtNum(escolhido.valor)}
+           (${esc(escolhido.fornecedor?.nome || escolhido.fornecedor_avulso || '—')}).`
+  }
+  q('#ea-produto').oninput = revisarAlerta
+  fundo.querySelectorAll('[name="ea-destino"]').forEach(r => { r.onchange = revisarAlerta })
+  revisarAlerta()
+
+  q('#ea-salvar').onclick = async () => {
+    const produto = q('#ea-produto').value.trim()
+    const motivo = q('#ea-motivo').value.trim()
+    if (produto.length < 2) { aviso('Escreva o que vai ser comprado.'); return }
+    if (motivo.length < 10) { aviso('Escreva o motivo da alteração — pelo menos uma frase.'); return }
+
+    const btn = q('#ea-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const { data: novo, error } = await db.rpc('solicitacao_editar_na_aprovacao', {
+      p_id: s.id,
+      p_produto: produto,
+      p_quantidade: q('#ea-qtd').value.trim(),
+      p_unidade: q('#ea-un').value.trim(),
+      p_valor: numeroBR(q('#ea-valor').value),
+      p_justificativa: motivo,
+      p_destino: destino()
+    })
+    if (error || !novo) {
+      aviso(error?.message || 'A alteração não foi gravada.')
+      btn.disabled = false; btn.textContent = 'Salvar'; return
+    }
+
+    fechar()
+    if (destino() === 'cotar') {
+      alert(`${s.numero} voltou para a Cotação com o item novo.`
+        + (escolhido ? '\n\nO orçamento que estava escolhido foi solto.' : ''))
+    }
+    abrirCompras('aprovar', true)
+  }
 }
 
 // ----- Compras › Cotação (analista de compras) -----
