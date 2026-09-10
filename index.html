@@ -40478,6 +40478,30 @@ async function relCrmTecnico (alvo) {
 // ----- Relatório: Faturamento -----
 const ROTULO_STATUS_PEDIDO = { EMITIDO: 'Emitido', CONCLUIDO: 'Concluído', CANCELADO: 'Cancelado' }
 const ROTULO_SITUACAO_PAGAMENTO = { EM_ABERTO: 'Em aberto', PARCIAL: 'Parcial', QUITADO: 'Quitado', CANCELADO: 'Cancelado' }
+// ----- Relatório: Faturamento -----
+//
+// Quatro jeitos de olhar a mesma coisa, escolhidos no topo. O relatório
+// nasceu mostrando só PEDIDO, e pedido esconde o dia a dia: um pedido de
+// 400 t que saiu em 8 caminhões ao longo de duas semanas vira uma linha
+// só, na data em que foi VENDIDO. Quem precisa saber o que rodou no dia
+// não enxergava nada.
+//
+//   pedido    -> uma linha por pedido, pela data do pedido (como era)
+//   lancamento-> uma linha por carregamento/NF, pela data do carregamento
+//   diario    -> uma linha por dia, somando os carregamentos
+//   gerado    -> o pedido e o que já saiu contra ele, com o saldo
+//
+// O que muda junto com o modo é o SIGNIFICADO do De/Até: em pedido e em
+// "gerado" ele filtra a data do pedido; em lançamento e diário, a data do
+// carregamento. Sem isso a pessoa acha que filtrou o dia e filtrou outra
+// coisa.
+const MODOS_REL_FATURAMENTO = [
+  { id: 'pedido',     nome: 'Pedido',              dica: 'uma linha por pedido' },
+  { id: 'lancamento', nome: 'Lançamento',          dica: 'uma linha por carregamento/NF' },
+  { id: 'diario',     nome: 'Resumo diário',       dica: 'uma linha por dia' },
+  { id: 'gerado',     nome: 'Pedido + lançamentos', dica: 'o que já saiu de cada pedido' }
+]
+
 const COLUNAS_REL_FATURAMENTO = ['Número', 'Cliente', 'Vendedor', 'Produto', 'Quantidade (t)', 'Valor total', 'Situação pagamento', 'Status', 'Data pedido', 'Vencimento']
 function linhaRelFaturamento (p) {
   return [p.numero ?? '—', p.cliente?.nome_fantasia || p.cliente?.razao_social || '—', p.vendedor?.nome ?? '—',
@@ -40486,68 +40510,270 @@ function linhaRelFaturamento (p) {
     ROTULO_STATUS_PEDIDO[p.status] ?? p.status ?? '—', fmtData(p.data_pedido), p.vencimento ? fmtData(p.vencimento) : '—']
 }
 
+const COLUNAS_REL_CARREGAMENTO = ['Data', 'NF', 'Pedido', 'Cliente', 'Produto', 'Vendedor',
+  'Quantidade (t)', 'Preço unit.', 'Valor NF', 'Veículo', 'Motorista', 'UF', 'Status']
+const nomeCliente_ = c => c?.nome_fantasia || c?.razao_social || '—'
+// a placa vem da frota própria OU do veículo do cliente: dos 165
+// carregamentos recentes, 62 usam um e 82 usam o outro
+const placaDoCarregamento = c => c?.veiculo?.placa || c?.veiculoCliente?.placa || '—'
+function linhaRelCarregamento (c) {
+  return [fmtData(c.data_carregamento), c.numero_nf ?? '—', c.pedido?.numero ?? '—',
+    nomeCliente_(c.cliente), c.produto?.nome ?? '—', c.vendedor?.nome ?? '—',
+    c.quantidade_t ?? '—', c.preco_unitario != null ? `R$ ${fmtNum(c.preco_unitario)}` : '—',
+    c.valor_nf != null ? `R$ ${fmtNum(c.valor_nf)}` : '—',
+    placaDoCarregamento(c), c.motorista ?? '—', c.uf_destino ?? '—', c.status ?? '—']
+}
+
+const COLUNAS_REL_DIARIO = ['Data', 'Lançamentos', 'Pedidos', 'Clientes', 'Quantidade (t)', 'Valor NF']
+const COLUNAS_REL_GERADO = ['Pedido', 'Cliente', 'Produto', 'Data pedido', 'Pedido (t)',
+  'Carregado (t)', 'Saldo (t)', 'Lançamentos', 'Valor do pedido', 'Valor faturado']
+
 async function relFaturamento (alvo) {
   const hoje = new Date().toISOString().slice(0, 10)
   const de = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10)
+
   alvo.innerHTML = `
+    <div class="panel" style="padding:14px 16px;margin-bottom:12px;">
+      <label class="texto-dim2" style="font-size:11px;text-transform:uppercase;letter-spacing:.12em;">Ver por</label>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;">
+        ${MODOS_REL_FATURAMENTO.map((m, i) => `
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;">
+            <input type="radio" name="rf-modo" value="${m.id}" ${i === 0 ? 'checked' : ''}>
+            <span>${m.nome} <span class="texto-dim2" style="font-size:11.5px;">· ${m.dica}</span></span>
+          </label>`).join('')}
+      </div>
+    </div>
+
     <div class="filtros" style="margin-bottom:14px;">
-      <div class="campo"><label>De</label><input type="date" id="rf-de" value="${de}"></div>
+      <div class="campo"><label id="rf-rot-data">De (data do pedido)</label><input type="date" id="rf-de" value="${de}"></div>
       <div class="campo"><label>Até</label><input type="date" id="rf-ate" value="${hoje}"></div>
-      <div class="campo"><label>Situação pagamento</label>
+      <div class="campo" id="rf-campo-situacao"><label>Situação pagamento</label>
         <select id="rf-situacao"><option value="">Todas</option>${Object.entries(ROTULO_SITUACAO_PAGAMENTO).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div>
-      <div class="campo"><label>Buscar por nome</label><input type="text" id="rf-nome" placeholder="número, cliente, vendedor, produto..."></div>
+      <div class="campo"><label>Buscar por nome</label><input type="text" id="rf-nome" placeholder="número, cliente, vendedor, produto, NF..."></div>
       <div class="campo"><label>Valor mín.</label><input type="number" id="rf-vmin" step="0.01" placeholder="0,00"></div>
       <div class="campo"><label>Valor máx.</label><input type="number" id="rf-vmax" step="0.01" placeholder="0,00"></div>
       <button class="btn" id="rf-buscar">Buscar</button>
     </div>
     <div id="rf-resultado"></div>`
 
-  let ultimaLista = []
+  const modo = () => alvo.querySelector('[name="rf-modo"]:checked').value
+  const porCarregamento = () => ['lancamento', 'diario'].includes(modo())
+
+  // o rótulo do De/Até muda junto com o modo, senão a pessoa filtra o dia
+  // errado sem perceber; e "situação de pagamento" é coisa de pedido
+  const ajustarFiltros = () => {
+    $('#rf-rot-data').textContent = porCarregamento()
+      ? 'De (data do carregamento)' : 'De (data do pedido)'
+    $('#rf-campo-situacao').style.display = modo() === 'pedido' ? '' : 'none'
+  }
+
+  let exportar = null
   const buscar = async () => {
-    const deVal = $('#rf-de').value, ateVal = $('#rf-ate').value, situacaoVal = $('#rf-situacao').value
+    const m = modo()
+    const deVal = $('#rf-de').value, ateVal = $('#rf-ate').value
+    const situacaoVal = $('#rf-situacao').value
     const nomeVal = $('#rf-nome').value, vminVal = $('#rf-vmin').value, vmaxVal = $('#rf-vmax').value
     $('#rf-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
-    let q = db.from('pedido').select(`
-      id, numero, quantidade_t, valor_total, status, situacao_pagamento, data_pedido, vencimento,
-      cliente:cliente_id ( razao_social, nome_fantasia ), vendedor:vendedor_id ( nome ), produto:produto_id ( nome )
-    `).gte('data_pedido', deVal).lte('data_pedido', ateVal).order('data_pedido', { ascending: false }).limit(3000)
-    if (situacaoVal) q = q.eq('situacao_pagamento', situacaoVal)
 
-    const { data, error } = await q
-    if (faltaMigracao(error) || error) { $('#rf-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-    ultimaLista = relFiltrarTexto(data || [], nomeVal, p => [p.numero, p.cliente?.nome_fantasia, p.cliente?.razao_social, p.vendedor?.nome, p.produto?.nome])
-    ultimaLista = relFiltrarValor(ultimaLista, vminVal, vmaxVal, p => p.valor_total)
-    if (!ultimaLista.length) { $('#rf-resultado').innerHTML = `<p class="vazio">Nenhum pedido encontrado.</p>`; return }
-
-    $('#rf-resultado').innerHTML = `
+    const cabecalho = (qtd, oque) => `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
-        <p class="texto-dim2" style="margin:0;">${ultimaLista.length} pedido${ultimaLista.length > 1 ? 's' : ''} encontrado${ultimaLista.length > 1 ? 's' : ''}</p>
+        <p class="texto-dim2" style="margin:0;">${qtd} ${oque}</p>
         <div style="display:flex;gap:8px;">
           <button class="btn-secundario mini" id="rf-excel">⬇ Exportar Excel</button>
           <button class="btn-secundario mini" id="rf-pdf">⬇ Exportar PDF</button>
         </div>
-      </div>
-      <div class="panel" style="padding:0;"><div class="tabela-scroll">
-        <table><thead><tr><th>Número</th><th>Cliente</th><th>Vendedor</th><th>Produto</th><th>Quantidade (t)</th><th>Valor total</th><th>Situação pagamento</th><th>Status</th><th>Data pedido</th><th>Vencimento</th></tr></thead><tbody>
-          ${ultimaLista.map(p => `<tr>
-            <td>${esc(p.numero ?? '—')}</td>
-            <td>${esc(p.cliente?.nome_fantasia || p.cliente?.razao_social || '—')}</td>
-            <td>${esc(p.vendedor?.nome ?? '—')}</td>
-            <td>${esc(p.produto?.nome ?? '—')}</td>
-            <td>${p.quantidade_t ?? '—'}</td>
-            <td>${p.valor_total != null ? `R$ ${fmtNum(p.valor_total)}` : '—'}</td>
-            <td><span class="chip">${esc(ROTULO_SITUACAO_PAGAMENTO[p.situacao_pagamento] ?? p.situacao_pagamento ?? '—')}</span></td>
-            <td>${esc(ROTULO_STATUS_PEDIDO[p.status] ?? p.status ?? '—')}</td>
-            <td>${fmtData(p.data_pedido)}</td>
-            <td>${p.vencimento ? fmtData(p.vencimento) : '—'}</td>
-          </tr>`).join('')}
-        </tbody></table>
-      </div></div>`
+      </div>`
+    const tabela = miolo => `<div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table>${miolo}</table></div></div>`
 
-    $('#rf-excel').onclick = () => exportarRelatorioExcel('relatorio_faturamento', COLUNAS_REL_FATURAMENTO, ultimaLista.map(linhaRelFaturamento))
-    $('#rf-pdf').onclick = () => exportarRelatorioPDF('Relatório de Faturamento', COLUNAS_REL_FATURAMENTO, ultimaLista.map(linhaRelFaturamento))
+    // ---------------------------------------------------------------
+    if (m === 'pedido') {
+      let q = db.from('pedido').select(`
+        id, numero, quantidade_t, valor_total, status, situacao_pagamento, data_pedido, vencimento,
+        cliente:cliente_id ( razao_social, nome_fantasia ), vendedor:vendedor_id ( nome ), produto:produto_id ( nome )
+      `).gte('data_pedido', deVal).lte('data_pedido', ateVal).order('data_pedido', { ascending: false }).limit(3000)
+      if (situacaoVal) q = q.eq('situacao_pagamento', situacaoVal)
+      const { data, error } = await q
+      if (error) { $('#rf-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+      let lista = relFiltrarTexto(data || [], nomeVal, p => [p.numero, p.cliente?.nome_fantasia, p.cliente?.razao_social, p.vendedor?.nome, p.produto?.nome])
+      lista = relFiltrarValor(lista, vminVal, vmaxVal, p => p.valor_total)
+      if (!lista.length) { $('#rf-resultado').innerHTML = `<p class="vazio">Nenhum pedido encontrado.</p>`; return }
+
+      $('#rf-resultado').innerHTML = cabecalho(lista.length, `pedido${lista.length > 1 ? 's' : ''}`) + tabela(`
+        <thead><tr><th>Número</th><th>Cliente</th><th>Vendedor</th><th>Produto</th><th class="num">Quantidade (t)</th><th class="num">Valor total</th><th>Situação pagamento</th><th>Status</th><th>Data pedido</th><th>Vencimento</th></tr></thead>
+        <tbody>${lista.map(p => `<tr>
+          <td>${esc(p.numero ?? '—')}</td>
+          <td>${esc(nomeCliente_(p.cliente))}</td>
+          <td>${esc(p.vendedor?.nome ?? '—')}</td>
+          <td>${esc(p.produto?.nome ?? '—')}</td>
+          <td class="num">${p.quantidade_t ?? '—'}</td>
+          <td class="num">${p.valor_total != null ? `R$ ${fmtNum(p.valor_total)}` : '—'}</td>
+          <td><span class="chip">${esc(ROTULO_SITUACAO_PAGAMENTO[p.situacao_pagamento] ?? p.situacao_pagamento ?? '—')}</span></td>
+          <td>${esc(ROTULO_STATUS_PEDIDO[p.status] ?? p.status ?? '—')}</td>
+          <td>${fmtData(p.data_pedido)}</td>
+          <td>${p.vencimento ? fmtData(p.vencimento) : '—'}</td>
+        </tr>`).join('')}</tbody>`)
+      exportar = { arquivo: 'relatorio_faturamento_pedidos', titulo: 'Faturamento por pedido',
+                   colunas: COLUNAS_REL_FATURAMENTO, linhas: lista.map(linhaRelFaturamento) }
+
+    // ---------------------------------------------------------------
+    } else {
+      const { data, error } = await db.from('carregamento').select(`
+        id, data_carregamento, numero_nf, quantidade_t, preco_unitario, valor_nf, status,
+        motorista, uf_destino, pedido_id,
+        pedido:pedido_id ( numero, quantidade_t, valor_total, data_pedido ),
+        cliente:cliente_id ( razao_social, nome_fantasia ),
+        produto:produto_id ( nome ), vendedor:vendedor_id ( nome ), veiculo:veiculo_id ( placa ),
+        veiculoCliente:veiculo_cliente_id ( placa )
+      `).gte('data_carregamento', porCarregamento() ? deVal : '1900-01-01')
+        .lte('data_carregamento', porCarregamento() ? ateVal : '2999-12-31')
+        .neq('status', 'CANCELADO')
+        .order('data_carregamento', { ascending: false }).limit(5000)
+      if (error) { $('#rf-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+      let cargas = data || []
+
+      // ----- uma linha por carregamento -----
+      if (m === 'lancamento') {
+        cargas = relFiltrarTexto(cargas, nomeVal, c => [c.numero_nf, c.pedido?.numero, c.cliente?.nome_fantasia,
+          c.cliente?.razao_social, c.vendedor?.nome, c.produto?.nome, c.motorista, c.veiculo?.placa])
+        cargas = relFiltrarValor(cargas, vminVal, vmaxVal, c => c.valor_nf)
+        if (!cargas.length) { $('#rf-resultado').innerHTML = `<p class="vazio">Nenhum lançamento nesse período.</p>`; return }
+        const t = cargas.reduce((s, c) => s + Number(c.quantidade_t || 0), 0)
+        const v = cargas.reduce((s, c) => s + Number(c.valor_nf || 0), 0)
+
+        $('#rf-resultado').innerHTML =
+          cabecalho(cargas.length, `lançamento${cargas.length > 1 ? 's' : ''} · ${fmtNum(t)} t · R$ ${fmtNum(v)}`) + tabela(`
+          <thead><tr><th>Data</th><th>NF</th><th>Pedido</th><th>Cliente</th><th>Produto</th><th>Vendedor</th>
+            <th class="num">Qtd (t)</th><th class="num">Preço unit.</th><th class="num">Valor NF</th>
+            <th>Veículo</th><th>Motorista</th><th>UF</th><th>Status</th></tr></thead>
+          <tbody>${cargas.map(c => `<tr>
+            <td>${fmtData(c.data_carregamento)}</td>
+            <td>${esc(c.numero_nf ?? '—')}</td>
+            <td class="texto-dim2">${esc(c.pedido?.numero ?? '—')}</td>
+            <td>${esc(nomeCliente_(c.cliente))}</td>
+            <td>${esc(c.produto?.nome ?? '—')}</td>
+            <td class="texto-dim">${esc(c.vendedor?.nome ?? '—')}</td>
+            <td class="num">${c.quantidade_t ?? '—'}</td>
+            <td class="num">${c.preco_unitario != null ? fmtNum(c.preco_unitario) : '—'}</td>
+            <td class="num">${c.valor_nf != null ? `R$ ${fmtNum(c.valor_nf)}` : '—'}</td>
+            <td class="texto-dim">${esc(placaDoCarregamento(c))}</td>
+            <td class="texto-dim">${esc(c.motorista ?? '—')}</td>
+            <td>${esc(c.uf_destino ?? '—')}</td>
+            <td><span class="chip">${esc(c.status ?? '—')}</span></td>
+          </tr>`).join('')}</tbody>`)
+        exportar = { arquivo: 'relatorio_faturamento_lancamentos', titulo: 'Faturamento por lançamento',
+                     colunas: COLUNAS_REL_CARREGAMENTO, linhas: cargas.map(linhaRelCarregamento) }
+
+      // ----- uma linha por dia -----
+      } else if (m === 'diario') {
+        cargas = relFiltrarTexto(cargas, nomeVal, c => [c.numero_nf, c.pedido?.numero, c.cliente?.nome_fantasia,
+          c.cliente?.razao_social, c.vendedor?.nome, c.produto?.nome])
+        const porDia = new Map()
+        for (const c of cargas) {
+          const d = c.data_carregamento
+          if (!porDia.has(d)) porDia.set(d, { data: d, n: 0, pedidos: new Set(), clientes: new Set(), t: 0, v: 0 })
+          const x = porDia.get(d)
+          x.n++; x.t += Number(c.quantidade_t || 0); x.v += Number(c.valor_nf || 0)
+          if (c.pedido_id) x.pedidos.add(c.pedido_id)
+          x.clientes.add(nomeCliente_(c.cliente))
+        }
+        let dias = [...porDia.values()].sort((a, b) => b.data.localeCompare(a.data))
+        dias = relFiltrarValor(dias, vminVal, vmaxVal, d => d.v)
+        if (!dias.length) { $('#rf-resultado').innerHTML = `<p class="vazio">Nenhum dia com carregamento nesse período.</p>`; return }
+        const tt = dias.reduce((s, d) => s + d.t, 0), vv = dias.reduce((s, d) => s + d.v, 0)
+
+        $('#rf-resultado').innerHTML =
+          cabecalho(dias.length, `dia${dias.length > 1 ? 's' : ''} com carregamento · ${fmtNum(tt)} t · R$ ${fmtNum(vv)}`) + tabela(`
+          <thead><tr><th>Data</th><th class="num">Lançamentos</th><th class="num">Pedidos</th><th>Clientes</th>
+            <th class="num">Quantidade (t)</th><th class="num">Valor NF</th></tr></thead>
+          <tbody>${dias.map(d => `<tr>
+            <td>${fmtData(d.data)}</td>
+            <td class="num">${d.n}</td>
+            <td class="num">${d.pedidos.size}</td>
+            <td class="texto-dim">${esc([...d.clientes].slice(0, 3).join(', '))}${d.clientes.size > 3 ? ` +${d.clientes.size - 3}` : ''}</td>
+            <td class="num">${fmtNum(d.t)}</td>
+            <td class="num">R$ ${fmtNum(d.v)}</td>
+          </tr>`).join('')}</tbody>`)
+        exportar = { arquivo: 'relatorio_faturamento_diario', titulo: 'Faturamento por dia',
+                     colunas: COLUNAS_REL_DIARIO,
+                     linhas: dias.map(d => [fmtData(d.data), d.n, d.pedidos.size, [...d.clientes].join(', '), fmtNum(d.t), `R$ ${fmtNum(d.v)}`]) }
+
+      // ----- o pedido e o que já saiu contra ele -----
+      } else {
+        let q = db.from('pedido').select(`
+          id, numero, quantidade_t, valor_total, status, situacao_pagamento, data_pedido,
+          cliente:cliente_id ( razao_social, nome_fantasia ), vendedor:vendedor_id ( nome ), produto:produto_id ( nome )
+        `).gte('data_pedido', deVal).lte('data_pedido', ateVal).order('data_pedido', { ascending: false }).limit(3000)
+        const { data: pedidos, error: eP } = await q
+        if (eP) { $('#rf-resultado').innerHTML = `<p class="vazio">${esc(eP.message)}</p>`; return }
+
+        const porPedido = new Map()
+        for (const c of cargas) {
+          if (!c.pedido_id) continue
+          if (!porPedido.has(c.pedido_id)) porPedido.set(c.pedido_id, [])
+          porPedido.get(c.pedido_id).push(c)
+        }
+
+        let lista = relFiltrarTexto(pedidos || [], nomeVal, p => [p.numero, p.cliente?.nome_fantasia, p.cliente?.razao_social, p.vendedor?.nome, p.produto?.nome])
+        lista = relFiltrarValor(lista, vminVal, vmaxVal, p => p.valor_total)
+        if (!lista.length) { $('#rf-resultado').innerHTML = `<p class="vazio">Nenhum pedido encontrado.</p>`; return }
+
+        const resumo = p => {
+          const cs = (porPedido.get(p.id) || []).sort((a, b) => (a.data_carregamento || '').localeCompare(b.data_carregamento || ''))
+          const t = cs.reduce((s, c) => s + Number(c.quantidade_t || 0), 0)
+          const v = cs.reduce((s, c) => s + Number(c.valor_nf || 0), 0)
+          return { cs, t, v, saldo: Number(p.quantidade_t || 0) - t }
+        }
+
+        $('#rf-resultado').innerHTML = cabecalho(lista.length, `pedido${lista.length > 1 ? 's' : ''} com o que já saiu`) + tabela(`
+          <thead><tr><th>Pedido</th><th>Cliente</th><th>Produto</th><th>Data pedido</th>
+            <th class="num">Pedido (t)</th><th class="num">Carregado (t)</th><th class="num">Saldo (t)</th>
+            <th class="num">Lanç.</th><th class="num">Valor faturado</th></tr></thead>
+          <tbody>${lista.map(p => {
+            const r = resumo(p)
+            return `<tr>
+              <td><b>${esc(p.numero ?? '—')}</b></td>
+              <td>${esc(nomeCliente_(p.cliente))}</td>
+              <td>${esc(p.produto?.nome ?? '—')}</td>
+              <td>${fmtData(p.data_pedido)}</td>
+              <td class="num">${p.quantidade_t ?? '—'}</td>
+              <td class="num">${fmtNum(r.t)}</td>
+              <td class="num ${r.saldo > 0.001 ? 'badge-alerta' : 'badge-bom'}">${fmtNum(r.saldo)}</td>
+              <td class="num">${r.cs.length}</td>
+              <td class="num">R$ ${fmtNum(r.v)}</td>
+            </tr>` + r.cs.map(c => `<tr class="texto-dim2" style="font-size:12px;">
+              <td></td>
+              <td colspan="3" style="padding-left:18px;">↳ ${fmtData(c.data_carregamento)}
+                · NF ${esc(c.numero_nf ?? '—')} · ${esc(placaDoCarregamento(c))}
+                ${c.motorista ? '· ' + esc(c.motorista) : ''}</td>
+              <td></td>
+              <td class="num">${c.quantidade_t ?? '—'}</td>
+              <td></td><td></td>
+              <td class="num">${c.valor_nf != null ? fmtNum(c.valor_nf) : '—'}</td>
+            </tr>`).join('')
+          }).join('')}</tbody>`)
+
+        exportar = { arquivo: 'relatorio_faturamento_pedido_lancamentos', titulo: 'Pedido e lançamentos gerados',
+          colunas: COLUNAS_REL_GERADO,
+          linhas: lista.map(p => {
+            const r = resumo(p)
+            return [p.numero ?? '—', nomeCliente_(p.cliente), p.produto?.nome ?? '—', fmtData(p.data_pedido),
+              p.quantidade_t ?? '—', fmtNum(r.t), fmtNum(r.saldo), r.cs.length,
+              p.valor_total != null ? `R$ ${fmtNum(p.valor_total)}` : '—', `R$ ${fmtNum(r.v)}`]
+          }) }
+      }
+    }
+
+    $('#rf-excel').onclick = () => exportarRelatorioExcel(exportar.arquivo, exportar.colunas, exportar.linhas)
+    $('#rf-pdf').onclick = () => exportarRelatorioPDF(exportar.titulo, exportar.colunas, exportar.linhas)
   }
+
+  alvo.querySelectorAll('[name="rf-modo"]').forEach(r => {
+    r.onchange = () => { ajustarFiltros(); buscar() }
+  })
   $('#rf-buscar').onclick = buscar
+  ajustarFiltros()
   buscar()
 }
 
