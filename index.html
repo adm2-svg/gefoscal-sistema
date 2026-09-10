@@ -22859,37 +22859,38 @@ function telaBaixa (s, contas, categorias, centros) {
     if (valor === null) { aviso('Informe o valor pago.'); return }
 
     const btn = q('#b-confirmar'); btn.disabled = true; btn.textContent = 'Registrando...'
-    let lancamentoId = null
 
-    if (q('#b-lancar').checked) {
-      const { data: lanc, error: eL } = await db.from('lancamento_financeiro').insert({
-        tipo: 'SAIDA',
-        descricao: `Compra: ${s.produto_servico}`,
-        valor,
-        data_lancamento: q('#b-data').value || new Date().toISOString().slice(0, 10),
-        conta_id: q('#b-conta').value || null,
-        categoria_id: q('#b-categoria').value || null,
-        centro_custo_id: q('#b-centro').value || null,
-        situacao: 'EFETIVADO',
-        observacao: `Solicitação de ${s.solicitante?.nome ?? '—'}`,
-        registrado_por: PERFIL.pessoaId
-      }).select('id').single()
+    // Uma chamada só, e o banco faz as duas coisas na mesma transação:
+    // cria o lançamento e muda o status.
+    //
+    // Antes eram dois passos soltos daqui, e isso escondia um problema feio.
+    // A tela de baixa é liberada por quem edita o FINANCEIRO, mas mudar o
+    // status mexe em solicitacao_compra, cuja RLS pede papel de COMPRAS.
+    // Quem edita só o Financeiro conseguia criar o lançamento e era barrado
+    // no status -- e a RLS não devolve erro, ela some com a linha: voltava
+    // "sucesso, zero linhas". A tela fechava e a baixa parecia feita.
+    // Resultado em 3 e 4 de setembro: 8 compras já pagas presas na fila e,
+    // como parecia não funcionar, retentativas duplicando o lançamento.
+    //
+    // Agora, se a baixa não puder ser gravada, a função levanta exceção e o
+    // lançamento não sobra: não existe mais o meio-termo que gerava órfão.
+    const { data: baixada, error } = await db.rpc('compra_dar_baixa', {
+      p_id: s.id,
+      p_valor: valor,
+      p_pago_em: new Date(q('#b-data').value || Date.now()).toISOString(),
+      p_comprovante_link: q('#b-comp').value.trim() || null,
+      p_lancar: q('#b-lancar').checked,
+      p_conta_id: q('#b-conta').value || null,
+      p_categoria_id: q('#b-categoria').value || null,
+      p_centro_id: q('#b-centro').value || null
+    })
 
-      if (eL) { aviso('Não deu para lançar no financeiro: ' + eL.message)
-        btn.disabled = false; btn.textContent = 'Confirmar baixa'; return }
-      lancamentoId = lanc.id
+    if (error || !baixada) {
+      aviso(error?.message ||
+        'A baixa não foi gravada — o status da compra continua como estava.')
+      btn.disabled = false; btn.textContent = 'Confirmar baixa'; return
     }
-
-    const { error } = await db.from('solicitacao_compra').update({
-      status: 'PAGA',
-      pago_por_id: PERFIL.pessoaId,
-      pago_em: new Date(q('#b-data').value || Date.now()).toISOString(),
-      valor_pago: valor,
-      comprovante_link: q('#b-comp').value.trim() || null,
-      lancamento_id: lancamentoId
-    }).eq('id', s.id)
-
-    if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Confirmar baixa'; return }
+    const lancamentoId = baixada.lancamento_id ?? null
 
     // se essa peça foi pedida de dentro de uma OS de manutenção ("Pedir peça
     // pro Compras"), o valor pago soma no valor_pecas daquela OS — dali o
@@ -23708,13 +23709,21 @@ function telaLancamento (l, acao) {
       })
       if (error) { aviso(error.message); btn.disabled = false; return }
 
-      // a compra volta para "aprovada a pagar": ela nunca foi paga de fato
+      // a compra volta para "aprovada a pagar": ela nunca foi paga de fato.
+      // Vai pela função do banco pelo mesmo motivo da baixa: update direto
+      // aqui é barrado em silêncio pra quem edita só o Financeiro, e aí o
+      // lançamento sumia e a compra ficava PAGA sem lançamento nenhum.
       if (compras?.length) {
-        await db.from('solicitacao_compra').update({
-          status: 'APROVADA', pago_em: null, valor_pago: null, pago_por_id: null
-        }).in('id', compras.map(c => c.id))
-        alert(`Lançamento excluído.\n\n${compras.length} compra(s) voltaram para "aprovada a pagar":\n`
-          + compras.map(c => `· ${c.numero} — ${c.produto_servico}`).join('\n'))
+        const { data: reabertas, error: eR } = await db.rpc('compra_desfazer_baixa',
+          { p_lancamento_id: l.id })
+        if (eR || !reabertas) {
+          alert('Lançamento excluído, mas as compras ligadas a ele NÃO voltaram para '
+            + '"aprovada a pagar":\n' + (eR?.message ?? 'nenhuma linha foi alterada')
+            + '\n\nAvise quem cuida do sistema antes de dar baixa nelas de novo.')
+        } else {
+          alert(`Lançamento excluído.\n\n${reabertas} compra(s) voltaram para "aprovada a pagar":\n`
+            + compras.map(c => `· ${c.numero} — ${c.produto_servico}`).join('\n'))
+        }
       }
 
       fechar(); abrirFinanceiro('lancamentos', true)
