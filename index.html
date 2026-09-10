@@ -22986,9 +22986,17 @@ async function finAPagar (alvo, editavel) {
   const hoje = new Date().toISOString().slice(0, 10)
   const em7 = new Date(Date.now() + 7 * 864e5).toISOString().slice(0, 10)
 
-  const { data, error } = await db.from('contas_a_pagar').select('*')
-    .neq('origem', 'compra')
-    .order('vencimento', { nullsFirst: false })
+  // os cadastros vêm junto porque a baixa do título gera lançamento, e o
+  // lançamento precisa de conta, categoria e centro de custo
+  const [{ data, error }, { data: contas }, { data: categorias }, { data: centros }] =
+    await Promise.all([
+      db.from('contas_a_pagar').select('*')
+        .neq('origem', 'compra')
+        .order('vencimento', { nullsFirst: false }),
+      db.from('conta_financeira').select('id,nome').order('nome'),
+      db.from('categoria_financeira').select('id,nome,tipo').order('nome'),
+      db.from('centro_de_custo').select('id,nome').order('nome')
+    ])
   if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
 
   const tudo = data || []
@@ -23000,10 +23008,14 @@ async function finAPagar (alvo, editavel) {
 
   $('#kpis').innerHTML = ''
 
-  const tabela = (lista, vazio) => `
+  // comBaixa só nos títulos: lançamento pendente se efetiva na aba
+  // Lançamentos, e compra se baixa na aba Compras. Cada coisa num lugar só.
+  const comAcao = editavel
+  const tabela = (lista, vazio, comBaixa = false) => `
     <div class="panel" style="padding:0;"><div class="tabela-scroll">
       <table><thead><tr>
         <th>Vencimento</th><th>Documento</th><th>Descrição</th><th>Centro</th><th class="num">Valor</th>
+        ${comBaixa && comAcao ? '<th></th>' : ''}
       </tr></thead><tbody>
         ${lista.map(x => {
           const atrasado = x.vencimento && x.vencimento < hoje
@@ -23013,8 +23025,11 @@ async function finAPagar (alvo, editavel) {
             <td>${esc((x.descricao ?? '').slice(0, 60))}</td>
             <td class="texto-dim">${esc(x.setor ?? '—')}</td>
             <td class="num">R$ ${fmtNum(x.valor)}</td>
+            ${comBaixa && comAcao
+              ? `<td class="num"><button class="btn mini" data-baixa-titulo="${x.id}">dar baixa</button></td>`
+              : ''}
           </tr>`
-        }).join('') || `<tr><td colspan="5" class="vazio">${vazio}</td></tr>`}
+        }).join('') || `<tr><td colspan="${comBaixa && comAcao ? 6 : 5}" class="vazio">${vazio}</td></tr>`}
       </tbody></table>
     </div></div>`
 
@@ -23038,13 +23053,138 @@ async function finAPagar (alvo, editavel) {
       <h3 style="font-family:var(--serif);font-size:17px;">Títulos do relatório contábil</h3>
       <span class="texto-dim2" style="font-size:12px;">${titulos.length} · R$ ${fmtNum(soma(titulos))}</span>
     </div>
-    ${tabela(titulos, 'Nenhum título em aberto. Importe o relatório em Cadastros.')}
+    ${tabela(titulos, 'Nenhum título em aberto. Importe o relatório em Cadastros.', true)}
 
     <div class="cabeca-secao" style="margin-top:26px;">
       <h3 style="font-family:var(--serif);font-size:17px;">Lançamentos pendentes</h3>
       <span class="texto-dim2" style="font-size:12px;">${manuais.length} · R$ ${fmtNum(soma(manuais))}</span>
     </div>
     ${tabela(manuais, 'Nenhum lançamento pendente de efetivação.')}`
+
+  alvo.querySelectorAll('[data-baixa-titulo]').forEach(b => {
+    b.onclick = () => telaBaixaTitulo(titulos.find(x => x.id === b.dataset.baixaTitulo),
+                                      contas || [], categorias || [], centros || [])
+  })
+}
+
+// ----- Baixa de título do relatório contábil -----
+//
+// Até esta tela existir, um título importado nascia ABERTO e ficava ABERTO
+// pra sempre: não havia nenhum UPDATE em titulo_externo no sistema. A conta
+// era paga de verdade, o dinheiro saía, e a aba continuava cobrando.
+//
+// Segue a mesma forma da baixa de Compras de propósito: mesmos campos, mesma
+// ordem, e o lançamento do Financeiro sai junto — assim a despesa entra no
+// fluxo de caixa e nos relatórios do mês, em vez de só sumir da lista.
+function telaBaixaTitulo (t, contas, categorias, centros) {
+  if (!t) return
+  const despesas = categorias.filter(c => c.tipo === 'DESPESA')
+  const hoje = new Date().toISOString().slice(0, 10)
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal">
+      <h3>Dar baixa no título</h3>
+      <div class="ficha" style="margin-bottom:16px;">
+        <div class="item"><div class="rot">Documento</div>
+          <div class="val">${esc(t.documento ?? '—')}</div></div>
+        <div class="item"><div class="rot">Fornecedor</div>
+          <div class="val">${esc(t.descricao ?? '—')}</div></div>
+        <div class="item"><div class="rot">Vencimento</div>
+          <div class="val">${t.vencimento ? fmtData(t.vencimento) : '—'}</div></div>
+        <div class="item"><div class="rot">Valor do título</div>
+          <div class="val">R$ ${fmtNum(t.valor)}</div></div>
+      </div>
+
+      <div class="form-grade">
+        <div class="campo"><label>Valor pago (R$) *</label>
+          <input id="bt-valor" inputmode="decimal" value="${t.valor ?? ''}"></div>
+        <div class="campo"><label>Data do pagamento</label>
+          <input type="date" id="bt-data" value="${hoje}"></div>
+        <div class="campo"><label>Conta</label>
+          <select id="bt-conta"><option value="">—</option>
+            ${contas.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Categoria</label>
+          <select id="bt-categoria"><option value="">—</option>
+            ${despesas.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('')}</select></div>
+        <div class="campo"><label>Centro de custo</label>
+          <select id="bt-centro"><option value="">—</option>
+            ${centros.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('')}</select></div>
+      </div>
+
+      <label class="linha-modulo" style="margin-top:12px;">
+        <input type="checkbox" id="bt-lancar" checked>
+        <span class="nome">Gerar lançamento no Financeiro</span></label>
+      <p class="aviso" style="margin-top:8px;">
+        Desmarque só se essa despesa já entrou no Financeiro por outro caminho,
+        senão o mesmo gasto conta duas vezes no mês.</p>
+
+      <div class="acoes">
+        <button class="btn" id="bt-confirmar">Confirmar baixa</button>
+        <button class="btn-secundario" id="bt-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="bt-recado"></div>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#bt-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const aviso = txt => {
+    const el = q('#bt-recado'); el.textContent = txt; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  q('#bt-confirmar').onclick = async () => {
+    const valor = numeroBR(q('#bt-valor').value)
+    if (valor === null) { aviso('Informe o valor pago.'); return }
+
+    const btn = q('#bt-confirmar'); btn.disabled = true; btn.textContent = 'Registrando...'
+    const dataPg = q('#bt-data').value || hoje
+    let lancamentoId = null
+
+    if (q('#bt-lancar').checked) {
+      const { data: lanc, error: eL } = await db.from('lancamento_financeiro').insert({
+        tipo: 'SAIDA',
+        descricao: `Título ${t.documento ?? ''} — ${t.descricao ?? ''}`.trim(),
+        valor,
+        data_lancamento: dataPg,
+        conta_id: q('#bt-conta').value || null,
+        categoria_id: q('#bt-categoria').value || null,
+        centro_custo_id: q('#bt-centro').value || null,
+        situacao: 'EFETIVADO',
+        observacao: 'Baixa de título do relatório contábil',
+        registrado_por: PERFIL.pessoaId
+      }).select('id').single()
+
+      if (eL) { aviso('Não deu para lançar no financeiro: ' + eL.message)
+        btn.disabled = false; btn.textContent = 'Confirmar baixa'; return }
+      lancamentoId = lanc.id
+    }
+
+    // o .select() no fim não é enfeite: sem ele, um UPDATE que a RLS barra
+    // volta "sem erro" e com zero linhas, e a baixa parece ter dado certo
+    // sem nada ter mudado. Conferindo a linha de volta, isso vira erro.
+    const { data: atualizado, error } = await db.from('titulo_externo').update({
+      situacao: 'PAGO',
+      valor_pago: valor,
+      pago_em: dataPg,
+      pago_por_id: PERFIL.pessoaId,
+      lancamento_id: lancamentoId
+    }).eq('id', t.id).select('id')
+
+    if (error || !atualizado?.length) {
+      aviso(error?.message ||
+        'A baixa não foi gravada: o título não foi encontrado ou você não tem permissão de editar o Financeiro.')
+      btn.disabled = false; btn.textContent = 'Confirmar baixa'; return
+    }
+
+    fechar()
+    abrirFinanceiro('pagar', true)
+  }
 }
 
 // ----- Financeiro › Compras -----
