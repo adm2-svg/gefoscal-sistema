@@ -17916,10 +17916,13 @@ async function paginaSdrWhatsapp () {
     ['regioes', 'Regiões'], ['treinar', 'Treinar IA'],
     ['documentos', 'Documentos'], ['links', 'Links'], ['analytics', 'Analytics']]
   area.innerHTML = `
+    <div id="sdr-controle-global"></div>
     <div class="subabas">
       ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
     </div>
     <div id="sub-sdr"></div>`
+
+  montarControleGlobalSdr($('#sdr-controle-global'))
 
   area.querySelectorAll('.subabas button').forEach(b => {
     b.onclick = () => {
@@ -17928,6 +17931,65 @@ async function paginaSdrWhatsapp () {
     }
   })
   abrirSubAbaSdr('leads')
+}
+
+// ---------------------------------------------------------------
+// Interruptor geral do SDR IA — Ativo / Pausado / Parado. Fica fixo no
+// topo do módulo inteiro (não muda ao trocar de sub-aba) porque é um
+// controle de emergência: precisa estar sempre à mão.
+//   Ativo   -> tudo funcionando normal (disparo + respostas)
+//   Pausado -> para de iniciar conversa nova, mas quem já está no meio
+//              de uma continua sendo respondido (não deixa ninguém na mão)
+//   Parado  -> para tudo, inclusive quem já está conversando —
+//              atendimento 100% manual até religar
+// Lido pelas Edge Functions sdr-canal-qr e sdr-whatsapp-webhook antes de
+// disparar ou responder (tabela sdr_config).
+// ---------------------------------------------------------------
+const ROTULO_STATUS_SDR_GLOBAL = {
+  ativo: { texto: '✅ Ativo', cor: 'var(--good-text)' },
+  pausado: { texto: '⏸️ Pausado', cor: 'var(--warn-text)' },
+  parado: { texto: '⏹️ Parado', cor: 'var(--critico-text)' }
+}
+
+async function montarControleGlobalSdr (alvo) {
+  if (!alvo) return
+  const { data: cfg, error } = await db.from('sdr_config')
+    .select('status,atualizado_em,atualizado_por,pessoa:atualizado_por(nome)').eq('id', true).maybeSingle()
+  if (faltaMigracao(error)) { alvo.innerHTML = ''; return }
+  const status = cfg?.status || 'ativo'
+  const info = ROTULO_STATUS_SDR_GLOBAL[status]
+
+  alvo.innerHTML = `
+    <div class="panel" style="padding:12px 16px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;border-left:4px solid ${info.cor};">
+      <div>
+        <span style="font-weight:700;color:${info.cor};">${info.texto}</span>
+        <span class="texto-dim2" style="font-size:11.5px;margin-left:8px;">
+          ${status === 'ativo' ? 'Disparando e respondendo normalmente.'
+            : status === 'pausado' ? 'Sem disparo novo — quem já está conversando continua sendo respondido.'
+            : 'Nada responde agora, nem quem já está conversando — atendimento 100% manual.'}
+          ${cfg?.atualizado_em ? ` · desde ${fmtQuando(cfg.atualizado_em)}${cfg.pessoa?.nome ? ' por ' + esc(cfg.pessoa.nome) : ''}` : ''}</span>
+      </div>
+      <div style="display:flex;gap:6px;">
+        <button class="btn-secundario mini" id="sdrg-ativo" ${status === 'ativo' ? 'disabled' : ''}>▶️ Ativo</button>
+        <button class="btn-secundario mini" id="sdrg-pausado" ${status === 'pausado' ? 'disabled' : ''}>⏸️ Pausar</button>
+        <button class="btn-secundario mini" id="sdrg-parado" style="color:var(--critico-text);" ${status === 'parado' ? 'disabled' : ''}>⏹️ Parar</button>
+      </div>
+    </div>`
+
+  const mudar = async novo => {
+    const confirmacoes = {
+      parado: 'Parar o SDR IA por completo? Ninguém mais recebe resposta automática, nem quem já está conversando, até religar.',
+      pausado: 'Pausar novos disparos? Quem já está conversando continua sendo respondido normalmente.',
+      ativo: 'Reativar o SDR IA (disparo + respostas normais)?'
+    }
+    if (!confirm(confirmacoes[novo])) return
+    const { error: e2 } = await db.from('sdr_config').update({ status: novo, atualizado_por: PERFIL.pessoaId }).eq('id', true)
+    if (e2) { alert('Não consegui mudar: ' + e2.message); return }
+    montarControleGlobalSdr(alvo)
+  }
+  $('#sdrg-ativo')?.addEventListener('click', () => mudar('ativo'))
+  $('#sdrg-pausado')?.addEventListener('click', () => mudar('pausado'))
+  $('#sdrg-parado')?.addEventListener('click', () => mudar('parado'))
 }
 
 function abrirSubAbaSdr (sub) {
@@ -19204,12 +19266,16 @@ async function abrirLista (lista, canais, vendedores, aoFechar) {
         <div class="panel" style="padding:0;margin-bottom:16px;max-height:44vh;overflow:auto;">
           <table><thead><tr>
             <th>Nome</th><th>Telefone</th><th>Como o robô compara</th>
-            <th>Situação</th><th></th>
+            <th>Abordagem</th><th>Situação</th><th></th>
           </tr></thead><tbody>
             ${contatos.map(c => `<tr>
               <td>${esc(c.nome || '—')}</td>
               <td>${esc(c.telefone)}</td>
               <td class="texto-dim2" style="font-size:12px;">${esc(c.telefone_norm || '—')}</td>
+              <td>${c.situacao === 'aguardando'
+                    ? `<button class="btn-secundario mini" data-alternar-ligacao="${c.id}" data-atual="${c.contato_telefonico_tentado ? '1' : '0'}"
+                         title="Clique pra alternar">${c.contato_telefonico_tentado ? '☎️ já tentou ligar' : '💬 direto'}</button>`
+                    : `<span class="texto-dim2" style="font-size:11.5px;">${c.contato_telefonico_tentado ? '☎️ já tentou ligar' : '💬 direto'}</span>`}</td>
               <td>${c.situacao === 'respondeu'
                     ? '<span class="badge-bom">respondeu</span>'
                     : c.situacao === 'erro'
@@ -19218,7 +19284,7 @@ async function abrirLista (lista, canais, vendedores, aoFechar) {
                   ${c.enviado_em ? `<br><span class="texto-dim2" style="font-size:11px;">${esc(fmtQuando(c.enviado_em) || '')}</span>` : ''}</td>
               <td style="text-align:right;">
                 <button class="btn-secundario mini" data-tirar="${c.id}">tirar</button></td>
-            </tr>`).join('') || `<tr><td colspan="5" class="vazio">
+            </tr>`).join('') || `<tr><td colspan="6" class="vazio">
               Nenhum contato ainda. Cole a lista abaixo.</td></tr>`}
           </tbody></table>
         </div>
@@ -19228,6 +19294,14 @@ async function abrirLista (lista, canais, vendedores, aoFechar) {
           <p class="texto-dim2" style="font-size:12px;margin:0 0 8px;">
             Um por linha. Aceita <b>nome; telefone</b> ou só o telefone. O formato não importa —
             o robô normaliza sozinho.</p>
+          <div style="display:flex;gap:16px;margin-bottom:8px;">
+            <label style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:12.5px;">
+              <input type="radio" name="sl-abordagem" id="sl-abordagem-direto" checked> 💬 Pode contatar diretamente</label>
+            <label style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:12.5px;">
+              <input type="radio" name="sl-abordagem" id="sl-abordagem-ligacao"> ☎️ Já tentou ligação, pode contatar</label>
+          </div>
+          <p class="texto-dim2" style="font-size:11px;margin:0 0 8px;">
+            No segundo caso, a IA abre a conversa mencionando que a Bianca tentou ligar antes.</p>
           <textarea id="sl-colar" style="min-height:120px;font-family:inherit;font-size:13px;"
             placeholder="Carlos Cardoso; 5562981423428&#10;Eraldo Pereira Maia; (11) 96816-9842&#10;5517997392894"></textarea>
           <div class="acoes"><button class="btn mini" id="sl-add">Acrescentar</button>
@@ -19263,9 +19337,23 @@ async function abrirLista (lista, canais, vendedores, aoFechar) {
       }
     })
 
+    // Bianca tentou ligar e não conseguiu? Marca aqui — sem precisar
+    // recolar o contato. Só disponível enquanto ainda está "na fila"
+    // (depois de enviado, a abertura já foi feita do jeito que estava).
+    fundo.querySelectorAll('[data-alternar-ligacao]').forEach(b => {
+      b.onclick = async () => {
+        const novoValor = b.dataset.atual !== '1'
+        const { error } = await db.from('sdr_lista_contato')
+          .update({ contato_telefonico_tentado: novoValor }).eq('id', b.dataset.alternarLigacao)
+        if (error) { alert('Não consegui marcar: ' + error.message); return }
+        recarregar()
+      }
+    })
+
     q('#sl-add').onclick = async () => {
       const linhas = q('#sl-colar').value.split('\n').map(x => x.trim()).filter(Boolean)
       if (!linhas.length) return
+      const jaTentouLigacao = q('#sl-abordagem-ligacao').checked
       const jaTem = new Set(contatos.map(c => c.telefone_norm))
       const novos = []
       const problemas = []
@@ -19277,7 +19365,7 @@ async function abrirLista (lista, canais, vendedores, aoFechar) {
         if (!norm || norm.length < 12) { problemas.push(linha + ' (telefone não parece válido)'); continue }
         if (jaTem.has(norm)) { problemas.push(linha + ' (já está na lista)'); continue }
         jaTem.add(norm)
-        novos.push({ lista_id: lista.id, telefone, nome })
+        novos.push({ lista_id: lista.id, telefone, nome, contato_telefonico_tentado: jaTentouLigacao })
       }
       if (novos.length) {
         const { error } = await db.from('sdr_lista_contato').insert(novos)
