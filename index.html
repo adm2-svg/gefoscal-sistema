@@ -22367,6 +22367,39 @@ function diasAging (venc) {
 }
 
 const PAG_FORMAS = { DINHEIRO: 'dinheiro', TRANSFERENCIA: 'transferência', BEM: 'bem (troca)', OUTRO: 'outro' }
+
+// Condições de pagamento. `meses` diz em quantos meses depois da data do
+// pedido cai cada parcela — escolher uma condição gera as parcelas já
+// divididas, e daí sai o vencimento do pedido. 'OUTRA' (tratada na tela)
+// libera texto livre e não gera parcela nenhuma: aí o vencimento é
+// digitado na mão.
+// Somar mês em JavaScript tem uma armadilha: 31/01 + 1 mês vira 03/03,
+// porque 31/02 não existe e a data "transborda". Num pedido do dia 31 com
+// 30/60/90 isso gerava 03/03, 31/03 e 01/05 — parcela fora de ordem e
+// prazo errado. Aqui a data é grudada no último dia do mês de destino
+// quando o dia original não existe lá.
+function somarMesesISO (iso, meses) {
+  const [a, m, d] = String(iso).split('-').map(Number)
+  const alvoMes = m - 1 + meses
+  const ano = a + Math.floor(alvoMes / 12)
+  const mes = ((alvoMes % 12) + 12) % 12
+  const ultimoDia = new Date(Date.UTC(ano, mes + 1, 0)).getUTCDate()
+  const dia = Math.min(d, ultimoDia)
+  return `${ano}-${String(mes + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`
+}
+
+const CONDICOES_PAGAMENTO = [
+  { chave: '', rotulo: '— não definida —', meses: null },
+  { chave: 'AVISTA', rotulo: 'À vista', meses: [0] },
+  { chave: '30', rotulo: '30 dias', meses: [1] },
+  { chave: '60', rotulo: '60 dias', meses: [2] },
+  { chave: '90', rotulo: '90 dias', meses: [3] },
+  { chave: '30_60', rotulo: '30/60 dias', meses: [1, 2] },
+  { chave: '30_60_90', rotulo: '30/60/90 dias', meses: [1, 2, 3] },
+  { chave: '60_90_120', rotulo: '60/90/120 dias', meses: [2, 3, 4] },
+  { chave: 'SAFRA', rotulo: 'Safra (120 dias)', meses: [4] },
+  { chave: 'SAFRA_180', rotulo: 'Safra longa (180 dias)', meses: [6] }
+]
 const saldoAberto = p => Math.max(0, Number(p.valor_total || 0) - Number(p.valor_recebido || 0))
 
 function tagAging (p) {
@@ -22392,8 +22425,8 @@ async function paginaCobranca () {
   const [{ data: pedidos, error }, { data: clientes }] = await Promise.all([
     db.from('pedido').select(`
       id, numero, cliente_id, quantidade_t, preco_unitario, valor_total,
-      condicao_pagamento, data_pedido, vencimento, situacao_pagamento,
-      baixado_em, valor_recebido, observacao_cobranca,
+      condicao_pagamento, forma_pagamento, data_pedido, vencimento, situacao_pagamento,
+      status, baixado_em, valor_recebido, observacao_cobranca,
       cliente:cliente_id ( nome_fantasia, razao_social )
     `).order('vencimento', { ascending: true, nullsFirst: false }),
     db.from('cliente').select('id,nome_fantasia,razao_social').eq('status', 'ATIVO').order('nome_fantasia')
@@ -22426,6 +22459,184 @@ function abrirCobranca (sub) {
   if (sub === 'pedidos') cobPedidos(alvo, editavel)
   if (sub === 'faturar') finFaturar(alvo, editavel)
   if (sub === 'clientes') cobClientes(alvo, editavel)
+}
+
+// ---------------------------------------------------------------
+// Pedidos sem prazo
+//
+// Um pedido sem vencimento não é um pedido "a vencer": ele simplesmente
+// não existe pro aging. Não aparece em vencido, não aparece em +60,
+// não entra em cobrança nenhuma. Fica invisível justamente na tela
+// feita pra não perder dinheiro de vista.
+//
+// Por isso este bloco abre no topo da Carteira e mostra o valor total
+// parado nessa situação. A ideia é que ele SUMA quando a última data
+// for preenchida.
+// ---------------------------------------------------------------
+function pedidosSemPrazo () {
+  return (CRED_CACHE.pedidos || []).filter(p =>
+    p.status !== 'CANCELADO' &&
+    p.situacao_pagamento !== 'QUITADO' &&
+    !p.vencimento)
+}
+
+function painelSemPrazo (editavel) {
+  const lista = pedidosSemPrazo()
+  if (!lista.length) return ''
+  const total = lista.reduce((s, p) => s + saldoAberto(p), 0)
+
+  return `
+    <div class="panel" id="cb-sem-prazo" style="padding:0;margin-bottom:16px;border-left:3px solid var(--warn-text);">
+      <div style="padding:16px 18px 10px;">
+        <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;">
+          <h3 style="font-family:var(--serif);font-size:15px;margin:0;">⏳ Sem prazo definido</h3>
+          <span class="chip" style="font-size:11.5px;">${lista.length} pedido(s)</span>
+          <span style="font-weight:700;color:var(--warn-text);">R$ ${fmtNum(total)}</span>
+        </div>
+        <p class="texto-dim" style="font-size:12.5px;line-height:1.55;margin:8px 0 0;">
+          Sem data de vencimento, esses pedidos <b>não entram no aging</b>: não contam como
+          vencido, não aparecem no filtro +60 e não entram em cobrança. Preencha a data aqui
+          mesmo, um atrás do outro. A condição é opcional e serve pra registrar como ficou
+          combinado.
+        </p>
+        ${!editavel ? `<p class="texto-dim2" style="font-size:11.5px;margin:8px 0 0;">
+          Você não tem permissão pra editar aqui — está só visualizando.</p>` : ''}
+      </div>
+      <div class="tabela-scroll">
+        <table><thead><tr>
+          <th>Cliente</th><th>PD</th><th class="num">Valor</th><th>Pedido em</th>
+          <th>Forma</th><th style="min-width:150px;">Vencimento</th>
+          <th style="min-width:160px;">Condição</th><th></th>
+        </tr></thead><tbody>
+        ${lista.map(p => `<tr data-linha-sp="${p.id}">
+          <td><b>${esc(nomeCliente(p.cliente))}</b></td>
+          <td class="texto-dim">${esc(p.numero || '—')}</td>
+          <td class="num">R$ ${fmtNum(p.valor_total)}</td>
+          <td class="texto-dim">${fmtData(p.data_pedido)}</td>
+          <td class="texto-dim">${esc(p.forma_pagamento || '—')}</td>
+          <td><input type="date" data-sp-venc="${p.id}" ${editavel ? '' : 'disabled'}
+                style="width:100%;font-size:12.5px;"></td>
+          <td><select data-sp-cond="${p.id}" ${editavel ? '' : 'disabled'} style="width:100%;font-size:12.5px;">
+              ${CONDICOES_PAGAMENTO.map(c => `<option value="${c.chave}">${esc(c.rotulo)}</option>`).join('')}
+            </select></td>
+          <td class="num" style="white-space:nowrap;">
+            ${editavel ? `<button class="btn-secundario mini" data-sp-salvar="${p.id}">salvar</button>` : ''}
+            <button class="btn-secundario mini" data-sp-abrir="${p.id}" title="abrir o pedido completo">abrir</button>
+            <span class="texto-dim2" data-sp-status="${p.id}" style="font-size:11px;margin-left:6px;"></span>
+          </td>
+        </tr>`).join('')}
+        </tbody></table>
+      </div>
+      ${editavel ? `<div class="acoes" style="padding:10px 18px 16px;">
+        <button class="btn" id="sp-salvar-tudo">Salvar todos os preenchidos</button>
+        <span class="texto-dim2" id="sp-recado" style="font-size:12px;"></span>
+      </div>` : ''}
+    </div>`
+}
+
+// Escolher uma condição já sugere a data, contando a partir da data do
+// pedido. É sugestão: o campo continua editável, porque combinado de
+// verdade nem sempre cai certinho em 30/60/90.
+function dataDaCondicao (dataPedido, chave) {
+  const c = CONDICOES_PAGAMENTO.find(x => x.chave === chave)
+  if (!c || !c.meses) return null
+  return somarMesesISO(dataPedido || hojeISO(), c.meses[c.meses.length - 1])
+}
+
+function ligarPainelSemPrazo (area, editavel) {
+  if (!area.querySelector('#cb-sem-prazo')) return
+
+  area.querySelectorAll('[data-sp-abrir]').forEach(b => {
+    b.onclick = () => {
+      const p = CRED_CACHE.pedidos.find(x => x.id === b.dataset.spAbrir)
+      if (p) abrirPedidoCompletoParaEditar(p.id)
+    }
+  })
+  if (!editavel) return
+
+  area.querySelectorAll('[data-sp-cond]').forEach(sel => {
+    sel.onchange = () => {
+      const id = sel.dataset.spCond
+      const p = CRED_CACHE.pedidos.find(x => x.id === id)
+      const campo = area.querySelector(`[data-sp-venc="${id}"]`)
+      const sugerida = dataDaCondicao(p?.data_pedido, sel.value)
+      if (sugerida && campo && !campo.value) campo.value = sugerida
+    }
+  })
+
+  const salvarUm = async id => {
+    const campo = area.querySelector(`[data-sp-venc="${id}"]`)
+    const sel = area.querySelector(`[data-sp-cond="${id}"]`)
+    const status = area.querySelector(`[data-sp-status="${id}"]`)
+    if (!campo?.value) {
+      if (status) { status.textContent = 'falta a data'; status.style.color = 'var(--warn-text)' }
+      return false
+    }
+    const cond = CONDICOES_PAGAMENTO.find(c => c.chave === sel?.value && c.chave)?.rotulo || null
+    if (status) { status.textContent = 'salvando...'; status.style.color = '' }
+
+    const antes = CRED_CACHE.pedidos.find(x => x.id === id)
+    const { error } = await db.from('pedido')
+      .update({ vencimento: campo.value, condicao_pagamento: cond })
+      .eq('id', id)
+    if (error) {
+      if (status) { status.textContent = error.message; status.style.color = 'var(--critico-text)' }
+      return false
+    }
+
+    // fica no histórico igual a qualquer outra edição de pedido — quem
+    // pôs a data, quando, e o que tinha antes
+    await db.from('pedido_historico').insert({
+      pedido_id: id, acao: 'EDICAO',
+      justificativa: 'Vencimento definido pelo painel "sem prazo" da Carteira.',
+      antes: { vencimento: antes?.vencimento ?? null, condicao_pagamento: antes?.condicao_pagamento ?? null },
+      depois: { vencimento: campo.value, condicao_pagamento: cond },
+      pessoa_id: PERFIL.pessoaId
+    })
+
+    if (antes) { antes.vencimento = campo.value; antes.condicao_pagamento = cond }
+    if (status) { status.textContent = 'ok'; status.style.color = 'var(--good-text)' }
+    return true
+  }
+
+  area.querySelectorAll('[data-sp-salvar]').forEach(b => {
+    b.onclick = async () => {
+      b.disabled = true
+      const ok = await salvarUm(b.dataset.spSalvar)
+      b.disabled = false
+      if (ok) {
+        const linha = area.querySelector(`[data-linha-sp="${b.dataset.spSalvar}"]`)
+        if (linha) { linha.style.opacity = '.4'; linha.style.textDecoration = 'line-through' }
+      }
+    }
+  })
+
+  const btnTudo = area.querySelector('#sp-salvar-tudo')
+  if (btnTudo) btnTudo.onclick = async () => {
+    const pendentes = [...area.querySelectorAll('[data-sp-venc]')].filter(c => c.value).map(c => c.dataset.spVenc)
+    const recado = area.querySelector('#sp-recado')
+    if (!pendentes.length) {
+      recado.textContent = 'Nenhuma data preenchida ainda.'
+      recado.style.color = 'var(--warn-text)'
+      return
+    }
+    btnTudo.disabled = true; btnTudo.textContent = 'Salvando...'
+    let feitos = 0
+    for (const id of pendentes) { if (await salvarUm(id)) feitos++ }
+    btnTudo.disabled = false; btnTudo.textContent = 'Salvar todos os preenchidos'
+    recado.style.color = feitos === pendentes.length ? 'var(--good-text)' : 'var(--warn-text)'
+    recado.textContent = `${feitos} de ${pendentes.length} salvo(s).` +
+      (feitos < pendentes.length ? ' Veja os que ficaram marcados em vermelho.' : ' Atualizando a tela...')
+    if (feitos) setTimeout(() => paginaCobranca(), 900)
+  }
+}
+
+// Abre o formulário completo do pedido a partir da Carteira (a Carteira
+// carrega só as colunas dela, então buscamos o pedido inteiro antes).
+async function abrirPedidoCompletoParaEditar (id) {
+  const { data, error } = await db.from('pedido').select('*').eq('id', id).maybeSingle()
+  if (error || !data) { alert('Não consegui abrir esse pedido: ' + (error?.message || 'não encontrei')); return }
+  formPedidoVenda(data)
 }
 
 function renderCobranca (area) {
@@ -22465,6 +22676,8 @@ function renderCobranca (area) {
       ${kpi('Maior exposição', 'R$ ' + fmtNum(maiorVal), maiorCliente ? nomeCliente(maiorCliente) + (carteiraAberta ? ' · ' + Math.round(maiorVal / carteiraAberta * 100) + '%' : '') : '—')}
     </div>
 
+    ${painelSemPrazo(editavel)}
+
     <div class="panel" style="padding:18px;margin-bottom:16px;">
       <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Composição da carteira em aberto</h3>
       ${svgDonut([
@@ -22488,13 +22701,18 @@ function renderCobranca (area) {
 
     <div class="panel" style="padding:0;"><div class="tabela-scroll">
       <table><thead><tr>
-        <th>Cliente</th><th>PD</th><th>Vencimento</th><th class="num">Toneladas</th>
+        <th>Cliente</th><th>PD</th><th>Vencimento</th><th>Pagamento</th><th class="num">Toneladas</th>
         <th class="num">R$/t</th><th class="num">Valor do pedido</th><th>Situação</th><th></th>
       </tr></thead><tbody>
       ${listaFiltrada.map(p => `<tr>
         <td><b>${esc(nomeCliente(p.cliente))}</b>${p.observacao_cobranca ? `<div class="texto-dim2" style="font-size:11.5px;margin-top:2px;max-width:280px;">${esc(p.observacao_cobranca)}</div>` : ''}</td>
         <td class="texto-dim">${esc(p.numero || '—')}</td>
-        <td class="texto-dim">${fmtData(p.vencimento)}</td>
+        <td class="texto-dim">${p.vencimento
+          ? fmtData(p.vencimento)
+          : '<span style="color:var(--warn-text);">sem prazo</span>'}</td>
+        <td class="texto-dim" style="font-size:12px;">
+          ${esc(p.condicao_pagamento || '—')}
+          ${p.forma_pagamento ? `<div class="texto-dim2" style="font-size:11px;">${esc(p.forma_pagamento)}</div>` : ''}</td>
         <td class="num">${fmtNum(p.quantidade_t)}</td>
         <td class="num">${fmtNum(p.preco_unitario)}</td>
         <td class="num">R$ ${fmtNum(p.valor_total)}${p.situacao_pagamento === 'PARCIAL' ? `<div class="texto-dim2" style="font-size:11px;">recebido R$ ${fmtNum(p.valor_recebido)}</div>` : ''}</td>
@@ -22507,7 +22725,7 @@ function renderCobranca (area) {
           <button class="btn-secundario mini" data-pedido-pdf="${p.id}" title="pedido comercial em PDF">pedido</button>
           <button class="btn-secundario mini" data-imprimir="${p.id}" title="recibo com o histórico de pagamentos">recibo</button>
         </td>
-      </tr>`).join('') || `<tr><td colspan="8" class="vazio">Nada aqui.</td></tr>`}
+      </tr>`).join('') || `<tr><td colspan="9" class="vazio">Nada aqui.</td></tr>`}
       </tbody></table>
     </div></div>
 
@@ -22528,6 +22746,8 @@ function renderCobranca (area) {
       <div class="recado oculto" id="np-recado"></div>
       <p class="texto-dim2" style="font-size:11.5px;margin-top:8px;">O número do pedido é gerado automaticamente. O valor é calculado por toneladas × R$/t.</p>
     </div>` : ''}`
+
+  ligarPainelSemPrazo(area, editavel)
 
   area.querySelectorAll('.chips-cred button').forEach(b => {
     b.onclick = () => { CRED_FILTRO = b.dataset.f; renderCobranca(area) }
@@ -23041,6 +23261,17 @@ async function formPedidoVenda (p, preset = null) {
             ${['Boleto','PIX','Transferência','Dinheiro','Cartão','Barter','Permuta','A combinar']
               .map(f => `<option ${p?.forma_pagamento === f ? 'selected' : ''}>${f}</option>`).join('')}
           </select></div>
+        <div class="campo"><label>Condição de pagamento</label>
+          <select id="pv-cond-sel">
+            ${CONDICOES_PAGAMENTO.map(c => `<option value="${c.chave}">${esc(c.rotulo)}</option>`).join('')}
+            <option value="OUTRA">outra (escrevo do meu jeito)</option>
+          </select>
+          <input id="pv-cond" style="margin-top:6px;display:none;"
+            placeholder="ex: 50% na entrega, 50% em 90 dias"
+            value="${esc(p?.condicao_pagamento ?? '')}"></div>
+        <div class="campo"><label>Vencimento</label>
+          <input type="date" id="pv-venc" value="${p?.vencimento ?? ''}">
+          <span class="texto-dim2" id="pv-venc-aviso" style="font-size:11px;"></span></div>
         <div class="campo" style="grid-column:1/-1;"><label>Local de entrega</label>
           <select id="pv-local-sel" style="margin-bottom:6px;">
             <option value="">— escolha um local cadastrado do cliente —</option></select>
@@ -23206,13 +23437,13 @@ async function formPedidoVenda (p, preset = null) {
     q('#pv-parcelas').querySelectorAll('[data-remove]').forEach(el => {
       el.onclick = () => { parcelas.splice(+el.dataset.remove, 1); desenharParcelas() }
     })
+
+    sincronizarVencimento()   // parcela mexeu, vencimento do pedido acompanha
   }
 
   q('#pv-add-parcela').onclick = () => {
     const ultima = parcelas[parcelas.length - 1]
-    const base = ultima?.vencimento ? new Date(ultima.vencimento) : new Date()
-    base.setMonth(base.getMonth() + 1)
-    parcelas.push({ vencimento: base.toISOString().slice(0, 10), valor: 0 })
+    parcelas.push({ vencimento: somarMesesISO(ultima?.vencimento || hojeISO(), 1), valor: 0 })
     desenharParcelas()
   }
 
@@ -23223,15 +23454,73 @@ async function formPedidoVenda (p, preset = null) {
     if (!n || n < 1) return
     // a última parcela absorve a sobra dos centavos
     const base = Math.floor((t / n) * 100) / 100
-    const d = new Date(q('#pv-data').value || Date.now())
-    parcelas = Array.from({ length: n }, (_, i) => {
-      const v = new Date(d); v.setMonth(v.getMonth() + i + 1)
-      return {
-        vencimento: v.toISOString().slice(0, 10),
-        valor: i === n - 1 ? Number((t - base * (n - 1)).toFixed(2)) : base
-      }
-    })
+    const dataBase = q('#pv-data').value || hojeISO()
+    parcelas = Array.from({ length: n }, (_, i) => ({
+      vencimento: somarMesesISO(dataBase, i + 1),
+      valor: i === n - 1 ? Number((t - base * (n - 1)).toFixed(2)) : base
+    }))
     desenharParcelas()
+  }
+
+  // ----- Condição de pagamento e vencimento -----
+  //
+  // Regra da casa, e ela vale nos dois sentidos: quando existe parcela, o
+  // vencimento do pedido É o da última parcela. Deixar os dois editáveis e
+  // divergentes só criaria a dúvida de qual manda na cobrança. Então com
+  // parcela o campo fica travado e mostra de onde veio; sem parcela, ele é
+  // digitável e vira a única data que a carteira conhece.
+  function sincronizarVencimento () {
+    const campo = q('#pv-venc')
+    const nota = q('#pv-venc-aviso')
+    if (!campo || !nota) return
+    if (parcelas.length) {
+      const ultima = [...parcelas].sort((a, b) => String(a.vencimento).localeCompare(String(b.vencimento))).pop()
+      campo.value = ultima?.vencimento || ''
+      campo.readOnly = true
+      campo.style.opacity = '.75'
+      nota.style.color = ''
+      nota.textContent = `vem da última das ${parcelas.length} parcelas`
+    } else {
+      campo.readOnly = false
+      campo.style.opacity = ''
+      nota.textContent = campo.value ? '' : 'sem data aqui, o pedido não entra no vencido da carteira'
+      nota.style.color = campo.value ? '' : 'var(--warn-text)'
+    }
+  }
+
+  const condSel = q('#pv-cond-sel')
+  const condTexto = q('#pv-cond')
+
+  // reconhece a condição já gravada: se o texto salvo bate com um dos
+  // padrões, o seletor abre nele; senão cai em "outra" com o texto à mostra
+  const jaGravada = (p?.condicao_pagamento || '').trim()
+  const baterCondicao = CONDICOES_PAGAMENTO.find(c => c.rotulo === jaGravada)
+  if (baterCondicao) condSel.value = baterCondicao.chave
+  else if (jaGravada) { condSel.value = 'OUTRA'; condTexto.style.display = '' }
+
+  condSel.onchange = () => {
+    const c = CONDICOES_PAGAMENTO.find(x => x.chave === condSel.value)
+    condTexto.style.display = condSel.value === 'OUTRA' ? '' : 'none'
+    if (!c || !c.meses) { if (condSel.value !== 'OUTRA') desenharParcelas(); sincronizarVencimento(); return }
+
+    const t = totalCalc()
+    if (!t) { aviso('Preencha quantidade e valor unitário antes de escolher a condição.'); condSel.value = ''; return }
+    const base = q('#pv-data').value || hojeISO()
+    const n = c.meses.length
+    const fatia = Math.floor((t / n) * 100) / 100
+    parcelas = c.meses.map((m, i) => ({
+      vencimento: somarMesesISO(base, m),
+      valor: i === n - 1 ? Number((t - fatia * (n - 1)).toFixed(2)) : fatia
+    }))
+    desenharParcelas()
+    sincronizarVencimento()
+  }
+
+  q('#pv-venc').onchange = sincronizarVencimento
+
+  function condicaoEscolhida () {
+    if (condSel.value === 'OUTRA') return condTexto.value.trim() || null
+    return CONDICOES_PAGAMENTO.find(c => c.chave === condSel.value && c.chave)?.rotulo || null
   }
 
   totalCalc(); desenharParcelas()
@@ -23278,7 +23567,17 @@ async function formPedidoVenda (p, preset = null) {
       forma_pagamento: q('#pv-forma').value,
       local_entrega: q('#pv-local').value.trim() || null,
       observacoes: q('#pv-obs').value.trim() || null,
-      vencimento: parcelas.length ? parcelas[parcelas.length - 1].vencimento : null,
+      // Com parcela, o vencimento é o da última (a mais distante, não a
+      // última da lista: a ordem de digitação não é necessariamente
+      // cronológica). Sem parcela, é o que foi digitado no campo.
+      //
+      // Antes esta linha era `parcelas.length ? ... : null` — ou seja,
+      // salvar um pedido sem parcela APAGAVA a data que existia, calado.
+      // Três pedidos em aberto estavam nessa situação.
+      vencimento: parcelas.length
+        ? [...parcelas].sort((a, b) => String(a.vencimento).localeCompare(String(b.vencimento))).pop().vencimento
+        : (q('#pv-venc').value || null),
+      condicao_pagamento: condicaoEscolhida(),
       emitido_por: PERFIL.pessoaId
     }
 
@@ -23293,6 +23592,7 @@ async function formPedidoVenda (p, preset = null) {
           cliente_id: p.cliente_id, quantidade_t: p.quantidade_t,
           preco_unitario: p.preco_unitario, valor_total: p.valor_total,
           forma_pagamento: p.forma_pagamento, data_pedido: p.data_pedido,
+          vencimento: p.vencimento, condicao_pagamento: p.condicao_pagamento,
           local_entrega: p.local_entrega, observacoes: p.observacoes,
           parcelas: parcelasAntes
         },
@@ -23300,6 +23600,7 @@ async function formPedidoVenda (p, preset = null) {
           cliente_id: corpo.cliente_id, quantidade_t: corpo.quantidade_t,
           preco_unitario: corpo.preco_unitario, valor_total: corpo.valor_total,
           forma_pagamento: corpo.forma_pagamento, data_pedido: corpo.data_pedido,
+          vencimento: corpo.vencimento, condicao_pagamento: corpo.condicao_pagamento,
           local_entrega: corpo.local_entrega, observacoes: corpo.observacoes,
           parcelas: parcelas.length
         },
