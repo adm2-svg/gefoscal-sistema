@@ -19437,6 +19437,111 @@ function estilosSdrUmaVez () {
 }
 
 // ----- Aba Leads: caixa de entrada única + conversa + ficha do lead -----
+// ---------------------------------------------------------------
+// Limpeza das conversas do SDR
+//
+// Duas ações, de pesos bem diferentes, e a tela deixa isso claro:
+//
+//   ESCONDER  some da caixa de entrada, o dado continua lá. É o certo
+//             pra teste que talvez você queira consultar depois.
+//   EXCLUIR   apaga o lead e todas as mensagens. Não volta. Fica só o
+//             registro de quem apagou, quando e por quê.
+//
+// Quem pode: quem edita o módulo do SDR, ou a diretoria. O botão nem
+// aparece pros outros, e o banco recusa de novo do lado de lá — a tela
+// esconder um botão não é permissão, é só educação.
+// ---------------------------------------------------------------
+async function sdrPodeLimpar () {
+  if (SDR_CACHE._podeLimpar === undefined) {
+    const { data } = await db.rpc('sdr_pode_limpar')
+    SDR_CACHE._podeLimpar = !!data
+  }
+  return SDR_CACHE._podeLimpar
+}
+
+// Painel que aparece só quando existe conversa de gente da casa na base.
+// Some sozinho quando a última for resolvida — é esse o objetivo dele.
+async function painelInternosSdr (alvo) {
+  if (!await sdrPodeLimpar()) return
+  const { data, error } = await db.rpc('sdr_conversas_internas')
+  if (error || !data?.length) return
+
+  const caixa = document.createElement('div')
+  caixa.className = 'panel'
+  caixa.style.cssText = 'padding:14px 16px;margin-bottom:12px;border-left:3px solid var(--warn-text);'
+  caixa.innerHTML = `
+    <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
+      <b style="font-size:13.5px;">🧹 Conversas de gente da casa</b>
+      <span class="chip" style="font-size:11px;">${data.length}</span>
+    </div>
+    <p class="texto-dim" style="font-size:12px;line-height:1.55;margin:6px 0 10px;">
+      Esses números são de pessoas do cadastro, não de clientes. Enquanto estiverem aqui,
+      entram na conta de qualquer relatório de leads. O bot já não cria conversa nova com
+      número interno; isso aqui é o que ficou de antes.
+    </p>
+    <div style="display:flex;flex-direction:column;gap:6px;">
+      ${data.map(c => `
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:12.5px;
+          padding:6px 0;border-top:1px solid var(--line2);" data-int="${c.lead_id}">
+          <span style="flex:1;min-width:150px;">
+            <b>${esc(c.nome || 'sem nome')}</b>
+            <span class="texto-dim2"> · ${esc(c.telefone || '')}</span>
+            ${c.pessoa_nome ? `<div class="texto-dim2" style="font-size:11px;">cadastro: ${esc(c.pessoa_nome)}</div>` : ''}
+          </span>
+          <span class="texto-dim2" style="font-size:11.5px;">${c.mensagens} msg</span>
+          ${c.oculto
+            ? '<span class="chip" style="font-size:10.5px;">escondida</span>'
+            : `<button class="btn-secundario mini" data-int-esconder="${c.lead_id}">esconder</button>`}
+          <button class="btn-secundario mini" data-int-excluir="${c.lead_id}"
+            style="border-color:var(--critico-text);color:var(--critico-text);">excluir</button>
+          <span class="texto-dim2" data-int-status="${c.lead_id}" style="font-size:11px;"></span>
+        </div>`).join('')}
+    </div>`
+  alvo.prepend(caixa)
+
+  caixa.querySelectorAll('[data-int-esconder]').forEach(b => {
+    b.onclick = () => esconderConversaSdr(Number(b.dataset.intEsconder), 'Número interno (teste da equipe).')
+  })
+  caixa.querySelectorAll('[data-int-excluir]').forEach(b => {
+    b.onclick = () => excluirConversaSdr({ leadId: Number(b.dataset.intExcluir) })
+  })
+}
+
+async function esconderConversaSdr (leadId, motivo) {
+  const { data, error } = await db.rpc('sdr_ocultar_conversa', { p_lead_id: leadId, p_motivo: motivo || null })
+  if (error || !data?.ok) { alert('Não consegui esconder: ' + (error?.message || data?.erro)); return }
+  SDR_CACHE._podeLimpar = undefined
+  irPara('sdr_whatsapp')
+}
+
+async function reexibirConversaSdr (leadId) {
+  const { data, error } = await db.rpc('sdr_reexibir_conversa', { p_lead_id: leadId })
+  if (error || !data?.ok) { alert('Não consegui trazer de volta: ' + (error?.message || data?.erro)); return }
+  irPara('sdr_whatsapp')
+}
+
+// Exclusão pede confirmação escrita, não um "ok" no automático: o texto
+// diz exatamente o que vai sumir e quantas mensagens são.
+async function excluirConversaSdr ({ leadId = null, telefone = null, nome = null, quantas = null }) {
+  const quem = nome || telefone || 'essa conversa'
+  const aviso =
+    `Excluir ${quem} de vez?\n\n` +
+    (quantas != null ? `Vão embora ${quantas} mensagem(ns) e o cadastro do lead.\n` : 'Vão embora o lead e todas as mensagens dele.\n') +
+    `Isso não tem volta. Fica registrado quem apagou e quando.\n\n` +
+    `Se a ideia é só tirar da frente, cancele e use "esconder".`
+  if (!confirm(aviso)) return
+
+  const motivo = prompt('Por que está excluindo? (fica no registro)', 'Conversa de teste da equipe.')
+  if (motivo === null) return
+
+  const { data, error } = await db.rpc('sdr_excluir_conversa', {
+    p_lead_id: leadId, p_telefone: telefone, p_motivo: motivo
+  })
+  if (error || !data?.ok) { alert('Não consegui excluir: ' + (error?.message || data?.erro)); return }
+  alert(`Pronto. ${data.mensagens_apagadas} mensagem(ns) apagada(s).`)
+  irPara('sdr_whatsapp')
+}
+
 async function sdrAbaLeads (alvo) {
   estilosSdrUmaVez()
   // As duas consultas não dependem uma da outra: em fila, a tela espera
@@ -19468,6 +19573,7 @@ async function sdrAbaLeads (alvo) {
 
   renderFiltrosSdr()
   renderItensListaSdr('')
+  painelInternosSdr(alvo)   // só desenha se houver conversa de gente da casa
   const busca = $('#sdr-busca-lead')
   busca.oninput = () => renderItensListaSdr(busca.value.trim().toLowerCase())
   $('#sdr-btn-novo-lead').onclick = () => abrirNovoLeadSdr()
@@ -19490,7 +19596,8 @@ function renderListaSdr () {
 // ---------------------------------------------------------------
 const SDR_FILTROS = [
   ['todas', 'Todas'], ['sdr', 'SDR responde'], ['comum', 'Comum'],
-  ['reuniao', 'Com reunião'], ['atencao', 'Precisam de atenção']
+  ['reuniao', 'Com reunião'], ['atencao', 'Precisam de atenção'],
+  ['ocultas', 'Escondidas']
 ]
 
 async function sdrMontarCaixaDeEntrada () {
@@ -19561,13 +19668,15 @@ function renderItensListaSdr (filtro) {
     !filtro || (nome || '').toLowerCase().includes(filtro) || (tel || '').includes(filtro)
 
   const aba = SDR_CACHE.filtro || 'todas'
-  let leads = SDR_CACHE.leads.filter(l => bate(l.nome, l.telefone))
+  // conversa escondida some de todas as listas, menos da lista dela
+  let leads = SDR_CACHE.leads.filter(l => bate(l.nome, l.telefone)
+    && (aba === 'ocultas' ? l.oculto_em : !l.oculto_em))
   if (aba === 'comum') leads = []
   if (aba === 'reuniao') leads = leads.filter(l => l.reuniao_em)
   if (aba === 'atencao') leads = leads.filter(precisaDeAtencaoSdr)
 
   let comuns = (SDR_CACHE.comuns || []).filter(c => bate(c.nome, c.telefone))
-  if (aba === 'sdr' || aba === 'reuniao' || aba === 'atencao') comuns = []
+  if (['sdr', 'reuniao', 'atencao', 'ocultas'].includes(aba)) comuns = []
 
   if (!leads.length && !comuns.length) {
     alvo.innerHTML = `<p class="texto-dim2" style="padding:18px;font-size:12.5px;">Nada encontrado aqui.</p>`
@@ -19799,6 +19908,8 @@ function renderConversaComum (contato) {
       <div style="display:flex;gap:8px;align-items:center;flex:none;">
         <span class="badge-atencao">👤 Comum</span>
         <button class="btn-secundario mini" id="sdr-comum-lista">Pôr numa lista</button>
+        <button class="btn-secundario mini" id="sdr-comum-excluir" title="apagar essa conversa de vez"
+          style="border-color:var(--critico-text);color:var(--critico-text);">🗑</button>
       </div>
     </div>
 
@@ -19810,6 +19921,14 @@ function renderConversaComum (contato) {
       </div>`)}`
 
   rolarFitaAteOFim()
+  const btnLimpar = $('#sdr-comum-excluir')
+  if (btnLimpar) btnLimpar.onclick = async () => {
+    if (!await sdrPodeLimpar()) { alert('Você não tem permissão pra excluir conversa do SDR.'); return }
+    excluirConversaSdr({
+      telefone: contato.telefone_norm || contato.telefone,
+      nome: contato.nome, quantas: contato.quantas
+    })
+  }
   $('#sdr-comum-lista').onclick = () => {
     const b = document.querySelector('.subabas button[data-sub="listas"]')
     if (b) b.click()
@@ -19883,6 +20002,9 @@ function renderDetalheSdr (lead) {
         <span class="${corStatusLeadSdr(lead.status)}">${esc(ROTULO_STATUS_LEAD_SDR[lead.status] || lead.status)}</span>
         <button class="btn-secundario mini" id="sdr-btn-ficha" title="Ficha completa, histórico de contato e transferência">📇 Ficha</button>
         <button class="btn-secundario mini" id="sdr-btn-relatorio" title="Ver relatório completo da IA">⋮</button>
+        <button class="btn-secundario mini" id="sdr-btn-esconder" title="Sumir da caixa de entrada sem apagar">👁</button>
+        <button class="btn-secundario mini" id="sdr-btn-excluir" title="Apagar essa conversa de vez"
+          style="border-color:var(--critico-text);color:var(--critico-text);">🗑</button>
       </div>
     </div>
 
@@ -19904,6 +20026,22 @@ function renderDetalheSdr (lead) {
 
   const btnRelatorio = $('#sdr-btn-relatorio')
   if (btnRelatorio) btnRelatorio.onclick = () => abrirRelatorioLeadSdr(lead)
+
+  // Limpeza: os dois botões só funcionam pra quem tem permissão, e a
+  // checagem de verdade é no banco — aqui só evitamos o clique inútil.
+  const btnEsconder = $('#sdr-btn-esconder')
+  if (btnEsconder) btnEsconder.onclick = async () => {
+    if (!await sdrPodeLimpar()) { alert('Você não tem permissão pra isso.'); return }
+    if (lead.oculto_em) { reexibirConversaSdr(lead.id); return }
+    const motivo = prompt('Por que está escondendo? (opcional)', 'Conversa de teste.')
+    if (motivo === null) return
+    esconderConversaSdr(lead.id, motivo)
+  }
+  const btnExcluirConv = $('#sdr-btn-excluir')
+  if (btnExcluirConv) btnExcluirConv.onclick = async () => {
+    if (!await sdrPodeLimpar()) { alert('Você não tem permissão pra excluir conversa do SDR.'); return }
+    excluirConversaSdr({ leadId: lead.id, nome: lead.nome || lead.telefone })
+  }
 
   const btnFicha = $('#sdr-btn-ficha')
   if (btnFicha) btnFicha.onclick = () => abrirFichaSdr(lead)
