@@ -12978,7 +12978,8 @@ async function paginaGestaoTI () {
     SETOR_TI_ID = setorTI?.id ?? null
   }
 
-  const abas = [['orcamento', 'Orçamento'], ['solicitacoes', 'Solicitações'], ['cartao', 'Cartão TI'], ['mapa', 'Mapa (MAPA/Trimestral)']]
+  const abas = [['orcamento', 'Orçamento'], ['apis', 'APIs e serviços'],
+                ['solicitacoes', 'Solicitações'], ['cartao', 'Cartão TI'], ['mapa', 'Mapa (MAPA/Trimestral)']]
   area.innerHTML = `
     <div style="background:linear-gradient(120deg,#0b1f1a 0%,#122e26 55%,#0b1f1a 100%);border-radius:14px;padding:22px 26px;margin-bottom:18px;position:relative;overflow:hidden;">
       <div style="position:absolute;right:-30px;top:-30px;font-size:130px;opacity:.08;line-height:1;">⚙️</div>
@@ -13004,6 +13005,7 @@ function abrirGestaoTI (sub, editavel) {
   const alvo = $('#sub-ti')
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
   if (sub === 'orcamento') tiOrcamento(alvo, editavel)
+  if (sub === 'apis') tiApisCriticas(alvo, editavel)
   if (sub === 'solicitacoes') tiSolicitacoes(alvo, editavel)
   if (sub === 'mapa') tiMapa(alvo)
   if (sub === 'cartao') painelOnfly(alvo, { escopo: 'ti', editavel })
@@ -13012,6 +13014,246 @@ function abrirGestaoTI (sub, editavel) {
 // ----- Orçamento -----
 const ICONE_CATEGORIA_TI = { ASSINATURA: '🔁', INFRA: '☁️', LICENCA: '🔑', HARDWARE: '💻', OUTRO: '🧾' }
 const COR_CATEGORIA_TI = { ASSINATURA: 'var(--rust)', INFRA: '#4a90d9', LICENCA: 'var(--gold)', HARDWARE: 'var(--good-text)', OUTRO: 'var(--dim2)' }
+
+// ---------------------------------------------------------------
+// APIs e serviços que precisam estar pagos
+//
+// Isto não é orçamento — é risco. A aba Orçamento responde "quanto a TI
+// custa"; esta responde "o que para de funcionar se a conta vencer".
+// Por isso o que manda na ordem é a criticidade, não o valor: a Supabase
+// custa menos que o Google Workspace e derruba muito mais coisa.
+//
+// O pagamento não é declarado, é conferido: cada serviço é casado com a
+// fatura do cartão Onfly pelo texto que aparece nela. Serviço que alguém
+// jura que está pago mas nunca apareceu na fatura é exatamente o caso
+// perigoso, e aqui ele fica marcado.
+// ---------------------------------------------------------------
+const CRITICIDADE_TI = {
+  PARA_TUDO: { rotulo: 'Para tudo', cor: 'var(--critico-text)', icone: '🔴', ordem: 1 },
+  ALTA:      { rotulo: 'Alta',      cor: 'var(--warn-text)',    icone: '🟠', ordem: 2 },
+  MEDIA:     { rotulo: 'Média',     cor: 'var(--gold)',         icone: '🟡', ordem: 3 },
+  BAIXA:     { rotulo: 'Baixa',     cor: 'var(--dim2)',         icone: '⚪', ordem: 4 }
+}
+
+async function tiApisCriticas (alvo, editavel) {
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+
+  const [{ data: servicos, error }, { data: soltas }] = await Promise.all([
+    db.rpc('ti_servicos_criticos'),
+    db.rpc('ti_cobrancas_nao_mapeadas', { p_dias: 90 })
+  ])
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  const lista = servicos || []
+  const paraTudo = lista.filter(s => s.criticidade === 'PARA_TUDO')
+  const semRastro = lista.filter(s => !s.ultimo_pagamento)
+  const sumidos = lista.filter(s => s.dias_sem_cobranca != null && s.dias_sem_cobranca > 45)
+  const gasto90 = lista.reduce((t, s) => t + Number(s.total_90d || 0), 0)
+
+  const cartao = s => {
+    const c = CRITICIDADE_TI[s.criticidade] || CRITICIDADE_TI.MEDIA
+    // três situações diferentes, e a tela não pode confundi-las:
+    // nunca apareceu na fatura / apareceu e sumiu / em dia
+    const alerta = !s.ultimo_pagamento
+      ? { texto: 'nunca apareceu na fatura do cartão', cor: 'var(--critico-text)' }
+      : s.dias_sem_cobranca > 45
+        ? { texto: `última cobrança há ${s.dias_sem_cobranca} dias`, cor: 'var(--warn-text)' }
+        : null
+
+    return `
+      <div class="panel" style="padding:14px 16px;${s.criticidade === 'PARA_TUDO'
+        ? 'border-left:3px solid var(--critico-text);' : ''}">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+          <div style="min-width:0;flex:1;">
+            <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">
+              <span>${c.icone}</span>
+              <b style="font-size:14px;">${esc(s.nome)}</b>
+              <span class="texto-dim2" style="font-size:11.5px;">${esc(s.fornecedor || '')}</span>
+            </div>
+            <p class="texto-dim" style="font-size:12.5px;line-height:1.5;margin:6px 0 0;">
+              ${esc(s.para_que_serve || '')}</p>
+            <p style="font-size:12px;line-height:1.5;margin:5px 0 0;color:${c.cor};">
+              <b>Se parar:</b> ${esc(s.o_que_para || '—')}</p>
+          </div>
+          <div style="text-align:right;flex:none;">
+            <div style="font-weight:700;font-size:15px;">
+              ${s.total_90d > 0 ? 'R$ ' + fmtNum(s.total_90d) : '—'}</div>
+            <div class="texto-dim2" style="font-size:10.5px;">últimos 90 dias${
+              s.cobrancas_90d ? ` · ${s.cobrancas_90d}x` : ''}</div>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;font-size:11.5px;" class="texto-dim2">
+          <span>Pago por: ${esc(s.forma_pagamento || 'não definido')}</span>
+          <span>Última cobrança: ${s.ultimo_pagamento
+            ? fmtData(s.ultimo_pagamento) + (s.ultimo_valor ? ' · R$ ' + fmtNum(s.ultimo_valor) : '')
+            : '<span style="color:var(--critico-text);">nenhuma encontrada</span>'}</span>
+          <span>No orçamento de TI: ${s.no_orcamento
+            ? '<span style="color:var(--good-text);">sim</span>'
+            : '<span style="color:var(--warn-text);">não está</span>'}</span>
+          ${s.url_painel ? `<a href="${esc(s.url_painel)}" target="_blank" rel="noopener"
+            style="color:var(--rust);">abrir painel ↗</a>` : ''}
+        </div>
+
+        ${alerta ? `<div style="margin-top:8px;font-size:11.5px;color:${alerta.cor};">
+          ⚠ ${esc(alerta.texto)}</div>` : ''}
+        ${s.observacao ? `<div class="texto-dim2" style="font-size:11px;margin-top:6px;">${esc(s.observacao)}</div>` : ''}
+        ${editavel ? `<div class="acoes" style="margin-top:8px;">
+          <button class="btn-secundario mini" data-api-editar="${s.id}">editar</button></div>` : ''}
+      </div>`
+  }
+
+  alvo.innerHTML = `
+    <div class="resumo-topo" style="margin-bottom:16px;">
+      <div class="bloco"><div class="rot">🔴 Derrubam o sistema</div>
+        <div class="val" style="color:var(--critico-text);">${paraTudo.length}</div></div>
+      <div class="bloco"><div class="rot">💳 Gasto em 90 dias</div>
+        <div class="val">R$ ${fmtNum(gasto90)}</div></div>
+      <div class="bloco"><div class="rot">⚠ Sem rastro no cartão</div>
+        <div class="val" style="color:${semRastro.length ? 'var(--warn-text)' : 'inherit'};">${semRastro.length}</div></div>
+      <div class="bloco"><div class="rot">⏳ Paradas há +45 dias</div>
+        <div class="val" style="color:${sumidos.length ? 'var(--warn-text)' : 'inherit'};">${sumidos.length}</div></div>
+    </div>
+
+    <div class="panel" style="padding:14px 16px;margin-bottom:16px;border-left:3px solid var(--rust);">
+      <p class="texto-dim" style="font-size:12.5px;line-height:1.6;margin:0;">
+        <b>Como ler esta tela.</b> A ordem é por <i>o que quebra</i>, não por quanto custa.
+        "Última cobrança" vem da fatura do cartão Onfly, não de alguém ter dito que pagou —
+        por isso um serviço pode estar no orçamento e mesmo assim aparecer aqui sem rastro:
+        significa que ninguém confirmou o pagamento, ou que ele sai por outro meio.
+      </p>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      ${lista.length ? lista.map(cartao).join('')
+        : '<p class="vazio">Nenhum serviço cadastrado ainda.</p>'}
+    </div>
+
+    ${(soltas || []).length ? `
+    <details class="panel" style="padding:0;margin-top:16px;">
+      <summary style="padding:14px 18px;cursor:pointer;font-weight:600;font-size:13.5px;">
+        💳 Cobranças de tecnologia que ninguém mapeou
+        <span class="chip" style="margin-left:6px;font-size:11px;">${soltas.length}</span>
+      </summary>
+      <div style="padding:0 18px 16px;">
+        <p class="texto-dim2" style="font-size:11.5px;line-height:1.55;margin:0 0 10px;">
+          Saíram no cartão nos últimos 90 dias, têm cara de serviço de tecnologia e não estão
+          na lista acima. Vale conferir se é assinatura que alguém contratou e ninguém registrou.
+        </p>
+        <div class="tabela-scroll"><table>
+          <thead><tr><th>Descrição na fatura</th><th class="num">Vezes</th>
+            <th class="num">Total</th><th>Última</th></tr></thead>
+          <tbody>${soltas.map(c => `<tr>
+            <td>${esc(c.descricao)}</td>
+            <td class="num">${c.vezes}</td>
+            <td class="num">R$ ${fmtNum(c.total)}</td>
+            <td class="texto-dim">${fmtData(c.ultima)}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+      </div>
+    </details>` : ''}
+
+    ${editavel ? `<div class="acoes" style="margin-top:16px;">
+      <button class="btn" id="api-novo">+ Cadastrar serviço</button></div>` : ''}`
+
+  if (!editavel) return
+  const btnNovo = $('#api-novo')
+  if (btnNovo) btnNovo.onclick = () => formServicoTi(null, () => tiApisCriticas(alvo, editavel))
+  alvo.querySelectorAll('[data-api-editar]').forEach(b => {
+    b.onclick = () => {
+      const s = lista.find(x => x.id === b.dataset.apiEditar)
+      formServicoTi(s, () => tiApisCriticas(alvo, editavel))
+    }
+  })
+}
+
+async function formServicoTi (registro, aoSalvar) {
+  // o form busca a linha crua: a função do painel devolve o cruzamento
+  // com o cartão, não os campos editáveis
+  let base = null
+  if (registro?.id) {
+    const { data } = await db.from('ti_servico_critico').select('*').eq('id', registro.id).maybeSingle()
+    base = data
+  }
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal" style="max-width:560px;">
+      <h3>${base ? 'Editar serviço' : 'Novo serviço'}</h3>
+      <div class="form-grade">
+        <div class="campo" style="grid-column:1/-1;"><label>Nome *</label>
+          <input id="ts-nome" value="${esc(base?.nome ?? '')}" placeholder="ex: API da Anthropic"></div>
+        <div class="campo"><label>Fornecedor</label>
+          <input id="ts-forn" value="${esc(base?.fornecedor ?? '')}"></div>
+        <div class="campo"><label>Criticidade</label>
+          <select id="ts-crit">
+            ${Object.entries(CRITICIDADE_TI).map(([k, v]) =>
+              `<option value="${k}" ${base?.criticidade === k ? 'selected' : ''}>${v.icone} ${v.rotulo}</option>`).join('')}
+          </select></div>
+        <div class="campo" style="grid-column:1/-1;"><label>Para que serve</label>
+          <textarea id="ts-serve" style="min-height:56px;">${esc(base?.para_que_serve ?? '')}</textarea></div>
+        <div class="campo" style="grid-column:1/-1;"><label>O que para de funcionar se a conta vencer</label>
+          <textarea id="ts-para" style="min-height:56px;"
+            placeholder="Escreva o efeito prático, não 'o serviço fica indisponível'.">${esc(base?.o_que_para ?? '')}</textarea></div>
+        <div class="campo"><label>Como aparece na fatura</label>
+          <input id="ts-padrao" value="${esc(base?.padrao_cobranca ?? '')}"
+            placeholder="ex: ANTHROPIC">
+          <span class="texto-dim2" style="font-size:11px;">É por esse texto que a cobrança do cartão é encontrada.</span></div>
+        <div class="campo"><label>Pago por</label>
+          <input id="ts-forma" value="${esc(base?.forma_pagamento ?? '')}" placeholder="Cartão Onfly, boleto..."></div>
+        <div class="campo" style="grid-column:1/-1;"><label>Link do painel</label>
+          <input id="ts-url" value="${esc(base?.url_painel ?? '')}" placeholder="https://..."></div>
+        <div class="campo" style="grid-column:1/-1;"><label>Observação</label>
+          <input id="ts-obs" value="${esc(base?.observacao ?? '')}"></div>
+      </div>
+      <div class="recado oculto" id="ts-recado"></div>
+      <div class="acoes" style="margin-top:14px;">
+        <button class="btn" id="ts-salvar">Salvar</button>
+        ${base ? '<button class="btn-secundario" id="ts-remover">Remover da lista</button>' : ''}
+        <button class="btn-secundario" id="ts-fechar">Cancelar</button>
+      </div>
+    </div>`
+  document.body.appendChild(fundo)
+  const q = s => fundo.querySelector(s)
+  const fechar = () => fundo.remove()
+  q('#ts-fechar').onclick = fechar
+
+  q('#ts-salvar').onclick = async () => {
+    const nome = q('#ts-nome').value.trim()
+    if (!nome) {
+      const r = q('#ts-recado'); r.classList.remove('oculto'); r.textContent = 'O nome é obrigatório.'
+      return
+    }
+    const corpo = {
+      nome, fornecedor: q('#ts-forn').value.trim() || null,
+      criticidade: q('#ts-crit').value,
+      para_que_serve: q('#ts-serve').value.trim() || null,
+      o_que_para: q('#ts-para').value.trim() || null,
+      padrao_cobranca: q('#ts-padrao').value.trim() || null,
+      forma_pagamento: q('#ts-forma').value.trim() || null,
+      url_painel: q('#ts-url').value.trim() || null,
+      observacao: q('#ts-obs').value.trim() || null,
+      atualizado_em: new Date().toISOString()
+    }
+    const { error } = base
+      ? await db.from('ti_servico_critico').update(corpo).eq('id', base.id)
+      : await db.from('ti_servico_critico').insert(corpo)
+    if (error) {
+      const r = q('#ts-recado'); r.classList.remove('oculto'); r.textContent = error.message
+      return
+    }
+    fechar(); if (aoSalvar) aoSalvar()
+  }
+
+  const btnRem = q('#ts-remover')
+  if (btnRem) btnRem.onclick = async () => {
+    if (!confirm(`Tirar "${base.nome}" da lista de serviços críticos?\n\nIsso não cancela nada no fornecedor — só para de acompanhar aqui.`)) return
+    const { error } = await db.from('ti_servico_critico').update({ ativo: false }).eq('id', base.id)
+    if (error) { alert(error.message); return }
+    fechar(); if (aoSalvar) aoSalvar()
+  }
+}
 
 async function tiOrcamento (alvo, editavel) {
   const { data, error } = await db.from('despesa_ti').select('*').order('status').order('nome')
