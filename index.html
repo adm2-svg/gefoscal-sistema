@@ -19138,15 +19138,17 @@ async function sdrAbaFunil (alvo) {
 // ----- Aba Regiões: vendedor x UF -----
 async function sdrAbaRegioes (alvo) {
   const [{ data: regioes }, { data: pessoas }] = await Promise.all([
-    db.from('vendedor_regiao').select('id,uf,ativo,vendedor:vendedor_id(id,nome)').order('uf'),
-    db.from('pessoa').select('id,nome,eh_vendedor').eq('status', 'ATIVO').order('nome')
+    db.from('vendedor_regiao').select('id,uf,ativo,vendedor:vendedor_id(id,nome,telefone)').order('uf'),
+    db.from('pessoa').select('id,nome,eh_vendedor,telefone').eq('status', 'ATIVO').order('nome')
   ])
   SDR_CACHE.regioes = regioes || []
   SDR_CACHE.vendedores = (pessoas || []).filter(p => p.eh_vendedor)
   if (!SDR_CACHE.vendedores.length) SDR_CACHE.vendedores = pessoas || []
 
   alvo.innerHTML = `
-    <p class="texto-dim2" style="margin-bottom:14px;">Qual vendedor recebe automaticamente um lead novo do WhatsApp, por UF.</p>
+    <p class="texto-dim2" style="margin-bottom:14px;">Qual vendedor recebe automaticamente um lead novo do WhatsApp, por UF.
+      O WhatsApp dele é pra onde o Eduardo manda o aviso quando marca ou remarca uma reunião —
+      sem número, o aviso só aparece dentro do sistema.</p>
     <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:flex-end;">
       <div class="campo" style="width:110px;">
         <label>UF</label>
@@ -19158,7 +19160,7 @@ async function sdrAbaRegioes (alvo) {
       </div>
       <button class="btn" id="sdr-btn-add-regiao">Adicionar</button>
     </div>
-    <table style="width:100%"><thead><tr><th>UF</th><th>Vendedor</th><th>Status</th><th></th></tr></thead>
+    <table style="width:100%"><thead><tr><th>UF</th><th>Vendedor</th><th>WhatsApp dele</th><th>Status</th><th></th></tr></thead>
       <tbody id="sdr-tbody-regioes"></tbody>
     </table>`
 
@@ -19177,12 +19179,20 @@ async function sdrAbaRegioes (alvo) {
 function renderTabelaRegioes () {
   const tbody = $('#sdr-tbody-regioes')
   if (!tbody) return
-  if (!SDR_CACHE.regioes.length) { tbody.innerHTML = `<tr><td colspan="4" class="texto-dim2">Nenhuma região cadastrada ainda.</td></tr>`; return }
+  if (!SDR_CACHE.regioes.length) { tbody.innerHTML = `<tr><td colspan="5" class="texto-dim2">Nenhuma região cadastrada ainda.</td></tr>`; return }
 
   tbody.innerHTML = SDR_CACHE.regioes.map(r => `
     <tr>
       <td>${esc(r.uf)}</td>
       <td>${esc(r.vendedor?.nome || '—')}</td>
+      <td style="min-width:210px;">
+        ${r.vendedor?.id ? `
+          <input data-zap-vendedor="${r.vendedor.id}" value="${esc(r.vendedor.telefone || '')}"
+            placeholder="77 99810-8347" style="width:150px;padding:5px 8px;font-size:12.5px;">
+          <span data-zap-aviso="${r.vendedor.id}" style="font-size:11px;margin-left:6px;">${
+            r.vendedor.telefone ? '' : '<span class="badge-atencao">falta</span>'}</span>
+        ` : '<span class="texto-dim2">—</span>'}
+      </td>
       <td>${r.ativo ? '<span class="badge-bom">ativo</span>' : '<span class="texto-dim2">inativo</span>'}</td>
       <td><button class="btn-secundario mini" data-del-regiao="${r.id}">remover</button></td>
     </tr>`).join('')
@@ -19192,6 +19202,31 @@ function renderTabelaRegioes () {
       await db.from('vendedor_regiao').delete().eq('id', b.dataset.delRegiao)
       SDR_CACHE.regioes = SDR_CACHE.regioes.filter(r => String(r.id) !== b.dataset.delRegiao)
       renderTabelaRegioes()
+    }
+  })
+
+  // Salva ao sair do campo. O mesmo vendedor pode aparecer em várias UFs —
+  // o número é dele, não da linha, então todas as linhas acompanham.
+  tbody.querySelectorAll('[data-zap-vendedor]').forEach(campo => {
+    campo.onchange = async () => {
+      const pessoaId = campo.dataset.zapVendedor
+      const aviso = tbody.querySelector(`[data-zap-aviso="${pessoaId}"]`)
+      campo.disabled = true
+      if (aviso) aviso.innerHTML = '<span class="texto-dim2">salvando...</span>'
+      const { data, error } = await db.rpc('sdr_salvar_whatsapp_vendedor', {
+        p_pessoa_id: pessoaId, p_telefone: campo.value
+      })
+      campo.disabled = false
+      if (error || !data?.ok) {
+        if (aviso) aviso.innerHTML = `<span class="badge-alerta">${esc(error?.message || data?.erro || 'não salvou')}</span>`
+        return
+      }
+      campo.value = data.telefone || ''
+      SDR_CACHE.regioes.forEach(r => { if (r.vendedor?.id === pessoaId) r.vendedor.telefone = data.telefone })
+      tbody.querySelectorAll(`[data-zap-vendedor="${pessoaId}"]`).forEach(outro => { outro.value = data.telefone || '' })
+      if (aviso) aviso.innerHTML = data.telefone
+        ? '<span class="badge-bom">salvo</span>'
+        : '<span class="badge-atencao">falta</span>'
     }
   })
 }
