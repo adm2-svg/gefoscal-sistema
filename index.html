@@ -2342,14 +2342,12 @@ async function atualizarBadgeNotificacoes (avisarSeSubiu = false) {
   if (!PERFIL.pessoaId) return
   // Não lidas + as que exigem confirmação e ainda não foram assumidas.
   // Ler não basta nessas: enquanto ninguém assumir, o sino continua aceso.
-  const [{ count: naoLidas }, { count: pendentes }] = await Promise.all([
-    db.from('notificacao_pessoal').select('id', { count: 'exact', head: true })
-      .eq('destinatario_id', PERFIL.pessoaId).eq('lida', false),
-    db.from('notificacao_pessoal').select('id', { count: 'exact', head: true })
-      .eq('destinatario_id', PERFIL.pessoaId).eq('lida', true)
-      .eq('exige_confirmacao', true).is('confirmada_em', null)
-  ])
-  const total = (naoLidas || 0) + (pendentes || 0)
+  // Numa consulta só — isto aqui roda a cada 20 segundos, o dia inteiro.
+  const { count } = await db.from('notificacao_pessoal')
+    .select('id', { count: 'exact', head: true })
+    .eq('destinatario_id', PERFIL.pessoaId)
+    .or('lida.eq.false,and(exige_confirmacao.eq.true,confirmada_em.is.null)')
+  const total = count || 0
   if (avisarSeSubiu && total > ULTIMA_CONTAGEM_NOTIF) tocarSomNotificacao()
   ULTIMA_CONTAGEM_NOTIF = total
   const badge = $('#notif-badge')
@@ -2443,21 +2441,15 @@ async function abrirNotificacoes () {
   estilosNotificacoesUmaVez()
 
   // As não lidas, mais as que ainda esperam um "assumo" — mesmo já lidas.
-  const colunas = 'id, titulo, mensagem, lida, criado_em, entidade, entidade_id, exige_confirmacao, confirmada_em, dados'
-  const [{ data: naoLidas }, { data: pendentes }] = await Promise.all([
-    db.from('notificacao_pessoal').select(colunas)
-      .eq('destinatario_id', PERFIL.pessoaId).eq('lida', false)
-      .order('criado_em', { ascending: false }).limit(30),
-    db.from('notificacao_pessoal').select(colunas)
-      .eq('destinatario_id', PERFIL.pessoaId).eq('lida', true)
-      .eq('exige_confirmacao', true).is('confirmada_em', null)
-      .order('criado_em', { ascending: false }).limit(10)
-  ])
-  const porId = new Map()
-  for (const n of [...(pendentes || []), ...(naoLidas || [])]) porId.set(n.id, n)
+  const { data: encontradas } = await db.from('notificacao_pessoal')
+    .select('id, titulo, mensagem, lida, criado_em, entidade, entidade_id, exige_confirmacao, confirmada_em, dados')
+    .eq('destinatario_id', PERFIL.pessoaId)
+    .or('lida.eq.false,and(exige_confirmacao.eq.true,confirmada_em.is.null)')
+    .order('criado_em', { ascending: false }).limit(40)
+
   // Quem espera confirmação vem primeiro: é o que não pode passar batido.
   const aguardando = n => n.exige_confirmacao && !n.confirmada_em
-  const notifs = [...porId.values()].sort((a, b) =>
+  const notifs = (encontradas || []).sort((a, b) =>
     (aguardando(b) - aguardando(a)) || (new Date(b.criado_em) - new Date(a.criado_em)))
 
   const fundo = document.createElement('div')
@@ -4103,11 +4095,21 @@ async function abrirRelatorioSdrDoLead (leadCrmId) {
 // com a reunião marcada em destaque. Só aparece se houver algum.
 async function blocoLeadsSdrDoVendedor (area) {
   if (!PERFIL.pessoaId) return
-  const { data, error } = await db.from('leads')
-    .select('id,nome,telefone,status,cultura,uf,municipio,perfil_disc,reuniao_em,lead_crm_id,updated_at')
-    .eq('vendedor_id', PERFIL.pessoaId).not('lead_crm_id', 'is', null)
-    .order('reuniao_em', { ascending: true, nullsFirst: false })
-    .limit(12)
+
+  // As duas vão juntas: esta é a primeira tela que todo mundo abre, e uma
+  // consulta esperando a outra aparece como lentidão do sistema inteiro.
+  const [{ data, error }, { data: avisos }] = await Promise.all([
+    db.from('leads')
+      .select('id,nome,telefone,status,cultura,uf,municipio,perfil_disc,reuniao_em,lead_crm_id,updated_at')
+      .eq('vendedor_id', PERFIL.pessoaId).not('lead_crm_id', 'is', null)
+      .order('reuniao_em', { ascending: true, nullsFirst: false })
+      .limit(12),
+    db.from('notificacao_pessoal')
+      .select('id, entidade_id, dados')
+      .eq('destinatario_id', PERFIL.pessoaId).eq('entidade', 'sdr_lead')
+      .eq('exige_confirmacao', true).is('confirmada_em', null)
+      .limit(30)
+  ])
   if (error || !data?.length) return
 
   const agora = Date.now()
@@ -4116,15 +4118,7 @@ async function blocoLeadsSdrDoVendedor (area) {
 
   // Quais dessas reuniões ele ainda não assumiu? Essas piscam até ele assumir.
   const aAssumir = new Map()
-  const idsCrm = data.map(l => l.lead_crm_id).filter(Boolean)
-  if (idsCrm.length) {
-    const { data: avisos } = await db.from('notificacao_pessoal')
-      .select('id, entidade_id, dados')
-      .eq('destinatario_id', PERFIL.pessoaId).eq('entidade', 'sdr_lead')
-      .eq('exige_confirmacao', true).is('confirmada_em', null)
-      .in('entidade_id', idsCrm)
-    for (const a of avisos || []) aAssumir.set(a.entidade_id, a)
-  }
+  for (const a of avisos || []) aAssumir.set(a.entidade_id, a)
 
   const linha = l => {
     const aviso = aAssumir.get(l.lead_crm_id)
@@ -18496,9 +18490,10 @@ function estilosSdrUmaVez () {
 // ----- Aba Leads: caixa de entrada única + conversa + ficha do lead -----
 async function sdrAbaLeads (alvo) {
   estilosSdrUmaVez()
-  try { await sdrCarregarLeads() }
+  // As duas consultas não dependem uma da outra: em fila, a tela espera
+  // duas idas ao servidor; juntas, espera só a mais lenta.
+  try { await sdrMontarCaixaDeEntrada() }
   catch (erro) { alvo.innerHTML = `<p class="vazio">${esc(erro.message)}</p>`; return }
-  await sdrMontarCaixaDeEntrada()
 
   alvo.innerHTML = `
     <div class="sdr-shell">
@@ -18554,9 +18549,15 @@ async function sdrMontarCaixaDeEntrada () {
   SDR_CACHE.ultimas = new Map()
   SDR_CACHE.comuns = []
 
-  const { data: msgs } = await db.from('mensagens')
-    .select('telefone,telefone_norm,nome,conteudo,created_at,papel,fora_da_lista,audio')
-    .order('created_at', { ascending: false }).limit(800)
+  // Os leads e as últimas mensagens vão juntos pro servidor. A prévia da
+  // conversa só precisa do começo do texto, então pedimos poucas colunas.
+  const [, { data: msgs, error: erroMsgs }] = await Promise.all([
+    sdrCarregarLeads(),
+    db.from('mensagens')
+      .select('telefone,telefone_norm,nome,conteudo,created_at,papel,fora_da_lista,audio')
+      .order('created_at', { ascending: false }).limit(400)
+  ])
+  if (erroMsgs) throw erroMsgs
 
   const comuns = new Map()
   const doSdr = new Set(SDR_CACHE.leads.map(l => l.telefone_norm || l.telefone))
