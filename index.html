@@ -1507,6 +1507,16 @@ const fmtNum = (n, d = 2) => (n ?? 0).toLocaleString('pt-BR', { minimumFractionD
 const casasPara = (unidade, padrao = 3) => (unidade || '').trim().toLowerCase() === 'kg' ? 0 : padrao
 const fmtData = d => d ? d.split('-').reverse().join('/') : '—'
 const fmtQuando = t => t ? new Date(t).toLocaleDateString('pt-BR') : null
+
+// Reunião precisa do dia E da hora — "14/09" sozinho não serve pra quem
+// vai se organizar em cima disso.
+const fmtReuniao = t => {
+  if (!t) return null
+  const d = new Date(t)
+  const dia = d.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit' })
+  const hora = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+  return `${dia.replace('.', '')} às ${hora}`
+}
 const esc = t => String(t ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
 const iniciais = n => String(n ?? '').split(' ').filter(Boolean).slice(0, 2).map(x => x[0]).join('').toUpperCase()
 
@@ -2330,10 +2340,16 @@ let ULTIMA_CONTAGEM_NOTIF = 0
 
 async function atualizarBadgeNotificacoes (avisarSeSubiu = false) {
   if (!PERFIL.pessoaId) return
-  const { count } = await db.from('notificacao_pessoal')
-    .select('id', { count: 'exact', head: true })
-    .eq('destinatario_id', PERFIL.pessoaId).eq('lida', false)
-  const total = count || 0
+  // Não lidas + as que exigem confirmação e ainda não foram assumidas.
+  // Ler não basta nessas: enquanto ninguém assumir, o sino continua aceso.
+  const [{ count: naoLidas }, { count: pendentes }] = await Promise.all([
+    db.from('notificacao_pessoal').select('id', { count: 'exact', head: true })
+      .eq('destinatario_id', PERFIL.pessoaId).eq('lida', false),
+    db.from('notificacao_pessoal').select('id', { count: 'exact', head: true })
+      .eq('destinatario_id', PERFIL.pessoaId).eq('lida', true)
+      .eq('exige_confirmacao', true).is('confirmada_em', null)
+  ])
+  const total = (naoLidas || 0) + (pendentes || 0)
   if (avisarSeSubiu && total > ULTIMA_CONTAGEM_NOTIF) tocarSomNotificacao()
   ULTIMA_CONTAGEM_NOTIF = total
   const badge = $('#notif-badge')
@@ -2404,6 +2420,20 @@ function estilosNotificacoesUmaVez () {
     #notif-lista::-webkit-scrollbar-thumb { background:var(--line2); border-radius:10px; }
     #notif-fechar:hover { background:rgba(255,255,255,.18) !important; }
     #notif-marcar-tudo:hover { color:var(--rust); }
+
+    /* Aviso que exige "assumo": pisca até alguém assumir. Ler não apaga. */
+    @keyframes piscar-pendente {
+      0%, 100% { border-color:var(--rust); box-shadow:0 0 0 0 rgba(var(--rust-rgb),.40); }
+      50%      { border-color:var(--gold); box-shadow:0 0 0 5px rgba(var(--rust-rgb),0); }
+    }
+    .pisca-pendente { animation:piscar-pendente 1.4s ease-in-out infinite; border-width:2px !important; }
+    @media (prefers-reduced-motion: reduce) {
+      .pisca-pendente { animation:none; border-color:var(--rust) !important; }
+    }
+    .btn-assumir { background:var(--rust);color:#fff;border:none;border-radius:8px;
+      padding:7px 12px;font-size:12px;font-weight:700;cursor:pointer;width:100%;margin-top:9px; }
+    .btn-assumir:hover { filter:brightness(1.1); }
+    .btn-assumir:disabled { opacity:.6;cursor:default;filter:none; }
   `
   document.head.appendChild(s)
 }
@@ -2412,11 +2442,23 @@ async function abrirNotificacoes () {
   if ($('#notif-fundo')) return // já aberto, não duplica
   estilosNotificacoesUmaVez()
 
-  const { data: notifsIniciais } = await db.from('notificacao_pessoal')
-    .select('id, titulo, mensagem, lida, criado_em, entidade, entidade_id')
-    .eq('destinatario_id', PERFIL.pessoaId).eq('lida', false)
-    .order('criado_em', { ascending: false }).limit(30)
-  const notifs = notifsIniciais || []
+  // As não lidas, mais as que ainda esperam um "assumo" — mesmo já lidas.
+  const colunas = 'id, titulo, mensagem, lida, criado_em, entidade, entidade_id, exige_confirmacao, confirmada_em, dados'
+  const [{ data: naoLidas }, { data: pendentes }] = await Promise.all([
+    db.from('notificacao_pessoal').select(colunas)
+      .eq('destinatario_id', PERFIL.pessoaId).eq('lida', false)
+      .order('criado_em', { ascending: false }).limit(30),
+    db.from('notificacao_pessoal').select(colunas)
+      .eq('destinatario_id', PERFIL.pessoaId).eq('lida', true)
+      .eq('exige_confirmacao', true).is('confirmada_em', null)
+      .order('criado_em', { ascending: false }).limit(10)
+  ])
+  const porId = new Map()
+  for (const n of [...(pendentes || []), ...(naoLidas || [])]) porId.set(n.id, n)
+  // Quem espera confirmação vem primeiro: é o que não pode passar batido.
+  const aguardando = n => n.exige_confirmacao && !n.confirmada_em
+  const notifs = [...porId.values()].sort((a, b) =>
+    (aguardando(b) - aguardando(a)) || (new Date(b.criado_em) - new Date(a.criado_em)))
 
   const fundo = document.createElement('div')
   fundo.id = 'notif-fundo'
@@ -2506,9 +2548,32 @@ async function abrirNotificacoes () {
         if (!n) return
         await db.from('notificacao_pessoal').update({ lida: true, lida_em: new Date().toISOString() }).eq('id', n.id)
         atualizarBadgeNotificacoes()
-        removerItem(id)
+        // Aviso que espera "assumo" não some por ter sido aberto: quem leu
+        // o relatório ainda precisa dizer que assume. Só o botão silencia.
+        if (!esperaConfirmacao(n)) removerItem(id)
         fechar()
         abrirEntidadeNotificacao(n.entidade, n.entidade_id)
+      }
+    })
+
+    painel.querySelectorAll('[data-assumir-notif]').forEach(botao => {
+      botao.onclick = async (ev) => {
+        ev.stopPropagation()   // assumir não é o mesmo que abrir
+        const id = botao.dataset.assumirNotif
+        botao.disabled = true
+        botao.textContent = 'Assumindo...'
+        const { data, error } = await db.rpc('sdr_assumir_reuniao', { p_notificacao_id: id })
+        if (error || !data?.ok) {
+          botao.disabled = false
+          botao.textContent = 'Estou ciente, assumo essa reunião'
+          alert('Não consegui registrar: ' + (error?.message || data?.erro || 'tente de novo'))
+          return
+        }
+        const n = notifs.find(x => x.id === id)
+        if (n) n.confirmada_em = new Date().toISOString()
+        botao.closest('.notif-item')?.classList.remove('pisca-pendente')
+        atualizarBadgeNotificacoes()
+        removerItem(id)
       }
     })
   }
@@ -2516,20 +2581,26 @@ async function abrirNotificacoes () {
 
   const btnTudo = painel.querySelector('#notif-marcar-tudo')
   if (btnTudo) btnTudo.onclick = async () => {
+    // "Marcar tudo como lido" não vale pra quem espera um "assumo":
+    // esse aviso existe justamente pra não poder ser varrido de uma vez.
     await db.from('notificacao_pessoal').update({ lida: true, lida_em: new Date().toISOString() })
       .eq('destinatario_id', PERFIL.pessoaId).eq('lida', false)
     atualizarBadgeNotificacoes()
-    notifs.forEach(n => removerItem(n.id))
+    notifs.filter(n => !esperaConfirmacao(n)).forEach(n => removerItem(n.id))
   }
 }
 
 const ICONE_NOTIF = { solicitacao_interna: '📋', solicitacao_compra: '🛒', sdr_lead: '📅' }
 
+const esperaConfirmacao = n => !!(n.exige_confirmacao && !n.confirmada_em)
+
 function itemNotifHtml (n) {
   const clicavel = !!(n.entidade && ABRIR_ENTIDADE_NOTIFICACAO[n.entidade] && n.entidade_id)
   const icone = ICONE_NOTIF[n.entidade] || '🔔'
+  const pendente = esperaConfirmacao(n)
+  const quandoReuniao = n.dados?.reuniao_em ? fmtReuniao(n.dados.reuniao_em) : null
   return `<div data-item-notif="${n.id}" ${clicavel ? `data-abrir-notif="${n.id}"` : ''}
-      class="notif-item" style="display:flex;gap:12px;align-items:flex-start;border:1px solid var(--line2);
+      class="notif-item${pendente ? ' pisca-pendente' : ''}" style="display:flex;gap:12px;align-items:flex-start;border:1px solid var(--line2);
       border-radius:12px;padding:12px 14px;background:var(--card);box-shadow:0 1px 3px rgba(0,0,0,.15);${clicavel ? 'cursor:pointer;' : ''}">
     <div style="flex:none;width:36px;height:36px;border-radius:10px;background:rgba(var(--rust-rgb),.15);
       display:flex;align-items:center;justify-content:center;font-size:17px;">${icone}</div>
@@ -2538,11 +2609,13 @@ function itemNotifHtml (n) {
         <span style="font-weight:700;font-size:13px;color:var(--txt);line-height:1.35;">${esc(n.titulo)}</span>
         <span style="flex:none;width:8px;height:8px;border-radius:50%;background:var(--gold);margin-top:5px;"></span>
       </div>
+      ${quandoReuniao ? `<div style="font-size:13.5px;font-weight:700;color:var(--rust);margin-top:5px;">${esc(quandoReuniao)}</div>` : ''}
       ${n.mensagem ? `<div class="texto-dim2" style="font-size:12.5px;margin-top:4px;line-height:1.4;">${esc(n.mensagem)}</div>` : ''}
       <div class="texto-dim2" style="font-size:11px;margin-top:7px;display:flex;align-items:center;gap:6px;">
         <span>${formatarHoraRelativa(n.criado_em)}</span>
         ${clicavel ? `<span style="color:var(--rust);font-weight:700;">· abrir →</span>` : ''}
       </div>
+      ${pendente ? `<button class="btn-assumir" data-assumir-notif="${n.id}">Estou ciente, assumo essa reunião</button>` : ''}
     </div>
   </div>`
 }
@@ -4041,17 +4114,34 @@ async function blocoLeadsSdrDoVendedor (area) {
   const futuras = data.filter(l => l.reuniao_em && new Date(l.reuniao_em).getTime() >= agora - 3600000)
   const resto = data.filter(l => !futuras.includes(l))
 
-  const linha = l => `
-    <div class="passo" data-rel-sdr="${l.lead_crm_id}" style="cursor:pointer;">
-      <span class="quando">${l.reuniao_em ? esc(fmtQuando(l.reuniao_em) || '') : esc(ROTULO_STATUS_LEAD_SDR[l.status] || l.status || '')}</span>
+  // Quais dessas reuniões ele ainda não assumiu? Essas piscam até ele assumir.
+  const aAssumir = new Map()
+  const idsCrm = data.map(l => l.lead_crm_id).filter(Boolean)
+  if (idsCrm.length) {
+    const { data: avisos } = await db.from('notificacao_pessoal')
+      .select('id, entidade_id, dados')
+      .eq('destinatario_id', PERFIL.pessoaId).eq('entidade', 'sdr_lead')
+      .eq('exige_confirmacao', true).is('confirmada_em', null)
+      .in('entidade_id', idsCrm)
+    for (const a of avisos || []) aAssumir.set(a.entidade_id, a)
+  }
+
+  const linha = l => {
+    const aviso = aAssumir.get(l.lead_crm_id)
+    return `
+    <div class="passo${aviso ? ' pisca-pendente' : ''}" data-rel-sdr="${l.lead_crm_id}" style="cursor:pointer;${aviso ? 'border-radius:10px;padding:10px 12px;' : ''}">
+      <span class="quando">${l.reuniao_em ? esc(fmtReuniao(l.reuniao_em) || '') : esc(ROTULO_STATUS_LEAD_SDR[l.status] || l.status || '')}</span>
       <span>
         <b>${esc(l.nome || l.telefone)}</b>
         ${l.perfil_disc ? `<span class="chip" style="font-size:10.5px;margin-left:6px;">DISC ${esc(l.perfil_disc)}</span>` : ''}
         ${l.reuniao_em ? '<span class="badge-bom" style="font-size:10.5px;margin-left:6px;">reunião marcada</span>' : ''}
+        ${aviso ? '<span class="badge-atencao" style="font-size:10.5px;margin-left:6px;">falta você assumir</span>' : ''}
         <span class="texto-dim2" style="font-size:11.5px;display:block;margin-top:2px;">
           ${esc([l.cultura, [l.municipio, l.uf].filter(Boolean).join('/')].filter(Boolean).join(' · ') || 'vindo do SDR de WhatsApp')} · toque para ver o relatório</span>
+        ${aviso ? `<button class="btn-assumir" data-assumir-vg="${aviso.id}" style="max-width:280px;">Estou ciente, assumo essa reunião</button>` : ''}
       </span>
     </div>`
+  }
 
   const bloco = document.createElement('div')
   bloco.className = 'panel'
@@ -4059,14 +4149,37 @@ async function blocoLeadsSdrDoVendedor (area) {
   bloco.innerHTML = `
     <div class="cabeca-secao">
       <h3 style="font-family:var(--serif);font-size:17px;">Leads do SDR no seu funil</h3>
-      <span class="texto-dim2" style="font-size:11.5px;">${futuras.length ? futuras.length + ' com reunião marcada' : 'sem reunião marcada'}</span>
+      <span class="texto-dim2" style="font-size:11.5px;">${
+        aAssumir.size ? `${aAssumir.size} esperando você assumir`
+        : futuras.length ? futuras.length + ' com reunião marcada' : 'sem reunião marcada'}</span>
     </div>
     ${futuras.map(linha).join('')}
     ${resto.length ? `<div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;margin:10px 0 4px;">Sem reunião marcada</div>${resto.map(linha).join('')}` : ''}`
   area.appendChild(bloco)
+  estilosNotificacoesUmaVez()   // o piscar mora lá
 
   bloco.querySelectorAll('[data-rel-sdr]').forEach(el => {
     el.onclick = () => abrirRelatorioSdrDoLead(el.dataset.relSdr)
+  })
+
+  bloco.querySelectorAll('[data-assumir-vg]').forEach(botao => {
+    botao.onclick = async (ev) => {
+      ev.stopPropagation()
+      botao.disabled = true
+      botao.textContent = 'Assumindo...'
+      const { data: r, error } = await db.rpc('sdr_assumir_reuniao', { p_notificacao_id: botao.dataset.assumirVg })
+      if (error || !r?.ok) {
+        botao.disabled = false
+        botao.textContent = 'Estou ciente, assumo essa reunião'
+        alert('Não consegui registrar: ' + (error?.message || r?.erro || 'tente de novo'))
+        return
+      }
+      const linhaEl = botao.closest('.passo')
+      linhaEl?.classList.remove('pisca-pendente')
+      linhaEl?.querySelector('.badge-atencao')?.remove()
+      botao.remove()
+      atualizarBadgeNotificacoes()
+    }
   })
 }
 
