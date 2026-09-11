@@ -20513,6 +20513,223 @@ async function excluirLinkSdr (id, alvo, aoExcluir) {
 // IA "Analista de Conversas SDR" quando um lead vindo do WhatsApp SDR
 // fecha como GANHO/PERDIDO — ver dispararAnaliseConversaSdr) cruzado com
 // leads (dados do bot) e lead (etapa comercial no CRM).
+// ---------------------------------------------------------------
+// Relatório diário do SDR — o fechamento do dia, dentro do Analytics
+//
+// Quem escreve é a Edge Function `sdr-relatorio-diario`, que roda às
+// 23h30 de Arraias (pg_cron, 02:30 UTC) e analisa TODA conversa do dia
+// que teve fala dos dois lados. Monólogo do robô não vira relatório:
+// se o lead não respondeu naquele dia, não há o que analisar.
+//
+// Duas camadas:
+//  - sdr_relatorio_diario   → o dia consolidado (números, DISC, funil,
+//                             objeções, quem pedir consultor, resumo escrito)
+//  - sdr_relatorio_conversa → a ficha individual de cada conversa
+//
+// O botão "Gerar agora" passa pela RPC sdr_relatorio_gerar, que guarda o
+// segredo no banco em vez de mandar pro navegador.
+// ---------------------------------------------------------------
+let SDR_REL_DIA = null
+
+// a IA às vezes devolve objeto onde o campo é de frase solta; aceita os dois
+const textoDoItem = x => {
+  if (x == null) return ''
+  if (typeof x === 'string') return x
+  return x.objecao || x.erro || x.texto || x.descricao || JSON.stringify(x)
+}
+
+const CHIP_TEMPERATURA = {
+  QUENTE: { rotulo: '🔥 Quente', classe: 'badge-bom' },
+  MORNO: { rotulo: '🌤 Morno', classe: 'chip' },
+  FRIO: { rotulo: '❄️ Frio', classe: 'texto-dim2' }
+}
+
+async function montarRelatorioDiarioSdr (alvo, dia = null) {
+  if (!alvo) return
+  alvo.innerHTML = `<p class="texto-dim2" style="margin-bottom:16px;">carregando o relatório do dia...</p>`
+
+  const { data: dias, error } = await db.from('sdr_relatorio_diario')
+    .select('*').order('data_referencia', { ascending: false }).limit(60)
+  if (error) { alvo.innerHTML = ''; return }   // migração ainda não aplicada: não atrapalha o resto da aba
+
+  const lista = dias || []
+  if (!lista.length) {
+    alvo.innerHTML = `
+      <div class="panel" style="padding:18px;margin-bottom:16px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 6px;">Relatório do dia</h3>
+        <p class="texto-dim2" style="font-size:12.5px;margin:0 0 12px;">
+          Ainda não há nenhum fechamento gravado. Ele roda sozinho todo dia às 23h30 e cobre
+          toda conversa em que o lead respondeu.</p>
+        <button class="btn-secundario mini" id="sdr-rel-gerar">Gerar o de hoje agora</button>
+        <span id="sdr-rel-status" class="texto-dim2" style="font-size:11.5px;margin-left:8px;"></span>
+      </div>`
+    ligarBotaoGerarRelatorioSdr(alvo, null)
+    return
+  }
+
+  const escolhido = lista.find(d => d.data_referencia === (dia || SDR_REL_DIA)) || lista[0]
+  SDR_REL_DIA = escolhido.data_referencia
+
+  const { data: fichas } = await db.from('sdr_relatorio_conversa')
+    .select('*').eq('data_referencia', escolhido.data_referencia)
+    .order('recomenda_handoff', { ascending: false }).order('qualidade', { ascending: true })
+
+  const contagem = obj => Object.entries(obj || {})
+    .filter(([k]) => k && k !== '—')
+    .sort((a, b) => b[1] - a[1])
+
+  const chipsTemperatura = contagem(escolhido.por_temperatura).map(([k, n]) => {
+    const c = CHIP_TEMPERATURA[k] || { rotulo: k, classe: 'chip' }
+    return `<span class="${c.classe}" style="font-size:11.5px;">${c.rotulo} ${n}</span>`
+  }).join(' ')
+
+  const chipsDisc = contagem(escolhido.por_disc).map(([k, n]) =>
+    `<span class="chip" style="font-size:11.5px;" title="${esc(ROTULO_DISC[k] || k)}">${esc(k)} · ${esc(ROTULO_DISC[k] || '')} ${n}</span>`).join(' ')
+
+  const chipsStatus = contagem(escolhido.por_status).map(([k, n]) =>
+    `<span class="chip" style="font-size:11.5px;">${esc(ROTULO_STATUS_LEAD_SDR[k] || k)} ${n}</span>`).join(' ')
+
+  const blocoFicha = f => {
+    const temp = CHIP_TEMPERATURA[f.temperatura] || { rotulo: f.temperatura || '—', classe: 'chip' }
+    const linhaLista = (titulo, itens, cor) => {
+      const arr = (itens || []).map(textoDoItem).filter(Boolean)
+      if (!arr.length) return ''
+      return `<div style="margin-top:10px;">
+        <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;${cor ? 'color:' + cor + ';' : ''}">${titulo}</div>
+        <ul style="margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px;">
+          ${arr.map(t => `<li style="font-size:12.5px;line-height:1.45;">${esc(t)}</li>`).join('')}
+        </ul></div>`
+    }
+    return `<details class="panel" style="padding:0;margin-bottom:8px;">
+      <summary style="padding:12px 14px;cursor:pointer;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <b style="font-size:13.5px;">${esc(f.nome || f.telefone)}</b>
+        <span class="${temp.classe}" style="font-size:11px;">${temp.rotulo}</span>
+        ${f.disc ? `<span class="chip" style="font-size:11px;" title="${esc(ROTULO_DISC[f.disc] || '')} · confiança ${esc((f.disc_confianca || '').toLowerCase())}">DISC ${esc(f.disc)}</span>` : ''}
+        ${f.qualidade != null ? `<span class="chip" style="font-size:11px;" title="nota da condução do SDR nesse dia">condução ${f.qualidade}/10</span>` : ''}
+        ${f.recomenda_handoff ? '<span class="badge-bom" style="font-size:11px;">pede consultor</span>' : ''}
+        <span class="texto-dim2" style="font-size:11px;margin-left:auto;">${f.mensagens_lead}↩ / ${f.mensagens_ia}↪</span>
+      </summary>
+      <div style="padding:0 14px 14px;">
+        ${f.resumo ? `<p style="font-size:13px;line-height:1.55;margin:0;">${esc(f.resumo)}</p>` : ''}
+        ${linhaLista('Sinais de compra', f.sinais_compra)}
+        ${linhaLista('Objeções', f.objecoes)}
+        ${linhaLista('Dúvidas em aberto', f.duvidas_abertas, 'var(--warn-text)')}
+        ${linhaLista('Erros do SDR', f.erros_do_sdr, 'var(--critico-text)')}
+        ${linhaLista('Evidências do DISC', f.disc_evidencias)}
+        ${f.proximo_passo ? `<div style="margin-top:10px;padding:10px 12px;border-left:3px solid var(--good-text);background:var(--surface2);border-radius:0 6px 6px 0;">
+          <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">Próximo passo</div>
+          <div style="font-size:12.5px;line-height:1.5;">${esc(f.proximo_passo)}</div></div>` : ''}
+        <div style="margin-top:10px;display:flex;gap:8px;">
+          <button class="btn-secundario mini" data-rel-conversa="${f.lead_sdr_id ?? ''}">Abrir conversa</button>
+          <a class="btn-secundario mini" href="https://wa.me/${esc((f.telefone || '').replace(/\D/g, ''))}" target="_blank" rel="noopener">Chamar no WhatsApp</a>
+        </div>
+      </div>
+    </details>`
+  }
+
+  alvo.innerHTML = `
+    <div class="panel" style="padding:18px;margin-bottom:16px;border-left:4px solid var(--good-text);">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+        <h3 style="font-family:var(--serif);font-size:16px;margin:0;">Relatório do dia</h3>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <select id="sdr-rel-dia" style="font-size:12.5px;">
+            ${lista.map(d => `<option value="${d.data_referencia}" ${d.data_referencia === escolhido.data_referencia ? 'selected' : ''}>${fmtData(d.data_referencia)} · ${d.conversas} conversa(s)</option>`).join('')}
+          </select>
+          <button class="btn-secundario mini" id="sdr-rel-gerar">Gerar de novo</button>
+          <span id="sdr-rel-status" class="texto-dim2" style="font-size:11.5px;"></span>
+        </div>
+      </div>
+
+      ${escolhido.resumo ? `<p style="font-size:13.5px;line-height:1.6;margin:0 0 14px;max-width:80ch;">${esc(escolhido.resumo)}</p>` : ''}
+
+      <div class="resumo-topo" style="margin-bottom:14px;">
+        ${kpi('Conversas de mão dupla', escolhido.conversas, 'o lead respondeu')}
+        ${kpi('Mensagens', `${escolhido.mensagens_lead} / ${escolhido.mensagens_ia}`, 'lead / Eduardo')}
+        ${kpi('Abordagens disparadas', escolhido.disparos)}
+        ${kpi('Chamaram fora da lista', escolhido.fora_da_lista, 'esperando gente')}
+      </div>
+
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:12px;">
+        ${chipsTemperatura ? `<div><div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Temperatura</div>${chipsTemperatura}</div>` : ''}
+        ${chipsDisc ? `<div><div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Perfil DISC</div>${chipsDisc}</div>` : ''}
+        ${chipsStatus ? `<div><div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">No funil do Eduardo</div>${chipsStatus}</div>` : ''}
+      </div>
+
+      ${(escolhido.destaques || []).length ? `
+        <div style="margin-bottom:12px;">
+          <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">Para amanhã</div>
+          <ul style="margin:0;padding-left:18px;display:flex;flex-direction:column;gap:5px;">
+            ${(escolhido.destaques || []).map(d => `<li style="font-size:12.5px;line-height:1.5;">${esc(textoDoItem(d))}</li>`).join('')}
+          </ul></div>` : ''}
+
+      ${(escolhido.movimentacoes || []).length ? `
+        <div style="margin-bottom:12px;">
+          <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">Andou no funil</div>
+          ${(escolhido.movimentacoes || []).map(m => `<div style="font-size:12.5px;">
+            <b>${esc(m.nome)}</b> · ${esc(ROTULO_STATUS_LEAD_SDR[m.de] || m.de)} → ${esc(ROTULO_STATUS_LEAD_SDR[m.para] || m.para)}</div>`).join('')}
+        </div>` : ''}
+
+      ${(escolhido.recomendados || []).length ? `
+        <div style="padding:12px 14px;border-left:3px solid var(--good-text);background:var(--surface2);border-radius:0 6px 6px 0;">
+          <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">Pedem consultor humano</div>
+          ${(escolhido.recomendados || []).map(r => `<div style="font-size:12.5px;line-height:1.5;margin-bottom:5px;">
+            <b>${esc(r.nome)}</b> — ${esc(r.motivo || '')}</div>`).join('')}
+        </div>` : ''}
+
+      ${(escolhido.objecoes_top || []).length ? `
+        <div style="margin-top:12px;">
+          <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">Objeções do dia</div>
+          ${(escolhido.objecoes_top || []).map(o => `<div style="font-size:12.5px;line-height:1.5;">
+            ${esc(o.objecao)} <span class="texto-dim2">— ${o.total}x, ${o.respondidas} respondida(s)</span></div>`).join('')}
+        </div>` : ''}
+    </div>
+
+    <div style="margin-bottom:20px;">
+      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:15px;">Conversa por conversa — ${fmtData(escolhido.data_referencia)}</h3></div>
+      ${(fichas || []).length ? (fichas || []).map(blocoFicha).join('')
+        : '<p class="vazio">Nenhuma conversa de mão dupla nesse dia.</p>'}
+    </div>`
+
+  const sel = $('#sdr-rel-dia')
+  if (sel) sel.onchange = () => montarRelatorioDiarioSdr(alvo, sel.value)
+
+  alvo.querySelectorAll('[data-rel-conversa]').forEach(b => {
+    b.onclick = () => {
+      const id = Number(b.dataset.relConversa)
+      if (!id) return
+      const aba = document.querySelector('.subabas button[data-sub="leads"]')
+      if (aba) aba.click()
+      setTimeout(async () => {
+        try {
+          await sdrCarregarLeads()
+          const lead = SDR_CACHE.leads.find(l => l.id === id)
+          if (lead) { SDR_CACHE.selecionado = lead; renderListaSdr(); renderDetalheSdr(lead) }
+        } catch { /* silencioso: o clique na aba já levou a pessoa pra lista */ }
+      }, 350)
+    }
+  })
+
+  ligarBotaoGerarRelatorioSdr(alvo, escolhido.data_referencia)
+}
+
+function ligarBotaoGerarRelatorioSdr (alvo, dia) {
+  const btn = alvo.querySelector('#sdr-rel-gerar')
+  const status = alvo.querySelector('#sdr-rel-status')
+  if (!btn) return
+  btn.onclick = async () => {
+    btn.disabled = true
+    if (status) status.textContent = 'pedindo...'
+    const { error } = await db.rpc('sdr_relatorio_gerar', dia ? { p_data: dia } : {})
+    if (error) {
+      btn.disabled = false
+      if (status) { status.textContent = error.message; status.style.color = 'var(--warn-text)' }
+      return
+    }
+    if (status) status.textContent = 'rodando — leva alguns segundos por conversa'
+    setTimeout(() => { montarRelatorioDiarioSdr(alvo, dia) }, 25000)
+  }
+}
+
 async function sdrAbaAnalytics (alvo) {
   const [{ data: analises, error }, { data: leadsSdr }, { data: leadsCrm }, { data: versoesPrompt }] = await Promise.all([
     db.from('sdr_analise_conversa').select('*').order('criado_em', { ascending: false }),
@@ -20626,6 +20843,7 @@ async function sdrAbaAnalytics (alvo) {
     .sort((a, b) => b.total - a.total)
 
   alvo.innerHTML = `
+    <div id="sdr-rel-diario"></div>
     <div class="resumo-topo" style="margin-bottom:16px;">
       ${kpi('Taxa de conversão geral', taxaConversaoGeral != null ? taxaConversaoGeral + '%' : '—', encerrados.length + ' negociação(ões) encerrada(s)')}
       ${kpi('Negociações ganhas', ganhos.length)}
@@ -20696,6 +20914,8 @@ async function sdrAbaAnalytics (alvo) {
         <p class="texto-dim2" style="font-size:10.5px;margin-top:8px;">Cada análise leva a versão do prompt que estava ativa quando a IA analisou a negociação encerrada.</p>
       </div>
     </div>`
+
+  montarRelatorioDiarioSdr($('#sdr-rel-diario'))
 }
 
 // ---------------------------------------------------------------
