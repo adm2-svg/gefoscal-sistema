@@ -16216,6 +16216,102 @@ function renderFunilGestao (alvo, lista, editavel, aoMudar, gerencia = true) {
 
 // ----- Busca/filtro no funil da equipe (Gestão) — filtra os .crm-card
 // já renderizados, sem precisar ir de novo no banco. -----
+// ---------------------------------------------------------------
+// Filtro do funil por vendedor
+//
+// A equipe inteira num quadro só vira uma tripa: rola-rola e ninguém
+// acha nada. Aqui o gestor escolhe de quem quer ver — um, dois ou todos —
+// e pode fechar o funil quando estiver olhando outra coisa da página.
+//
+// A escolha fica guardada no navegador dele: trocar de aba e voltar não
+// desfaz o que ele acabou de montar.
+// ---------------------------------------------------------------
+const MEMORIA_FUNIL = 'gefoscal.crm.funil'
+
+function lerMemoriaFunil () {
+  try { return JSON.parse(localStorage.getItem(MEMORIA_FUNIL) || '{}') } catch { return {} }
+}
+function gravarMemoriaFunil (novo) {
+  try { localStorage.setItem(MEMORIA_FUNIL, JSON.stringify({ ...lerMemoriaFunil(), ...novo })) } catch { /* navegador sem espaço, não é motivo pra quebrar a tela */ }
+}
+
+const SEM_VENDEDOR = '__sem__'
+
+function montarFiltroFunilGestao (lista, editavel, aoMudar) {
+  const memoria = lerMemoriaFunil()
+  CRM_CACHE.funilVendedores = new Set(Array.isArray(memoria.vendedores) ? memoria.vendedores : [])
+  CRM_CACHE.funilFechado = !!memoria.fechado
+
+  // Quem aparece: só quem realmente tem lead no funil, ordenado por volume.
+  const contagem = new Map()
+  for (const l of lista) {
+    const chave = l.vendedor_id || SEM_VENDEDOR
+    const nome = l.vendedor?.nome || 'Sem vendedor'
+    const atual = contagem.get(chave) || { chave, nome, quantos: 0 }
+    atual.quantos++
+    contagem.set(chave, atual)
+  }
+  const vendedores = [...contagem.values()].sort((a, b) =>
+    (a.chave === SEM_VENDEDOR) - (b.chave === SEM_VENDEDOR) || b.quantos - a.quantos)
+
+  // Um filtro que sobrou de ontem apontando pra quem não tem mais lead
+  // deixaria o quadro vazio sem explicação. Limpa o que não existe mais.
+  const existentes = new Set(vendedores.map(v => v.chave))
+  CRM_CACHE.funilVendedores = new Set([...CRM_CACHE.funilVendedores].filter(x => existentes.has(x)))
+
+  const chips = $('#cg-chips-vendedor')
+  const desenharChips = () => {
+    const nenhumEscolhido = CRM_CACHE.funilVendedores.size === 0
+    chips.innerHTML = `
+      <button class="chip-filtro ${nenhumEscolhido ? 'ativo' : ''}" data-vend="">
+        Todos <span style="opacity:.7;">${lista.length}</span>
+      </button>
+      ${vendedores.map(v => `
+        <button class="chip-filtro ${CRM_CACHE.funilVendedores.has(v.chave) ? 'ativo' : ''}" data-vend="${esc(v.chave)}">
+          ${esc(v.nome)} <span style="opacity:.7;">${v.quantos}</span>
+        </button>`).join('')}`
+
+    chips.querySelectorAll('[data-vend]').forEach(b => {
+      b.onclick = () => {
+        const chave = b.dataset.vend
+        if (!chave) CRM_CACHE.funilVendedores.clear()          // "Todos" limpa a seleção
+        else if (CRM_CACHE.funilVendedores.has(chave)) CRM_CACHE.funilVendedores.delete(chave)
+        else CRM_CACHE.funilVendedores.add(chave)
+        gravarMemoriaFunil({ vendedores: [...CRM_CACHE.funilVendedores] })
+        desenharChips()
+        desenharFunil()
+      }
+    })
+  }
+
+  const desenharFunil = () => {
+    const escolhidos = CRM_CACHE.funilVendedores
+    const visiveis = escolhidos.size
+      ? lista.filter(l => escolhidos.has(l.vendedor_id || SEM_VENDEDOR))
+      : lista
+    renderFunilGestao($('#cg-funil'), visiveis, editavel, aoMudar)
+    ligarBuscaFunilGestao()   // o quadro é novo, a busca precisa reencontrar os cards
+    const busca = $('#cg-busca-funil')
+    if (busca?.value.trim()) busca.dispatchEvent(new Event('input'))
+  }
+
+  const bloco = $('#cg-funil-bloco')
+  const botao = $('#cg-funil-abrir-fechar')
+  const aplicarAberturaFechamento = () => {
+    bloco.classList.toggle('oculto', CRM_CACHE.funilFechado)
+    botao.textContent = CRM_CACHE.funilFechado ? '▸ Mostrar funil' : '▾ Esconder funil'
+  }
+  botao.onclick = () => {
+    CRM_CACHE.funilFechado = !CRM_CACHE.funilFechado
+    gravarMemoriaFunil({ fechado: CRM_CACHE.funilFechado })
+    aplicarAberturaFechamento()
+  }
+
+  desenharChips()
+  desenharFunil()
+  aplicarAberturaFechamento()
+}
+
 function ligarBuscaFunilGestao () {
   const input = $('#cg-busca-funil')
   if (!input) return
@@ -16429,14 +16525,18 @@ async function crmGestaoTab (alvo, editavel) {
     <div id="cg-indicadores-parado" style="margin-bottom:16px;"></div>
 
     <div class="cabeca-secao" style="margin-top:4px;">
-      <h3 style="font-family:var(--serif);font-size:16px;">Funil de vendas (equipe toda)</h3>
+      <h3 style="font-family:var(--serif);font-size:16px;">Funil de vendas</h3>
+      <button class="btn-secundario mini" id="cg-funil-abrir-fechar"></button>
     </div>
-    <p class="texto-dim2" style="font-size:11.5px;margin:-4px 0 12px;">
-      Arraste o card pra outra coluna, ou clique nele pra abrir e trocar a etapa lá dentro.</p>
-    <div class="campo" style="max-width:420px;margin-bottom:12px;">
-      <input id="cg-busca-funil" placeholder="🔍 pesquisar por cliente, vendedor, local...">
+    <div id="cg-funil-bloco">
+      <p class="texto-dim2" style="font-size:11.5px;margin:-4px 0 10px;">
+        Arraste o card pra outra coluna, ou clique nele pra abrir e trocar a etapa lá dentro.</p>
+      <div id="cg-chips-vendedor" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;"></div>
+      <div class="campo" style="max-width:420px;margin-bottom:12px;">
+        <input id="cg-busca-funil" placeholder="🔍 pesquisar por cliente, vendedor, local...">
+      </div>
+      <div id="cg-funil"></div>
     </div>
-    <div id="cg-funil"></div>
 
     <div style="display:grid;grid-template-columns:1.3fr 1fr;gap:16px;margin-top:20px;" class="grade-painel-comb">
       <div class="panel" style="padding:18px;">
@@ -16507,7 +16607,7 @@ async function crmGestaoTab (alvo, editavel) {
     <div id="cg-listas-painel" class="oculto" style="margin-top:10px;"></div>
     <div id="cg-banco-painel" class="oculto" style="margin-top:10px;"></div>`
 
-  renderFunilGestao($('#cg-funil'), lista, editavel, () => crmGestaoTab(alvo, editavel))
+  montarFiltroFunilGestao(lista, editavel, () => crmGestaoTab(alvo, editavel))
   $('#cg-indicadores-parado').appendChild(montarIndicadoresFunilParado(atribuidos))
   ligarBuscaFunilGestao()
   carregarAtividadeEquipe(atribuidos)
