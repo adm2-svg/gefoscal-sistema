@@ -18353,6 +18353,8 @@ function renderDetalheSdr (lead) {
     return `<div style="display:flex;justify-content:${minha ? 'flex-end' : 'flex-start'};">
       <div style="max-width:70%;padding:8px 12px;border-radius:12px;font-size:13px;line-height:1.45;
         ${minha ? 'background:var(--rust);color:#fff;border-bottom-right-radius:4px;' : 'background:var(--surface2);border:1px solid var(--line2);border-bottom-left-radius:4px;'}">
+        ${m.audio ? `<div style="font-size:10.5px;opacity:.75;margin-bottom:3px;display:flex;align-items:center;gap:4px;">
+          🎤 <span>${minha ? 'enviado como áudio' : 'áudio transcrito'}</span></div>` : ''}
         ${esc(m.conteudo).replace(/\n/g, '<br>')}
         <div style="font-size:9.5px;opacity:.65;margin-top:4px;text-align:right;">${formatarHoraRelativa(m.created_at)}</div>
       </div>
@@ -19158,18 +19160,73 @@ const ROTULO_STATUS_CANAL = {
 }
 let SDR_TIMER_QR = null
 
+// Vozes da OpenAI. Onyx é masculina e grave — a que mais combina com o
+// Eduardo; nova e shimmer são femininas, se um dia o SDR mudar de nome.
+const VOZES_TTS = [
+  ['onyx', 'Onyx — masculina, grave'], ['echo', 'Echo — masculina, mais leve'],
+  ['ash', 'Ash — masculina, jovem'], ['ballad', 'Ballad — masculina, calma'],
+  ['alloy', 'Alloy — neutra'], ['sage', 'Sage — neutra, suave'],
+  ['nova', 'Nova — feminina'], ['shimmer', 'Shimmer — feminina, clara'],
+  ['coral', 'Coral — feminina, animada'], ['fable', 'Fable — narrativa']
+]
+
 async function sdrAbaCanais (alvo) {
-  const { data: canais, error } = await db.from('sdr_canal').select('*').order('tipo')
+  const [{ data: canais, error }, { data: cfgAudio }] = await Promise.all([
+    db.from('sdr_canal').select('*').order('tipo'),
+    db.from('sdr_config').select('audio_ativo,voz_tts,audio_max_seg').eq('id', true).maybeSingle()
+  ])
   if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
 
   const podeMexer = ehTotal()
   alvo.innerHTML = `
+    ${cfgAudio ? `
+    <div class="panel" style="padding:16px;margin-bottom:14px;">
+      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Áudio</h3></div>
+      <p class="texto-dim2" style="font-size:12.5px;margin:-6px 0 12px;">
+        O Eduardo ouve o áudio do lead e responde no mesmo formato: quem manda áudio recebe áudio,
+        quem escreve recebe texto. A transcrição fica gravada na conversa, marcada com 🎤.</p>
+      <div class="form-grade" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));">
+        <div class="campo"><label>&nbsp;</label>
+          <label style="display:flex;align-items:center;gap:7px;font-size:13px;font-weight:400;padding-top:7px;">
+            <input type="checkbox" id="sdr-audio-ativo" ${cfgAudio.audio_ativo ? 'checked' : ''} ${podeMexer ? '' : 'disabled'}>
+            Responder em áudio quando o lead mandar áudio
+          </label>
+          <span class="texto-dim2" style="font-size:11px;">Desmarcado, ele continua ouvindo mas responde só por texto.</span>
+        </div>
+        <div class="campo"><label>Voz</label>
+          <select id="sdr-voz" ${podeMexer ? '' : 'disabled'}>
+            ${VOZES_TTS.map(([v, r]) => `<option value="${v}" ${cfgAudio.voz_tts === v ? 'selected' : ''}>${esc(r)}</option>`).join('')}
+          </select></div>
+        <div class="campo"><label>Áudio do lead até (segundos)</label>
+          <input id="sdr-audio-max" type="number" min="15" max="600" value="${cfgAudio.audio_max_seg ?? 120}" ${podeMexer ? '' : 'disabled'}>
+          <span class="texto-dim2" style="font-size:11px;">Mais longo que isso não é transcrito — trava de custo.</span></div>
+      </div>
+      ${podeMexer ? `<div class="acoes"><button class="btn-secundario mini" id="sdr-audio-salvar">Salvar</button>
+        <span id="sdr-audio-status" class="texto-dim2" style="font-size:11.5px;margin-left:8px;"></span></div>` : ''}
+    </div>` : ''}
+
     <p class="texto-dim2" style="margin-bottom:14px;">
       Os números de WhatsApp que a IA atende. O oficial da Meta atende qualquer pessoa;
       o do QR Code só fala com quem está numa lista ativa.</p>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;">
       ${(canais || []).map(c => cartaoCanal(c, podeMexer)).join('')}
     </div>`
+
+  const btnAudio = $('#sdr-audio-salvar')
+  if (btnAudio) btnAudio.onclick = async () => {
+    const st = $('#sdr-audio-status')
+    btnAudio.disabled = true
+    const { error: e } = await db.from('sdr_config').update({
+      audio_ativo: $('#sdr-audio-ativo').checked,
+      voz_tts: $('#sdr-voz').value,
+      audio_max_seg: Math.max(15, Math.min(600, Number($('#sdr-audio-max').value) || 120))
+    }).eq('id', true)
+    btnAudio.disabled = false
+    if (st) {
+      st.textContent = e ? e.message : 'salvo — vale já na próxima mensagem'
+      st.style.color = e ? 'var(--warn-text)' : 'var(--good-text)'
+    }
+  }
 
   alvo.querySelectorAll('[data-conectar]').forEach(b => {
     b.onclick = async () => {
