@@ -3466,6 +3466,141 @@ async function painelLucioRH (area) {
 const URL_CALENDARIO_DIRETOR = '' // fallback opcional: cole aqui o link de incorporação do Google Calendar direto no código, se preferir
 const CHAVE_CAL_DIRETOR = 'gefoscal-calendario-diretor-url' // link salvo pelo próprio usuário (por navegador), via botão "conectar workspace"
 
+// ---------------------------------------------------------------
+// Agenda na Visão Geral
+//
+// Junta num lugar só o que estava espalhado: a agenda pessoal, as
+// solicitações que a pessoa tem pra resolver, as que ela pediu e está
+// esperando, as tarefas de projeto dela e os projetos com prazo.
+//
+// O que está atrasado ou vence em até 3 dias sobe pro topo, em destaque.
+// O resto fica agrupado por dia. A ideia é que ninguém precise abrir
+// quatro telas pra saber o que tem pra hoje.
+//
+// Antes isso só existia pro Fabiano e pro Mikael, cada um com o seu
+// bloco. Agora é de todo mundo.
+// ---------------------------------------------------------------
+const DIAS_ALERTA_AGENDA = 3
+
+const ORIGEM_AGENDA = {
+  tarefa:         { icone: '✓', rotulo: 'Agenda',      modulo: null },
+  solicitacao:    { icone: '📋', rotulo: 'Solicitação', modulo: 'solicitacoes' },
+  projeto_tarefa: { icone: '🔧', rotulo: 'Tarefa de projeto', modulo: 'projetos' },
+  projeto:        { icone: '📦', rotulo: 'Projeto',     modulo: 'projetos' }
+}
+
+function diasAte (iso) {
+  if (!iso) return null
+  return Math.round((new Date(iso + 'T12:00:00') - new Date(hojeISO() + 'T12:00:00')) / 86400000)
+}
+
+function rotuloDiaAgenda (iso) {
+  const d = diasAte(iso)
+  if (d === 0) return 'Hoje'
+  if (d === 1) return 'Amanhã'
+  if (d === -1) return 'Ontem'
+  if (d < 0) return `${fmtData(iso)} · há ${-d} dias`
+  return fmtData(iso)
+}
+
+async function blocoAgendaPessoal (area) {
+  if (!PERFIL.pessoaId) return
+
+  const { data, error } = await db.rpc('minha_agenda', {
+    p_dias_frente: 30, p_dias_tras: 60
+  })
+  if (error) return   // agenda é apoio: se falhar, o resto da Visão Geral continua
+
+  const itens = (data || []).filter(i => !i.concluido && i.quando)
+  const hoje = hojeISO()
+
+  const atrasados = itens.filter(i => i.quando < hoje)
+  const perto = itens.filter(i => {
+    const d = diasAte(i.quando)
+    return d >= 0 && d <= DIAS_ALERTA_AGENDA
+  })
+  const depois = itens.filter(i => diasAte(i.quando) > DIAS_ALERTA_AGENDA)
+
+  // sem nada pra mostrar, não ocupa espaço na tela
+  if (!itens.length) return
+
+  const bloco = document.createElement('div')
+  bloco.className = 'panel'
+  bloco.style.cssText = 'padding:18px;margin-bottom:16px;'
+  if (atrasados.length) bloco.style.borderLeft = '3px solid var(--critico-text)'
+  else if (perto.length) bloco.style.borderLeft = '3px solid var(--warn-text)'
+
+  const linha = i => {
+    const o = ORIGEM_AGENDA[i.tipo] || { icone: '•', rotulo: i.tipo, modulo: null }
+    const d = diasAte(i.quando)
+    const cor = d < 0 ? 'var(--critico-text)' : d <= DIAS_ALERTA_AGENDA ? 'var(--warn-text)' : 'var(--dim2)'
+    return `
+      <div style="display:flex;gap:10px;align-items:flex-start;padding:7px 0;border-bottom:1px solid var(--line2);">
+        <span style="flex:none;font-size:13px;width:18px;text-align:center;" title="${esc(o.rotulo)}">${o.icone}</span>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:13px;line-height:1.4;">${esc(i.titulo || 'sem título')}</div>
+          <div class="texto-dim2" style="font-size:11px;margin-top:1px;">
+            ${esc(o.rotulo)}${i.referencia ? ' · ' + esc(i.referencia) : ''}
+            ${i.papel === 'pedi' ? ' · <i>você pediu, está esperando</i>' : ''}
+            ${i.urgencia ? ' · ' + esc(String(i.urgencia).toLowerCase()) : ''}
+          </div>
+        </div>
+        <div style="flex:none;text-align:right;">
+          <div style="font-size:11.5px;color:${cor};font-weight:${d <= DIAS_ALERTA_AGENDA ? '700' : '400'};">
+            ${esc(rotuloDiaAgenda(i.quando))}</div>
+          ${i.hora ? `<div class="texto-dim2" style="font-size:10.5px;">${esc(String(i.hora).slice(0, 5))}</div>` : ''}
+        </div>
+      </div>`
+  }
+
+  const porDia = {}
+  for (const i of depois) (porDia[i.quando] = porDia[i.quando] || []).push(i)
+  const diasOrdenados = Object.keys(porDia).sort()
+
+  bloco.innerHTML = `
+    <div class="cabeca-secao" style="margin-bottom:6px;">
+      <h3 style="font-family:var(--serif);font-size:17px;">Sua agenda</h3>
+      <span class="texto-dim2" style="font-size:11.5px;">
+        ${itens.length} item(ns) em aberto</span>
+    </div>
+
+    ${atrasados.length ? `
+      <div style="background:rgba(var(--rust-rgb),.07);border-radius:8px;padding:10px 12px;margin:10px 0;">
+        <div style="font-size:12.5px;font-weight:700;color:var(--critico-text);margin-bottom:4px;">
+          ⏰ ${atrasados.length} com prazo vencido</div>
+        ${atrasados.sort((a, b) => a.quando.localeCompare(b.quando)).map(linha).join('')}
+      </div>` : ''}
+
+    ${perto.length ? `
+      <div style="margin:10px 0;">
+        <div style="font-size:12.5px;font-weight:700;color:var(--warn-text);margin-bottom:4px;">
+          📌 ${perto.length} vencendo até ${DIAS_ALERTA_AGENDA} dias</div>
+        ${perto.sort((a, b) => a.quando.localeCompare(b.quando)).map(linha).join('')}
+      </div>` : ''}
+
+    ${diasOrdenados.length ? `
+      <details ${atrasados.length || perto.length ? '' : 'open'} style="margin-top:8px;">
+        <summary style="cursor:pointer;font-size:12.5px;color:var(--dim);">
+          Mais ${depois.length} adiante</summary>
+        <div style="margin-top:6px;">
+          ${diasOrdenados.map(dia => `
+            <div class="rot texto-dim2" style="font-size:10.5px;text-transform:uppercase;
+              letter-spacing:.4px;margin:10px 0 2px;">${esc(rotuloDiaAgenda(dia))}</div>
+            ${porDia[dia].map(linha).join('')}`).join('')}
+        </div>
+      </details>` : ''}
+
+    <div class="acoes" style="margin-top:12px;">
+      <button class="btn-secundario mini" data-agenda-ir="solicitacoes">Abrir Solicitações</button>
+      <button class="btn-secundario mini" data-agenda-ir="projetos">Abrir Projetos</button>
+    </div>`
+
+  area.appendChild(bloco)
+  bloco.querySelectorAll('[data-agenda-ir]').forEach(b => {
+    b.onclick = () => irPara(b.dataset.agendaIr)
+  })
+}
+
 async function blocoCalendarioPlanner (area) {
   const bloco = document.createElement('div')
   bloco.className = 'grade-cal-planner'
@@ -4251,6 +4386,7 @@ async function paginaVisaoGeral () {
   if (PERFIL.pessoaId === PESSOA_PAINEL_DIRETOR) {
     $('#subtitulo-pagina').textContent = ''
     await painelExecutivoDiretor(area)
+    await blocoAgendaPessoal(area)
     await blocoCalendarioPlanner(area)
     await blocoSecretaria(area)
     await blocoResumoSolicitacoesProjetos(area)
@@ -4262,6 +4398,7 @@ async function paginaVisaoGeral () {
   if (PERFIL.pessoaId === PESSOA_PAINEL_MIKAEL) {
     $('#subtitulo-pagina').textContent = ''
     await painelPendenciasJuridicoFrota(area)
+    await blocoAgendaPessoal(area)
     await blocoCalendarioPlanner(area)
     await blocoSecretariaJuridicoFrota(area)
     await blocoResumoSolicitacoesProjetos(area)
@@ -4274,6 +4411,10 @@ async function paginaVisaoGeral () {
   if (PERFIL.pessoaId === ID_LUCIO_DECISOR_PRORROGACAO) {
     await painelLucioRH(area)
   }
+
+  // a agenda vem antes dos painéis de módulo: é o que a pessoa precisa
+  // ver primeiro ao entrar, não depois de rolar quatro blocos
+  await blocoAgendaPessoal(area)
 
   // painel do financeiro, para quem trabalha nele
   await painelAtencao(area)
