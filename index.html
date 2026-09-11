@@ -2354,6 +2354,9 @@ function ligarChecagemPeriodicaNotificacoes () {
 // apontar; hoje só existe 'solicitacao_interna', mas é só acrescentar
 // uma linha nova quando outro módulo passar a gerar notificação.
 const ABRIR_ENTIDADE_NOTIFICACAO = {
+  // reunião marcada pelo SDR de WhatsApp: abre a ficha do lead com o
+  // relatório da conversa, sem precisar do módulo SDR nem passar pelo CRM
+  sdr_lead: async (id) => { await abrirRelatorioSdrDoLead(id) },
   // abre o registro numa janela própria: quem é responsável pela
   // inconsistência responde direto daqui, mesmo sem ter o módulo de DP
   ponto_inconsistencia: async (id) => { await abrirPontoInconsistenciaPorId(id) },
@@ -2520,7 +2523,7 @@ async function abrirNotificacoes () {
   }
 }
 
-const ICONE_NOTIF = { solicitacao_interna: '📋', solicitacao_compra: '🛒' }
+const ICONE_NOTIF = { solicitacao_interna: '📋', solicitacao_compra: '🛒', sdr_lead: '📅' }
 
 function itemNotifHtml (n) {
   const clicavel = !!(n.entidade && ABRIR_ENTIDADE_NOTIFICACAO[n.entidade] && n.entidade_id)
@@ -3941,6 +3944,132 @@ async function blocoResumoSolicitacoesProjetos (area) {
   proj.querySelector('[data-ir]').onclick = () => irPara('projetos')
 }
 
+// ---------------------------------------------------------------
+// O que o consultor recebe quando o SDR marca uma reunião
+//
+// Duas portas para a mesma coisa:
+//  - a notificação "Reunião marcada pelo SDR" (entidade 'sdr_lead')
+//  - o bloco "Leads do SDR" na Visão Geral dele
+//
+// Os dois abrem a mesma ficha: quem é o lead, quando é a reunião, e o
+// relatório da conversa que o Eduardo teve — resumo, DISC, sinais de
+// compra, objeções, o que ficou em aberto e o próximo passo.
+// ---------------------------------------------------------------
+async function abrirRelatorioSdrDoLead (leadCrmId) {
+  const { data: leadSdr } = await db.from('leads')
+    .select('*').eq('lead_crm_id', leadCrmId).maybeSingle()
+  if (!leadSdr) { alert('Esse lead não veio do SDR de WhatsApp.'); return }
+
+  const [{ data: ficha }, { data: compromisso }] = await Promise.all([
+    db.from('sdr_relatorio_conversa').select('*').eq('lead_sdr_id', leadSdr.id)
+      .order('data_referencia', { ascending: false }).limit(1).maybeSingle(),
+    leadSdr.reuniao_compromisso_id
+      ? db.from('lead_compromisso').select('data_hora,titulo,observacao').eq('id', leadSdr.reuniao_compromisso_id).maybeSingle()
+      : Promise.resolve({ data: null })
+  ])
+
+  const listaDe = (titulo, itens, cor) => {
+    const arr = (itens || []).map(textoDoItem).filter(Boolean)
+    if (!arr.length) return ''
+    return `<div style="margin-top:12px;">
+      <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;${cor ? 'color:' + cor + ';' : ''}">${titulo}</div>
+      <ul style="margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px;">
+        ${arr.map(t => `<li style="font-size:12.5px;line-height:1.45;">${esc(t)}</li>`).join('')}</ul></div>`
+  }
+
+  const quando = leadSdr.reuniao_em || compromisso?.data_hora
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal" style="max-width:620px;">
+      <h3 style="margin-bottom:2px;">${esc(leadSdr.nome || leadSdr.telefone)}</h3>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 14px;">
+        Lead do SDR de WhatsApp${leadSdr.municipio || leadSdr.uf ? ' · ' + esc([leadSdr.municipio, leadSdr.uf].filter(Boolean).join('/')) : ''}
+        ${leadSdr.cultura ? ' · ' + esc(leadSdr.cultura) : ''}</p>
+
+      ${quando ? `<div style="padding:12px 14px;border-left:3px solid var(--good-text);background:var(--surface2);border-radius:0 6px 6px 0;margin-bottom:14px;">
+        <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;">Reunião marcada</div>
+        <div style="font-size:15px;font-weight:700;margin-top:2px;">${esc(fmtQuando(quando) || '')}</div>
+        <div class="texto-dim2" style="font-size:11.5px;margin-top:2px;">Já está na sua agenda, na aba Meu Dia do CRM.</div>
+      </div>` : ''}
+
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+        ${leadSdr.perfil_disc ? `<span class="chip" style="font-size:11.5px;">DISC ${esc(leadSdr.perfil_disc)} · ${esc(ROTULO_DISC[leadSdr.perfil_disc] || '')}</span>` : ''}
+        ${ficha?.temperatura ? `<span class="${(CHIP_TEMPERATURA[ficha.temperatura] || {}).classe || 'chip'}" style="font-size:11.5px;">${esc((CHIP_TEMPERATURA[ficha.temperatura] || {}).rotulo || ficha.temperatura)}</span>` : ''}
+        ${leadSdr.volume_producao ? `<span class="chip" style="font-size:11.5px;">${esc(leadSdr.volume_producao)}</span>` : ''}
+        ${leadSdr.fornecedor_atual ? `<span class="chip" style="font-size:11.5px;">hoje compra de ${esc(leadSdr.fornecedor_atual)}</span>` : ''}
+      </div>
+
+      ${ficha?.resumo
+        ? `<p style="font-size:13.5px;line-height:1.6;margin:0;">${esc(ficha.resumo)}</p>`
+        : `<p class="texto-dim2" style="font-size:12.5px;margin:0;">O relatório dessa conversa ainda está sendo montado — ele fica pronto poucos minutos depois do agendamento, ou no fechamento do dia.</p>`}
+
+      ${ficha ? `
+        ${listaDe('Sinais de compra', ficha.sinais_compra)}
+        ${listaDe('Objeções que ele levantou', ficha.objecoes)}
+        ${listaDe('Ficou em aberto — retome isso', ficha.duvidas_abertas, 'var(--warn-text)')}
+        ${listaDe('Por que o DISC', ficha.disc_evidencias)}
+        ${ficha.proximo_passo ? `<div style="margin-top:12px;padding:10px 12px;border-left:3px solid var(--rust);background:var(--surface2);border-radius:0 6px 6px 0;">
+          <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">Próximo passo</div>
+          <div style="font-size:12.5px;line-height:1.5;">${esc(ficha.proximo_passo)}</div></div>` : ''}` : ''}
+
+      <div class="acoes" style="margin-top:16px;">
+        <a class="btn-secundario" href="https://wa.me/${esc((leadSdr.telefone || '').replace(/\D/g, ''))}" target="_blank" rel="noopener">Chamar no WhatsApp</a>
+        <button class="btn-secundario" id="rel-sdr-crm">Abrir no CRM</button>
+        <button class="btn-secundario" id="rel-sdr-fechar">Fechar</button>
+      </div>
+    </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#rel-sdr-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  fundo.querySelector('#rel-sdr-crm').onclick = () => { fechar(); irPara('crm') }
+}
+
+// Bloco da Visão Geral do consultor: os leads que o SDR entregou pra ele,
+// com a reunião marcada em destaque. Só aparece se houver algum.
+async function blocoLeadsSdrDoVendedor (area) {
+  if (!PERFIL.pessoaId) return
+  const { data, error } = await db.from('leads')
+    .select('id,nome,telefone,status,cultura,uf,municipio,perfil_disc,reuniao_em,lead_crm_id,updated_at')
+    .eq('vendedor_id', PERFIL.pessoaId).not('lead_crm_id', 'is', null)
+    .order('reuniao_em', { ascending: true, nullsFirst: false })
+    .limit(12)
+  if (error || !data?.length) return
+
+  const agora = Date.now()
+  const futuras = data.filter(l => l.reuniao_em && new Date(l.reuniao_em).getTime() >= agora - 3600000)
+  const resto = data.filter(l => !futuras.includes(l))
+
+  const linha = l => `
+    <div class="passo" data-rel-sdr="${l.lead_crm_id}" style="cursor:pointer;">
+      <span class="quando">${l.reuniao_em ? esc(fmtQuando(l.reuniao_em) || '') : esc(ROTULO_STATUS_LEAD_SDR[l.status] || l.status || '')}</span>
+      <span>
+        <b>${esc(l.nome || l.telefone)}</b>
+        ${l.perfil_disc ? `<span class="chip" style="font-size:10.5px;margin-left:6px;">DISC ${esc(l.perfil_disc)}</span>` : ''}
+        ${l.reuniao_em ? '<span class="badge-bom" style="font-size:10.5px;margin-left:6px;">reunião marcada</span>' : ''}
+        <span class="texto-dim2" style="font-size:11.5px;display:block;margin-top:2px;">
+          ${esc([l.cultura, [l.municipio, l.uf].filter(Boolean).join('/')].filter(Boolean).join(' · ') || 'vindo do SDR de WhatsApp')} · toque para ver o relatório</span>
+      </span>
+    </div>`
+
+  const bloco = document.createElement('div')
+  bloco.className = 'panel'
+  bloco.style.cssText = 'padding:18px;margin-bottom:16px;'
+  bloco.innerHTML = `
+    <div class="cabeca-secao">
+      <h3 style="font-family:var(--serif);font-size:17px;">Leads do SDR no seu funil</h3>
+      <span class="texto-dim2" style="font-size:11.5px;">${futuras.length ? futuras.length + ' com reunião marcada' : 'sem reunião marcada'}</span>
+    </div>
+    ${futuras.map(linha).join('')}
+    ${resto.length ? `<div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;margin:10px 0 4px;">Sem reunião marcada</div>${resto.map(linha).join('')}` : ''}`
+  area.appendChild(bloco)
+
+  bloco.querySelectorAll('[data-rel-sdr]').forEach(el => {
+    el.onclick = () => abrirRelatorioSdrDoLead(el.dataset.relSdr)
+  })
+}
+
 async function paginaVisaoGeral () {
   $('#subtitulo-pagina').textContent = 'O painel montado para você'
   const area = areaLivre()
@@ -4027,6 +4156,7 @@ async function paginaVisaoGeral () {
 
   // painel do financeiro, para quem trabalha nele
   await painelAtencao(area)
+  await blocoLeadsSdrDoVendedor(area)
   await painelGerencial(area)
   await minhasSolicitacoes(area)
   await minhasCompras(area)
