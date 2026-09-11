@@ -19183,13 +19183,41 @@ async function sdrAbaCanais (alvo) {
       ${(canais || []).map(c => cartaoCanal(c, podeMexer)).join('')}
     </div>`
 
+  // Antes isto só escrevia 'aguardando_qr' no banco e torcia pra Evolution
+  // mandar um webhook por conta própria — quando a sessão caía de vez, ela
+  // não mandava, e a tela ficava num "esperando" eterno. Agora a gente pede.
+  const acaoCanal = async (botao, canalId, acao, rotulo) => {
+    const aviso = alvo.querySelector(`[data-canal-status="${canalId}"]`)
+    const textoOriginal = botao.textContent
+    botao.disabled = true; botao.textContent = 'aguarde...'
+    if (aviso) { aviso.textContent = rotulo; aviso.style.color = 'var(--dim2)' }
+
+    const { data, error } = await db.functions.invoke('sdr-canal-conectar', {
+      body: { acao, canal_id: canalId }
+    })
+    botao.disabled = false; botao.textContent = textoOriginal
+
+    if (error || (data && data.erro)) {
+      if (aviso) {
+        aviso.textContent = data?.erro || error?.message || 'não deu certo'
+        aviso.style.color = 'var(--warn-text)'
+      }
+      return
+    }
+    if (data?.jaConectado && aviso) aviso.textContent = 'já estava conectado'
+    sdrAbaCanais(alvo)
+  }
+
   alvo.querySelectorAll('[data-conectar]').forEach(b => {
-    b.onclick = async () => {
-      const { error } = await db.from('sdr_canal')
-        .update({ status: 'aguardando_qr', status_em: new Date().toISOString(), status_detalhe: null })
-        .eq('id', b.dataset.conectar)
-      if (error) { alert('Não consegui pedir a conexão: ' + error.message); return }
-      sdrAbaCanais(alvo)
+    b.onclick = () => acaoCanal(b, b.dataset.conectar, 'conectar', 'pedindo o código ao serviço de WhatsApp...')
+  })
+  alvo.querySelectorAll('[data-reiniciar-canal]').forEach(b => {
+    b.onclick = () => acaoCanal(b, b.dataset.reiniciarCanal, 'reiniciar', 'reiniciando a instância...')
+  })
+  alvo.querySelectorAll('[data-sair-canal]').forEach(b => {
+    b.onclick = () => {
+      if (!confirm('Isso derruba a sessão atual do WhatsApp. Vai precisar ler o QR de novo. Continuar?')) return
+      acaoCanal(b, b.dataset.sairCanal, 'sair', 'encerrando a sessão...')
     }
   })
   alvo.querySelectorAll('[data-desconectar]').forEach(b => {
@@ -19246,22 +19274,28 @@ function cartaoCanal (c, podeMexer) {
              No celular: WhatsApp → Aparelhos conectados → Conectar aparelho.</p>`
         : `<div class="caixa-texto" style="margin:0;">
              <p style="font-size:12.5px;margin:0;color:var(--warn-text);">
-               Pedido registrado, esperando o serviço gerar o QR.</p>
+               Ainda sem QR na tela.</p>
              <p class="texto-dim2" style="font-size:12px;margin:6px 0 0;">
-               Se ele não aparecer, o serviço de WhatsApp ainda não está no ar —
-               é ele quem lê este pedido e devolve o código.</p>
+               Clique em <b>Pedir QR</b> aqui embaixo. Se mesmo assim não vier, use
+               <b>Reiniciar</b> e, por último, <b>Sair da sessão</b> — isso derruba o
+               vínculo antigo e força um código novo.</p>
            </div>`) : ''}
 
       ${oficial ? `<p class="texto-dim2" style="font-size:12px;margin:0;">
           Conecta sozinho pela Cloud API, sem QR. Depende da liberação do número na Meta.</p>` : ''}
 
-      ${podeMexer ? `<div class="acoes" style="margin-top:2px;">
-        ${!oficial && c.status !== 'aguardando_qr' && c.status !== 'conectado'
-          ? `<button class="btn mini" data-conectar="${c.id}">Conectar por QR</button>` : ''}
+      ${podeMexer ? `<div class="acoes" style="margin-top:2px;flex-wrap:wrap;">
+        ${!oficial && c.status !== 'conectado'
+          ? `<button class="btn mini" data-conectar="${c.id}">${c.status === 'aguardando_qr' ? 'Pedir QR de novo' : 'Pedir QR'}</button>` : ''}
+        ${!oficial ? `<button class="btn-secundario mini" data-reiniciar-canal="${c.id}"
+            title="Reinicia a instância no serviço de WhatsApp e pede o código de novo">Reiniciar</button>` : ''}
+        ${!oficial ? `<button class="btn-secundario mini" data-sair-canal="${c.id}"
+            title="Derruba a sessão antiga — use quando o QR não renova">Sair da sessão</button>` : ''}
         ${c.status !== 'desconectado'
           ? `<button class="btn-secundario mini" data-desconectar="${c.id}">Desconectar</button>` : ''}
         <button class="btn-secundario mini" data-editar-canal="${c.id}">Editar</button>
-      </div>` : ''}
+      </div>
+      <div class="texto-dim2" data-canal-status="${c.id}" style="font-size:11.5px;"></div>` : ''}
     </div>`
 }
 
