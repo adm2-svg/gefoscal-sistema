@@ -14111,6 +14111,11 @@ function abrirCrm (sub, editavel, gerencia) {
   if (sub === 'calendario') crmMeuDia(alvo, editavel, gerencia)
   if (sub === 'atribuir') crmAtribuir(alvo)
   if (sub === 'gestao') crmGestaoTab(alvo, editavel).then(() => {
+    const comparativo = document.createElement('div')
+    comparativo.style.marginTop = '26px'
+    alvo.appendChild(comparativo)
+    painelCustoRetorno(comparativo)
+
     const caixa = document.createElement('div')
     caixa.style.marginTop = '26px'
     caixa.innerHTML = `<div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Cartão corporativo — equipe comercial</h3></div>`
@@ -16323,6 +16328,172 @@ function ligarBuscaFunilGestao () {
       card.style.display = !termo || texto.includes(termo) ? '' : 'none'
     })
   }
+}
+
+// ---------------------------------------------------------------
+// Custo × retorno por vendedor
+//
+// De um lado o que ele fechou; do outro o que ele gastou. Hoje o único
+// custo lançado é o cartão Onfly — a coluna "Outros custos" (salário,
+// comissão, ajuda de custo) já está montada e fica em branco até alguém
+// alimentar. Quando entrar, a conta do saldo se ajusta sozinha.
+//
+// Regras que mantêm a conta honesta, e que valem mais que o número:
+//   · o gasto é casado por PESSOA, não pela área da despesa — o Fabiano
+//     é vendedor e as despesas dele estão marcadas como DIRECAO;
+//   · o ganho é datado por quando o lead virou GANHO, não por "mexeram
+//     nele ontem";
+//   · lead sem valor preenchido aparece como "sem valor", nunca R$ 0;
+//   · gasto de cartão que ninguém ligou a uma pessoa fica à vista.
+// ---------------------------------------------------------------
+const PERIODOS_CUSTO = [
+  ['mes', 'Este mês'], ['mes_passado', 'Mês passado'],
+  ['90d', 'Últimos 90 dias'], ['ano', 'Este ano']
+]
+
+function faixaDoPeriodo (chave) {
+  const hoje = new Date()
+  const iso = d => d.toISOString().slice(0, 10)
+  if (chave === 'mes') {
+    return [iso(new Date(hoje.getFullYear(), hoje.getMonth(), 1)), iso(hoje)]
+  }
+  if (chave === 'mes_passado') {
+    return [iso(new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1)),
+            iso(new Date(hoje.getFullYear(), hoje.getMonth(), 0))]
+  }
+  if (chave === 'ano') return [iso(new Date(hoje.getFullYear(), 0, 1)), iso(hoje)]
+  return [iso(new Date(Date.now() - 90 * 864e5)), iso(hoje)]
+}
+
+async function painelCustoRetorno (alvo, periodo = '90d') {
+  alvo.innerHTML = `
+    <div class="cabeca-secao">
+      <h3 style="font-family:var(--serif);font-size:16px;">Custo × retorno por vendedor</h3>
+      <div id="cr-periodos" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+    </div>
+    <div id="cr-corpo" class="panel" style="padding:0;">
+      <p class="texto-dim2" style="padding:16px;">carregando...</p>
+    </div>`
+
+  const chips = alvo.querySelector('#cr-periodos')
+  chips.innerHTML = PERIODOS_CUSTO.map(([id, rot]) =>
+    `<button class="chip-filtro ${id === periodo ? 'ativo' : ''}" data-per="${id}">${rot}</button>`).join('')
+  chips.querySelectorAll('[data-per]').forEach(b => {
+    b.onclick = () => painelCustoRetorno(alvo, b.dataset.per)
+  })
+
+  const [de, ate] = faixaDoPeriodo(periodo)
+  const corpo = alvo.querySelector('#cr-corpo')
+
+  const [{ data: linhas, error }, { data: semDono }] = await Promise.all([
+    db.rpc('crm_custo_retorno_vendedor', { p_de: de, p_ate: ate }),
+    db.rpc('crm_cartao_sem_dono', { p_de: de, p_ate: ate })
+  ])
+
+  if (error) { corpo.innerHTML = `<p class="vazio" style="padding:16px;">${esc(error.message)}</p>`; return }
+
+  const dados = linhas || []
+  const orfao = Array.isArray(semDono) ? semDono[0] : semDono
+
+  // Quem não teve nem ganho, nem funil, nem gasto no período não diz nada.
+  const ativos = dados.filter(v =>
+    v.ganhos || v.abertos || Number(v.custo_cartao) || Number(v.valor_ganho))
+
+  const n = v => Number(v || 0)
+  const totalGanho = ativos.reduce((s, v) => s + n(v.valor_ganho), 0)
+  const totalCusto = ativos.reduce((s, v) => s + n(v.custo_cartao) + n(v.custo_outros), 0)
+  const totalSemValor = ativos.reduce((s, v) => s + v.ganhos_sem_valor + v.abertos_sem_valor, 0)
+
+  const dinheiro = (soma, semValor, quantos) => {
+    if (!quantos) return '<span class="texto-dim2">—</span>'
+    if (!n(soma)) return `<span class="texto-dim2" title="${semValor} sem valor preenchido">sem valor</span>`
+    return `R$ ${fmtNum(soma)}${semValor ? ` <span class="texto-dim2" style="font-size:10px;">+${semValor} s/ valor</span>` : ''}`
+  }
+
+  // O número que a pessoa quer ver: sobrou ou faltou?
+  const saldoCelula = v => {
+    const custo = n(v.custo_cartao) + n(v.custo_outros)
+    const ganho = n(v.valor_ganho)
+    if (!custo && !ganho) return '<span class="texto-dim2">—</span>'
+    if (!ganho) {
+      return `<span class="badge-atencao" title="Gastou e ainda não fechou nada neste período">− R$ ${fmtNum(custo)}</span>`
+    }
+    const saldo = ganho - custo
+    return `<span class="${saldo >= 0 ? 'badge-bom' : 'badge-alerta'}">${saldo >= 0 ? '' : '− '}R$ ${fmtNum(Math.abs(saldo))}</span>`
+  }
+
+  // Quanto custou cada real fechado. Só faz sentido quando há os dois lados.
+  const porRealCelula = v => {
+    const custo = n(v.custo_cartao) + n(v.custo_outros)
+    const ganho = n(v.valor_ganho)
+    if (!custo) return '<span class="texto-dim2">—</span>'
+    if (!ganho) return '<span class="texto-dim2">sem ganho no período</span>'
+    const razao = custo / ganho
+    return `<span class="${razao > 0.5 ? 'badge-alerta' : razao > 0.2 ? 'badge-atencao' : 'texto-dim2'}">R$ ${razao.toFixed(2)}</span>`
+  }
+
+  corpo.innerHTML = `
+    <div style="padding:14px 16px 4px;">
+      <p class="texto-dim2" style="font-size:11.5px;margin:0;">
+        De ${esc(fmtData(de))} a ${esc(fmtData(ate))}. O ganho conta pela data em que o lead
+        virou GANHO; o gasto do cartão conta pela data da despesa, casada pela pessoa —
+        não pela área em que a despesa foi classificada.
+      </p>
+    </div>
+
+    <div class="resumo-topo" style="margin:12px 16px 4px;">
+      ${[['Ganho no período', 'R$ ' + fmtNum(totalGanho), ''],
+         ['Gasto no cartão', 'R$ ' + fmtNum(totalCusto), ''],
+         ['Saldo', (totalGanho - totalCusto >= 0 ? '' : '− ') + 'R$ ' + fmtNum(Math.abs(totalGanho - totalCusto)),
+          totalGanho - totalCusto >= 0 ? '' : 'alerta']]
+        .map(([rot, val, cl]) => `<div class="bloco ${cl}"><div class="rot">${rot}</div><div class="val">${val}</div></div>`).join('')}
+    </div>
+
+    <div class="tabela-scroll" style="max-height:none;">
+      <table><thead><tr>
+        <th>Vendedor</th>
+        <th class="num">Ganhos</th><th class="num">Valor ganho</th>
+        <th class="num">Em funil</th><th class="num">Valor em funil</th>
+        <th class="num">Cartão Onfly</th><th class="num">Outros custos</th>
+        <th class="num">Saldo</th><th class="num">Custo por R$ 1 ganho</th>
+      </tr></thead><tbody>
+        ${ativos.map(v => `<tr>
+          <td>${esc(v.vendedor)}</td>
+          <td class="num">${v.ganhos ? `<span class="badge-bom">${v.ganhos}</span>` : '<span class="texto-dim2">—</span>'}</td>
+          <td class="num">${dinheiro(v.valor_ganho, v.ganhos_sem_valor, v.ganhos)}</td>
+          <td class="num">${v.abertos || '<span class="texto-dim2">—</span>'}</td>
+          <td class="num">${dinheiro(v.valor_funil, v.abertos_sem_valor, v.abertos)}</td>
+          <td class="num">${n(v.custo_cartao)
+            ? `R$ ${fmtNum(v.custo_cartao)} <span class="texto-dim2" style="font-size:10px;">${v.lancamentos_cartao}x</span>`
+            : '<span class="texto-dim2">—</span>'}</td>
+          <td class="num"><span class="texto-dim2" title="Salário, comissão e ajuda de custo ainda não são lançados no sistema">a lançar</span></td>
+          <td class="num">${saldoCelula(v)}</td>
+          <td class="num">${porRealCelula(v)}</td>
+        </tr>`).join('') || `<tr><td colspan="9" class="vazio">Nada movimentou neste período.</td></tr>`}
+      </tbody></table>
+    </div>
+
+    ${orfao && Number(orfao.total) ? `
+      <div style="margin:12px 16px;padding:12px 14px;border-left:3px solid var(--warn-text);
+        background:var(--surface2);border-radius:0 8px 8px 0;">
+        <div style="font-size:12.5px;font-weight:600;color:var(--warn-text);">
+          R$ ${fmtNum(orfao.total)} no cartão sem dono (${orfao.lancamentos} lançamento(s))</div>
+        <p class="texto-dim2" style="font-size:11.5px;margin:4px 0 0;line-height:1.45;">
+          Essas despesas não estão ligadas a nenhuma pessoa, então não entram na conta de
+          ninguém aqui em cima. Dá pra ligar cada uma a um colaborador no painel do cartão,
+          logo abaixo.</p>
+      </div>` : ''}
+
+    ${totalSemValor ? `
+      <p class="texto-dim2" style="font-size:11px;margin:0 16px 14px;line-height:1.45;">
+        ⚠️ <b>${totalSemValor}</b> lead(s) sem valor estimado preenchido. Onde está escrito
+        <i>"sem valor"</i>, o negócio não vale zero — ninguém informou quanto vale. Enquanto isso,
+        o saldo e o custo por real ganho contam menos do que a realidade.</p>` : ''}
+
+    <p class="texto-dim2" style="font-size:11px;margin:0 16px 14px;line-height:1.45;">
+      A coluna <b>Outros custos</b> está reservada para salário, comissão e ajuda de custo.
+      Enquanto esses valores não forem lançados, o saldo mostra só cartão contra ganho —
+      é menos custo do que a realidade, não mais.</p>`
 }
 
 // ----- Atividade da equipe — cruza o sinal do funil (verde/amarelo/
