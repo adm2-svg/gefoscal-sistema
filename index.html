@@ -33970,7 +33970,8 @@ async function paginaDesempenho () {
   DESEMP_CACHE = { pessoas: pessoas || [], setores: setores || [] }
 
   const abas = [
-    ['painel', '📊', 'Painel'], ['especialista', '🎯', 'Especialista RH'], ['agilidade', '⚡', 'Agilidade e prazos'],
+    ['painel', '📊', 'Painel'], ['especialista', '🎯', 'Especialista RH'], ['disc', '🧭', 'Perfis DISC'],
+    ['agilidade', '⚡', 'Agilidade e prazos'],
     ['individual', '👤', 'Acompanhamento Individual'], ['prestadores', '🏢', 'Prestadores Atrelados'], ['recrutamento', '🗂️', 'Recrutamento e Seleção'],
     ['360', '🔄', 'Avaliação 360'], ['pdi', '🌱', 'Planos de desenvolvimento'],
     ['trilhas', '🎓', 'Trilhas'], ['meu', '🙋', 'Meu RH']
@@ -34012,6 +34013,7 @@ function abrirDesempenho (sub, editavel) {
   if (sub === 'pdi') desempPdi(alvo, editavel)
   if (sub === 'trilhas') desempTrilhas(alvo, editavel)
   if (sub === 'especialista') desempEspecialistaRH(alvo)
+  if (sub === 'disc') desempPerfisDisc(alvo)
   if (sub === 'meu') desempMeu(alvo)
 }
 
@@ -34026,11 +34028,12 @@ const AGENTE_ESPECIALISTA_RH_ID = '469c5bfc-1f69-4bad-9756-a1cc6a587bf9'
 let RH_ESPEC_HISTORICO = []
 
 async function coletarContextoRH () {
-  const [resumoAgil, { data: cicloAtivo }, { data: pdiTodos }, { data: vagas }] = await Promise.all([
+  const [resumoAgil, { data: cicloAtivo }, { data: pdiTodos }, { data: vagas }, { data: perfisDisc }] = await Promise.all([
     resumoAgilidadeIndividual(),
     db.from('avaliacao_360_ciclo').select('id,nome,status').eq('status', 'ABERTO').maybeSingle(),
     db.from('plano_desenvolvimento').select('status'),
-    db.from('vaga').select('cargo,etapa,tipo_contratacao').neq('status', 'CANCELADA')
+    db.from('vaga').select('cargo,etapa,tipo_contratacao').neq('status', 'CANCELADA'),
+    db.from('rh_perfil_disc').select('nome,cargo_no_laudo,primario,secundario,disc_natural,disc_adaptado').order('nome')
   ])
 
   const pdiAtivos = (pdiTodos || []).filter(p => p.status === 'EM_ANDAMENTO').length
@@ -34055,7 +34058,387 @@ async function coletarContextoRH () {
     ? `- ${vagasAbertas.length} vaga(s) em aberto: ${vagasAbertas.map(v => `${v.cargo} (${v.tipo_contratacao}, etapa: ${ROTULO_ETAPA_VAGA[v.etapa] || v.etapa})`).join('; ')}\n`
     : `- Nenhuma vaga em aberto no momento\n`
 
+  // Perfis DISC: a especialista passa a saber COM QUEM ela est\u00e1 lidando,
+  // n\u00e3o s\u00f3 os n\u00fameros. O aviso de uso vai junto de prop\u00f3sito \u2014 sen\u00e3o ela
+  // come\u00e7a a usar o perfil pra opinar sobre quem merece o qu\u00ea.
+  if ((perfisDisc || []).length) {
+    texto += `\nPERFIS DISC DA EQUIPE (${perfisDisc.length} pessoas com laudo):\n`
+    for (const d of perfisDisc) {
+      const n = d.disc_natural || {}
+      const a = d.disc_adaptado || {}
+      const grafico = ['D', 'I', 'S', 'C'].map(l => `${l}${n[l] ?? '?'}`).join(' ')
+      const forcado = ['D', 'I', 'S', 'C']
+        .map(l => ({ l, dif: Number(a[l] ?? 0) - Number(n[l] ?? 0) }))
+        .filter(x => Math.abs(x.dif) >= 20)
+        .map(x => `${x.l}${x.dif > 0 ? '+' : ''}${x.dif}`)
+      texto += `- ${d.nome}${d.cargo_no_laudo ? ` (${d.cargo_no_laudo})` : ''}: ` +
+        `${d.primario || '?'}${d.secundario || ''} | natural ${grafico}` +
+        `${forcado.length ? ` | adapta\u00e7\u00e3o forte no trabalho: ${forcado.join(', ')}` : ''}\n`
+    }
+    texto += `- Como usar: DISC explica COMO a pessoa tende a agir. Serve pra escolher o jeito ` +
+      `de dar um feedback, montar dupla, entender um atrito. N\u00e3o serve pra dizer quem \u00e9 melhor, ` +
+      `nem pra recomendar promo\u00e7\u00e3o, aumento ou desligamento \u2014 se te perguntarem isso, diga que ` +
+      `o DISC n\u00e3o responde essa pergunta.\n` +
+      `- "Adapta\u00e7\u00e3o forte" \u00e9 a dist\u00e2ncia entre como a pessoa \u00e9 e como ela acha que precisa ` +
+      `ser no trabalho de hoje. Diferen\u00e7a grande costuma significar desgaste, e vale investigar ` +
+      `com a pessoa antes de concluir qualquer coisa.\n`
+  }
+
   return texto
+}
+
+// ---------------------------------------------------------------
+// Perfis DISC
+//
+// O laudo mede quatro tendências de comportamento:
+//   D — como a pessoa encara problema e desafio
+//   I — como ela lida com gente
+//   S — o ritmo com que ela trabalha
+//   C — a relação dela com regra e detalhe
+//
+// Cada laudo traz DOIS gráficos. O Natural é como a pessoa é quando está
+// à vontade. O Adaptado é o que ela ACHA que o trabalho de hoje exige
+// dela. Distância grande entre os dois costuma ser a informação mais
+// útil do relatório inteiro: é alguém se forçando a ser outra pessoa
+// todo dia — e isso cansa.
+//
+// Isto aqui serve pra conduzir melhor uma conversa. Não serve pra
+// decidir promoção, nem pra rotular ninguém, e a tela diz isso.
+// ---------------------------------------------------------------
+const DISC_FATOR = {
+  D: { nome: 'Dominância', frase: 'como encara problema e desafio', cor: '#d14949' },
+  I: { nome: 'Influência', frase: 'como lida com as pessoas', cor: '#d9a520' },
+  S: { nome: 'Estabilidade', frase: 'o ritmo em que trabalha', cor: '#3f9d5c' },
+  C: { nome: 'Conformidade', frase: 'relação com regra e detalhe', cor: '#4a7fc1' }
+}
+const DISC_LETRAS = ['D', 'I', 'S', 'C']
+
+// A leitura da dupla principal, em português de gente.
+const DISC_DUPLA = {
+  DI: 'Decide rápido e convence pelo entusiasmo. Vai bem onde precisa abrir caminho; precisa de alguém do lado cuidando do detalhe.',
+  DC: 'Quer resultado e quer certo. Exigente consigo e com os outros; costuma achar que ninguém faz do jeito dela.',
+  DS: 'Firme, mas sem alarde. Puxa o resultado mantendo o time junto.',
+  ID: 'Ganha as pessoas e depois puxa o ritmo. Ótimo em relação; some no acompanhamento fino.',
+  IS: 'Acolhe e mantém a paz. Excelente pra unir gente; evita conflito até quando precisa dele.',
+  IC: 'Sociável, mas checa antes de falar. Costuma ser a ponte entre quem vende e quem executa.',
+  SD: 'Constante, e firme quando cobrado. Não gosta de mudança feita sem explicar o porquê.',
+  SI: 'Paciente e próximo. Leva a tarefa até o fim e cuida de quem está por perto.',
+  SC: 'Trabalha no ritmo, com cuidado. Precisa de tempo e de regra clara; pressa em cima dele derruba a qualidade.',
+  CD: 'Padrão alto e senso de urgência. Cobra qualidade e não disfarça quando algo saiu errado.',
+  CI: 'Rigoroso, mas sabe conversar. Explica o porquê da regra em vez de só cobrar.',
+  CS: 'Qualidade acima de quantidade. Detalhista, discreto, e sensível a crítica no trabalho dele.'
+}
+
+const barraDisc = (valores, tamanho = 'normal') => {
+  if (!valores) return '<span class="texto-dim2">sem gráfico</span>'
+  const alt = tamanho === 'mini' ? 5 : 8
+  return `<div style="display:flex;gap:${tamanho === 'mini' ? 3 : 5}px;align-items:flex-end;">
+    ${DISC_LETRAS.map(l => {
+      const v = Number(valores[l] ?? 0)
+      return `<div style="flex:1;text-align:center;" title="${DISC_FATOR[l].nome}: ${v}">
+        <div style="height:${tamanho === 'mini' ? 22 : 44}px;display:flex;align-items:flex-end;">
+          <div style="width:100%;height:${Math.max(3, v)}%;background:${DISC_FATOR[l].cor};
+            border-radius:${alt}px ${alt}px 2px 2px;opacity:${v >= 50 ? 1 : .5};"></div>
+        </div>
+        <div style="font-size:${tamanho === 'mini' ? 8.5 : 10}px;font-weight:700;margin-top:2px;
+          color:${v >= 50 ? DISC_FATOR[l].cor : 'var(--dim2)'};">${l}</div>
+        ${tamanho === 'mini' ? '' : `<div class="texto-dim2" style="font-size:9.5px;">${v}</div>`}
+      </div>`
+    }).join('')}
+  </div>`
+}
+
+// A distância entre ser e ter que ser.
+function tensaoDisc (nat, ada) {
+  if (!nat || !ada) return null
+  const dif = DISC_LETRAS.map(l => ({ l, d: Number(ada[l] ?? 0) - Number(nat[l] ?? 0) }))
+  const maior = dif.reduce((a, b) => Math.abs(b.d) > Math.abs(a.d) ? b : a)
+  if (Math.abs(maior.d) < 20) return null
+  const f = DISC_FATOR[maior.l]
+  return maior.d > 0
+    ? `No trabalho de hoje, ele(a) se força a mais <b>${f.nome}</b> do que o natural (${maior.d > 0 ? '+' : ''}${maior.d} pontos em ${f.frase}). Esforço constante cansa — vale perguntar se o cargo está pedindo isso mesmo.`
+    : `No trabalho de hoje, ele(a) segura a <b>${f.nome}</b> natural (${maior.d} pontos em ${f.frase}). Pode ser adaptação saudável, ou pode ser alguém se encolhendo.`
+}
+
+let DISC_CACHE = { perfis: [], filtro: '', letra: '' }
+
+async function desempPerfisDisc (alvo) {
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  const [{ data, error }, { data: pessoas }] = await Promise.all([
+    db.from('rh_perfil_disc')
+      .select('id,nome,cargo_no_laudo,empresa_no_laudo,disc_natural,disc_adaptado,primario,secundario,pessoa_id,pessoa:pessoa_id(nome)')
+      .order('nome'),
+    db.from('pessoa').select('id,nome').order('nome')
+  ])
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  DISC_CACHE.perfis = data || []
+  DISC_CACHE.pessoas = pessoas || []
+
+  const semCadastro = DISC_CACHE.perfis.filter(p => !p.pessoa_id).length
+
+  alvo.innerHTML = `
+    <div class="panel" style="padding:16px 18px;margin-bottom:14px;border-left:3px solid var(--rust);">
+      <p class="texto-dim" style="margin:0;font-size:12.5px;line-height:1.6;">
+        <b>Para que serve, e para que não serve.</b> O DISC descreve <i>como</i> a pessoa tende a agir —
+        não o quanto ela vale, nem do que ela é capaz. Serve pra escolher o jeito de dar um feedback,
+        montar dupla de trabalho, entender um atrito. Não serve pra decidir promoção, salário ou
+        desligamento, e não é para virar apelido de corredor.
+        Só o RH e a diretoria enxergam isso; cada pessoa enxerga o próprio.
+      </p>
+    </div>
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
+      <input id="disc-busca" placeholder="🔍 buscar por nome ou cargo..."
+        style="flex:1;min-width:220px;max-width:340px;font-size:13px;padding:8px 12px;
+        border:1px solid var(--line);border-radius:999px;background:var(--panel);color:var(--txt);">
+      <div id="disc-chips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+      <span style="flex:1;"></span>
+      <button class="btn-secundario mini" id="disc-novo">+ Perfil manual</button>
+    </div>
+
+    ${semCadastro ? `<p class="texto-dim2" style="font-size:11.5px;margin:0 0 12px;">
+      ${semCadastro} perfil(is) ainda não estão ligados a um cadastro de pessoa —
+      abra o perfil e use <b>"Ligar a um cadastro"</b>. Sem isso, a pessoa não consegue ver o próprio laudo.</p>` : ''}
+
+    <div id="disc-grade" class="sdr-cartoes"></div>`
+
+  estilosSdrUmaVez()   // os cartões usam a mesma linguagem visual do SDR
+  renderChipsDisc()
+  renderGradeDisc()
+  $('#disc-busca').oninput = e => { DISC_CACHE.filtro = e.target.value.trim().toLowerCase(); renderGradeDisc() }
+  $('#disc-novo').onclick = () => formPerfilDisc(null, () => desempPerfisDisc(alvo))
+}
+
+function renderChipsDisc () {
+  const alvo = $('#disc-chips')
+  if (!alvo) return
+  const conta = l => DISC_CACHE.perfis.filter(p => p.primario === l).length
+  alvo.innerHTML = `
+    <button class="chip-filtro ${!DISC_CACHE.letra ? 'ativo' : ''}" data-letra="">Todos ${DISC_CACHE.perfis.length}</button>
+    ${DISC_LETRAS.map(l => `<button class="chip-filtro ${DISC_CACHE.letra === l ? 'ativo' : ''}" data-letra="${l}"
+        title="${DISC_FATOR[l].nome} — ${DISC_FATOR[l].frase}">${l} ${conta(l)}</button>`).join('')}`
+  alvo.querySelectorAll('[data-letra]').forEach(b => {
+    b.onclick = () => { DISC_CACHE.letra = b.dataset.letra; renderChipsDisc(); renderGradeDisc() }
+  })
+}
+
+function renderGradeDisc () {
+  const alvo = $('#disc-grade')
+  if (!alvo) return
+  const f = DISC_CACHE.filtro
+  const lista = DISC_CACHE.perfis.filter(p =>
+    (!DISC_CACHE.letra || p.primario === DISC_CACHE.letra) &&
+    (!f || (p.nome || '').toLowerCase().includes(f) || (p.cargo_no_laudo || '').toLowerCase().includes(f)))
+
+  if (!lista.length) { alvo.innerHTML = `<p class="texto-dim2" style="font-size:12.5px;">Nada encontrado.</p>`; return }
+
+  alvo.innerHTML = lista.map(p => `
+    <div class="sdr-cartao" data-disc="${p.id}" style="cursor:pointer;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
+        <div style="min-width:0;">
+          <h5 style="margin:0;">${esc(p.nome)}</h5>
+          <div class="texto-dim2" style="font-size:11.5px;margin-top:2px;">
+            ${esc(p.cargo_no_laudo || p.pessoa?.nome || 'sem cargo no laudo')}</div>
+        </div>
+        <span class="chip" style="flex:none;font-size:11px;font-weight:700;
+          background:rgba(var(--rust-rgb),.14);color:var(--rust);border:none;">
+          ${esc((p.primario || '?') + (p.secundario || ''))}</span>
+      </div>
+      <div style="margin-top:12px;">${barraDisc(p.disc_natural)}</div>
+      <div class="texto-dim2" style="font-size:10.5px;margin-top:8px;line-height:1.4;">
+        ${esc((DISC_DUPLA[(p.primario || '') + (p.secundario || '')] || '').slice(0, 90))}${
+          (DISC_DUPLA[(p.primario || '') + (p.secundario || '')] || '').length > 90 ? '…' : ''}
+      </div>
+      ${!p.pessoa_id ? '<div style="margin-top:8px;"><span class="badge-atencao" style="font-size:10px;">sem cadastro ligado</span></div>' : ''}
+    </div>`).join('')
+
+  alvo.querySelectorAll('[data-disc]').forEach(el => {
+    el.onclick = () => abrirPerfilDisc(DISC_CACHE.perfis.find(x => x.id === el.dataset.disc))
+  })
+}
+
+async function abrirPerfilDisc (resumo) {
+  if (!resumo) return
+  const { data: p } = await db.from('rh_perfil_disc')
+    .select('*, pessoa:pessoa_id(nome)').eq('id', resumo.id).maybeSingle()
+  if (!p) return
+
+  const dupla = (p.primario || '') + (p.secundario || '')
+  const tensao = tensaoDisc(p.disc_natural, p.disc_adaptado)
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:640px;">
+    <div class="cabeca-secao" style="margin-bottom:4px;">
+      <h3 style="margin:0;">${esc(p.nome)}</h3>
+      <span class="chip" style="font-size:12px;font-weight:700;background:rgba(var(--rust-rgb),.14);color:var(--rust);border:none;">${esc(dupla || '—')}</span>
+    </div>
+    <p class="texto-dim2" style="font-size:12px;margin:0 0 14px;">
+      ${esc([p.cargo_no_laudo, p.empresa_no_laudo].filter(Boolean).join(' · ') || 'sem cargo no laudo')}
+      ${p.pessoa?.nome ? ` · cadastrado como <b>${esc(p.pessoa.nome)}</b>` : ' · <span style="color:var(--warn-text);">sem cadastro ligado</span>'}
+    </p>
+
+    ${DISC_DUPLA[dupla] ? `<div class="caixa-texto" style="margin-bottom:14px;">
+      <div class="rot">Em uma frase</div>
+      <p style="font-size:13.5px;line-height:1.55;margin:6px 0 0;">${esc(DISC_DUPLA[dupla])}</p>
+    </div>` : ''}
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
+      <div class="caixa-texto">
+        <div class="rot">Natural — como é</div>
+        <div style="margin-top:8px;">${barraDisc(p.disc_natural)}</div>
+      </div>
+      <div class="caixa-texto">
+        <div class="rot">Adaptado — como acha que precisa ser</div>
+        <div style="margin-top:8px;">${barraDisc(p.disc_adaptado)}</div>
+      </div>
+    </div>
+
+    ${tensao ? `<div style="padding:11px 13px;border-left:3px solid var(--warn-text);background:var(--surface2);
+      border-radius:0 8px 8px 0;margin-bottom:14px;">
+      <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">A distância entre os dois</div>
+      <p style="font-size:12.5px;line-height:1.5;margin:0;">${tensao}</p>
+    </div>` : ''}
+
+    ${p.caracteristicas ? `<div class="caixa-texto" style="margin-bottom:14px;">
+      <div class="rot">Como o laudo descreve</div>
+      <p style="font-size:12.8px;line-height:1.6;margin:6px 0 0;">${esc(p.caracteristicas)}</p>
+    </div>` : ''}
+
+    ${(p.pontos_fortes || []).length ? `<div class="caixa-texto" style="margin-bottom:14px;">
+      <div class="rot">O que ele(a) traz pra equipe</div>
+      <ul style="margin:8px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:4px;">
+        ${p.pontos_fortes.map(x => `<li style="font-size:12.5px;line-height:1.45;">${esc(x)}</li>`).join('')}
+      </ul></div>` : ''}
+
+    ${p.observacoes ? `<div class="caixa-texto" style="margin-bottom:14px;">
+      <div class="rot">Anotações do RH</div>
+      <p style="font-size:12.5px;line-height:1.5;margin:6px 0 0;">${esc(p.observacoes)}</p></div>` : ''}
+
+    <div class="acoes" style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap;">
+      ${!p.pessoa_id ? '<button class="btn-secundario" id="disc-ligar">Ligar a um cadastro</button>' : ''}
+      <button class="btn-secundario" id="disc-editar">Editar</button>
+      <button class="btn-secundario" id="disc-fechar">Fechar</button>
+    </div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#disc-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  fundo.querySelector('#disc-editar').onclick = () => { fechar(); formPerfilDisc(p, () => abrirAbaDisc()) }
+  const btnLigar = fundo.querySelector('#disc-ligar')
+  if (btnLigar) btnLigar.onclick = () => { fechar(); ligarPerfilDiscAPessoa(p) }
+}
+
+function ligarPerfilDiscAPessoa (p) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:420px;">
+    <div class="cabeca-secao"><h3 style="margin:0;">Ligar o laudo a um cadastro</h3></div>
+    <p class="texto-dim2" style="font-size:12px;margin:-4px 0 12px;line-height:1.5;">
+      O laudo é de <b>${esc(p.nome)}</b>. Escolha quem é essa pessoa no cadastro do sistema —
+      é isso que permite que ela veja o próprio perfil.</p>
+    <div class="campo"><label>Pessoa</label>
+      <select id="dlp-pessoa">
+        <option value="">— não ligar por enquanto —</option>
+        ${(DISC_CACHE.pessoas || []).map(x => `<option value="${x.id}">${esc(x.nome)}</option>`).join('')}
+      </select></div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="dlp-salvar">Ligar</button>
+      <button class="btn-secundario" id="dlp-cancelar">Cancelar</button>
+    </div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.querySelector('#dlp-cancelar').onclick = () => fundo.remove()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+  fundo.querySelector('#dlp-salvar').onclick = async () => {
+    const id = fundo.querySelector('#dlp-pessoa').value || null
+    const { error } = await db.from('rh_perfil_disc').update({ pessoa_id: id, atualizado_em: new Date().toISOString() }).eq('id', p.id)
+    if (error) { alert('Não consegui ligar: ' + error.message); return }
+    fundo.remove()
+    abrirAbaDisc()
+  }
+}
+
+function formPerfilDisc (p, aoSalvar) {
+  const campoNota = (l, valores) =>
+    `<div class="campo" style="margin:0;"><label style="font-size:11px;">${l} — ${DISC_FATOR[l].nome}</label>
+      <input type="number" min="0" max="100" id="pd-${(valores === 'nat' ? 'n' : 'a')}${l}"
+        value="${(p?.[valores === 'nat' ? 'disc_natural' : 'disc_adaptado'] || {})[l] ?? ''}"></div>`
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:560px;">
+    <div class="cabeca-secao"><h3 style="margin:0;">${p ? 'Editar perfil' : 'Novo perfil DISC'}</h3></div>
+    <div class="campo"><label>Nome *</label><input id="pd-nome" value="${esc(p?.nome || '')}"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      <div class="campo"><label>Cargo no laudo</label><input id="pd-cargo" value="${esc(p?.cargo_no_laudo || '')}"></div>
+      <div class="campo"><label>Empresa no laudo</label><input id="pd-empresa" value="${esc(p?.empresa_no_laudo || '')}"></div>
+    </div>
+    <div class="rot" style="margin-top:6px;">Gráfico natural (0 a 100)</div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px;">
+      ${DISC_LETRAS.map(l => campoNota(l, 'nat')).join('')}</div>
+    <div class="rot">Gráfico adaptado (0 a 100)</div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px;">
+      ${DISC_LETRAS.map(l => campoNota(l, 'ada')).join('')}</div>
+    <div class="campo"><label>Como o laudo descreve</label>
+      <textarea id="pd-carac" rows="4">${esc(p?.caracteristicas || '')}</textarea></div>
+    <div class="campo"><label>Anotações do RH</label>
+      <textarea id="pd-obs" rows="2" placeholder="O que vocês observam na prática, além do laudo">${esc(p?.observacoes || '')}</textarea></div>
+    <div class="recado oculto" id="pd-recado"></div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="pd-salvar">Salvar</button>
+      <button class="btn-secundario" id="pd-cancelar">Cancelar</button>
+    </div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.querySelector('#pd-cancelar').onclick = () => fundo.remove()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+
+  fundo.querySelector('#pd-salvar').onclick = async () => {
+    const recado = fundo.querySelector('#pd-recado')
+    const nome = fundo.querySelector('#pd-nome').value.trim()
+    if (!nome) { recado.classList.remove('oculto'); recado.textContent = 'O nome é obrigatório.'; return }
+
+    const lerGrafico = pre => {
+      const v = {}
+      let algum = false
+      for (const l of DISC_LETRAS) {
+        const bruto = fundo.querySelector(`#pd-${pre}${l}`).value.trim()
+        if (bruto === '') continue
+        const n = Number(bruto)
+        if (!Number.isFinite(n) || n < 0 || n > 100) return 'erro'
+        v[l] = n; algum = true
+      }
+      return algum ? v : null
+    }
+    const nat = lerGrafico('n'), ada = lerGrafico('a')
+    if (nat === 'erro' || ada === 'erro') {
+      recado.classList.remove('oculto'); recado.textContent = 'As notas do gráfico vão de 0 a 100.'; return
+    }
+    const ordenado = nat ? Object.entries(nat).sort((a, b) => b[1] - a[1]) : []
+
+    const dados = {
+      nome, cargo_no_laudo: fundo.querySelector('#pd-cargo').value.trim() || null,
+      empresa_no_laudo: fundo.querySelector('#pd-empresa').value.trim() || null,
+      disc_natural: nat, disc_adaptado: ada,
+      primario: ordenado[0]?.[0] || null, secundario: ordenado[1]?.[0] || null,
+      caracteristicas: fundo.querySelector('#pd-carac').value.trim() || null,
+      observacoes: fundo.querySelector('#pd-obs').value.trim() || null,
+      atualizado_em: new Date().toISOString()
+    }
+    const { error } = p
+      ? await db.from('rh_perfil_disc').update(dados).eq('id', p.id)
+      : await db.from('rh_perfil_disc').insert({ ...dados, criado_por: PERFIL.pessoaId })
+    if (error) { recado.classList.remove('oculto'); recado.textContent = error.message; return }
+    fundo.remove()
+    if (aoSalvar) aoSalvar()
+  }
+}
+
+function abrirAbaDisc () {
+  const b = document.querySelector('.subabas-rh button[data-sub="disc"]')
+  if (b) b.click()
 }
 
 async function desempEspecialistaRH (alvo) {
