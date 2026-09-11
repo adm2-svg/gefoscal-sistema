@@ -35173,15 +35173,22 @@ async function recrKanbanVagas (area) {
   const setoresPorId = Object.fromEntries((setores || []).map(s => [s.id, s.nome]))
 
   area.innerHTML = `
-    <div class="acoes" style="margin-bottom:14px;"><button class="btn" id="recr-nova-vaga">+ Nova vaga</button></div>
+    <div class="acoes" style="margin-bottom:14px;display:flex;gap:8px;flex-wrap:wrap;">
+      <button class="btn" id="recr-nova-vaga">+ Nova vaga</button>
+      <button class="btn-secundario mini" id="recr-ver-canceladas">Ver vagas canceladas</button>
+    </div>
+    <div id="recr-canceladas" class="oculto" style="margin-bottom:14px;"></div>
     <div style="display:grid;grid-template-columns:repeat(6,minmax(180px,1fr));gap:12px;overflow-x:auto;">
       ${ETAPAS_VAGA.map(([chave, rotulo]) => {
         const daColuna = lista.filter(v => v.etapa === chave)
         return `<div>
           <div class="texto-dim2" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">${esc(rotulo)} (${daColuna.length})</div>
           ${daColuna.map(v => `
-            <div class="panel" style="padding:12px;margin-bottom:8px;cursor:pointer;" data-abrir-vaga="${v.id}">
-              <div style="font-weight:600;font-size:13px;margin-bottom:4px;">${esc(v.cargo)}</div>
+            <div class="panel" style="padding:12px;margin-bottom:8px;cursor:pointer;position:relative;" data-abrir-vaga="${v.id}">
+              <button class="btn-lixeira-vaga" data-excluir-vaga="${v.id}" title="Excluir esta vaga"
+                style="position:absolute;top:8px;right:8px;background:none;border:none;cursor:pointer;
+                font-size:14px;line-height:1;padding:2px 4px;border-radius:6px;opacity:.45;">🗑️</button>
+              <div style="font-weight:600;font-size:13px;margin-bottom:4px;padding-right:22px;">${esc(v.cargo)}</div>
               <div class="texto-dim2" style="font-size:11px;margin-bottom:6px;">${esc(setoresPorId[v.setor_id] || '—')}</div>
               <span class="chip" style="font-size:10px;${!v.tipo_contratacao ? 'border-color:var(--warn-text,#c8901a);color:var(--warn-text,#c8901a);' : ''}">${v.tipo_contratacao || '⚠️ definir CLT/PJ'}</span>
               ${(v.tags || []).slice(0, 2).map(t => `<span class="chip" style="font-size:10px;">${esc(t)}</span>`).join('')}
@@ -35190,9 +35197,124 @@ async function recrKanbanVagas (area) {
       }).join('')}
     </div>`
 
+  if (!$('#estilo-lixeira-vaga')) {
+    const s = document.createElement('style')
+    s.id = 'estilo-lixeira-vaga'
+    s.textContent = `.btn-lixeira-vaga:hover { opacity:1 !important; background:rgba(var(--critico-rgb),.15); }`
+    document.head.appendChild(s)
+  }
+
   $('#recr-nova-vaga').onclick = () => abrirFormVaga(null, setores, area)
+
+  const painelCanceladas = $('#recr-canceladas')
+  $('#recr-ver-canceladas').onclick = () => {
+    if (painelCanceladas.classList.contains('oculto')) {
+      painelCanceladas.classList.remove('oculto')
+      listarVagasCanceladas(painelCanceladas, area)
+    } else painelCanceladas.classList.add('oculto')
+  }
+
   area.querySelectorAll('[data-abrir-vaga]').forEach(card => {
     card.onclick = () => abrirDetalheVaga(lista.find(v => v.id === card.dataset.abrirVaga), setoresPorId, area)
+  })
+
+  area.querySelectorAll('[data-excluir-vaga]').forEach(btn => {
+    btn.onclick = e => {
+      e.stopPropagation()   // a lixeira não abre a vaga
+      excluirVaga(lista.find(v => v.id === btn.dataset.excluirVaga), area)
+    }
+  })
+}
+
+// ---------------------------------------------------------------
+// Excluir vaga
+//
+// A vaga sai do quadro, mas a linha continua no banco. Quem se
+// candidatou não vira órfão, e daqui a seis meses ainda dá pra dizer
+// quem cancelou e por quê — que é o que o RH vai precisar responder.
+// ---------------------------------------------------------------
+function excluirVaga (vaga, area) {
+  if (!vaga) return
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:440px;">
+    <div class="cabeca-secao"><h3 style="margin:0;">Excluir a vaga de ${esc(vaga.cargo)}?</h3></div>
+    <p class="texto-dim2" style="font-size:12.5px;margin:-4px 0 12px;line-height:1.5;">
+      Ela sai do quadro de recrutamento na hora. O registro continua guardado
+      com o seu nome e o motivo, e dá pra reabrir depois se for o caso.
+    </p>
+    <div class="campo">
+      <label>Por que está excluindo? *</label>
+      <textarea id="exv-motivo" rows="3"
+        placeholder="Ex.: posição congelada pela diretoria; contratamos por indicação; setor desistiu da abertura"></textarea>
+    </div>
+    <div class="recado oculto" id="exv-recado"></div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="exv-confirmar" style="background:var(--critico-text);">Excluir vaga</button>
+      <button class="btn-secundario" id="exv-cancelar">Voltar</button>
+    </div>
+  </div>`
+  document.body.appendChild(fundo)
+
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#exv-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  setTimeout(() => fundo.querySelector('#exv-motivo').focus(), 50)
+
+  const recado = fundo.querySelector('#exv-recado')
+  const botao = fundo.querySelector('#exv-confirmar')
+  botao.onclick = async () => {
+    const motivo = fundo.querySelector('#exv-motivo').value.trim()
+    if (motivo.length < 5) {
+      recado.classList.remove('oculto')
+      recado.textContent = 'Escreva o motivo antes de excluir — é ele que explica a decisão depois.'
+      return
+    }
+    botao.disabled = true; botao.textContent = 'Excluindo...'
+    const { data, error } = await db.rpc('vaga_cancelar', { p_id: vaga.id, p_motivo: motivo })
+    if (error || !data?.ok) {
+      botao.disabled = false; botao.textContent = 'Excluir vaga'
+      recado.classList.remove('oculto')
+      recado.textContent = error?.message || data?.erro || 'Não consegui excluir.'
+      return
+    }
+    fechar()
+    if (data.candidatos) {
+      alert(`Vaga excluída. ${data.candidatos} candidato(s) continuam registrados nela — o histórico foi preservado.`)
+    }
+    recrKanbanVagas(area)
+  }
+}
+
+async function listarVagasCanceladas (alvo, area) {
+  alvo.innerHTML = `<p class="texto-dim2" style="font-size:12px;">carregando...</p>`
+  const { data, error } = await db.from('vaga')
+    .select('id,cargo,cancelada_em,cancelamento_motivo,pessoa:cancelada_por(nome)')
+    .eq('status', 'CANCELADA').order('cancelada_em', { ascending: false }).limit(50)
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  if (!data?.length) {
+    alvo.innerHTML = `<p class="texto-dim2" style="font-size:12px;">Nenhuma vaga excluída até agora.</p>`
+    return
+  }
+
+  alvo.innerHTML = `<div class="panel" style="padding:0;"><div class="tabela-scroll">
+    <table><thead><tr><th>Vaga</th><th>Excluída em</th><th>Por quem</th><th>Motivo</th><th></th></tr></thead><tbody>
+      ${data.map(v => `<tr>
+        <td>${esc(v.cargo)}</td>
+        <td class="texto-dim2">${esc(fmtQuando(v.cancelada_em) || '—')}</td>
+        <td class="texto-dim2">${esc(v.pessoa?.nome || '—')}</td>
+        <td style="font-size:12.5px;">${esc(v.cancelamento_motivo || '—')}</td>
+        <td><button class="btn-secundario mini" data-reabrir-vaga="${v.id}">reabrir</button></td>
+      </tr>`).join('')}
+    </tbody></table></div></div>`
+
+  alvo.querySelectorAll('[data-reabrir-vaga]').forEach(b => {
+    b.onclick = async () => {
+      if (!confirm('Reabrir essa vaga? Ela volta pro quadro de recrutamento.')) return
+      const { data: r, error: e2 } = await db.rpc('vaga_reabrir', { p_id: b.dataset.reabrirVaga })
+      if (e2 || !r?.ok) { alert('Não consegui reabrir: ' + (e2?.message || r?.erro)); return }
+      recrKanbanVagas(area)
+    }
   })
 }
 
