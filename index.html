@@ -10536,7 +10536,10 @@ async function comprasFornecedores (alvo, editavel) {
         <td class="texto-dim2">${esc(f.criado?.nome ?? '—')}
           ${f.criado_em ? '<br>' + fmtQuando(f.criado_em) : ''}</td>
         <td><span class="chip">${esc(f.status)}</span></td>
-        ${editavel ? `<td style="text-align:right;"><button class="btn-secundario mini" data-editar-forn="${f.id}">editar</button></td>` : ''}
+        ${editavel ? `<td style="text-align:right;white-space:nowrap;">
+          <button class="btn-secundario mini" data-editar-forn="${f.id}">editar</button>
+          <button class="btn-secundario mini" data-del-forn="${f.id}" title="Excluir fornecedor"
+            aria-label="Excluir fornecedor" style="color:var(--warn-text);margin-left:6px;">${icDp('excluir')}</button></td>` : ''}
       </tr>`).join('') || `<tr><td colspan="${editavel ? 7 : 6}" class="vazio">Nenhum fornecedor cadastrado.</td></tr>`}
       </tbody></table>
     </div></div>`
@@ -10571,6 +10574,62 @@ async function comprasFornecedores (alvo, editavel) {
 
   alvo.querySelectorAll('[data-editar-forn]').forEach(b => {
     b.onclick = () => formEditarFornecedor(data.find(f => f.id === b.dataset.editarForn))
+  })
+
+  alvo.querySelectorAll('[data-del-forn]').forEach(b => {
+    b.onclick = () => excluirFornecedor(
+      (data || []).find(f => f.id === b.dataset.delForn),
+      () => comprasFornecedores(alvo, editavel))
+  })
+}
+
+// ----- Excluir fornecedor -----
+// Mesma regra do cliente: fornecedor amarrado em compra, orçamento, OS,
+// recebimento, entrada de combustível ou solicitação não pode simplesmente
+// sumir — as chaves estrangeiras barram no banco e o histórico quebraria.
+// Nesse caso a tela inativa e explica o porquê. Sem movimento nenhum, exclui
+// de verdade pelo caminho normal: justificativa e registro em exclusao_log.
+//
+// A contagem vem da função fornecedor_tem_movimento (security definer) em vez
+// de seis consultas na tela, porque quem tem só o módulo Cadastro não enxerga
+// orçamento nem solicitação de compra e contaria zero sem estar zerado.
+const ROTULO_MOVIMENTO_FORNECEDOR = {
+  solicitacao_compra: ['solicitação de compra', 'solicitações de compra'],
+  orcamento: ['orçamento', 'orçamentos'],
+  ordem_servico: ['ordem de serviço', 'ordens de serviço'],
+  recebimento: ['recebimento', 'recebimentos'],
+  entrada_combustivel: ['entrada de combustível', 'entradas de combustível'],
+  solicitacao_interna: ['solicitação interna', 'solicitações internas']
+}
+
+async function excluirFornecedor (f, aoTerminar = () => {}) {
+  if (!f) return
+  const { data: mov, error } = await db.rpc('fornecedor_tem_movimento', { p_id: f.id })
+  if (error) { alert('Não deu pra conferir o histórico do fornecedor: ' + error.message); return }
+
+  const usos = Object.entries(mov || {})
+    .map(([chave, n]) => [Number(n) || 0, ROTULO_MOVIMENTO_FORNECEDOR[chave] || [chave, chave]])
+    .filter(([n]) => n > 0)
+    .map(([n, rot]) => `${n} ${n === 1 ? rot[0] : rot[1]}`)
+
+  if (usos.length) {
+    const onde = usos.join(', ')
+    if (f.status === 'INATIVO') {
+      alert(`"${f.nome}" aparece em ${onde}.\n\n`
+        + 'Apagar quebraria esse histórico. Ele já está inativo, então não aparece mais nas listas de escolha.')
+      return
+    }
+    if (!confirm(`"${f.nome}" aparece em ${onde}.\n\n`
+      + 'Apagar quebraria esse histórico, então ele será apenas inativado: some das listas de escolha e o que já foi lançado continua de pé. Continuar?')) return
+    const { error: e2 } = await db.from('fornecedor').update({ status: 'INATIVO' }).eq('id', f.id)
+    if (e2) { alert('Não deu pra inativar: ' + e2.message); return }
+    aoTerminar()
+    return
+  }
+
+  excluirComJustificativa({
+    tabela: 'fornecedor', id: f.id, modulo: 'Cadastro',
+    titulo: 'Excluir fornecedor', descricao: f.nome, aoExcluir: aoTerminar
   })
 }
 
