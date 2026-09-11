@@ -16483,22 +16483,48 @@ async function crmGestaoTab (alvo, editavel) {
   const parados = emAberto.filter(l => (diasDesde(l.atualizado_em) ?? 0) > 7)
     .sort((a, b) => (diasDesde(b.atualizado_em) ?? 0) - (diasDesde(a.atualizado_em) ?? 0))
 
-  // ranking por vendedor
+  // ----- ranking por vendedor -----
+  // Duas coisas que esta tabela escondia e agora mostra:
+  //   1. O que já foi GANHO. Antes só somávamos lead em aberto, então
+  //      quem fechou e não tem nada aberto aparecia com R$ 0 — como se
+  //      não tivesse feito nada, justamente por ter feito.
+  //   2. A diferença entre "vale zero" e "ninguém preencheu o valor".
+  //      Eram o mesmo "R$ 0" na tela, e são coisas opostas.
   const porVendedor = {}
   atribuidos.forEach(l => {
     const nome = l.vendedor?.nome ?? '—'
-    porVendedor[nome] = porVendedor[nome] || { abertos: 0, valor: 0, ganhos: 0, fechados: 0, somaDias: 0, qtdDias: 0 }
+    porVendedor[nome] = porVendedor[nome] || {
+      abertos: 0, valor: 0, abertosSemValor: 0,
+      ganhos: 0, valorGanho: 0, ganhosSemValor: 0,
+      fechados: 0, somaDias: 0, qtdDias: 0
+    }
     const g = porVendedor[nome]
-    if (ETAPAS_LEAD_ABERTAS.includes(l.etapa)) { g.abertos++; g.valor += Number(l.valor_estimado || 0) }
-    if (l.etapa === 'GANHO') { g.ganhos++; g.fechados++ }
+    const valor = Number(l.valor_estimado || 0)
+    if (ETAPAS_LEAD_ABERTAS.includes(l.etapa)) {
+      g.abertos++; g.valor += valor; if (!valor) g.abertosSemValor++
+    }
+    if (l.etapa === 'GANHO') {
+      g.ganhos++; g.fechados++; g.valorGanho += valor; if (!valor) g.ganhosSemValor++
+    }
     if (l.etapa === 'PERDIDO') g.fechados++
     const d = diasDesde(l.atualizado_em); if (d != null) { g.somaDias += d; g.qtdDias++ }
   })
   const rankingVendedor = Object.entries(porVendedor).map(([nome, v]) => ({
-    rotulo: nome, valor: v.abertos, valorPipeline: v.valor,
+    rotulo: nome, valor: v.abertos, valorPipeline: v.valor, abertosSemValor: v.abertosSemValor,
+    ganhos: v.ganhos, valorGanho: v.valorGanho, ganhosSemValor: v.ganhosSemValor,
     conversao: v.fechados ? Math.round((v.ganhos / v.fechados) * 100) : null,
     diasMedios: v.qtdDias ? Math.round(v.somaDias / v.qtdDias) : null
-  })).sort((a, b) => b.valorPipeline - a.valorPipeline)
+  })).sort((a, b) =>
+    (b.valorGanho + b.valorPipeline) - (a.valorGanho + a.valorPipeline) || b.valor - a.valor)
+
+  const totalSemValor = rankingVendedor.reduce((s, v) => s + v.abertosSemValor + v.ganhosSemValor, 0)
+
+  // "R$ 0" e "ninguém preencheu" viram coisas diferentes na tela.
+  const celulaDinheiro = (soma, semValor, quantos) => {
+    if (!quantos) return '<span class="texto-dim2">—</span>'
+    if (!soma) return `<span class="texto-dim2" title="${semValor} lead(s) sem valor estimado preenchido">sem valor</span>`
+    return `R$ ${fmtNum(soma)}${semValor ? ` <span class="texto-dim2" style="font-size:10px;" title="${semValor} lead(s) ainda sem valor preenchido">+${semValor} s/ valor</span>` : ''}`
+  }
 
   // carteira própria do gestor (ele também vende)
   const minhaCarteira = PERFIL.pessoaId ? lista.filter(l => l.vendedor_id === PERFIL.pessoaId) : []
@@ -16544,16 +16570,24 @@ async function crmGestaoTab (alvo, editavel) {
         <div class="tabela-scroll" style="max-height:none;">
           <table><thead><tr>
             <th>Vendedor</th><th class="num">Abertos</th><th class="num">Valor em funil</th>
+            <th class="num">Ganhos</th><th class="num">Valor ganho</th>
             <th class="num">Conversão</th><th class="num">Dias médios sem mexer</th>
           </tr></thead><tbody>
             ${rankingVendedor.map(v => `<tr>
-              <td>${esc(v.rotulo)}</td><td class="num">${v.valor}</td>
-              <td class="num">R$ ${fmtNum(v.valorPipeline)}</td>
+              <td>${esc(v.rotulo)}</td>
+              <td class="num">${v.valor}</td>
+              <td class="num">${celulaDinheiro(v.valorPipeline, v.abertosSemValor, v.valor)}</td>
+              <td class="num">${v.ganhos ? `<span class="badge-bom">${v.ganhos}</span>` : '<span class="texto-dim2">—</span>'}</td>
+              <td class="num">${celulaDinheiro(v.valorGanho, v.ganhosSemValor, v.ganhos)}</td>
               <td class="num">${v.conversao != null ? v.conversao + '%' : '—'}</td>
               <td class="num">${v.diasMedios != null ? `<span class="${v.diasMedios > 7 ? 'badge-alerta' : 'texto-dim2'}">${v.diasMedios}d</span>` : '—'}</td>
-            </tr>`).join('') || `<tr><td colspan="5" class="vazio">Nenhum lead atribuído ainda.</td></tr>`}
+            </tr>`).join('') || `<tr><td colspan="7" class="vazio">Nenhum lead atribuído ainda.</td></tr>`}
           </tbody></table>
         </div>
+        ${totalSemValor ? `<p class="texto-dim2" style="font-size:11px;margin:10px 0 0;line-height:1.45;">
+          ⚠️ <b>${totalSemValor}</b> lead(s) estão sem valor estimado preenchido. Onde está escrito
+          <i>"sem valor"</i> não quer dizer que o negócio vale zero — quer dizer que ninguém informou
+          quanto vale. Enquanto isso, essas colunas não servem pra comparar vendedor com vendedor.</p>` : ''}
       </div>
       <div class="panel" style="padding:18px;">
         <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Leads parados há mais de 7 dias</h3>
