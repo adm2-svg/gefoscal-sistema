@@ -2554,7 +2554,7 @@ function moduloPorChave (chave) { return PERFIL.modulos.find(m => m.chave === ch
 // frente de trabalho quando chegamos nela) OU o checkbox normal de módulo em
 // Administração (tem_modulo). O RLS no banco já aceita os dois; aqui só
 // espelhamos a mesma regra pra não esconder uma aba que o ADMIN liberou.
-const MODULOS_POR_PAPEL = { cobranca: ['ADMIN', 'DIRETORIA', 'COMERCIAL', 'COBRANCA'], crm: ['ADMIN', 'DIRETORIA', 'COMERCIAL'], sdr_whatsapp: ['ADMIN', 'DIRETORIA', 'COMERCIAL'] }
+const MODULOS_POR_PAPEL = { cobranca: ['ADMIN', 'DIRETORIA', 'COMERCIAL', 'COBRANCA'], crm: ['ADMIN', 'DIRETORIA', 'COMERCIAL', 'PRE_VENDAS'], sdr_whatsapp: ['ADMIN', 'DIRETORIA', 'COMERCIAL', 'PRE_VENDAS'], crm_tecnico: ['ADMIN', 'DIRETORIA', 'PRE_VENDAS'] }
 
 // souGestor(): "sou gestor de algum setor" — usado no Painel do gestor
 // da Visão Geral (aparece pra qualquer gestor). Já o CRM é liberado só
@@ -2563,11 +2563,26 @@ const MODULOS_POR_PAPEL = { cobranca: ['ADMIN', 'DIRETORIA', 'COMERCIAL', 'COBRA
 const souGestor = () => PERFIL.setoresGeridos.length > 0
 const MODULOS_SO_GESTOR_COMERCIAL = ['crm']
 
+// Dois caminhos valem como gestor comercial, e os dois já valiam no banco
+// (eh_algum_gestor / eh_gestor_do_vendedor aceitam o papel GESTOR_COMERCIAL):
+// ser gestor do setor Comercial (setor.gestor_id) OU ter o papel marcado no
+// checkbox "Gestor comercial" em Administração. A tela só olhava o primeiro,
+// então o checkbox não ligava nada — quem era marcado por ele via a RLS
+// liberar os dados mas a aba Gestão nunca aparecia.
+const ehGestorComercial = () => PERFIL.souGestorComercial || PERFIL.papeis.includes('GESTOR_COMERCIAL')
+
+// Pre-vendas: nivel de acesso que trabalha o "pool" de leads sem vendedor —
+// liga, qualifica e marca quem nao atendeu pro SDR retomar. Enxerga o modulo
+// CRM inteiro (Comercial, SDR WhatsApp e Tecnico) mas NAO a carteira dos
+// vendedores nem o resto do sistema. No banco o papel PRE_VENDAS tem policies
+// proprias, limitadas ao pool (lead.vendedor_id nulo).
+const souPreVendas = () => PERFIL.papeis.includes('PRE_VENDAS')
+
 function podeVer (chave) {
   if (ehTotal()) return true
   const papeisExtra = MODULOS_POR_PAPEL[chave]
   if (papeisExtra && PERFIL.papeis.some(p => papeisExtra.includes(p))) return true
-  if (MODULOS_SO_GESTOR_COMERCIAL.includes(chave) && PERFIL.souGestorComercial) return true
+  if (MODULOS_SO_GESTOR_COMERCIAL.includes(chave) && ehGestorComercial()) return true
   const m = moduloPorChave(chave)
   return !!m && PERFIL.permissoes.some(p => p.modulo_id === m.id)
 }
@@ -2577,7 +2592,7 @@ function podeEditar (chave) {
   if (ehTotal()) return true
   const papeisExtra = MODULOS_POR_PAPEL[chave]
   if (papeisExtra && PERFIL.papeis.some(p => papeisExtra.includes(p))) return true
-  if (MODULOS_SO_GESTOR_COMERCIAL.includes(chave) && PERFIL.souGestorComercial) return true
+  if (MODULOS_SO_GESTOR_COMERCIAL.includes(chave) && ehGestorComercial()) return true
   const m = moduloPorChave(chave)
   return !!m && PERFIL.permissoes.some(p => p.modulo_id === m.id && p.pode_editar)
 }
@@ -5781,6 +5796,7 @@ async function subUsuarios (alvo, editavel) {
         <div class="campo"><label>Nível de acesso</label>
           <select id="u-nivel" ${editavel ? '' : 'disabled'}>
             <option value="usuario">Usuário — só consulta</option>
+            <option value="pre_vendas">Pré-vendas (CRM) — módulo CRM inteiro, pool de leads</option>
             <option value="administrador">Administrador — consulta e altera</option>
           </select></div>
         <div class="campo"><label>&nbsp;</label>
@@ -5911,7 +5927,8 @@ async function subUsuarios (alvo, editavel) {
       $('#u-email').value = p.email || ''
       $('#u-cargo').value = p.cargo_id || ''
       $('#u-setor').value = p.setor_id || ''
-      $('#u-nivel').value = (pc?.papeis || []).includes('ADMIN') ? 'administrador' : 'usuario'
+      $('#u-nivel').value = (pc?.papeis || []).includes('ADMIN') ? 'administrador'
+        : (pc?.papeis || []).includes('PRE_VENDAS') ? 'pre_vendas' : 'usuario'
       $('#u-gestor-comercial').checked = (pc?.papeis || []).includes('GESTOR_COMERCIAL')
       $('#u-pode-vender').checked = !!p.eh_vendedor
       $('#u-perfil-vendedor').checked = (pc?.papeis || []).includes('VENDEDOR')
@@ -6048,7 +6065,10 @@ async function subUsuarios (alvo, editavel) {
 
     if (e1) { recado(e1.message, true); btn.disabled = false; btn.textContent = 'Salvar cadastro'; return }
 
-    const papeis = $('#u-nivel').value === 'administrador' ? ['ADMIN', 'DIRETORIA'] : ['LEITOR']
+    const nivel = $('#u-nivel').value
+    const papeis = nivel === 'administrador' ? ['ADMIN', 'DIRETORIA']
+      : nivel === 'pre_vendas' ? ['LEITOR', 'PRE_VENDAS']
+      : ['LEITOR']
     if ($('#u-gestor-comercial').checked) papeis.push('GESTOR_COMERCIAL')
     if ($('#u-perfil-vendedor').checked) papeis.push('VENDEDOR')
     const { error: e2 } = await db.from('usuario_precadastro').upsert({
@@ -6060,6 +6080,18 @@ async function subUsuarios (alvo, editavel) {
     // (o resto do papeis só pega no próximo login, via o pré-cadastro acima)
     const { data: perfilAtivo } = await db.from('usuario_perfil').select('user_id').eq('pessoa_id', pessoa.id).maybeSingle()
     if (perfilAtivo?.user_id) {
+      // Nível de acesso: antes ele ia só pro pré-cadastro, ou seja, mudar de
+      // Administrador pra Usuário (ou pra Pré-vendas) não surtia efeito nenhum
+      // em quem já tinha login — o papel antigo continuava valendo pra sempre.
+      // Agora os papéis de nível são regravados na hora, como já era feito
+      // com Gestor comercial e Vendedor.
+      const PAPEIS_DE_NIVEL = ['ADMIN', 'DIRETORIA', 'LEITOR', 'PRE_VENDAS']
+      await db.from('usuario_papel').delete().eq('user_id', perfilAtivo.user_id).in('papel', PAPEIS_DE_NIVEL)
+      const papeisNivel = papeis.filter(x => PAPEIS_DE_NIVEL.includes(x))
+      if (papeisNivel.length) {
+        await db.from('usuario_papel').insert(papeisNivel.map(papel => ({ user_id: perfilAtivo.user_id, papel })))
+      }
+
       await db.from('usuario_papel').delete().eq('user_id', perfilAtivo.user_id).eq('papel', 'GESTOR_COMERCIAL')
       if ($('#u-gestor-comercial').checked) {
         await db.from('usuario_papel').insert({ user_id: perfilAtivo.user_id, papel: 'GESTOR_COMERCIAL' })
@@ -6095,6 +6127,22 @@ async function subUsuarios (alvo, editavel) {
         if (ver) ver.checked = true
         if (editar) editar.checked = true
       })
+    }
+
+    // Nível pré-vendas: marca de uma vez o módulo CRM inteiro (Comercial, SDR
+    // WhatsApp e Técnico) com direito de editar, mais Cadastro e Banco de
+    // Informações só pra consultar enquanto trabalha o lead.
+    if (nivel === 'pre_vendas') {
+      const marcar = (chave, edita) => {
+        const mod = PERFIL.modulos.find(m => m.chave === chave)
+        if (!mod) return
+        const ver = $(`#u-modulos [data-ver="${mod.id}"]`)
+        const editar = $(`#u-modulos [data-editar="${mod.id}"]`)
+        if (ver) ver.checked = true
+        if (editar && edita) editar.checked = true
+      }
+      ;['crm', 'sdr_whatsapp', 'crm_tecnico'].forEach(c => marcar(c, true))
+      ;['cadastro', 'banco'].forEach(c => marcar(c, false))
     }
 
     // permissões: apaga as antigas e grava as marcadas
@@ -13687,7 +13735,7 @@ function corEtapaLead (e) {
 
 // gestor de setor OU ADMIN/DIRETORIA enxerga a carteira toda; qualquer
 // outra pessoa (o vendedor de fato) só vê o que é dela
-const souGerenciaCrm = () => ehTotal() || PERFIL.souGestorComercial
+const souGerenciaCrm = () => ehTotal() || ehGestorComercial()
 
 function diasDesde (dataIso) {
   if (!dataIso) return null
@@ -13705,7 +13753,9 @@ async function paginaCrm () {
   const editavel = podeEditar('crm')
   $('#subtitulo-pagina').textContent = gerencia
     ? 'Funil de vendas, leads e conversão em cliente'
-    : 'Sua carteira de leads — o que foi atribuído a você'
+    : souPreVendas()
+      ? 'Pool de prospecção — leads que ainda não têm vendedor'
+      : 'Sua carteira de leads — o que foi atribuído a você'
   const area = areaLivre()
   area.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
@@ -13721,6 +13771,7 @@ async function paginaCrm () {
 
   const abas = [['painel', 'Painel'], ['funil', 'Funil'], ['progresso', 'Progresso'], ['calendario', 'Meu Dia']]
   if (gerencia) abas.push(['gestao', 'Gestão'])
+  if (!gerencia && souPreVendas()) abas.push(['atribuir', 'Prospecção'])
 
   const inicial = CRM_SUBABA_INICIAL && abas.some(a => a[0] === CRM_SUBABA_INICIAL) ? CRM_SUBABA_INICIAL : abas[0][0]
   CRM_SUBABA_INICIAL = null
@@ -13775,6 +13826,8 @@ const selLead = `
 function filtrarPorDono (q, gerencia) {
   q = q.eq('arquivado', false)
   if (gerencia) return q.not('vendedor_id', 'is', null) // gerência já vê tudo atribuído; o pool fica na aba Atribuir
+  // pré-vendas trabalha justamente o pool: os leads que ainda não têm dono
+  if (souPreVendas()) return q.is('vendedor_id', null)
   return q.eq('vendedor_id', PERFIL.pessoaId)
 }
 
