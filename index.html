@@ -14055,6 +14055,181 @@ function diasDesde (dataIso) {
 let CRM_CACHE = { pessoas: [], vendedores: [], leads: [] }
 let CRM_SUBABA_INICIAL = null // setado por quem navega de fora (ex.: CRM Gestão) pra abrir direto numa sub-aba
 
+// ---------------------------------------------------------------
+// Meus pedidos
+//
+// O vendedor vendia e o pedido sumia da vista dele: o que acontecia na
+// expedição e no faturamento ficava com outro setor. Aqui ele acompanha
+// o próprio pedido do começo ao fim, sem depender de aviso e sem ter que
+// perguntar pra ninguém.
+//
+// Gerência vê o time inteiro e pode filtrar por vendedor; vendedor vê o
+// que é dele. Isso vem do RLS de `lead`/`pedido` e do filtro aqui — quem
+// tem gerência escolhe, quem não tem nem vê o seletor.
+// ---------------------------------------------------------------
+const ETAPAS_CARGA = {
+  PROGRAMADO:   { rotulo: 'Programado',  cor: 'var(--dim)',          icone: '📅' },
+  EM_ANDAMENTO: { rotulo: 'Carregando',  cor: 'var(--warn-text)',    icone: '⏳' },
+  CARREGADO:    { rotulo: 'Carregado',   cor: 'var(--warn-text)',    icone: '🚚' },
+  FATURADO:     { rotulo: 'Faturado',    cor: 'var(--good-text)',    icone: '🧾' },
+  CANCELADO:    { rotulo: 'Cancelado',   cor: 'var(--critico-text)', icone: '✖' }
+}
+
+let MEUS_PEDIDOS_VENDEDOR = ''
+
+async function crmMeusPedidos (alvo, editavel, gerencia) {
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+
+  if (!gerencia && !PERFIL.pessoaId) {
+    alvo.innerHTML = `<p class="vazio">Seu login não está ligado a uma pessoa do cadastro,
+      então não consigo saber quais pedidos são seus.</p>`
+    return
+  }
+
+  const eu = MEUS_PEDIDOS_VENDEDOR || (gerencia ? '' : PERFIL.pessoaId)
+
+  let qPedidos = db.from('pedido').select(`
+      id, numero, cliente_id, vendedor_id, valor_total, quantidade_t, data_pedido,
+      vencimento, condicao_pagamento, forma_pagamento, situacao_pagamento, valor_recebido,
+      status, cliente:cliente_id ( nome_fantasia, razao_social )
+    `).neq('status', 'CANCELADO').order('data_pedido', { ascending: false }).limit(300)
+  if (eu) qPedidos = qPedidos.eq('vendedor_id', eu)
+
+  let qCargas = db.from('carregamento').select(`
+      id, pedido_id, cliente_id, vendedor_id, quantidade_t, status,
+      data_programada, data_carregamento, numero_nf, valor_nf
+    `).order('data_programada', { ascending: false, nullsFirst: false }).limit(600)
+  if (eu) qCargas = qCargas.eq('vendedor_id', eu)
+
+  const [{ data: pedidos, error }, { data: cargas }] = await Promise.all([qPedidos, qCargas])
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  const porPedido = {}
+  const soltas = []
+  for (const c of cargas || []) {
+    if (c.pedido_id) (porPedido[c.pedido_id] = porPedido[c.pedido_id] || []).push(c)
+    else soltas.push(c)
+  }
+
+  const lista = pedidos || []
+  const totalVendido = lista.reduce((s, p) => s + Number(p.valor_total || 0), 0)
+  const totalRecebido = lista.reduce((s, p) => s + Number(p.valor_recebido || 0), 0)
+  const emAberto = lista.filter(p => p.situacao_pagamento !== 'QUITADO')
+  const cargasFaturadas = (cargas || []).filter(c => c.status === 'FATURADO').length
+  const cargasProgramadas = (cargas || []).filter(c => c.status === 'PROGRAMADO').length
+
+  alvo.innerHTML = `
+    <div class="kpis" style="margin-bottom:16px;">
+      ${kpi('Pedidos', String(lista.length), emAberto.length + ' em aberto')}
+      ${kpi('Valor vendido', 'R$ ' + fmtNum(totalVendido), '')}
+      ${kpi('Já recebido', 'R$ ' + fmtNum(totalRecebido),
+            totalVendido ? Math.round(totalRecebido / totalVendido * 100) + '% do vendido' : '')}
+      ${kpi('Cargas faturadas', String(cargasFaturadas), cargasProgramadas + ' programadas')}
+    </div>
+
+    ${gerencia ? `<select id="mp-vendedor" style="margin-bottom:14px;min-width:240px;">
+      <option value="">todos os vendedores</option>
+      ${CRM_CACHE.vendedores.map(v => `<option value="${v.id}" ${MEUS_PEDIDOS_VENDEDOR === v.id ? 'selected' : ''}>${esc(v.nome)}</option>`).join('')}
+    </select>` : ''}
+
+    ${!lista.length ? `<p class="vazio">Nenhum pedido ainda${eu && !gerencia ? ' no seu nome' : ''}.</p>` : `
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      ${lista.map(p => cartaoMeuPedido(p, porPedido[p.id] || [])).join('')}
+    </div>`}
+
+    ${soltas.length ? `
+    <details class="panel" style="padding:0;margin-top:16px;">
+      <summary style="padding:14px 18px;cursor:pointer;font-weight:600;font-size:13.5px;">
+        Cargas sem pedido vinculado
+        <span class="chip" style="margin-left:6px;font-size:11px;">${soltas.length}</span>
+      </summary>
+      <div style="padding:0 18px 14px;">
+        <p class="texto-dim2" style="font-size:11.5px;line-height:1.5;margin:0 0 10px;">
+          Essas cargas estão no seu nome mas não apontam pra nenhum pedido, então não dá pra
+          dizer de qual venda elas saíram. Quem cuida da expedição consegue vincular.
+        </p>
+        <div class="tabela-scroll"><table>
+          <thead><tr><th>Programada</th><th class="num">Toneladas</th><th>NF</th><th>Situação</th></tr></thead>
+          <tbody>${soltas.map(c => `<tr>
+            <td class="texto-dim">${fmtData(c.data_programada) || '—'}</td>
+            <td class="num">${fmtNum(c.quantidade_t)}</td>
+            <td class="texto-dim">${esc(c.numero_nf || '—')}</td>
+            <td>${chipCarga(c.status)}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+      </div>
+    </details>` : ''}`
+
+  const sel = alvo.querySelector('#mp-vendedor')
+  if (sel) sel.onchange = () => { MEUS_PEDIDOS_VENDEDOR = sel.value; crmMeusPedidos(alvo, editavel, gerencia) }
+}
+
+function chipCarga (status) {
+  const e = ETAPAS_CARGA[status] || { rotulo: status || '—', cor: 'var(--dim)', icone: '' }
+  return `<span class="chip" style="font-size:11px;color:${e.cor};border-color:${e.cor};">${e.icone} ${esc(e.rotulo)}</span>`
+}
+
+function cartaoMeuPedido (p, cargas) {
+  const nome = p.cliente?.nome_fantasia || p.cliente?.razao_social || 'cliente sem nome'
+  const saldo = Math.max(0, Number(p.valor_total || 0) - Number(p.valor_recebido || 0))
+  const tFaturadas = cargas.filter(c => c.status === 'FATURADO')
+    .reduce((s, c) => s + Number(c.quantidade_t || 0), 0)
+  const pedidoT = Number(p.quantidade_t || 0)
+  const pct = pedidoT ? Math.min(100, Math.round(tFaturadas / pedidoT * 100)) : 0
+
+  return `
+    <div class="panel" style="padding:14px 16px;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+        <div style="min-width:0;">
+          <b style="font-size:14px;">${esc(nome)}</b>
+          <div class="texto-dim2" style="font-size:11.5px;margin-top:2px;">
+            pedido ${esc(p.numero || '—')} · ${fmtData(p.data_pedido) || 'sem data'}
+            · ${fmtNum(p.quantidade_t)} t
+          </div>
+        </div>
+        <div style="text-align:right;flex:none;">
+          <div style="font-weight:700;">R$ ${fmtNum(p.valor_total)}</div>
+          <div class="texto-dim2" style="font-size:11px;">
+            ${p.situacao_pagamento === 'QUITADO'
+              ? '<span style="color:var(--good-text);">quitado</span>'
+              : `em aberto R$ ${fmtNum(saldo)}`}
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;font-size:11.5px;" class="texto-dim2">
+        <span>Vencimento: ${p.vencimento
+          ? fmtData(p.vencimento)
+          : '<span style="color:var(--warn-text);">sem prazo</span>'}</span>
+        <span>Pagamento: ${esc(p.condicao_pagamento || p.forma_pagamento || '—')}</span>
+      </div>
+
+      ${pedidoT ? `
+      <div style="margin-top:10px;">
+        <div style="display:flex;justify-content:space-between;font-size:11px;" class="texto-dim2">
+          <span>faturado ${fmtNum(tFaturadas)} t de ${fmtNum(pedidoT)} t</span><span>${pct}%</span>
+        </div>
+        <div style="height:5px;background:var(--line2);border-radius:999px;overflow:hidden;margin-top:3px;">
+          <div style="height:100%;width:${pct}%;background:var(--good-text);"></div>
+        </div>
+      </div>` : ''}
+
+      ${cargas.length ? `
+      <div style="margin-top:10px;display:flex;flex-direction:column;gap:4px;">
+        ${cargas.map(c => `
+          <div style="display:flex;gap:10px;align-items:center;font-size:12px;flex-wrap:wrap;">
+            ${chipCarga(c.status)}
+            <span class="texto-dim">${fmtNum(c.quantidade_t)} t</span>
+            <span class="texto-dim2">${c.status === 'FATURADO'
+              ? (c.numero_nf ? 'NF ' + esc(c.numero_nf) : 'sem número de NF')
+              : (fmtData(c.data_programada) ? 'prevista ' + fmtData(c.data_programada) : 'sem data prevista')}</span>
+          </div>`).join('')}
+      </div>`
+      : `<p class="texto-dim2" style="font-size:11.5px;margin:10px 0 0;">
+           Nenhuma carga programada ainda pra esse pedido.</p>`}
+    </div>`
+}
+
 async function paginaCrm () {
   if (!podeVer('crm')) { areaLivre().innerHTML =
     `<div class="panel" style="padding:22px;"><p class="texto-dim">Você não tem acesso ao CRM Comercial.</p></div>`; return }
@@ -14079,7 +14254,8 @@ async function paginaCrm () {
   CRM_CACHE.vendedores = CRM_CACHE.pessoas.filter(p => p.eh_vendedor)
   if (!CRM_CACHE.vendedores.length) CRM_CACHE.vendedores = CRM_CACHE.pessoas
 
-  const abas = [['painel', 'Painel'], ['funil', 'Funil'], ['progresso', 'Progresso'], ['calendario', 'Meu Dia']]
+  const abas = [['painel', 'Painel'], ['funil', 'Funil'], ['progresso', 'Progresso'],
+                ['pedidos', 'Meus pedidos'], ['calendario', 'Meu Dia']]
   if (gerencia) abas.push(['gestao', 'Gestão'])
   if (!gerencia && souPreVendas()) abas.push(['atribuir', 'Prospecção'])
 
@@ -14109,6 +14285,7 @@ function abrirCrm (sub, editavel, gerencia) {
   if (sub === 'funil') crmFunilIndividual(alvo, editavel, gerencia)
   if (sub === 'progresso') crmProgressoIndividual(alvo, editavel, gerencia)
   if (sub === 'calendario') crmMeuDia(alvo, editavel, gerencia)
+  if (sub === 'pedidos') crmMeusPedidos(alvo, editavel, gerencia)
   if (sub === 'atribuir') crmAtribuir(alvo)
   if (sub === 'gestao') crmGestaoTab(alvo, editavel).then(() => {
     const comparativo = document.createElement('div')
@@ -17579,6 +17756,7 @@ const TEC_PARAMS_SOLO = [
 
 let TEC = { clientes: [], contatos: [], talhoes: [], analises: [], aplicacoes: [], visitas: [], resultados: [], ocorrencias: [], demandas: [], docs: [], anexos: [] }
 let TEC_VISTA = 'painel'
+let TEC_PESSOAS = []   // quem pode ser atribuído como técnico responsável
 let TEC_SUBACOMP = 'ciclo'
 let TEC_CAL_REF = new Date()
 let TEC_CMP = {}
@@ -17674,7 +17852,8 @@ async function paginaCrmTecnico () {
   area.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
   const [{ data: clientes }, { data: contatos }, { data: talhoes }, { data: analises }, { data: aplicacoes },
-    { data: visitas }, { data: resultados }, { data: ocorrencias }, { data: demandas }, { data: docs }, { data: anexos }] = await Promise.all([
+    { data: visitas }, { data: resultados }, { data: ocorrencias }, { data: demandas }, { data: docs }, { data: anexos },
+    { data: pessoasTec }] = await Promise.all([
     db.from('tecnico_cliente').select('*').order('nome'),
     db.from('tecnico_contato').select('*'),
     db.from('tecnico_talhao').select('*'),
@@ -17685,13 +17864,15 @@ async function paginaCrmTecnico () {
     db.from('tecnico_ocorrencia').select('*'),
     db.from('tecnico_demanda').select('*'),
     db.from('tecnico_doc').select('*'),
-    db.from('tecnico_anexo').select('*')
+    db.from('tecnico_anexo').select('*'),
+    db.from('pessoa').select('id,nome').eq('status', 'ATIVO').order('nome')
   ])
   TEC = {
     clientes: clientes || [], contatos: contatos || [], talhoes: talhoes || [], analises: analises || [],
     aplicacoes: aplicacoes || [], visitas: visitas || [], resultados: resultados || [], ocorrencias: ocorrencias || [],
     demandas: demandas || [], docs: docs || [], anexos: anexos || []
   }
+  TEC_PESSOAS = pessoasTec || []
 
   const abas = [['painel', 'Painel'], ['clientes', 'Clientes'], ['acompanhamento', 'Acompanhamento'], ['agenda', 'Agenda']]
   area.innerHTML = `
@@ -17797,6 +17978,119 @@ function tecRenderPainel (alvo) {
 }
 
 // ----- Clientes (lista + ficha) -----
+// ---------------------------------------------------------------
+// Fila de atribuição
+//
+// Cliente que faturou a primeira nota entra sozinho aqui, sem técnico.
+// O sistema entrega na porta; quem distribui é o gestor. Enquanto ninguém
+// assume, o acompanhamento não começou — e é justamente esse intervalo
+// que a fila torna visível, com os dias parados contados.
+// ---------------------------------------------------------------
+function tecEsperandoTecnico () {
+  return (TEC.clientes || [])
+    .filter(c => !c.responsavel_id)
+    .sort((a, b) => String(b.liberado_em || '').localeCompare(String(a.liberado_em || '')))
+}
+
+function diasParados (iso) {
+  if (!iso) return null
+  return Math.floor((Date.now() - new Date(iso).getTime()) / 86400000)
+}
+
+function tecFilaAtribuicao (podeAtribuir) {
+  const fila = tecEsperandoTecnico()
+  if (!fila.length) return ''
+
+  const parados = fila.map(c => diasParados(c.liberado_em)).filter(d => d != null)
+  const maisAntigo = parados.length ? Math.max(...parados) : null
+
+  return `
+    <div class="panel" id="tec-fila" style="padding:0;margin-bottom:16px;border-left:3px solid var(--rust);">
+      <div style="padding:16px 18px 10px;">
+        <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;">
+          <h3 style="font-family:var(--serif);font-size:15px;margin:0;">👤 Esperando técnico</h3>
+          <span class="chip" style="font-size:11.5px;">${fila.length} cliente(s)</span>
+          ${maisAntigo != null && maisAntigo > 0
+            ? `<span style="font-weight:700;color:${maisAntigo > 14 ? 'var(--critico-text)' : 'var(--warn-text)'};">
+                 o mais antigo há ${maisAntigo} dia(s)</span>` : ''}
+        </div>
+        <p class="texto-dim" style="font-size:12.5px;line-height:1.55;margin:8px 0 0;">
+          Entraram sozinhos quando faturaram a primeira nota. Enquanto não tiverem um técnico,
+          ninguém está acompanhando a aplicação deles.
+          ${!podeAtribuir ? '<b>Você não tem permissão pra atribuir aqui</b> — está só vendo.' : ''}
+        </p>
+      </div>
+      <div class="tabela-scroll">
+        <table><thead><tr>
+          <th>Cliente</th><th>Local</th><th>Vendedor</th><th>Liberado</th>
+          <th style="min-width:190px;">Técnico responsável</th><th></th>
+        </tr></thead><tbody>
+        ${fila.map(c => {
+          const d = diasParados(c.liberado_em)
+          return `<tr data-fila="${c.id}">
+            <td><b>${esc(c.nome)}</b>
+              <div class="texto-dim2" style="font-size:11px;">${esc(c.codigo || '')}
+                ${c.origem === 'faturamento' ? '· entrou pelo faturamento' : '· cadastrado à mão'}</div></td>
+            <td class="texto-dim2">${esc(c.municipio || '—')}</td>
+            <td class="texto-dim2">${esc(tecNomeDePessoa(c.vendedor_id) || '—')}</td>
+            <td class="texto-dim">${c.liberado_em ? fmtData(c.liberado_em) : '—'}
+              ${d != null && d > 0 ? `<div style="font-size:11px;color:${d > 14 ? 'var(--critico-text)' : 'var(--warn-text)'};">há ${d} dia(s)</div>` : ''}</td>
+            <td><select data-fila-tec="${c.id}" ${podeAtribuir ? '' : 'disabled'} style="width:100%;font-size:12.5px;">
+                <option value="">— escolher —</option>
+                ${(TEC_PESSOAS || []).map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')}
+              </select></td>
+            <td class="num" style="white-space:nowrap;">
+              ${podeAtribuir ? `<button class="btn-secundario mini" data-fila-salvar="${c.id}">atribuir</button>` : ''}
+              <span class="texto-dim2" data-fila-status="${c.id}" style="font-size:11px;margin-left:6px;"></span>
+            </td>
+          </tr>`
+        }).join('')}
+        </tbody></table>
+      </div>
+    </div>`
+}
+
+function tecNomeDePessoa (id) {
+  return (TEC_PESSOAS || []).find(p => p.id === id)?.nome || null
+}
+
+function tecLigarFilaAtribuicao (alvo, podeAtribuir) {
+  if (!alvo.querySelector('#tec-fila') || !podeAtribuir) return
+
+  alvo.querySelectorAll('[data-fila-salvar]').forEach(b => {
+    b.onclick = async () => {
+      const id = b.dataset.filaSalvar
+      const sel = alvo.querySelector(`[data-fila-tec="${id}"]`)
+      const status = alvo.querySelector(`[data-fila-status="${id}"]`)
+      if (!sel?.value) { status.textContent = 'escolha o técnico'; status.style.color = 'var(--warn-text)'; return }
+
+      b.disabled = true
+      status.textContent = 'salvando...'; status.style.color = ''
+      const { error } = await db.from('tecnico_cliente')
+        .update({ responsavel_id: sel.value, atualizado_por: PERFIL.pessoaId, atualizado_em: new Date().toISOString() })
+        .eq('id', id)
+      b.disabled = false
+      if (error) { status.textContent = error.message; status.style.color = 'var(--critico-text)'; return }
+
+      // o técnico precisa saber que caiu cliente no colo dele — senão a
+      // atribuição vira um campo preenchido que ninguém leu
+      const cli = TEC.clientes.find(c => c.id === id)
+      await db.from('notificacao_pessoal').insert({
+        destinatario_id: sel.value,
+        titulo: 'Cliente novo pra acompanhar',
+        mensagem: `${cli?.nome || 'Um cliente'}${cli?.municipio ? ' (' + cli.municipio + ')' : ''} ` +
+          `ficou sob sua responsabilidade no CRM Técnico. Ele já recebeu a primeira carga.`,
+        entidade: 'tecnico_cliente', entidade_id: id, exige_confirmacao: false
+      })
+
+      status.textContent = 'ok'; status.style.color = 'var(--good-text)'
+      const linha = alvo.querySelector(`[data-fila="${id}"]`)
+      if (linha) { linha.style.opacity = '.4'; linha.style.textDecoration = 'line-through' }
+      if (cli) cli.responsavel_id = sel.value
+    }
+  })
+}
+
 function tecRenderClientes (alvo) {
   const municipios = Array.from(new Set(TEC.clientes.map(c => c.municipio).filter(Boolean))).sort()
   alvo.innerHTML = `
@@ -17810,6 +18104,10 @@ function tecRenderClientes (alvo) {
       <button class="btn" id="tf-novo">+ Novo cliente</button>
     </div>
     <div class="panel" style="padding:0;"><div id="tec-lista-clientes" class="tabela-scroll"></div></div>`
+
+  const podeAtribuir = podeEditar('crm_tecnico')
+  alvo.insertAdjacentHTML('afterbegin', tecFilaAtribuicao(podeAtribuir))
+  tecLigarFilaAtribuicao(alvo, podeAtribuir)
 
   ;['rota', 'municipio', 'fase', 'nivel', 'farol'].forEach(k => {
     const el = $('#tf-' + k); if (el) el.onchange = () => { TF[k] = el.value; tecDesenharListaClientes() }
@@ -18041,16 +18339,19 @@ function tecFormCliente (c) {
 function tecToast (msg) { alert(msg) }
 async function tecRecarregar () {
   const [{ data: clientes }, { data: contatos }, { data: talhoes }, { data: analises }, { data: aplicacoes },
-    { data: visitas }, { data: resultados }, { data: ocorrencias }, { data: demandas }, { data: docs }, { data: anexos }] = await Promise.all([
+    { data: visitas }, { data: resultados }, { data: ocorrencias }, { data: demandas }, { data: docs }, { data: anexos },
+    { data: pessoasTec }] = await Promise.all([
     db.from('tecnico_cliente').select('*').order('nome'), db.from('tecnico_contato').select('*'),
     db.from('tecnico_talhao').select('*'), db.from('tecnico_analise_solo').select('*'),
     db.from('tecnico_aplicacao').select('*'), db.from('tecnico_visita').select('*'),
     db.from('tecnico_resultado').select('*'), db.from('tecnico_ocorrencia').select('*'),
-    db.from('tecnico_demanda').select('*'), db.from('tecnico_doc').select('*'), db.from('tecnico_anexo').select('*')
+    db.from('tecnico_demanda').select('*'), db.from('tecnico_doc').select('*'), db.from('tecnico_anexo').select('*'),
+    db.from('pessoa').select('id,nome').eq('status', 'ATIVO').order('nome')
   ])
   TEC = { clientes: clientes || [], contatos: contatos || [], talhoes: talhoes || [], analises: analises || [],
     aplicacoes: aplicacoes || [], visitas: visitas || [], resultados: resultados || [], ocorrencias: ocorrencias || [],
     demandas: demandas || [], docs: docs || [], anexos: anexos || [] }
+  TEC_PESSOAS = pessoasTec || []
   if ($('#sub-tec')) tecAbrirSub()
 }
 function tecExcluirCliente (id, fundo) {
