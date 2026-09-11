@@ -18368,73 +18368,331 @@ async function sdrCarregarLeads () {
   return SDR_CACHE.leads
 }
 
-// ----- Aba Leads: lista tipo WhatsApp + conversa + ficha do lead -----
+// ---------------------------------------------------------------
+// A cara do SDR — central de atendimento
+//
+// Anatomia de WhatsApp (caixa de entrada à esquerda, conversa em balões
+// à direita), cores da Gefoscal. Tudo aqui usa só as variáveis do tema,
+// nunca cor fixa: trocar de skin continua funcionando sozinho.
+// ---------------------------------------------------------------
+function estilosSdrUmaVez () {
+  if ($('#sdr-estilos')) return
+  const s = document.createElement('style')
+  s.id = 'sdr-estilos'
+  s.textContent = `
+    .sdr-shell { display:flex; border:1px solid var(--line2); border-radius:16px; overflow:hidden;
+      height:74vh; min-height:560px; background:var(--panel);
+      box-shadow:0 8px 30px rgba(0,0,0,.16); }
+    .sdr-coluna { width:352px; flex:none; border-right:1px solid var(--line2);
+      display:flex; flex-direction:column; background:var(--surface2); min-width:0; }
+    .sdr-palco { flex:1; display:flex; flex-direction:column; min-width:0; background:var(--panel); }
+
+    .sdr-topo { padding:14px 16px 12px; border-bottom:1px solid var(--line2); flex:none;
+      background:linear-gradient(135deg, rgba(var(--rust-rgb),.13), rgba(var(--gold-rgb),.07)); }
+    .sdr-topo h4 { margin:0 0 10px; font-family:var(--serif); font-size:16px; display:flex;
+      align-items:center; gap:8px; }
+    .sdr-busca-linha { display:flex; gap:7px; }
+    .sdr-busca { flex:1; min-width:0; font-size:13px; padding:9px 12px; border:1px solid var(--line);
+      border-radius:999px; background:var(--panel); color:var(--txt); outline:none; }
+    .sdr-busca:focus { border-color:var(--rust); }
+
+    .sdr-filtros { display:flex; gap:6px; padding:10px 14px; border-bottom:1px solid var(--line2);
+      flex:none; overflow-x:auto; background:var(--surface2); }
+    .sdr-filtro { border:1px solid var(--line2); background:var(--panel); color:var(--dim);
+      border-radius:999px; padding:5px 12px; font-size:11.5px; font-weight:600; cursor:pointer;
+      white-space:nowrap; transition:all .15s ease; }
+    .sdr-filtro:hover { border-color:var(--rust); color:var(--txt); }
+    .sdr-filtro.ativo { background:var(--rust); border-color:var(--rust); color:#fff; }
+
+    .sdr-rolagem { flex:1; overflow-y:auto; }
+    .sdr-rolagem::-webkit-scrollbar, .sdr-fita::-webkit-scrollbar { width:7px; }
+    .sdr-rolagem::-webkit-scrollbar-thumb, .sdr-fita::-webkit-scrollbar-thumb {
+      background:var(--line2); border-radius:10px; }
+
+    .sdr-secao { position:sticky; top:0; z-index:2; padding:9px 14px 7px;
+      background:var(--surface2); border-bottom:1px solid var(--line2);
+      display:flex; align-items:center; gap:8px; }
+    .sdr-secao b { font-size:10.5px; letter-spacing:.9px; text-transform:uppercase; }
+    .sdr-secao .conta { margin-left:auto; font-size:10.5px; color:var(--dim2);
+      background:var(--panel); border:1px solid var(--line2); border-radius:999px; padding:1px 8px; }
+    .sdr-secao-nota { padding:4px 14px 9px; font-size:11px; color:var(--dim2);
+      background:var(--surface2); border-bottom:1px solid var(--line2); line-height:1.4; }
+
+    .sdr-conversa { padding:11px 14px; border-bottom:1px solid var(--line2); cursor:pointer;
+      display:flex; gap:11px; align-items:center; transition:background .12s ease;
+      border-left:3px solid transparent; }
+    .sdr-conversa:hover { background:var(--hover-bg); }
+    .sdr-conversa.ativa { background:var(--hover-bg); border-left-color:var(--rust); }
+    .sdr-conversa .corpo { flex:1; min-width:0; }
+    .sdr-conversa .alto { display:flex; justify-content:space-between; gap:8px; align-items:baseline; }
+    .sdr-conversa .nome { font-weight:600; font-size:13.5px; white-space:nowrap;
+      overflow:hidden; text-overflow:ellipsis; }
+    .sdr-conversa .hora { font-size:10.5px; color:var(--dim2); flex:none; }
+    .sdr-conversa .previa { font-size:12px; color:var(--dim2); margin-top:2px; white-space:nowrap;
+      overflow:hidden; text-overflow:ellipsis; }
+    .sdr-conversa .marcas { margin-top:6px; display:flex; gap:4px; flex-wrap:wrap; align-items:center; }
+
+    /* a conversa, com o fundo discreto de papel de parede do WhatsApp */
+    .sdr-fita { flex:1; overflow-y:auto; padding:18px 18px 8px; display:flex;
+      flex-direction:column; gap:7px;
+      background:
+        radial-gradient(circle at 18% 22%, rgba(var(--rust-rgb),.05) 0 2px, transparent 2px),
+        radial-gradient(circle at 68% 72%, rgba(var(--gold-rgb),.05) 0 2px, transparent 2px),
+        var(--panel);
+      background-size:64px 64px, 88px 88px, auto; }
+    .sdr-dia { align-self:center; font-size:10.5px; color:var(--dim2); background:var(--surface2);
+      border:1px solid var(--line2); border-radius:999px; padding:3px 12px; margin:6px 0; }
+    .sdr-balao { max-width:72%; padding:9px 13px; border-radius:14px; font-size:13.2px;
+      line-height:1.5; position:relative; box-shadow:0 1px 2px rgba(0,0,0,.10);
+      align-self:flex-start; background:var(--surface2); border:1px solid var(--line2);
+      border-bottom-left-radius:5px; word-break:break-word; }
+    .sdr-balao.meu { align-self:flex-end; background:var(--rust); color:#fff; border-color:transparent;
+      border-bottom-left-radius:14px; border-bottom-right-radius:5px; }
+    .sdr-balao .rodape { font-size:9.5px; opacity:.7; margin-top:5px; text-align:right;
+      display:flex; gap:5px; justify-content:flex-end; align-items:center; }
+    .sdr-balao .etiqueta { font-size:10px; opacity:.8; margin-bottom:4px;
+      display:flex; align-items:center; gap:4px; }
+
+    .sdr-compositor { flex:none; border-top:1px solid var(--line2); padding:11px 14px;
+      background:var(--surface2); display:flex; gap:9px; align-items:flex-end; }
+    .sdr-compositor textarea { flex:1; min-width:0; resize:none; font-family:inherit; font-size:13.5px;
+      line-height:1.45; padding:10px 14px; border:1px solid var(--line); border-radius:18px;
+      background:var(--panel); color:var(--txt); max-height:120px; outline:none; }
+    .sdr-compositor textarea:focus { border-color:var(--rust); }
+    .sdr-enviar { flex:none; width:40px; height:40px; border-radius:50%; border:none; cursor:pointer;
+      background:var(--rust); color:#fff; font-size:16px; display:flex; align-items:center;
+      justify-content:center; transition:filter .15s ease; }
+    .sdr-enviar:hover { filter:brightness(1.12); }
+    .sdr-enviar:disabled { opacity:.45; cursor:default; filter:none; }
+
+    .sdr-aviso-compositor { flex:none; padding:10px 14px; background:rgba(var(--warn-rgb),.12);
+      border-top:1px solid var(--line2); font-size:12px; color:var(--warn-text);
+      display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+
+    .sdr-vazio { margin:auto; text-align:center; color:var(--dim2); font-size:13px; padding:26px; }
+    .sdr-vazio .simbolo { font-size:54px; opacity:.2; margin-bottom:10px; }
+
+    /* Cartões usados nas outras sub-abas */
+    .sdr-cartoes { display:grid; gap:14px;
+      grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); }
+    .sdr-cartao { border:1px solid var(--line2); border-radius:14px; padding:16px;
+      background:var(--panel); transition:border-color .15s ease, transform .15s ease,
+      box-shadow .15s ease; }
+    .sdr-cartao:hover { border-color:var(--rust); transform:translateY(-2px);
+      box-shadow:0 8px 22px rgba(0,0,0,.16); }
+    .sdr-cartao h5 { margin:0 0 4px; font-family:var(--serif); font-size:15px; }
+
+    @media (max-width: 900px) {
+      .sdr-shell { height:auto; min-height:0; flex-direction:column; }
+      .sdr-coluna { width:auto; border-right:none; border-bottom:1px solid var(--line2);
+        max-height:46vh; }
+      .sdr-palco { min-height:56vh; }
+      .sdr-balao { max-width:86%; }
+    }
+  `
+  document.head.appendChild(s)
+}
+
+// ----- Aba Leads: caixa de entrada única + conversa + ficha do lead -----
 async function sdrAbaLeads (alvo) {
+  estilosSdrUmaVez()
   try { await sdrCarregarLeads() }
   catch (erro) { alvo.innerHTML = `<p class="vazio">${esc(erro.message)}</p>`; return }
+  await sdrMontarCaixaDeEntrada()
 
   alvo.innerHTML = `
-    <div style="display:flex;gap:0;border:1px solid var(--line2);border-radius:12px;overflow:hidden;height:72vh;min-height:540px;background:var(--surface2);">
-      <div id="sdr-lista" style="width:340px;flex:none;border-right:1px solid var(--line2);overflow-y:auto;background:var(--surface2);"></div>
-      <div id="sdr-detalhe" style="flex:1;display:flex;flex-direction:column;min-width:0;background:var(--panel);">
-        <div style="margin:auto;color:var(--dim2);font-size:13px;padding:20px;text-align:center;">
-          <div style="font-size:56px;opacity:.25;margin-bottom:8px;">💬</div>
-          Selecione um lead pra ver a conversa
+    <div class="sdr-shell">
+      <div class="sdr-coluna">
+        <div class="sdr-topo">
+          <h4>💬 Conversas</h4>
+          <div class="sdr-busca-linha">
+            <input id="sdr-busca-lead" class="sdr-busca" placeholder="Buscar por nome ou telefone...">
+            <button class="btn-secundario mini" id="sdr-btn-novo-lead"
+              title="Cadastrar contato feito por fora (ligação, WhatsApp pessoal)" style="flex:none;">+ Novo</button>
+          </div>
+        </div>
+        <div class="sdr-filtros" id="sdr-filtros"></div>
+        <div class="sdr-rolagem" id="sdr-lista-itens"></div>
+      </div>
+      <div class="sdr-palco" id="sdr-detalhe">
+        <div class="sdr-vazio">
+          <div class="simbolo">💬</div>
+          Escolha uma conversa para abrir
         </div>
       </div>
     </div>`
 
-  renderListaSdr()
-  faixaForaDaLista(alvo)   // avisa quem chamou e a IA não respondeu
-}
-
-function renderListaSdr () {
-  const lista = $('#sdr-lista')
-  if (!lista) return
-  if (!SDR_CACHE.leads.length) { lista.innerHTML = `<p class="texto-dim2" style="padding:14px;">Nenhum lead ainda.</p>`; return }
-
-  lista.innerHTML = `
-    <div style="padding:12px 14px;border-bottom:1px solid var(--line2);background:var(--panel);display:flex;gap:8px;">
-      <input id="sdr-busca-lead" placeholder="Buscar por nome ou telefone..." style="flex:1;min-width:0;font-size:13px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface2);color:var(--txt);">
-      <button class="btn-secundario mini" id="sdr-btn-novo-lead" title="Cadastrar contato feito por fora (ligação, WhatsApp pessoal)" style="flex:none;">+ Novo</button>
-    </div>
-    <div id="sdr-lista-itens"></div>`
+  renderFiltrosSdr()
   renderItensListaSdr('')
   const busca = $('#sdr-busca-lead')
   busca.oninput = () => renderItensListaSdr(busca.value.trim().toLowerCase())
   $('#sdr-btn-novo-lead').onclick = () => abrirNovoLeadSdr()
 }
 
+// Mantido porque outras telas ainda chamam pra redesenhar a lista.
+function renderListaSdr () {
+  renderItensListaSdr($('#sdr-busca-lead')?.value.trim().toLowerCase() || '')
+}
+
+// ---------------------------------------------------------------
+// A caixa de entrada
+//
+// Duas famílias de conversa, na mesma lista, separadas por um rótulo:
+//   SDR RESPONDE — está em lista ativa, o Eduardo conversa sozinho.
+//   COMUM        — chamou sem estar em lista nenhuma. O Eduardo fica
+//                  calado de propósito; aqui só se lê e se responde à mão.
+// A prévia da última mensagem vem de uma consulta só, e é ela que dá
+// a sensação de WhatsApp: sem isso, a lista é um cadastro, não uma caixa.
+// ---------------------------------------------------------------
+const SDR_FILTROS = [
+  ['todas', 'Todas'], ['sdr', 'SDR responde'], ['comum', 'Comum'],
+  ['reuniao', 'Com reunião'], ['atencao', 'Precisam de atenção']
+]
+
+async function sdrMontarCaixaDeEntrada () {
+  SDR_CACHE.filtro = SDR_CACHE.filtro || 'todas'
+  SDR_CACHE.ultimas = new Map()
+  SDR_CACHE.comuns = []
+
+  const { data: msgs } = await db.from('mensagens')
+    .select('telefone,telefone_norm,nome,conteudo,created_at,papel,fora_da_lista,audio')
+    .order('created_at', { ascending: false }).limit(800)
+
+  const comuns = new Map()
+  const doSdr = new Set(SDR_CACHE.leads.map(l => l.telefone_norm || l.telefone))
+
+  for (const m of msgs || []) {
+    const chave = m.telefone_norm || m.telefone
+    if (!SDR_CACHE.ultimas.has(chave)) SDR_CACHE.ultimas.set(chave, m)
+    if (doSdr.has(chave)) continue
+    if (!comuns.has(chave)) {
+      comuns.set(chave, {
+        chave, telefone: m.telefone, telefone_norm: m.telefone_norm,
+        nome: m.nome, quantas: 0, desde: m.created_at
+      })
+    }
+    const c = comuns.get(chave)
+    c.quantas++
+    if (!c.nome && m.nome) c.nome = m.nome
+  }
+  SDR_CACHE.comuns = [...comuns.values()]
+}
+
+function renderFiltrosSdr () {
+  const alvo = $('#sdr-filtros')
+  if (!alvo) return
+  alvo.innerHTML = SDR_FILTROS.map(([id, rotulo]) =>
+    `<button class="sdr-filtro ${SDR_CACHE.filtro === id ? 'ativo' : ''}" data-filtro-sdr="${id}">${rotulo}</button>`).join('')
+  alvo.querySelectorAll('[data-filtro-sdr]').forEach(b => {
+    b.onclick = () => {
+      SDR_CACHE.filtro = b.dataset.filtroSdr
+      renderFiltrosSdr()
+      renderItensListaSdr($('#sdr-busca-lead')?.value.trim().toLowerCase() || '')
+    }
+  })
+}
+
+const previaDaConversa = m => {
+  if (!m) return null
+  const quem = m.papel === 'assistant' ? 'Você: ' : ''
+  const corpo = m.audio ? '🎤 áudio' : (m.conteudo || '').replace(/\s+/g, ' ')
+  return quem + corpo
+}
+
+function precisaDeAtencaoSdr (l) {
+  return !!(l.bloqueio_lgpd || l.ia_pausada || (l.status === 'agendado' && !l.enviado_para_consultor))
+}
+
 function renderItensListaSdr (filtro) {
   const alvo = $('#sdr-lista-itens')
   if (!alvo) return
-  const filtrados = filtro
-    ? SDR_CACHE.leads.filter(l => (l.nome || '').toLowerCase().includes(filtro) || (l.telefone || '').includes(filtro))
-    : SDR_CACHE.leads
 
-  if (!filtrados.length) { alvo.innerHTML = `<p class="texto-dim2" style="padding:14px;">Nada encontrado.</p>`; return }
+  const bate = (nome, tel) =>
+    !filtro || (nome || '').toLowerCase().includes(filtro) || (tel || '').includes(filtro)
 
-  alvo.innerHTML = filtrados.map(l => `
-    <div class="sdr-item-lead" data-id="${l.id}" style="padding:12px 14px;border-bottom:1px solid var(--line2);cursor:pointer;
-      display:flex;gap:11px;align-items:flex-start;${SDR_CACHE.selecionado?.id === l.id ? 'background:var(--hover-bg);' : ''}">
-      ${avatarHtml(null, l.nome || l.telefone, 42)}
-      <div style="flex:1;min-width:0;">
-        <div style="display:flex;justify-content:space-between;gap:6px;align-items:baseline;">
-          <span style="font-weight:600;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(l.nome || l.telefone)}</span>
-          <span style="font-size:10.5px;color:var(--dim2);flex:none;">${formatarHoraRelativa(l.updated_at)}</span>
+  const aba = SDR_CACHE.filtro || 'todas'
+  let leads = SDR_CACHE.leads.filter(l => bate(l.nome, l.telefone))
+  if (aba === 'comum') leads = []
+  if (aba === 'reuniao') leads = leads.filter(l => l.reuniao_em)
+  if (aba === 'atencao') leads = leads.filter(precisaDeAtencaoSdr)
+
+  let comuns = (SDR_CACHE.comuns || []).filter(c => bate(c.nome, c.telefone))
+  if (aba === 'sdr' || aba === 'reuniao' || aba === 'atencao') comuns = []
+
+  if (!leads.length && !comuns.length) {
+    alvo.innerHTML = `<p class="texto-dim2" style="padding:18px;font-size:12.5px;">Nada encontrado aqui.</p>`
+    return
+  }
+
+  const itemLead = l => {
+    const ultima = SDR_CACHE.ultimas.get(l.telefone_norm || l.telefone)
+    const previa = previaDaConversa(ultima)
+    const ativo = SDR_CACHE.selecionado?.id === l.id && !SDR_CACHE.comumAberto
+    return `
+    <div class="sdr-conversa${ativo ? ' ativa' : ''}" data-id="${l.id}">
+      ${avatarHtml(null, l.nome || l.telefone, 44)}
+      <div class="corpo">
+        <div class="alto">
+          <span class="nome">${esc(l.nome || l.telefone)}</span>
+          <span class="hora">${formatarHoraRelativa(ultima?.created_at || l.updated_at)}</span>
         </div>
-        <div style="font-size:11.5px;color:var(--dim2);margin-top:2px;">${esc(l.telefone)}</div>
-        <div style="margin-top:6px;display:flex;gap:5px;flex-wrap:wrap;align-items:center;">
+        <div class="previa">${previa ? esc(previa) : esc(l.telefone)}</div>
+        <div class="marcas">
           <span class="${corStatusLeadSdr(l.status)}" style="font-size:10px;">${esc(ROTULO_STATUS_LEAD_SDR[l.status] || l.status)}</span>
+          ${l.reuniao_em ? `<span class="badge-bom" style="font-size:10px;">📅 ${esc(fmtReuniao(l.reuniao_em) || '')}</span>` : ''}
           ${l.bloqueio_lgpd ? `<span class="badge-alerta" style="font-size:10px;background:rgba(var(--critico-rgb),.18);color:var(--critico-text);">🚫 LGPD</span>` : ''}
+          ${l.ia_pausada ? '<span class="badge-atencao" style="font-size:10px;">IA pausada</span>' : ''}
           ${l.perfil_disc ? `<span class="chip" style="font-size:10px;background:rgba(var(--rust-rgb),.14);color:var(--rust);border:none;">${esc(l.perfil_disc)}</span>` : ''}
           ${l.enviado_para_consultor ? '<span class="badge-bom" style="font-size:10px;">✓ enviado</span>' : ''}
         </div>
       </div>
-    </div>`).join('')
+    </div>`
+  }
 
-  alvo.querySelectorAll('.sdr-item-lead').forEach(el => {
+  const itemComum = c => {
+    const ultima = SDR_CACHE.ultimas.get(c.chave)
+    const previa = previaDaConversa(ultima)
+    const ativo = SDR_CACHE.comumAberto === c.chave
+    return `
+    <div class="sdr-conversa${ativo ? ' ativa' : ''}" data-comum="${esc(c.chave)}">
+      ${avatarHtml(null, c.nome || c.telefone, 44)}
+      <div class="corpo">
+        <div class="alto">
+          <span class="nome">${esc(c.nome || c.telefone)}</span>
+          <span class="hora">${formatarHoraRelativa(ultima?.created_at)}</span>
+        </div>
+        <div class="previa">${previa ? esc(previa) : esc(c.telefone)}</div>
+        <div class="marcas">
+          <span class="chip" style="font-size:10px;">${c.quantas} ${c.quantas === 1 ? 'mensagem' : 'mensagens'}</span>
+          <span class="badge-atencao" style="font-size:10px;">aguardando gente</span>
+        </div>
+      </div>
+    </div>`
+  }
+
+  alvo.innerHTML = `
+    ${leads.length ? `
+      <div class="sdr-secao">
+        <b style="color:var(--rust);">🤖 SDR responde</b>
+        <span class="conta">${leads.length}</span>
+      </div>
+      ${leads.map(itemLead).join('')}` : ''}
+    ${comuns.length ? `
+      <div class="sdr-secao">
+        <b style="color:var(--warn-text);">👤 Comum</b>
+        <span class="conta">${comuns.length}</span>
+      </div>
+      <div class="sdr-secao-nota">
+        Chamaram sem estar em nenhuma lista ativa, então o Eduardo não respondeu — de propósito.
+        Aqui só se lê o que veio e se responde à mão.
+      </div>
+      ${comuns.map(itemComum).join('')}` : ''}`
+
+  alvo.querySelectorAll('[data-id]').forEach(el => {
     el.onclick = () => selecionarLeadSdr(el.dataset.id)
+  })
+  alvo.querySelectorAll('[data-comum]').forEach(el => {
+    el.onclick = () => selecionarComumSdr(el.dataset.comum)
   })
 }
 
@@ -18442,17 +18700,177 @@ async function selecionarLeadSdr (id) {
   const lead = SDR_CACHE.leads.find(l => String(l.id) === String(id))
   if (!lead) return
   SDR_CACHE.selecionado = lead
-  const busca = $('#sdr-busca-lead')?.value.trim().toLowerCase() || ''
-  renderItensListaSdr(busca)
+  SDR_CACHE.comumAberto = null
+  renderItensListaSdr($('#sdr-busca-lead')?.value.trim().toLowerCase() || '')
 
   const painel = $('#sdr-detalhe')
   painel.innerHTML = `<p class="texto-dim2" style="margin:auto;">carregando conversa...</p>`
 
-  const { data: msgs } = await db.from('mensagens').select('*').eq('telefone', lead.telefone).order('created_at', { ascending: true })
+  const { data: msgs } = await db.from('mensagens').select('*')
+    .eq('telefone', lead.telefone).order('created_at', { ascending: true })
   SDR_CACHE.mensagens = msgs || []
   renderDetalheSdr(lead)
 }
 
+async function selecionarComumSdr (chave) {
+  const contato = (SDR_CACHE.comuns || []).find(c => c.chave === chave)
+  if (!contato) return
+  SDR_CACHE.comumAberto = chave
+  SDR_CACHE.selecionado = null
+  renderItensListaSdr($('#sdr-busca-lead')?.value.trim().toLowerCase() || '')
+
+  const painel = $('#sdr-detalhe')
+  painel.innerHTML = `<p class="texto-dim2" style="margin:auto;">carregando conversa...</p>`
+
+  const { data: msgs } = await db.from('mensagens').select('*')
+    .or(`telefone.eq.${contato.telefone},telefone_norm.eq.${chave}`)
+    .order('created_at', { ascending: true })
+  SDR_CACHE.mensagens = msgs || []
+  renderConversaComum(contato)
+}
+
+// ---------------------------------------------------------------
+// A conversa em balões
+// ---------------------------------------------------------------
+const DIA_DA_MENSAGEM = iso => new Date(iso).toLocaleDateString('pt-BR')
+
+function rotuloDoDia (iso) {
+  const hoje = new Date().toLocaleDateString('pt-BR')
+  const ontem = new Date(Date.now() - 864e5).toLocaleDateString('pt-BR')
+  const dia = DIA_DA_MENSAGEM(iso)
+  return dia === hoje ? 'Hoje' : dia === ontem ? 'Ontem' : dia
+}
+
+function balaoDaMensagem (m, anterior) {
+  const minha = m.papel === 'assistant'
+  const trocouDeDia = !anterior || DIA_DA_MENSAGEM(m.created_at) !== DIA_DA_MENSAGEM(anterior.created_at)
+  const hora = new Date(m.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+
+  // Só mostramos o carimbo de entrega no que saiu daqui: no que o lead
+  // mandou, ele não significa nada.
+  const carimbo = !minha ? ''
+    : m.entregue === false ? '<span title="o WhatsApp não confirmou a entrega">⚠️ não entregue</span>'
+    : m.entregue === true ? '<span title="entregue no aparelho">✓✓</span>'
+    : ''
+
+  return `
+    ${trocouDeDia ? `<div class="sdr-dia">${esc(rotuloDoDia(m.created_at))}</div>` : ''}
+    <div class="sdr-balao${minha ? ' meu' : ''}">
+      ${m.audio ? `<div class="etiqueta">🎤 ${minha ? 'enviado como áudio' : 'áudio transcrito'}</div>` : ''}
+      ${m.enviado_por ? '<div class="etiqueta">✍️ escrito à mão</div>' : ''}
+      ${esc(m.conteudo).replace(/\n/g, '<br>')}
+      <div class="rodape">${carimbo}<span>${hora}</span></div>
+    </div>`
+}
+
+function fitaDeMensagens () {
+  const msgs = SDR_CACHE.mensagens || []
+  if (!msgs.length) return '<p class="texto-dim2" style="margin:auto;">Sem mensagens ainda.</p>'
+  return msgs.map((m, i) => balaoDaMensagem(m, msgs[i - 1])).join('')
+}
+
+function rolarFitaAteOFim () {
+  const fita = $('#sdr-fita')
+  if (fita) fita.scrollTop = fita.scrollHeight
+}
+
+// ---------------------------------------------------------------
+// Escrever à mão
+//
+// Vale pra quem o Eduardo não atende (Comum) e pra lead com a IA pausada.
+// Com a IA no ar, responder junto faz o cliente ouvir duas vozes ao mesmo
+// tempo — então aqui a gente avisa e oferece pausar antes.
+// ---------------------------------------------------------------
+function compositorHtml (podeEscrever, aviso) {
+  if (!podeEscrever) return aviso || ''
+  return `
+    <div class="sdr-compositor">
+      <textarea id="sdr-escrever" rows="1" placeholder="Escreva uma mensagem..."></textarea>
+      <button class="sdr-enviar" id="sdr-enviar" title="Enviar (Enter)">➤</button>
+    </div>`
+}
+
+function ligarCompositor (telefone, aoEnviar) {
+  const caixa = $('#sdr-escrever')
+  const botao = $('#sdr-enviar')
+  if (!caixa || !botao) return
+
+  const crescer = () => {
+    caixa.style.height = 'auto'
+    caixa.style.height = Math.min(caixa.scrollHeight, 120) + 'px'
+  }
+  caixa.oninput = crescer
+
+  const enviar = async () => {
+    const texto = caixa.value.trim()
+    if (!texto) return
+    botao.disabled = true; caixa.disabled = true
+    const { data, error } = await db.functions.invoke('sdr-responder-manual', {
+      body: { telefone, texto }
+    })
+    botao.disabled = false; caixa.disabled = false
+    if (error || data?.erro) {
+      alert('Não consegui enviar: ' + (data?.erro || error?.message || 'tente de novo'))
+      caixa.focus()
+      return
+    }
+    SDR_CACHE.mensagens.push({
+      telefone, papel: 'assistant', conteudo: texto,
+      created_at: data?.created_at || new Date().toISOString(),
+      enviado_por: PERFIL.pessoaId, audio: false, entregue: null
+    })
+    caixa.value = ''
+    crescer()
+    if (aoEnviar) aoEnviar()
+    caixa.focus()
+  }
+
+  botao.onclick = enviar
+  caixa.onkeydown = e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); enviar() }
+  }
+}
+
+// ----- Conversa de quem o Eduardo NÃO atende -----
+function renderConversaComum (contato) {
+  const painel = $('#sdr-detalhe')
+  if (!painel) return
+
+  painel.innerHTML = `
+    <div style="padding:12px 16px;border-bottom:1px solid var(--line2);display:flex;
+      justify-content:space-between;align-items:center;gap:12px;flex:none;background:var(--surface2);">
+      <div style="display:flex;gap:11px;align-items:center;min-width:0;">
+        ${avatarHtml(null, contato.nome || contato.telefone, 40)}
+        <div style="min-width:0;">
+          <div style="font-weight:700;font-size:14px;">${esc(contato.nome || contato.telefone)}</div>
+          <div style="font-size:11.5px;color:var(--dim2);">${esc(contato.telefone)} · fora das listas</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex:none;">
+        <span class="badge-atencao">👤 Comum</span>
+        <button class="btn-secundario mini" id="sdr-comum-lista">Pôr numa lista</button>
+      </div>
+    </div>
+
+    <div class="sdr-fita" id="sdr-fita">${fitaDeMensagens()}</div>
+
+    ${compositorHtml(podeEditar('sdr_whatsapp'), `
+      <div class="sdr-aviso-compositor">
+        Você não tem permissão de escrita no SDR, então só dá pra ler esta conversa.
+      </div>`)}`
+
+  rolarFitaAteOFim()
+  $('#sdr-comum-lista').onclick = () => {
+    const b = document.querySelector('.subabas button[data-sub="listas"]')
+    if (b) b.click()
+  }
+  ligarCompositor(contato.telefone, () => {
+    $('#sdr-fita').innerHTML = fitaDeMensagens()
+    rolarFitaAteOFim()
+  })
+}
+
+// ----- Conversa de um lead do SDR -----
 function renderDetalheSdr (lead) {
   const painel = $('#sdr-detalhe')
   if (!painel) return
@@ -18460,19 +18878,6 @@ function renderDetalheSdr (lead) {
   const dupl = lead.duplicado_resultado || null
   const jaExisteNoCrm = dupl && dupl.existe
   const nomeVendedorCrm = dupl?.vendedor_nome || null
-
-  const bolhas = SDR_CACHE.mensagens.map(m => {
-    const minha = m.papel === 'assistant'
-    return `<div style="display:flex;justify-content:${minha ? 'flex-end' : 'flex-start'};">
-      <div style="max-width:70%;padding:8px 12px;border-radius:12px;font-size:13px;line-height:1.45;
-        ${minha ? 'background:var(--rust);color:#fff;border-bottom-right-radius:4px;' : 'background:var(--surface2);border:1px solid var(--line2);border-bottom-left-radius:4px;'}">
-        ${m.audio ? `<div style="font-size:10.5px;opacity:.75;margin-bottom:3px;display:flex;align-items:center;gap:4px;">
-          🎤 <span>${minha ? 'enviado como áudio' : 'áudio transcrito'}</span></div>` : ''}
-        ${esc(m.conteudo).replace(/\n/g, '<br>')}
-        <div style="font-size:9.5px;opacity:.65;margin-top:4px;text-align:right;">${formatarHoraRelativa(m.created_at)}</div>
-      </div>
-    </div>`
-  }).join('')
 
   let blocoEnvio = ''
   if (lead.bloqueio_lgpd) {
@@ -18501,31 +18906,45 @@ function renderDetalheSdr (lead) {
       </div>`
   }
 
+  // Com a IA no ar, escrever junto faria o cliente ouvir duas vozes.
+  const podeEscrever = podeEditar('sdr_whatsapp') && !lead.bloqueio_lgpd && !!lead.ia_pausada
+  const avisoDuasVozes = lead.bloqueio_lgpd
+    ? `<div class="sdr-aviso-compositor">🚫 Contato bloqueado por LGPD — não dá pra escrever para ele.</div>`
+    : !podeEditar('sdr_whatsapp')
+      ? `<div class="sdr-aviso-compositor">Você não tem permissão de escrita no SDR, então só dá pra ler.</div>`
+      : `<div class="sdr-aviso-compositor">
+           <span>O Eduardo está atendendo esse contato. Se você escrever agora, o cliente ouve duas vozes ao mesmo tempo.</span>
+           <button class="btn-secundario mini" id="sdr-pausar-ia">Pausar a IA e responder</button>
+         </div>`
+
   painel.innerHTML = `
     <div style="padding:12px 16px;border-bottom:1px solid var(--line2);display:flex;justify-content:space-between;align-items:center;flex:none;background:var(--surface2);">
       <div style="display:flex;gap:11px;align-items:center;min-width:0;">
-        ${avatarHtml(null, lead.nome || lead.telefone, 38)}
+        ${avatarHtml(null, lead.nome || lead.telefone, 40)}
         <div style="min-width:0;">
           <div style="font-weight:700;font-size:14px;">${esc(lead.nome || lead.telefone)}</div>
-          <div style="font-size:11.5px;color:var(--dim2);">${esc(lead.telefone)}</div>
+          <div style="font-size:11.5px;color:var(--dim2);">${esc(lead.telefone)}${lead.reuniao_em ? ` · 📅 ${esc(fmtReuniao(lead.reuniao_em) || '')}` : ''}</div>
         </div>
       </div>
-      <div style="display:flex;gap:8px;align-items:center;flex:none;">
+      <div style="display:flex;gap:8px;align-items:center;flex:none;flex-wrap:wrap;justify-content:flex-end;">
         ${seloBomDia(lead)}
         ${lead.bloqueio_lgpd ? `<span class="badge-alerta" style="background:rgba(var(--critico-rgb),.18);color:var(--critico-text);">🚫 LGPD</span>` : ''}
+        ${lead.ia_pausada ? '<span class="badge-atencao">IA pausada</span>' : ''}
         <span class="${corStatusLeadSdr(lead.status)}">${esc(ROTULO_STATUS_LEAD_SDR[lead.status] || lead.status)}</span>
         <button class="btn-secundario mini" id="sdr-btn-ficha" title="Ficha completa, histórico de contato e transferência">📇 Ficha</button>
         <button class="btn-secundario mini" id="sdr-btn-relatorio" title="Ver relatório completo da IA">⋮</button>
       </div>
     </div>
 
-    <div style="flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:8px;background:var(--panel);">
-      ${bolhas || '<p class="texto-dim2" style="margin:auto;">Sem mensagens ainda.</p>'}
-    </div>
+    <div class="sdr-fita" id="sdr-fita">${fitaDeMensagens()}</div>
 
-    <div style="padding:14px 18px;border-top:1px solid var(--line2);flex:none;background:var(--surface2);">
+    ${compositorHtml(podeEscrever, avisoDuasVozes)}
+
+    <div style="padding:13px 16px;border-top:1px solid var(--line2);flex:none;background:var(--surface2);">
       ${blocoEnvio}
     </div>`
+
+  rolarFitaAteOFim()
 
   const btnEnviar = $('#sdr-btn-enviar')
   if (btnEnviar) btnEnviar.onclick = () => enviarLeadParaConsultor(lead)
@@ -18538,6 +18957,23 @@ function renderDetalheSdr (lead) {
 
   const btnFicha = $('#sdr-btn-ficha')
   if (btnFicha) btnFicha.onclick = () => abrirFichaSdr(lead)
+
+  const btnPausar = $('#sdr-pausar-ia')
+  if (btnPausar) btnPausar.onclick = async () => {
+    if (!confirm('Pausar o Eduardo só neste contato? Ele para de responder essa pessoa até você religar.')) return
+    const { error } = await db.from('leads').update({ ia_pausada: true }).eq('id', lead.id)
+    if (error) { alert('Não consegui pausar: ' + error.message); return }
+    lead.ia_pausada = true
+    renderItensListaSdr($('#sdr-busca-lead')?.value.trim().toLowerCase() || '')
+    renderDetalheSdr(lead)
+  }
+
+  if (podeEscrever) {
+    ligarCompositor(lead.telefone, () => {
+      $('#sdr-fita').innerHTML = fitaDeMensagens()
+      rolarFitaAteOFim()
+    })
+  }
 }
 
 // ---- Relatório da IA (menu 3 pontinhos): o que ela levantou até agora, incluindo DISC ----
@@ -19240,55 +19676,6 @@ function renderTabelaRegioes () {
 // fica calado de propósito. Se ninguém olhar, essa pessoa fica sem
 // resposta — então ela aparece aqui, em cima da lista de leads.
 // ---------------------------------------------------------------
-async function faixaForaDaLista (alvo) {
-  const desde = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString()
-  const { data, error } = await db.from('mensagens')
-    .select('telefone,telefone_norm,nome,conteudo,created_at')
-    .eq('fora_da_lista', true).eq('papel', 'user')
-    .gte('created_at', desde)
-    .order('created_at', { ascending: false }).limit(200)
-  if (error || !data?.length) return
-
-  // uma linha por pessoa, com a mensagem mais recente dela
-  const porPessoa = new Map()
-  for (const m of data) {
-    const chave = m.telefone_norm || m.telefone
-    if (!porPessoa.has(chave)) porPessoa.set(chave, { ...m, quantas: 0 })
-    porPessoa.get(chave).quantas++
-  }
-  const pessoas = [...porPessoa.values()]
-
-  const faixa = document.createElement('div')
-  faixa.className = 'caixa-texto'
-  faixa.style.cssText = 'margin:0 0 14px;border-color:rgba(var(--warn-rgb),.55);'
-  faixa.innerHTML = `
-    <div class="rot" style="color:var(--warn-text);">
-      ⚠️ ${pessoas.length} ${pessoas.length === 1 ? 'pessoa chamou' : 'pessoas chamaram'} fora da lista</div>
-    <p class="texto-dim2" style="font-size:12px;margin:6px 0 10px;">
-      A IA não respondeu, de propósito — elas não estão em nenhuma lista ativa.
-      Estão esperando atendimento humano. Últimos 7 dias.</p>
-    <div style="display:flex;flex-direction:column;gap:6px;">
-      ${pessoas.slice(0, 8).map(p => `
-        <div style="display:flex;gap:10px;align-items:baseline;font-size:13px;">
-          <b style="flex:none;">${esc(p.nome || p.telefone)}</b>
-          <span class="texto-dim2" style="flex:none;font-size:11.5px;">${esc(p.telefone)}</span>
-          <span class="texto-dim2" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
-                white-space:nowrap;">${esc(p.conteudo || '')}</span>
-          <span class="texto-dim2" style="flex:none;font-size:11.5px;">${esc(fmtQuando(p.created_at) || '')}</span>
-        </div>`).join('')}
-      ${pessoas.length > 8 ? `<div class="texto-dim2" style="font-size:12px;">
-        e mais ${pessoas.length - 8}…</div>` : ''}
-    </div>
-    <div class="acoes" style="margin-top:10px;">
-      <button class="btn-secundario mini" id="fl-ir-listas">Abrir Listas</button>
-    </div>`
-  alvo.prepend(faixa)
-  faixa.querySelector('#fl-ir-listas').onclick = () => {
-    const b = document.querySelector('.subabas button[data-sub="listas"]')
-    if (b) b.click()
-  }
-}
-
 // ---------------------------------------------------------------
 // Aba Canais — os WhatsApps que o SDR atende
 //
@@ -21233,7 +21620,7 @@ async function montarRelatorioDiarioSdr (alvo, dia = null) {
         try {
           await sdrCarregarLeads()
           const lead = SDR_CACHE.leads.find(l => l.id === id)
-          if (lead) { SDR_CACHE.selecionado = lead; renderListaSdr(); renderDetalheSdr(lead) }
+          if (lead) await selecionarLeadSdr(lead.id)   // carrega a conversa junto
         } catch { /* silencioso: o clique na aba já levou a pessoa pra lista */ }
       }, 350)
     }
