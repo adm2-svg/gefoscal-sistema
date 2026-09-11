@@ -12979,6 +12979,7 @@ async function paginaGestaoTI () {
   }
 
   const abas = [['orcamento', 'Orçamento'], ['apis', 'APIs e serviços'],
+                ['gastos', 'Classificar gastos'],
                 ['solicitacoes', 'Solicitações'], ['cartao', 'Cartão TI'], ['mapa', 'Mapa (MAPA/Trimestral)']]
   area.innerHTML = `
     <div style="background:linear-gradient(120deg,#0b1f1a 0%,#122e26 55%,#0b1f1a 100%);border-radius:14px;padding:22px 26px;margin-bottom:18px;position:relative;overflow:hidden;">
@@ -13006,6 +13007,7 @@ function abrirGestaoTI (sub, editavel) {
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
   if (sub === 'orcamento') tiOrcamento(alvo, editavel)
   if (sub === 'apis') tiApisCriticas(alvo, editavel)
+  if (sub === 'gastos') tiClassificarGastos(alvo, editavel)
   if (sub === 'solicitacoes') tiSolicitacoes(alvo, editavel)
   if (sub === 'mapa') tiMapa(alvo)
   if (sub === 'cartao') painelOnfly(alvo, { escopo: 'ti', editavel })
@@ -13095,6 +13097,36 @@ async function tiApisCriticas (alvo, editavel) {
             style="color:var(--rust);">abrir painel ↗</a>` : ''}
         </div>
 
+        ${(s.chaves || []).length ? `
+          <div style="margin-top:9px;font-size:11px;" class="texto-dim2">
+            <b>Chaves de acesso:</b>
+            ${(s.chaves || []).map(k => `<code style="background:var(--surface2);padding:1px 5px;
+              border-radius:4px;margin-right:4px;">${esc(k)}</code>`).join('')}
+            <div style="margin-top:3px;">(só o nome — o valor fica no cofre do Supabase e não aparece aqui)</div>
+          </div>` : ''}
+
+        ${(s.funcoes || []).length ? `
+          <details style="margin-top:7px;">
+            <summary style="cursor:pointer;font-size:11px;color:var(--dim);">
+              Depende disso: ${(s.funcoes || []).length} parte(s) do sistema</summary>
+            <div class="texto-dim2" style="font-size:10.5px;margin-top:4px;line-height:1.6;">
+              ${(s.funcoes || []).map(f => esc(f)).join(' · ')}
+            </div>
+          </details>` : ''}
+
+        <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;font-size:11.5px;align-items:center;">
+          <span class="texto-dim2">Próximo vencimento:
+            ${s.proximo_vencimento
+              ? `<b style="color:${diasAte(s.proximo_vencimento) <= 7 ? 'var(--warn-text)' : 'inherit'};">
+                   ${fmtData(s.proximo_vencimento)}</b>`
+              : '<span style="color:var(--warn-text);">não definido</span>'}</span>
+          ${s.gastos_classificados ? `<span class="texto-dim2">${s.gastos_classificados} cobrança(s) já ligada(s)</span>` : ''}
+          ${editavel ? `<button class="btn-secundario mini" data-api-venc="${s.id}">vencimento e contrato</button>` : ''}
+        </div>
+
+        ${s.como_foi_contratado ? `<div class="texto-dim2" style="font-size:11px;margin-top:6px;">
+          <b>Como foi contratado:</b> ${esc(s.como_foi_contratado)}</div>` : ''}
+
         ${alerta ? `<div style="margin-top:8px;font-size:11.5px;color:${alerta.cor};">
           ⚠ ${esc(alerta.texto)}</div>` : ''}
         ${s.observacao ? `<div class="texto-dim2" style="font-size:11px;margin-top:6px;">${esc(s.observacao)}</div>` : ''}
@@ -13159,6 +13191,12 @@ async function tiApisCriticas (alvo, editavel) {
   if (!editavel) return
   const btnNovo = $('#api-novo')
   if (btnNovo) btnNovo.onclick = () => formServicoTi(null, () => tiApisCriticas(alvo, editavel))
+  alvo.querySelectorAll('[data-api-venc]').forEach(b => {
+    b.onclick = () => {
+      const s = lista.find(x => x.id === b.dataset.apiVenc)
+      formVencimentoServico(s, () => tiApisCriticas(alvo, editavel))
+    }
+  })
   alvo.querySelectorAll('[data-api-editar]').forEach(b => {
     b.onclick = () => {
       const s = lista.find(x => x.id === b.dataset.apiEditar)
@@ -13251,6 +13289,315 @@ async function formServicoTi (registro, aoSalvar) {
     if (!confirm(`Tirar "${base.nome}" da lista de serviços críticos?\n\nIsso não cancela nada no fornecedor — só para de acompanhar aqui.`)) return
     const { error } = await db.from('ti_servico_critico').update({ ativo: false }).eq('id', base.id)
     if (error) { alert(error.message); return }
+    fechar(); if (aoSalvar) aoSalvar()
+  }
+}
+
+// ---------------------------------------------------------------
+// Classificar gastos do cartão
+//
+// A fatura do Onfly chega com o texto que a maquininha mandou:
+// "RAILWAY", "HTM*COMOVENDERMAISW", "MP *AGNALDOTIMOTE". Ninguém
+// consegue gerir TI olhando isso. Aqui cada linha vira uma decisão:
+// é um serviço que a gente acompanha, é gasto avulso de TI, ou não é
+// TI nenhum.
+//
+// O sistema dá o palpite quando o texto bate com um serviço já
+// cadastrado, mas quem confirma é a pessoa — palpite aceito sozinho
+// vira erro silencioso. Uma vez classificado, o serviço passa a
+// reconhecer aquele texto na fatura e aprende o ritmo das cobranças.
+// ---------------------------------------------------------------
+const CLASSIF_GASTO = {
+  A_DEFINIR:  { rotulo: 'A definir',      cor: 'var(--warn-text)' },
+  SERVICO:    { rotulo: 'Serviço',        cor: 'var(--good-text)' },
+  TI_AVULSO:  { rotulo: 'TI avulso',      cor: 'var(--gold)' },
+  NAO_E_TI:   { rotulo: 'Não é TI',       cor: 'var(--dim2)' }
+}
+
+let GASTOS_TI = { dias: 120, filtro: 'A_DEFINIR', servicos: [], lista: [] }
+
+async function tiClassificarGastos (alvo, editavel) {
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+
+  const [{ data: gastos, error }, { data: servicos }] = await Promise.all([
+    db.rpc('ti_gastos_do_cartao', { p_dias: GASTOS_TI.dias }),
+    db.from('ti_servico_critico').select('id,nome,padrao_cobranca,proximo_vencimento,forma_pagamento')
+      .eq('ativo', true).order('nome')
+  ])
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  GASTOS_TI.lista = gastos || []
+  GASTOS_TI.servicos = servicos || []
+
+  const todos = GASTOS_TI.lista
+  const conta = c => todos.filter(g => g.classificacao === c).length
+  const aDefinir = conta('A_DEFINIR')
+  const totalTi = todos
+    .filter(g => ['SERVICO', 'TI_AVULSO'].includes(g.classificacao))
+    .reduce((s, g) => s + Number(g.valor || 0), 0)
+
+  const lista = GASTOS_TI.filtro === 'TODOS'
+    ? todos : todos.filter(g => g.classificacao === GASTOS_TI.filtro)
+
+  const linha = g => {
+    const c = CLASSIF_GASTO[g.classificacao] || CLASSIF_GASTO.A_DEFINIR
+    const sugere = g.classificacao === 'A_DEFINIR' && g.sugerido_id
+    return `
+      <tr data-gasto="${g.onfly_id}">
+        <td class="texto-dim">${fmtData(g.data)}</td>
+        <td>
+          <b style="font-size:12.5px;">${esc(g.descricao)}</b>
+          ${g.vezes_mesmo_texto > 1
+            ? `<span class="texto-dim2" style="font-size:10.5px;"> · ${g.vezes_mesmo_texto}x na fatura</span>` : ''}
+          ${g.pessoa ? `<div class="texto-dim2" style="font-size:10.5px;">${esc(g.pessoa)}</div>` : ''}
+          ${g.observacao ? `<div class="texto-dim2" style="font-size:10.5px;">${esc(g.observacao)}</div>` : ''}
+        </td>
+        <td class="num">R$ ${fmtNum(g.valor)}</td>
+        <td>
+          <span style="font-size:11px;color:${c.cor};">${esc(c.rotulo)}</span>
+          ${g.servico_nome ? `<div class="texto-dim2" style="font-size:10.5px;">${esc(g.servico_nome)}</div>` : ''}
+          ${sugere ? `<div style="font-size:10.5px;color:var(--rust);">parece ser ${esc(g.sugerido_nome)}</div>` : ''}
+        </td>
+        <td class="num" style="white-space:nowrap;">
+          ${editavel ? `
+            ${sugere ? `<button class="btn-secundario mini" data-aceitar="${g.onfly_id}"
+              title="confirmar o palpite">✓ é esse</button>` : ''}
+            <button class="btn-secundario mini" data-classificar="${g.onfly_id}">classificar</button>`
+            : '<span class="texto-dim2" style="font-size:11px;">só leitura</span>'}
+        </td>
+      </tr>`
+  }
+
+  alvo.innerHTML = `
+    <div class="resumo-topo" style="margin-bottom:14px;">
+      <div class="bloco"><div class="rot">❓ Ainda sem classificar</div>
+        <div class="val" style="color:${aDefinir ? 'var(--warn-text)' : 'inherit'};">${aDefinir}</div></div>
+      <div class="bloco"><div class="rot">💻 Gasto de TI no período</div>
+        <div class="val">R$ ${fmtNum(totalTi)}</div></div>
+      <div class="bloco"><div class="rot">✅ Ligados a um serviço</div>
+        <div class="val">${conta('SERVICO')}</div></div>
+      <div class="bloco"><div class="rot">🚫 Marcados como não-TI</div>
+        <div class="val">${conta('NAO_E_TI')}</div></div>
+    </div>
+
+    <div class="panel" style="padding:12px 16px;margin-bottom:14px;">
+      <p class="texto-dim" style="font-size:12.5px;line-height:1.55;margin:0;">
+        A fatura chega com o texto cru da maquininha. Classifique uma vez e o serviço
+        passa a reconhecer aquele texto sozinho nas próximas faturas — e aprende o ritmo
+        das cobranças pra estimar o próximo vencimento.
+        <b>O palpite não é aceito sozinho</b>: quem confirma é você.
+      </p>
+    </div>
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
+      ${[['A_DEFINIR', 'A definir'], ['SERVICO', 'Serviços'], ['TI_AVULSO', 'TI avulso'],
+         ['NAO_E_TI', 'Não é TI'], ['TODOS', 'Tudo']].map(([id, rot]) =>
+        `<button class="chip-filtro ${GASTOS_TI.filtro === id ? 'ativo' : ''}" data-fg="${id}">
+          ${rot}${id !== 'TODOS' ? ' ' + conta(id) : ' ' + todos.length}</button>`).join('')}
+      <span style="flex:1;"></span>
+      <select id="gt-dias" style="font-size:12.5px;">
+        ${[[30, '30 dias'], [90, '90 dias'], [120, '120 dias'], [365, '1 ano']].map(([d, r]) =>
+          `<option value="${d}" ${GASTOS_TI.dias === d ? 'selected' : ''}>${r}</option>`).join('')}
+      </select>
+    </div>
+
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>Data</th><th>Como veio na fatura</th><th class="num">Valor</th>
+        <th>O que é</th><th></th>
+      </tr></thead><tbody>
+        ${lista.length ? lista.map(linha).join('')
+          : `<tr><td colspan="5" class="vazio">Nada nesse filtro.</td></tr>`}
+      </tbody></table>
+    </div></div>
+
+    ${GASTOS_TI.servicos.length ? `
+    <div class="panel" style="padding:16px 18px;margin-top:16px;">
+      <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 4px;">Quando vence cada um</h3>
+      <p class="texto-dim2" style="font-size:11.5px;line-height:1.5;margin:0 0 12px;">
+        Data em branco significa que ninguém preencheu e ainda não deu pra estimar pelo ritmo
+        das cobranças — não significa que não vence.
+      </p>
+      <div class="tabela-scroll"><table>
+        <thead><tr><th>Serviço</th><th>Como aparece na fatura</th><th>Pago por</th>
+          <th>Próximo vencimento</th><th></th></tr></thead>
+        <tbody>${GASTOS_TI.servicos.map(s => {
+          const d = s.proximo_vencimento ? diasAte(s.proximo_vencimento) : null
+          return `<tr>
+            <td><b style="font-size:12.5px;">${esc(s.nome)}</b></td>
+            <td class="texto-dim2" style="font-size:11.5px;">${esc(s.padrao_cobranca || '—')}</td>
+            <td class="texto-dim2" style="font-size:11.5px;">${esc(s.forma_pagamento || '—')}</td>
+            <td style="font-size:12px;${d != null && d <= 7 ? 'color:var(--warn-text);font-weight:700;' : ''}">
+              ${s.proximo_vencimento
+                ? fmtData(s.proximo_vencimento) + (d != null && d >= 0 ? ` · em ${d}d` : d != null ? ' · passou' : '')
+                : '<span class="texto-dim2">não definido</span>'}</td>
+            <td class="num">${editavel
+              ? `<button class="btn-secundario mini" data-venc="${s.id}">definir</button>` : ''}</td>
+          </tr>`
+        }).join('')}</tbody>
+      </table></div>
+    </div>` : ''}`
+
+  alvo.querySelectorAll('[data-fg]').forEach(b => {
+    b.onclick = () => { GASTOS_TI.filtro = b.dataset.fg; tiClassificarGastos(alvo, editavel) }
+  })
+  $('#gt-dias').onchange = e => {
+    GASTOS_TI.dias = Number(e.target.value); tiClassificarGastos(alvo, editavel)
+  }
+
+  if (!editavel) return
+  alvo.querySelectorAll('[data-aceitar]').forEach(b => {
+    b.onclick = async () => {
+      const g = todos.find(x => String(x.onfly_id) === b.dataset.aceitar)
+      b.disabled = true
+      await salvarClassificacao(g.onfly_id, 'SERVICO', g.sugerido_id, null)
+      tiClassificarGastos(alvo, editavel)
+    }
+  })
+  alvo.querySelectorAll('[data-classificar]').forEach(b => {
+    b.onclick = () => {
+      const g = todos.find(x => String(x.onfly_id) === b.dataset.classificar)
+      formClassificarGasto(g, () => tiClassificarGastos(alvo, editavel))
+    }
+  })
+  alvo.querySelectorAll('[data-venc]').forEach(b => {
+    b.onclick = () => {
+      const s = GASTOS_TI.servicos.find(x => x.id === b.dataset.venc)
+      formVencimentoServico(s, () => tiClassificarGastos(alvo, editavel))
+    }
+  })
+}
+
+async function salvarClassificacao (onflyId, classificacao, servicoId, observacao) {
+  const { data, error } = await db.rpc('ti_classificar_gasto', {
+    p_onfly_id: onflyId, p_classificacao: classificacao,
+    p_servico_id: servicoId || null, p_observacao: observacao || null
+  })
+  if (error || !data?.ok) {
+    alert('Não consegui salvar: ' + (error?.message || data?.erro))
+    return false
+  }
+  return true
+}
+
+function formClassificarGasto (g, aoSalvar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal" style="max-width:520px;">
+      <h3>O que é esse gasto?</h3>
+      <div class="caixa-texto" style="margin-bottom:14px;">
+        <div style="font-size:14px;font-weight:700;">${esc(g.descricao)}</div>
+        <div class="texto-dim2" style="font-size:12px;margin-top:2px;">
+          ${fmtData(g.data)} · R$ ${fmtNum(g.valor)}${g.pessoa ? ' · ' + esc(g.pessoa) : ''}</div>
+      </div>
+
+      <div class="campo"><label>Classificação</label>
+        <select id="cg-classe">
+          <option value="SERVICO" ${g.classificacao === 'SERVICO' ? 'selected' : ''}>Serviço que a gente acompanha</option>
+          <option value="TI_AVULSO" ${g.classificacao === 'TI_AVULSO' ? 'selected' : ''}>Gasto de TI avulso (não recorrente)</option>
+          <option value="NAO_E_TI" ${g.classificacao === 'NAO_E_TI' ? 'selected' : ''}>Não é TI</option>
+          <option value="A_DEFINIR" ${g.classificacao === 'A_DEFINIR' ? 'selected' : ''}>Deixar pra decidir depois</option>
+        </select></div>
+
+      <div class="campo" id="cg-servico-campo"><label>Qual serviço</label>
+        <select id="cg-servico">
+          <option value="">— escolha —</option>
+          ${GASTOS_TI.servicos.map(s => `<option value="${s.id}"
+            ${(g.servico_id || g.sugerido_id) === s.id ? 'selected' : ''}>${esc(s.nome)}</option>`).join('')}
+        </select>
+        <span class="texto-dim2" style="font-size:11px;">
+          Não achou? Cadastre em "APIs e serviços" e volte aqui.</span></div>
+
+      <div class="campo"><label>Observação</label>
+        <input id="cg-obs" value="${esc(g.observacao ?? '')}" placeholder="opcional"></div>
+
+      <div class="recado oculto" id="cg-recado"></div>
+      <div class="acoes" style="margin-top:14px;">
+        <button class="btn" id="cg-salvar">Salvar</button>
+        <button class="btn-secundario" id="cg-fechar">Cancelar</button>
+      </div>
+    </div>`
+  document.body.appendChild(fundo)
+  const q = s => fundo.querySelector(s)
+  const fechar = () => fundo.remove()
+  q('#cg-fechar').onclick = fechar
+
+  const ajustar = () => {
+    q('#cg-servico-campo').style.display = q('#cg-classe').value === 'SERVICO' ? '' : 'none'
+  }
+  q('#cg-classe').onchange = ajustar
+  ajustar()
+
+  q('#cg-salvar').onclick = async () => {
+    const classe = q('#cg-classe').value
+    const servico = q('#cg-servico').value || null
+    if (classe === 'SERVICO' && !servico) {
+      const r = q('#cg-recado'); r.classList.remove('oculto'); r.textContent = 'Escolha qual serviço.'
+      return
+    }
+    const ok = await salvarClassificacao(g.onfly_id, classe, servico, q('#cg-obs').value.trim())
+    if (ok) { fechar(); if (aoSalvar) aoSalvar() }
+  }
+}
+
+function formVencimentoServico (s, aoSalvar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal" style="max-width:480px;">
+      <h3>Vencimento — ${esc(s.nome)}</h3>
+      <div class="form-grade">
+        <div class="campo"><label>Próximo vencimento</label>
+          <input type="date" id="vs-data" value="${esc(s.proximo_vencimento ?? '')}"></div>
+        <div class="campo"><label>Dia do mês</label>
+          <input type="number" id="vs-dia" min="1" max="31" placeholder="ex: 11"
+            value="${s.dia_vencimento ?? ''}">
+          <span class="texto-dim2" style="font-size:11px;">se cobra todo mês no mesmo dia</span></div>
+        <div class="campo" style="grid-column:1/-1;"><label>Como é pago</label>
+          <input id="vs-forma" value="${esc(s.forma_pagamento ?? '')}"
+            placeholder="Cartão Onfly, boleto, débito em conta..."></div>
+        <div class="campo" style="grid-column:1/-1;"><label>Como foi contratado</label>
+          <input id="vs-contrato" placeholder="quem assinou, em que conta, e-mail usado...">
+          <span class="texto-dim2" style="font-size:11px;">
+            Útil no dia em que alguém precisar renovar e não souber por onde entrar.</span></div>
+      </div>
+      <div class="recado oculto" id="vs-recado"></div>
+      <div class="acoes" style="margin-top:14px;">
+        <button class="btn" id="vs-salvar">Salvar</button>
+        <button class="btn-secundario" id="vs-fechar">Cancelar</button>
+      </div>
+    </div>`
+  document.body.appendChild(fundo)
+  const q = x => fundo.querySelector(x)
+  const fechar = () => fundo.remove()
+  q('#vs-fechar').onclick = fechar
+
+  // o campo de "como foi contratado" já pode ter texto salvo
+  db.from('ti_servico_critico').select('como_foi_contratado,dia_vencimento').eq('id', s.id).maybeSingle()
+    .then(({ data }) => {
+      if (!data) return
+      if (data.como_foi_contratado) q('#vs-contrato').value = data.como_foi_contratado
+      if (data.dia_vencimento && !q('#vs-dia').value) q('#vs-dia').value = data.dia_vencimento
+    })
+
+  q('#vs-salvar').onclick = async () => {
+    const dia = q('#vs-dia').value ? Number(q('#vs-dia').value) : null
+    if (dia !== null && (dia < 1 || dia > 31)) {
+      const r = q('#vs-recado'); r.classList.remove('oculto'); r.textContent = 'Dia do mês entre 1 e 31.'
+      return
+    }
+    const { error } = await db.from('ti_servico_critico').update({
+      proximo_vencimento: q('#vs-data').value || null,
+      dia_vencimento: dia,
+      forma_pagamento: q('#vs-forma').value.trim() || null,
+      como_foi_contratado: q('#vs-contrato').value.trim() || null,
+      atualizado_em: new Date().toISOString()
+    }).eq('id', s.id)
+    if (error) {
+      const r = q('#vs-recado'); r.classList.remove('oculto'); r.textContent = error.message
+      return
+    }
     fechar(); if (aoSalvar) aoSalvar()
   }
 }
