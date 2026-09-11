@@ -4021,16 +4021,20 @@ async function blocoResumoSolicitacoesProjetos (area) {
 // compra, objeções, o que ficou em aberto e o próximo passo.
 // ---------------------------------------------------------------
 async function abrirRelatorioSdrDoLead (leadCrmId) {
+  estilosSdrUmaVez()   // os balões da conversa moram lá
   const { data: leadSdr } = await db.from('leads')
     .select('*').eq('lead_crm_id', leadCrmId).maybeSingle()
   if (!leadSdr) { alert('Esse lead não veio do SDR de WhatsApp.'); return }
 
-  const [{ data: ficha }, { data: compromisso }] = await Promise.all([
+  const [{ data: ficha }, { data: compromisso }, { data: conversa }] = await Promise.all([
     db.from('sdr_relatorio_conversa').select('*').eq('lead_sdr_id', leadSdr.id)
       .order('data_referencia', { ascending: false }).limit(1).maybeSingle(),
     leadSdr.reuniao_compromisso_id
       ? db.from('lead_compromisso').select('data_hora,titulo,observacao').eq('id', leadSdr.reuniao_compromisso_id).maybeSingle()
-      : Promise.resolve({ data: null })
+      : Promise.resolve({ data: null }),
+    db.from('mensagens').select('papel,conteudo,created_at,audio,enviado_por')
+      .eq('telefone_norm', leadSdr.telefone_norm || leadSdr.telefone)
+      .order('created_at', { ascending: true }).limit(200)
   ])
 
   const listaDe = (titulo, itens, cor) => {
@@ -4054,7 +4058,7 @@ async function abrirRelatorioSdrDoLead (leadCrmId) {
 
       ${quando ? `<div style="padding:12px 14px;border-left:3px solid var(--good-text);background:var(--surface2);border-radius:0 6px 6px 0;margin-bottom:14px;">
         <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;">Reunião marcada</div>
-        <div style="font-size:15px;font-weight:700;margin-top:2px;">${esc(fmtQuando(quando) || '')}</div>
+        <div style="font-size:15px;font-weight:700;margin-top:2px;">${esc(fmtReuniao(quando) || '')}</div>
         <div class="texto-dim2" style="font-size:11.5px;margin-top:2px;">Já está na sua agenda, na aba Meu Dia do CRM.</div>
       </div>` : ''}
 
@@ -4077,6 +4081,16 @@ async function abrirRelatorioSdrDoLead (leadCrmId) {
         ${ficha.proximo_passo ? `<div style="margin-top:12px;padding:10px 12px;border-left:3px solid var(--rust);background:var(--surface2);border-radius:0 6px 6px 0;">
           <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">Próximo passo</div>
           <div style="font-size:12.5px;line-height:1.5;">${esc(ficha.proximo_passo)}</div></div>` : ''}` : ''}
+
+      ${(conversa || []).length ? `
+        <details style="margin-top:14px;border:1px solid var(--line2);border-radius:10px;overflow:hidden;">
+          <summary style="cursor:pointer;padding:10px 13px;background:var(--surface2);font-size:12.5px;font-weight:600;">
+            💬 Ler a conversa inteira (${conversa.length} ${conversa.length === 1 ? 'mensagem' : 'mensagens'})
+          </summary>
+          <div class="sdr-fita" style="max-height:340px;padding:14px;border-radius:0;">
+            ${conversa.map((m, i) => balaoDaMensagem(m, conversa[i - 1])).join('')}
+          </div>
+        </details>` : ''}
 
       <div class="acoes" style="margin-top:16px;">
         <a class="btn-secundario" href="https://wa.me/${esc((leadSdr.telefone || '').replace(/\D/g, ''))}" target="_blank" rel="noopener">Chamar no WhatsApp</a>
