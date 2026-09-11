@@ -19171,62 +19171,17 @@ const VOZES_TTS = [
 ]
 
 async function sdrAbaCanais (alvo) {
-  const [{ data: canais, error }, { data: cfgAudio }] = await Promise.all([
-    db.from('sdr_canal').select('*').order('tipo'),
-    db.from('sdr_config').select('audio_ativo,voz_tts,audio_max_seg').eq('id', true).maybeSingle()
-  ])
+  const { data: canais, error } = await db.from('sdr_canal').select('*').order('tipo')
   if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
 
   const podeMexer = ehTotal()
   alvo.innerHTML = `
-    ${cfgAudio ? `
-    <div class="panel" style="padding:16px;margin-bottom:14px;">
-      <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:16px;">Áudio</h3></div>
-      <p class="texto-dim2" style="font-size:12.5px;margin:-6px 0 12px;">
-        O Eduardo ouve o áudio do lead e responde no mesmo formato: quem manda áudio recebe áudio,
-        quem escreve recebe texto. A transcrição fica gravada na conversa, marcada com 🎤.</p>
-      <div class="form-grade" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));">
-        <div class="campo"><label>&nbsp;</label>
-          <label style="display:flex;align-items:center;gap:7px;font-size:13px;font-weight:400;padding-top:7px;">
-            <input type="checkbox" id="sdr-audio-ativo" ${cfgAudio.audio_ativo ? 'checked' : ''} ${podeMexer ? '' : 'disabled'}>
-            Responder em áudio quando o lead mandar áudio
-          </label>
-          <span class="texto-dim2" style="font-size:11px;">Desmarcado, ele continua ouvindo mas responde só por texto.</span>
-        </div>
-        <div class="campo"><label>Voz</label>
-          <select id="sdr-voz" ${podeMexer ? '' : 'disabled'}>
-            ${VOZES_TTS.map(([v, r]) => `<option value="${v}" ${cfgAudio.voz_tts === v ? 'selected' : ''}>${esc(r)}</option>`).join('')}
-          </select></div>
-        <div class="campo"><label>Áudio do lead até (segundos)</label>
-          <input id="sdr-audio-max" type="number" min="15" max="600" value="${cfgAudio.audio_max_seg ?? 120}" ${podeMexer ? '' : 'disabled'}>
-          <span class="texto-dim2" style="font-size:11px;">Mais longo que isso não é transcrito — trava de custo.</span></div>
-      </div>
-      ${podeMexer ? `<div class="acoes"><button class="btn-secundario mini" id="sdr-audio-salvar">Salvar</button>
-        <span id="sdr-audio-status" class="texto-dim2" style="font-size:11.5px;margin-left:8px;"></span></div>` : ''}
-    </div>` : ''}
-
     <p class="texto-dim2" style="margin-bottom:14px;">
       Os números de WhatsApp que a IA atende. O oficial da Meta atende qualquer pessoa;
       o do QR Code só fala com quem está numa lista ativa.</p>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;">
       ${(canais || []).map(c => cartaoCanal(c, podeMexer)).join('')}
     </div>`
-
-  const btnAudio = $('#sdr-audio-salvar')
-  if (btnAudio) btnAudio.onclick = async () => {
-    const st = $('#sdr-audio-status')
-    btnAudio.disabled = true
-    const { error: e } = await db.from('sdr_config').update({
-      audio_ativo: $('#sdr-audio-ativo').checked,
-      voz_tts: $('#sdr-voz').value,
-      audio_max_seg: Math.max(15, Math.min(600, Number($('#sdr-audio-max').value) || 120))
-    }).eq('id', true)
-    btnAudio.disabled = false
-    if (st) {
-      st.textContent = e ? e.message : 'salvo — vale já na próxima mensagem'
-      st.style.color = e ? 'var(--warn-text)' : 'var(--good-text)'
-    }
-  }
 
   alvo.querySelectorAll('[data-conectar]').forEach(b => {
     b.onclick = async () => {
@@ -19840,6 +19795,192 @@ async function dispararAnaliseConversaSdr (leadId, etapaAnterior, etapaNova) {
   }
 }
 
+// ---------------------------------------------------------------
+// Aba Voz (dentro de Treinar IA)
+//
+// O que separa "locutor de propaganda" de "gente mandando áudio" não é a
+// voz escolhida: é a INSTRUÇÃO DE ESTILO, que vai junto em cada geração.
+// Ela fica no banco (sdr_config.voz_instrucoes), então dá pra mexer aqui,
+// ouvir, e mexer de novo — sem publicar nada.
+//
+// O botão de amostra chama a function sdr-voz-amostra com o que está NA
+// TELA, não com o que está salvo: dá pra comparar duas configurações de
+// ouvido antes de decidir qual vale pros leads.
+// ---------------------------------------------------------------
+const ESTILOS_VOZ_SDR = {
+  natural: {
+    rotulo: 'Conversa de WhatsApp',
+    dica: 'O mais próximo de gente mandando áudio. É o padrão.',
+    velocidade: 0.95,
+    texto: `Você é o Eduardo, um pré-vendedor de uma empresa de fertilizantes do interior do Tocantins, mandando áudio de WhatsApp para um produtor rural.
+
+Fale como gente de verdade manda áudio, não como quem lê um texto em voz alta:
+
+- Ritmo de conversa, sem pressa. Um pouco mais devagar do que o normal de locução.
+- Português do Brasil, sotaque neutro, informal e cordial. Nada de formalidade de atendimento.
+- Respire entre as frases. Faça uma pausa curta na vírgula e uma pausa maior no ponto, como quem está pensando enquanto fala.
+- Entonação de quem está conversando com um conhecido: sobe um pouco no fim das perguntas, desce no fim das afirmações. Nunca entone como propaganda de rádio.
+- Volume e energia médios. Simpático, mas tranquilo — não é animação forçada de vendedor.
+- Não separe as palavras nem enfatize demais. Quando tiver dúvida, fale mais solto do que certinho.`
+  },
+  calmo: {
+    rotulo: 'Calmo e pausado',
+    dica: 'Mais devagar ainda. Bom para quem tem sinal ruim ou não gosta de pressa.',
+    velocidade: 0.9,
+    texto: `Você é o Eduardo, pré-vendedor de uma empresa de fertilizantes, falando com um produtor rural pelo WhatsApp.
+
+Fale devagar e com calma, como quem tem tempo:
+
+- Ritmo bem tranquilo, pausado. Nunca atropele as palavras.
+- Pausas nítidas entre as frases, como quem espera o outro acompanhar.
+- Tom baixo e firme, acolhedor, sem euforia nenhuma.
+- Português do Brasil, informal, sotaque neutro e claro.
+- Fale como quem está sentado conversando, não como quem está correndo para terminar o recado.`
+  },
+  proximo: {
+    rotulo: 'Mais próximo e solto',
+    dica: 'Informalidade maior, com naturalidade de quem já conhece. Pode soar íntimo demais para primeiro contato.',
+    velocidade: 1.0,
+    texto: `Você é o Eduardo, pré-vendedor de fertilizantes do interior, mandando áudio no WhatsApp para um produtor que você trata bem, de igual para igual.
+
+- Bem informal e caloroso, do jeito que se fala com um conhecido da região.
+- Ritmo natural, com as pequenas irregularidades de quem fala sem roteiro: acelera um pouco no meio da frase, desacelera no fim.
+- Entonação viva, mas sem exagero de vendedor animado.
+- Português do Brasil, sotaque neutro com leve sotaque do interior.
+- Soe como alguém que está genuinamente interessado na conversa, não cumprindo tarefa.`
+  }
+}
+
+const FRASE_AMOSTRA_PADRAO =
+  'Oi, tudo bem? Aqui é o Eduardo, da Gefoscal. É sobre a adubação da próxima safra. ' +
+  'Você já fechou o planejamento ou ainda está olhando opções?'
+
+function painelVozSdr (cfg) {
+  if (!cfg) {
+    return `<p class="vazio">A configuração de voz ainda não existe no banco.</p>`
+  }
+  const podeMexer = ehTotal()
+  return `
+    <p class="texto-dim2" style="margin-bottom:14px;font-size:12.5px;">
+      Como o Eduardo soa quando responde em áudio. O que mais tira o jeito de robô não é a voz
+      escolhida, é a <b>instrução de estilo</b> aqui embaixo — ela vai junto em cada áudio gerado.
+      Mexa, ouça a amostra, mexa de novo: nada disso precisa de publicação.</p>
+
+    <div class="panel" style="padding:16px;margin-bottom:14px;">
+      <label style="display:flex;align-items:center;gap:8px;font-size:13.5px;font-weight:400;">
+        <input type="checkbox" id="vz-ativo" ${cfg.audio_ativo ? 'checked' : ''} ${podeMexer ? '' : 'disabled'}>
+        <b>Responder em áudio quando o lead mandar áudio</b>
+      </label>
+      <span class="texto-dim2" style="font-size:11.5px;">
+        Desmarcado, ele continua ouvindo e transcrevendo, mas responde só por texto.</span>
+
+      <div class="form-grade" style="grid-template-columns:repeat(auto-fit,minmax(190px,1fr));margin-top:12px;">
+        <div class="campo"><label>Voz</label>
+          <select id="vz-voz" ${podeMexer ? '' : 'disabled'}>
+            ${VOZES_TTS.map(([v, r]) => `<option value="${v}" ${cfg.voz_tts === v ? 'selected' : ''}>${esc(r)}</option>`).join('')}
+          </select></div>
+        <div class="campo"><label>Velocidade da fala</label>
+          <input id="vz-velocidade" type="number" step="0.05" min="0.5" max="1.5"
+            value="${Number(cfg.voz_velocidade ?? 1).toFixed(2)}" ${podeMexer ? '' : 'disabled'}>
+          <span class="texto-dim2" style="font-size:11px;">1,00 é o normal. 0,95 já soa bem menos apressado.</span></div>
+        <div class="campo"><label>Áudio do lead até (segundos)</label>
+          <input id="vz-max" type="number" min="15" max="600" value="${cfg.audio_max_seg ?? 120}" ${podeMexer ? '' : 'disabled'}>
+          <span class="texto-dim2" style="font-size:11px;">Trava de custo: mais longo não é transcrito.</span></div>
+      </div>
+    </div>
+
+    <div class="panel" style="padding:16px;margin-bottom:14px;">
+      <div class="cabeca-secao" style="margin-bottom:6px;">
+        <h4 style="font-family:var(--serif);font-size:15px;margin:0;">Instrução de estilo</h4>
+      </div>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 10px;">
+        Escreva como se estivesse dirigindo um ator antes de gravar. Pausas, ritmo, entonação e
+        temperamento é o que muda de verdade — o texto que ele fala já vem pronto da conversa.</p>
+
+      <div class="acoes" style="margin-bottom:10px;">
+        ${Object.entries(ESTILOS_VOZ_SDR).map(([chave, e]) =>
+          `<button class="btn-secundario mini" data-estilo-voz="${chave}" title="${esc(e.dica)}">${esc(e.rotulo)}</button>`).join('')}
+      </div>
+
+      <textarea id="vz-instrucoes" ${podeMexer ? '' : 'disabled'}
+        style="width:100%;min-height:220px;font-size:12.5px;line-height:1.5;padding:12px;
+        border:1px solid var(--line);border-radius:8px;background:var(--surface2);color:var(--txt);resize:vertical;"
+        >${esc(cfg.voz_instrucoes || '')}</textarea>
+    </div>
+
+    <div class="panel" style="padding:16px;">
+      <h4 style="font-family:var(--serif);font-size:15px;margin:0 0 6px;">Ouvir antes de valer</h4>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 10px;">
+        Gera um áudio com o que está <b>nesta tela agora</b>, mesmo sem salvar. Serve pra comparar
+        duas configurações de ouvido antes de decidir.</p>
+      <textarea id="vz-frase" style="width:100%;min-height:70px;font-size:12.5px;padding:10px;
+        border:1px solid var(--line);border-radius:8px;background:var(--surface2);color:var(--txt);"
+        >${esc(FRASE_AMOSTRA_PADRAO)}</textarea>
+      <div class="acoes" style="margin-top:10px;">
+        <button class="btn-secundario" id="vz-ouvir">▶︎ Ouvir amostra</button>
+        ${podeMexer ? '<button class="btn" id="vz-salvar">Salvar</button>' : ''}
+        <span id="vz-status" class="texto-dim2" style="font-size:12px;margin-left:8px;"></span>
+      </div>
+      <div id="vz-player" style="margin-top:12px;"></div>
+    </div>`
+}
+
+function ligarPainelVozSdr (alvo) {
+  const q = sel => alvo.querySelector(sel)
+  const status = (texto, cor) => {
+    const el = q('#vz-status'); if (!el) return
+    el.textContent = texto
+    el.style.color = cor || 'var(--dim2)'
+  }
+
+  alvo.querySelectorAll('[data-estilo-voz]').forEach(b => {
+    b.onclick = () => {
+      const e = ESTILOS_VOZ_SDR[b.dataset.estiloVoz]
+      if (!e) return
+      q('#vz-instrucoes').value = e.texto
+      q('#vz-velocidade').value = e.velocidade.toFixed(2)
+      status(`estilo "${e.rotulo}" carregado — ouça a amostra antes de salvar`)
+    }
+  })
+
+  const botaoOuvir = q('#vz-ouvir')
+  if (botaoOuvir) botaoOuvir.onclick = async () => {
+    botaoOuvir.disabled = true
+    status('gerando o áudio...')
+    const { data, error } = await db.functions.invoke('sdr-voz-amostra', {
+      body: {
+        texto: q('#vz-frase').value.trim() || FRASE_AMOSTRA_PADRAO,
+        voz: q('#vz-voz').value,
+        instrucoes: q('#vz-instrucoes').value.trim(),
+        velocidade: Number(q('#vz-velocidade').value) || 1
+      }
+    })
+    botaoOuvir.disabled = false
+    if (error || !data?.audio_base64) {
+      status(data?.erro || error?.message || 'não deu pra gerar o áudio', 'var(--warn-text)')
+      return
+    }
+    status(`${data.kb} KB gerados`)
+    q('#vz-player').innerHTML =
+      `<audio controls autoplay style="width:100%;" src="data:audio/mpeg;base64,${data.audio_base64}"></audio>`
+  }
+
+  const botaoSalvar = q('#vz-salvar')
+  if (botaoSalvar) botaoSalvar.onclick = async () => {
+    botaoSalvar.disabled = true
+    const { error } = await db.from('sdr_config').update({
+      audio_ativo: q('#vz-ativo').checked,
+      voz_tts: q('#vz-voz').value,
+      voz_instrucoes: q('#vz-instrucoes').value.trim() || null,
+      voz_velocidade: Math.max(0.25, Math.min(2, Number(q('#vz-velocidade').value) || 1)),
+      audio_max_seg: Math.max(15, Math.min(600, Number(q('#vz-max').value) || 120))
+    }).eq('id', true)
+    botaoSalvar.disabled = false
+    status(error ? error.message : 'salvo — vale já no próximo áudio',
+      error ? 'var(--warn-text)' : 'var(--good-text)')
+  }
+}
+
 async function sdrAbaTreinar (alvo) {
   const [{ data: versoes, error }, { data: biblioteca }, { data: documentos }, { data: links }] = await Promise.all([
     db.from('sdr_prompt').select('id,conteudo,ativo,criado_em,atualizado_por:atualizado_por(nome)').order('criado_em', { ascending: false }),
@@ -19848,6 +19989,8 @@ async function sdrAbaTreinar (alvo) {
     db.from('sdr_link').select('*').eq('ativo', true).order('titulo')
   ])
   if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  const { data: cfgVoz } = await db.from('sdr_config')
+    .select('audio_ativo,voz_tts,voz_instrucoes,voz_velocidade,audio_max_seg').eq('id', true).maybeSingle()
   SDR_CACHE.biblioteca = biblioteca || []
   const recursos = { documentos: documentos || [], links: links || [] }
 
@@ -19855,6 +19998,14 @@ async function sdrAbaTreinar (alvo) {
   const historico = (versoes || []).filter(v => !v.ativo)
 
   alvo.innerHTML = `
+    <div class="segmentado" id="tr-abas" style="margin-bottom:16px;">
+      <button data-tr="comportamento" class="ativo">💬 Comportamento</button>
+      <button data-tr="voz">🎙️ Voz</button>
+    </div>
+
+    <div id="tr-voz" class="oculto">${painelVozSdr(cfgVoz)}</div>
+
+    <div id="tr-comportamento">
     <p class="texto-dim2" style="margin-bottom:12px;font-size:12.5px;">
       Esse é o prompt que a SDR IA segue em toda conversa no WhatsApp. Editar aqui atualiza o bot
       na próxima mensagem, sem precisar de deploy. Se algo não ficar bom, dá pra voltar pra
@@ -19953,7 +20104,17 @@ async function sdrAbaTreinar (alvo) {
         <div class="texto-dim2" id="sim-sdr-status" style="font-size:11.5px;margin-top:6px;"></div>
         <div id="sim-sdr-resultado" style="margin-top:12px;"></div>
       </div>
+    </div>
     </div>`
+
+  alvo.querySelectorAll('#tr-abas button').forEach(b => {
+    b.onclick = () => {
+      alvo.querySelectorAll('#tr-abas button').forEach(x => x.classList.toggle('ativo', x === b))
+      $('#tr-comportamento').classList.toggle('oculto', b.dataset.tr !== 'comportamento')
+      $('#tr-voz').classList.toggle('oculto', b.dataset.tr !== 'voz')
+    }
+  })
+  ligarPainelVozSdr(alvo)
 
   $('#sdr-btn-salvar-prompt').onclick = () => salvarNovoPromptSdr(ativa)
 
