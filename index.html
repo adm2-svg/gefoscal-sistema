@@ -34164,17 +34164,25 @@ let DISC_CACHE = { perfis: [], filtro: '', letra: '' }
 
 async function desempPerfisDisc (alvo) {
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
-  const [{ data, error }, { data: pessoas }] = await Promise.all([
+  // A lista de pendentes vem de uma função no banco, não de uma conta feita aqui:
+  // saber quem tem login exige ler usuario_perfil, que o RH não enxerga. Se eu
+  // calculasse no navegador, o RH veria "ninguém tem login" — que é falta de
+  // permissão, não fato.
+  const [{ data, error }, { data: pessoas }, { data: pendentes }] = await Promise.all([
     db.from('rh_perfil_disc')
-      .select('id,nome,cargo_no_laudo,empresa_no_laudo,disc_natural,disc_adaptado,primario,secundario,pessoa_id,pessoa:pessoa_id(nome)')
+      .select('id,nome,cargo_no_laudo,empresa_no_laudo,disc_natural,disc_adaptado,primario,secundario,origem,pessoa_id,pessoa:pessoa_id(nome)')
       .order('nome'),
-    db.from('pessoa').select('id,nome').order('nome')
+    db.from('pessoa').select('id,nome').order('nome'),
+    db.rpc('rh_disc_pendentes')
   ])
   if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
   DISC_CACHE.perfis = data || []
   DISC_CACHE.pessoas = pessoas || []
 
   const semCadastro = DISC_CACHE.perfis.filter(p => !p.pessoa_id).length
+
+  const faltando = pendentes || []
+  const podemResponder = faltando.filter(p => p.tem_login).length
 
   alvo.innerHTML = `
     <div class="panel" style="padding:16px 18px;margin-bottom:14px;border-left:3px solid var(--rust);">
@@ -34200,7 +34208,35 @@ async function desempPerfisDisc (alvo) {
       ${semCadastro} perfil(is) ainda não estão ligados a um cadastro de pessoa —
       abra o perfil e use <b>"Ligar a um cadastro"</b>. Sem isso, a pessoa não consegue ver o próprio laudo.</p>` : ''}
 
-    <div id="disc-grade" class="sdr-cartoes"></div>`
+    <div id="disc-grade" class="sdr-cartoes"></div>
+
+    ${faltando.length ? `
+    <details class="panel" style="padding:0;margin-top:18px;">
+      <summary style="padding:14px 18px;cursor:pointer;font-weight:600;font-size:13.5px;list-style:none;">
+        ⏳ Ainda não responderam
+        <span class="chip" style="margin-left:6px;font-size:11px;">${faltando.length}</span>
+        <span class="texto-dim2" style="font-weight:400;font-size:11.5px;margin-left:6px;">
+          — ${podemResponder} conseguem responder pelo sistema</span>
+      </summary>
+      <div style="padding:0 18px 16px;">
+        <p class="texto-dim2" style="font-size:11.5px;line-height:1.55;margin:0 0 12px;">
+          Quem tem login vê um convite em <b>Meu RH</b> assim que entrar: 24 grupos de palavras,
+          uns 5 minutos. <b>Quem não tem login não consegue responder por aqui</b> — hoje são
+          ${faltando.length - podemResponder} pessoas nessa situação. Para elas, ou se cria o acesso,
+          ou o perfil entra à mão em "+ Perfil manual".
+        </p>
+        <div class="tabela-scroll"><table>
+          <thead><tr><th>Pessoa</th><th>Cargo</th><th>Consegue responder</th></tr></thead>
+          <tbody>${faltando.map(p => `<tr>
+            <td>${esc(p.nome)}</td>
+            <td class="texto-dim">${esc(p.cargo || '—')}</td>
+            <td>${p.tem_login
+              ? '<span class="badge-bom" style="font-size:10.5px;">sim, tem login</span>'
+              : '<span class="badge-alerta" style="font-size:10.5px;">sem login</span>'}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+      </div>
+    </details>` : ''}`
 
   estilosSdrUmaVez()   // os cartões usam a mesma linguagem visual do SDR
   renderChipsDisc()
@@ -34249,7 +34285,13 @@ function renderGradeDisc () {
         ${esc((DISC_DUPLA[(p.primario || '') + (p.secundario || '')] || '').slice(0, 90))}${
           (DISC_DUPLA[(p.primario || '') + (p.secundario || '')] || '').length > 90 ? '…' : ''}
       </div>
-      ${!p.pessoa_id ? '<div style="margin-top:8px;"><span class="badge-atencao" style="font-size:10px;">sem cadastro ligado</span></div>' : ''}
+      <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+        <span class="texto-dim2" style="font-size:10px;">${
+          p.origem === 'questionario_interno' ? '📝 respondido no sistema'
+          : p.origem === 'manual' ? '✍️ lançado à mão'
+          : '📄 relatório da consultoria'}</span>
+        ${!p.pessoa_id ? '<span class="badge-atencao" style="font-size:10px;">sem cadastro ligado</span>' : ''}
+      </div>
     </div>`).join('')
 
   alvo.querySelectorAll('[data-disc]').forEach(el => {
@@ -34439,6 +34481,248 @@ function formPerfilDisc (p, aoSalvar) {
 function abrirAbaDisc () {
   const b = document.querySelector('.subabas-rh button[data-sub="disc"]')
   if (b) b.click()
+}
+
+// ---------------------------------------------------------------
+// Questionário DISC interno
+//
+// Vinte e quatro grupos de quatro palavras. Em cada um a pessoa escolhe
+// a que MAIS e a que MENOS a descreve. Cada palavra pertence a um dos
+// quatro fatores, e cada grupo tem exatamente um de cada — senão o
+// resultado penderia pro fator que aparece mais vezes.
+//
+// Uma coisa que precisa ficar dita, e está dita na tela: isto NÃO é o
+// relatório da consultoria. É um instrumento nosso, inspirado no mesmo
+// método. Serve pra conversar, não pra comparar número com número de
+// quem fez o laudo pago.
+// ---------------------------------------------------------------
+const DISC_GRUPOS = [
+  [['Decidido','D'],['Animado','I'],['Paciente','S'],['Cuidadoso','C']],
+  [['Sociável','I'],['Metódico','C'],['Firme','D'],['Calmo','S']],
+  [['Constante','S'],['Exigente','D'],['Detalhista','C'],['Falante','I']],
+  [['Analítico','C'],['Otimista','I'],['Leal','S'],['Competitivo','D']],
+  [['Acolhedor','I'],['Direto','D'],['Organizado','C'],['Tranquilo','S']],
+  [['Prudente','C'],['Companheiro','S'],['Ousado','D'],['Entusiasmado','I']],
+  [['Objetivo','D'],['Preciso','C'],['Expressivo','I'],['Prestativo','S']],
+  [['Discreto','S'],['Convincente','I'],['Rigoroso','C'],['Determinado','D']],
+  [['Comunicativo','I'],['Ponderado','S'],['Incisivo','D'],['Criterioso','C']],
+  [['Disciplinado','C'],['Corajoso','D'],['Gentil','S'],['Espontâneo','I']],
+  [['Conciliador','S'],['Franco','D'],['Alegre','I'],['Minucioso','C']],
+  [['Persuasivo','I'],['Sistemático','C'],['Sereno','S'],['Assertivo','D']],
+  [['Cauteloso','C'],['Extrovertido','I'],['Resoluto','D'],['Estável','S']],
+  [['Bom ouvinte','S'],['Exato','C'],['Inspirador','I'],['Impaciente','D']],
+  [['Arrojado','D'],['Caloroso','I'],['Previsível','S'],['Formal','C']],
+  [['Meticuloso','C'],['Dedicado','S'],['Envolvente','I'],['Dono do rumo','D']],
+  [['Popular','I'],['Perfeccionista','C'],['Cooperativo','S'],['Intenso','D']],
+  [['Apoiador','S'],['Questionador','D'],['Lógico','C'],['Brincalhão','I']],
+  [['Planejador','C'],['Simpático','I'],['Firme no ritmo','S'],['Acelerado','D']],
+  [['Contagiante','I'],['Resiliente','S'],['Correto','C'],['Combativo','D']],
+  [['Reservado','C'],['Fiel','S'],['Empolgado','I'],['Dominante','D']],
+  [['Harmonioso','S'],['Conferidor','C'],['Aberto','I'],['Focado em resultado','D']],
+  [['Persistente','D'],['Acessível','S'],['Conversador','I'],['Atento a detalhe','C']],
+  [['Cordial','I'],['Sem pressa','S'],['Exigente com qualidade','C'],['Rápido nas decisões','D']]
+]
+
+let DISC_Q = { passo: 0, respostas: [] }
+
+function abrirQuestionarioDisc (aoTerminar) {
+  estilosSdrUmaVez()
+  DISC_Q = { passo: 0, respostas: DISC_GRUPOS.map(() => ({ mais: null, menos: null })) }
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:520px;"><div id="dq-corpo"></div></div>`
+  document.body.appendChild(fundo)
+
+  const corpo = fundo.querySelector('#dq-corpo')
+  const fechar = () => fundo.remove()
+
+  const desenharIntro = () => {
+    corpo.innerHTML = `
+      <div class="cabeca-secao"><h3 style="margin:0;">Seu perfil de comportamento</h3></div>
+      <p style="font-size:13px;line-height:1.65;margin:0 0 12px;">
+        São <b>24 grupos de quatro palavras</b>. Em cada um, escolha a palavra que
+        <b>mais</b> te descreve e a que <b>menos</b> te descreve. Leva uns 5 minutos.
+      </p>
+      <div class="caixa-texto" style="margin-bottom:14px;">
+        <div class="rot">Antes de começar</div>
+        <ul style="margin:8px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:6px;font-size:12.5px;line-height:1.5;">
+          <li>Não existe resposta certa nem errada, e nenhum perfil é melhor que outro.</li>
+          <li>Responda pensando em <b>como você é</b>, não em como acha que deveria ser.</li>
+          <li>Vá pela primeira impressão. Pensar demais atrapalha mais do que ajuda.</li>
+          <li>Isso <b>não</b> decide promoção, salário ou avaliação. Serve pra te conhecerem melhor.</li>
+          <li>Quem vê: o RH, a diretoria e você.</li>
+        </ul>
+      </div>
+      <div class="acoes" style="margin-top:14px;">
+        <button class="btn" id="dq-comecar">Começar</button>
+        <button class="btn-secundario" id="dq-sair">Agora não</button>
+      </div>`
+    corpo.querySelector('#dq-sair').onclick = fechar
+    corpo.querySelector('#dq-comecar').onclick = () => { DISC_Q.passo = 0; desenharGrupo() }
+  }
+
+  const desenharGrupo = () => {
+    const i = DISC_Q.passo
+    const grupo = DISC_GRUPOS[i]
+    const r = DISC_Q.respostas[i]
+    const pct = Math.round((i / DISC_GRUPOS.length) * 100)
+
+    corpo.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
+        <b style="font-size:13px;">Grupo ${i + 1} de ${DISC_GRUPOS.length}</b>
+        <span class="texto-dim2" style="font-size:11.5px;">${pct}%</span>
+      </div>
+      <div style="height:5px;background:var(--line2);border-radius:999px;overflow:hidden;margin-bottom:16px;">
+        <div style="height:100%;width:${pct}%;background:var(--rust);transition:width .2s ease;"></div>
+      </div>
+
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 10px;">
+        Marque a que <b style="color:var(--good-text);">MAIS</b> e a que
+        <b style="color:var(--warn-text);">MENOS</b> te descrevem.</p>
+
+      <table style="width:100%;font-size:13.5px;">
+        <thead><tr>
+          <th style="text-align:left;"></th>
+          <th style="width:64px;color:var(--good-text);font-size:11px;">MAIS</th>
+          <th style="width:64px;color:var(--warn-text);font-size:11px;">MENOS</th>
+        </tr></thead>
+        <tbody>
+          ${grupo.map(([palavra, fator]) => `
+            <tr>
+              <td style="padding:9px 0;">${esc(palavra)}</td>
+              <td style="text-align:center;">
+                <input type="radio" name="dq-mais" value="${fator}" ${r.mais === fator ? 'checked' : ''}
+                  style="width:19px;height:19px;cursor:pointer;"></td>
+              <td style="text-align:center;">
+                <input type="radio" name="dq-menos" value="${fator}" ${r.menos === fator ? 'checked' : ''}
+                  style="width:19px;height:19px;cursor:pointer;"></td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+
+      <div class="recado oculto" id="dq-recado" style="margin-top:10px;"></div>
+      <div class="acoes" style="margin-top:16px;display:flex;gap:8px;">
+        ${i > 0 ? '<button class="btn-secundario" id="dq-voltar">← Voltar</button>' : ''}
+        <span style="flex:1;"></span>
+        <button class="btn" id="dq-proximo">${i === DISC_GRUPOS.length - 1 ? 'Ver meu resultado' : 'Próximo →'}</button>
+      </div>`
+
+    const recado = corpo.querySelector('#dq-recado')
+    const guardar = () => {
+      const mais = corpo.querySelector('input[name="dq-mais"]:checked')?.value || null
+      const menos = corpo.querySelector('input[name="dq-menos"]:checked')?.value || null
+      DISC_Q.respostas[i] = { mais, menos }
+      return { mais, menos }
+    }
+    corpo.querySelectorAll('input').forEach(el => { el.onchange = () => { guardar(); recado.classList.add('oculto') } })
+
+    const btnVoltar = corpo.querySelector('#dq-voltar')
+    if (btnVoltar) btnVoltar.onclick = () => { guardar(); DISC_Q.passo--; desenharGrupo() }
+
+    corpo.querySelector('#dq-proximo').onclick = () => {
+      const { mais, menos } = guardar()
+      if (!mais || !menos) {
+        recado.classList.remove('oculto')
+        recado.textContent = 'Escolha uma palavra em cada coluna.'
+        return
+      }
+      if (mais === menos) {
+        recado.classList.remove('oculto')
+        recado.textContent = 'A mesma palavra não pode ser a que mais e a que menos te descreve.'
+        return
+      }
+      if (i === DISC_GRUPOS.length - 1) enviar()
+      else { DISC_Q.passo++; desenharGrupo() }
+    }
+  }
+
+  const enviar = async () => {
+    corpo.innerHTML = `<p class="texto-dim2" style="padding:30px;text-align:center;">apurando...</p>`
+    const respostas = DISC_Q.respostas.map((r, g) => ({ g, mais: r.mais, menos: r.menos }))
+    const { data, error } = await db.rpc('rh_disc_apurar', { p_respostas: respostas })
+    if (error || !data?.ok) {
+      corpo.innerHTML = `<p class="vazio" style="padding:20px;">${esc(error?.message || data?.erro || 'não deu certo')}</p>
+        <div class="acoes"><button class="btn-secundario" id="dq-fechar2">Fechar</button></div>`
+      corpo.querySelector('#dq-fechar2').onclick = fechar
+      return
+    }
+    const dupla = (data.primario || '') + (data.secundario || '')
+    corpo.innerHTML = `
+      <div class="cabeca-secao" style="margin-bottom:4px;">
+        <h3 style="margin:0;">Pronto 🎉</h3>
+        <span class="chip" style="font-size:12px;font-weight:700;background:rgba(var(--rust-rgb),.14);color:var(--rust);border:none;">${esc(dupla)}</span>
+      </div>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 14px;">Este é o seu perfil de comportamento.</p>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
+        <div class="caixa-texto"><div class="rot">Como você é</div>
+          <div style="margin-top:8px;">${barraDisc(data.natural)}</div></div>
+        <div class="caixa-texto"><div class="rot">Como você se apresenta</div>
+          <div style="margin-top:8px;">${barraDisc(data.adaptado)}</div></div>
+      </div>
+
+      ${DISC_DUPLA[dupla] ? `<div class="caixa-texto" style="margin-bottom:14px;">
+        <div class="rot">Em uma frase</div>
+        <p style="font-size:13.5px;line-height:1.55;margin:6px 0 0;">${esc(DISC_DUPLA[dupla])}</p></div>` : ''}
+
+      <p class="texto-dim2" style="font-size:11.5px;line-height:1.5;margin:0;">
+        Lembrando: isso descreve um jeito de agir, não o seu valor nem o seu limite.
+        Se alguma coisa aqui não te parece verdade, fale com o RH — a conversa vale
+        mais que o gráfico.</p>
+
+      <div class="acoes" style="margin-top:16px;"><button class="btn" id="dq-fechar3">Fechar</button></div>`
+    corpo.querySelector('#dq-fechar3').onclick = () => { fechar(); if (aoTerminar) aoTerminar() }
+  }
+
+  desenharIntro()
+  fundo.onclick = e => { if (e.target === fundo && DISC_Q.passo === 0) fechar() }
+}
+
+// ----- Cartão do próprio perfil, dentro de Meu RH -----
+async function blocoMeuDisc (alvo) {
+  if (!PERFIL.pessoaId) return
+  const { data: meu } = await db.from('rh_perfil_disc')
+    .select('id,primario,secundario,disc_natural,disc_adaptado,origem,criado_em')
+    .eq('pessoa_id', PERFIL.pessoaId).order('criado_em', { ascending: false }).limit(1).maybeSingle()
+
+  const bloco = document.createElement('div')
+  bloco.className = 'panel'
+  bloco.style.cssText = 'padding:18px;margin-bottom:16px;'
+
+  if (!meu) {
+    bloco.innerHTML = `
+      <div class="cabeca-secao" style="margin-bottom:6px;">
+        <h3 style="font-family:var(--serif);font-size:16px;">Seu perfil de comportamento</h3>
+      </div>
+      <p class="texto-dim" style="font-size:13px;line-height:1.6;margin:0 0 12px;">
+        Você ainda não respondeu. São 24 grupos de palavras, uns 5 minutos.
+        Serve pra equipe entender seu jeito de trabalhar — não é prova e não vale nota.
+      </p>
+      <button class="btn" id="meu-disc-responder">Responder agora</button>`
+    alvo.prepend(bloco)
+    bloco.querySelector('#meu-disc-responder').onclick =
+      () => abrirQuestionarioDisc(() => desempMeu(alvo))
+    return
+  }
+
+  const dupla = (meu.primario || '') + (meu.secundario || '')
+  bloco.innerHTML = `
+    <div class="cabeca-secao" style="margin-bottom:8px;">
+      <h3 style="font-family:var(--serif);font-size:16px;">Seu perfil de comportamento</h3>
+      <span class="chip" style="font-size:12px;font-weight:700;background:rgba(var(--rust-rgb),.14);color:var(--rust);border:none;">${esc(dupla || '—')}</span>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+      <div class="caixa-texto"><div class="rot">Como você é</div>
+        <div style="margin-top:8px;">${barraDisc(meu.disc_natural)}</div></div>
+      <div class="caixa-texto"><div class="rot">Como você se apresenta</div>
+        <div style="margin-top:8px;">${barraDisc(meu.disc_adaptado)}</div></div>
+    </div>
+    ${DISC_DUPLA[dupla] ? `<p style="font-size:13px;line-height:1.55;margin:12px 0 0;">${esc(DISC_DUPLA[dupla])}</p>` : ''}
+    <p class="texto-dim2" style="font-size:11px;margin:10px 0 0;">
+      ${meu.origem === 'laudo_tti' ? 'Do relatório da consultoria' : 'Respondido por você aqui no sistema'}
+      · ${esc(fmtQuando(meu.criado_em) || '')}</p>`
+  alvo.prepend(bloco)
 }
 
 async function desempEspecialistaRH (alvo) {
@@ -36956,6 +37240,10 @@ async function desempMeu (alvo) {
   alvo.querySelectorAll('[data-abrir-minha-trilha]').forEach(card => {
     card.onclick = () => abrirMinhaTrilha(listaAtribs.find(a => a.id === card.dataset.abrirMinhaTrilha), () => desempMeu(alvo))
   })
+
+  // o cartão do próprio perfil de comportamento entra no topo,
+  // depois que o resto da página já desenhou
+  await blocoMeuDisc(alvo)
 }
 
 // ----- Fazer uma trilha: lista os módulos, marca como concluído, e ao
