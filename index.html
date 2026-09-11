@@ -15692,6 +15692,192 @@ async function popularMunicipios (selectEl, uf, atual) {
 // dentro do formLead um resumo somente-leitura do que a IA já levantou +
 // o histórico de contato manual + a conversa — pra quem recebeu o lead
 // (via Transferir) não perder contexto nenhum.
+// ---------------------------------------------------------------
+// "Como abordar esse cliente"
+//
+// Cruza duas coisas de naturezas DIFERENTES, e a tela precisa deixar
+// isso claro o tempo todo:
+//   * o DISC do consultor é MEDIDO (laudo da consultoria ou questionário
+//     respondido por ele);
+//   * o estilo do cliente é um PALPITE que a IA tirou da conversa.
+// Um vale como dado, o outro vale como leitura. Misturar os dois e
+// chamar tudo de "perfil" seria vender certeza que não existe.
+//
+// A permissão de ver o DISC do consultor segue a mesma regra da aba
+// Perfis DISC (o próprio, o RH e a diretoria) — quem é bloqueado recebe
+// um aviso de PERMISSÃO, nunca um espaço vazio que pareça "não tem".
+// ---------------------------------------------------------------
+const COACH_CACHE = {}
+
+async function carregarCoachDisc (fundo, l) {
+  const alvo = fundo.querySelector('#ld-coach')
+  if (!alvo) return
+
+  alvo.innerHTML = `
+    <div class="caixa-texto" style="margin-top:10px;">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <div class="rot" style="margin:0;">🧭 Como abordar esse cliente</div>
+        <span style="flex:1;"></span>
+        <button type="button" class="btn-secundario mini" id="coach-gerar">Montar orientação</button>
+      </div>
+      <p class="texto-dim2" style="font-size:11.5px;line-height:1.5;margin:8px 0 0;">
+        Lê a conversa do WhatsApp, estima o jeito do cliente e cruza com o seu perfil
+        de comportamento pra sugerir como conduzir.</p>
+      <div id="coach-corpo"></div>
+    </div>`
+
+  const corpo = alvo.querySelector('#coach-corpo')
+  alvo.querySelector('#coach-gerar').onclick = () => montarCoachDisc(l, corpo)
+
+  if (COACH_CACHE[l.id]) corpo.innerHTML = COACH_CACHE[l.id]
+}
+
+function barraMiniDisc (obj) {
+  if (!obj) return ''
+  return `<div style="display:flex;gap:3px;">${DISC_LETRAS.map(k => {
+    const v = Number(obj[k] ?? 0)
+    return `<div title="${k} ${v}" style="flex:1;text-align:center;">
+      <div style="height:34px;display:flex;align-items:flex-end;">
+        <div style="width:100%;height:${Math.max(3, v)}%;background:var(--rust);opacity:${.35 + (v / 160)};border-radius:2px 2px 0 0;"></div>
+      </div>
+      <div style="font-size:9.5px;color:var(--dim2);margin-top:2px;">${k}</div></div>`
+  }).join('')}</div>`
+}
+
+async function montarCoachDisc (l, corpo) {
+  corpo.innerHTML = `<p class="texto-dim2" style="font-size:12px;margin:10px 0 0;">lendo a conversa...</p>`
+
+  const { data: ctx, error } = await db.rpc('crm_coach_disc', { p_lead_id: l.id })
+  if (error) { corpo.innerHTML = `<p class="vazio" style="margin-top:10px;">${esc(error.message)}</p>`; return }
+  if (!ctx?.ok) { corpo.innerHTML = `<p class="vazio" style="margin-top:10px;">${esc(ctx?.erro || 'não consegui montar')}</p>`; return }
+
+  const cons = ctx.consultor || {}
+  const cli = ctx.cliente || {}
+
+  // A conversa em si não vem na RPC — é grande e o RLS de `mensagens` já
+  // resolve quem pode ler. Se vier vazia, a IA trabalha só com o cadastro,
+  // e isso é dito na tela em vez de fingir que houve leitura.
+  let transcricao = ''
+  if (cli.telefone) {
+    const { data: msgs } = await db.from('mensagens').select('papel,conteudo')
+      .eq('telefone', cli.telefone).order('created_at', { ascending: true }).limit(120)
+    transcricao = (msgs || []).map(m => `${m.papel === 'assistant' ? 'Nós' : 'Cliente'}: ${m.conteudo}`).join('\n')
+  }
+
+  // ----- o que a gente REALMENTE tem, dito sem rodeio -----
+  const avisos = []
+  if (!cons.pessoa_id) avisos.push('Esse lead não tem consultor definido, então não dá pra cruzar com perfil nenhum.')
+  else if (!cons.pode_ver) avisos.push(`O perfil de comportamento do ${esc(cons.nome || 'consultor')} existe ou não, mas <b>você não tem permissão pra ver</b> — só o próprio, o RH e a diretoria veem. A orientação abaixo saiu só da leitura do cliente.`)
+  else if (!cons.tem_perfil) avisos.push(`${esc(cons.nome || 'O consultor')} ainda <b>não respondeu</b> o perfil de comportamento. Dá pra responder em Meu RH, leva uns 5 minutos — aí a orientação passa a cruzar os dois lados.`)
+  if (!cli.telefone) avisos.push('Esse lead não veio do SDR de WhatsApp, então não existe conversa registrada pra ler.')
+  else if (!transcricao) avisos.push('Existe o lead do SDR, mas nenhuma mensagem trocada ainda.')
+
+  const cabecalho = `
+    <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:center;margin:12px 0 10px;">
+      <div style="text-align:center;">
+        <div class="texto-dim2" style="font-size:10.5px;">CONSULTOR · medido</div>
+        <div style="font-size:20px;font-weight:800;color:var(--rust);margin:2px 0;">
+          ${cons.primario ? esc((cons.primario || '') + (cons.secundario || '')) : '—'}</div>
+        <div class="texto-dim2" style="font-size:11px;">${esc(cons.nome || 'sem consultor')}</div>
+        ${cons.natural ? `<div style="margin-top:6px;">${barraMiniDisc(cons.natural)}</div>` : ''}
+      </div>
+      <div class="texto-dim2" style="font-size:16px;">×</div>
+      <div style="text-align:center;">
+        <div class="texto-dim2" style="font-size:10.5px;">CLIENTE · palpite</div>
+        <div style="font-size:20px;font-weight:800;color:var(--gold);margin:2px 0;">${esc(cli.estilo || '—')}</div>
+        <div class="texto-dim2" style="font-size:11px;">${esc(ROTULO_DISC[cli.estilo] || 'ainda sem leitura')}</div>
+      </div>
+    </div>
+    ${cli.evidencias ? `<div class="texto-dim2" style="font-size:11px;line-height:1.5;
+      border-left:2px solid var(--line2);padding-left:8px;margin-bottom:10px;">
+      <b>De onde veio esse palpite:</b> ${esc(cli.evidencias)}</div>` : ''}
+    ${avisos.length ? `<div class="recado" style="margin-bottom:10px;font-size:11.5px;line-height:1.5;">
+      ${avisos.map(a => `<div>• ${a}</div>`).join('')}</div>` : ''}`
+
+  corpo.innerHTML = cabecalho + `<p class="texto-dim2" style="font-size:12px;">montando a orientação...</p>`
+
+  const sistema = [
+    'Você orienta um consultor de vendas do Grupo Gefoscal (fertilizante fosfatado natural) antes dele falar com um produtor rural.',
+    '',
+    'REGRAS DURAS:',
+    '- O perfil DISC do consultor é dado MEDIDO. Pode tratar como fato.',
+    '- O estilo do cliente é PALPITE tirado da conversa. Fale dele como leitura ("parece", "dá a entender"), nunca como diagnóstico. Se a conversa for curta ou não existir, diga que a leitura é fraca em vez de inventar confiança.',
+    '- Não invente fato nenhum sobre o cliente que não esteja na conversa ou no cadastro abaixo. Nada de supor tamanho de área, dinheiro ou intenção.',
+    '- DISC descreve jeito de agir, não valor nem capacidade da pessoa. Não rotule o cliente de difícil, burro, enrolão nem nada parecido.',
+    '- Português do Brasil, direto, como quem fala com um colega. Sem jargão de coach e sem encher linguiça.',
+    '',
+    'FORMATO DA RESPOSTA (markdown simples, no máximo 220 palavras no total):',
+    '**Como ele parece ser** — 1 ou 2 frases.',
+    '**O que funciona** — 3 a 4 itens curtos, concretos, ligados ao cruzamento dos dois estilos.',
+    '**O que evitar** — 2 ou 3 itens.',
+    '**Cuidado com o seu próprio jeito** — 1 item, só se você souber o DISC do consultor: onde o estilo natural DELE atrapalha com um cliente assim.',
+    '**Pra abrir a conversa** — 1 frase pronta, do jeito que se manda no WhatsApp.',
+    '',
+    'Se faltar o DISC do consultor, pule a seção "Cuidado com o seu próprio jeito" e não comente a ausência: a tela já avisa.'
+  ].join('\n')
+
+  const dados = [
+    `CONSULTOR: ${cons.nome || '(não definido)'}`,
+    cons.pode_ver && cons.primario
+      ? `DISC do consultor (medido, origem ${cons.origem || 'laudo'}): primário ${cons.primario}, secundário ${cons.secundario || '—'}. Natural: ${JSON.stringify(cons.natural)}. Adaptado: ${JSON.stringify(cons.adaptado)}.`
+      : 'DISC do consultor: indisponível.',
+    '',
+    `CLIENTE: ${ctx.lead?.nome || '—'} · ${[ctx.lead?.municipio, ctx.lead?.uf].filter(Boolean).join('/') || 'local não informado'} · etapa ${ctx.lead?.etapa || '—'}`,
+    cli.cultura ? `Cultura: ${cli.cultura}` : null,
+    cli.volume ? `Volume: ${cli.volume}` : null,
+    cli.fornecedor_atual ? `Fornecedor atual: ${cli.fornecedor_atual}` : null,
+    cli.momento_compra ? `Momento de compra: ${cli.momento_compra}` : null,
+    cli.eh_decisor != null ? `É o decisor: ${cli.eh_decisor ? 'sim' : 'não'}` : null,
+    cli.estilo ? `Estilo estimado pelo SDR: ${cli.estilo} (${ROTULO_DISC[cli.estilo] || ''})` : 'Estilo do cliente: ainda sem leitura.',
+    cli.evidencias ? `Trechos que embasaram o palpite: ${cli.evidencias}` : null,
+    ctx.lead?.observacoes ? `Observações do CRM: ${ctx.lead.observacoes}` : null,
+    '',
+    transcricao
+      ? `CONVERSA (${transcricao.split('\n').length} mensagens):\n${transcricao}`
+      : 'CONVERSA: não há conversa registrada com esse cliente.'
+  ].filter(x => x !== null).join('\n')
+
+  const { data, error: e2 } = await invocarIaComRetry('ia-agente-chat', {
+    systemPrompt: sistema,
+    mensagens: [{ role: 'user', content: dados }]
+  })
+
+  if (e2 || !data?.resposta) {
+    corpo.innerHTML = cabecalho +
+      `<p class="vazio" style="margin-top:6px;">A IA não respondeu agora (${esc(e2?.message || data?.erro || 'sem detalhe')}). O quadro acima continua valendo.</p>`
+    return
+  }
+
+  const html = cabecalho + `
+    <div style="font-size:13px;line-height:1.6;">${markdownSimplesParaHtml(data.resposta)}</div>
+    <p class="texto-dim2" style="font-size:10.5px;margin:12px 0 0;line-height:1.45;">
+      Isso é sugestão, não roteiro obrigatório. Quem está na conversa é você —
+      se o cliente não for nada disso, confie no que você está vendo.</p>`
+  corpo.innerHTML = html
+  COACH_CACHE[l.id] = html
+}
+
+// Markdown bem básico (negrito, itens e quebras) — o suficiente pro
+// formato que a gente pediu, sem carregar biblioteca nenhuma.
+function markdownSimplesParaHtml (texto) {
+  const linhas = esc(texto || '').split('\n')
+  let html = '', emLista = false
+  for (const bruta of linhas) {
+    const linha = bruta.trim()
+    if (!linha) { if (emLista) { html += '</ul>'; emLista = false } continue }
+    const negrito = t => t.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+    if (/^[-*•]\s+/.test(linha)) {
+      if (!emLista) { html += '<ul style="margin:4px 0 8px;padding-left:18px;display:flex;flex-direction:column;gap:4px;">'; emLista = true }
+      html += `<li>${negrito(linha.replace(/^[-*•]\s+/, ''))}</li>`
+    } else {
+      if (emLista) { html += '</ul>'; emLista = false }
+      html += `<p style="margin:8px 0 4px;">${negrito(linha)}</p>`
+    }
+  }
+  if (emLista) html += '</ul>'
+  return html
+}
+
 async function carregarHistoricoSdrNoLead (fundo, l) {
   const alvo = fundo.querySelector('#ld-sdr-historico')
   if (!alvo) return
@@ -15849,6 +16035,7 @@ function formLead (l, editavel, gerencia, aoFechar) {
         <button type="button" class="btn-secundario mini" id="ld-obs-padronizar">✨ Padronizar com IA</button>
       </div>` : ''}
       <textarea id="ld-obs" style="min-height:260px;font-size:14.5px;line-height:1.5;" ${editavel ? '' : 'disabled'}>${esc(l?.observacoes ?? '')}</textarea></div>
+    ${l ? `<div id="ld-coach"></div>` : ''}
     ${l ? `<div id="ld-sdr-historico"></div>` : ''}
     ${l ? `<div id="ld-bomdia"></div>` : ''}
     ${l ? `<div id="ld-lgpd"></div>` : ''}
@@ -15991,6 +16178,7 @@ function formLead (l, editavel, gerencia, aoFechar) {
     formLead(l, editavel, gerencia, aoFechar)
   })
   if (l && l.origem === 'whatsapp_sdr' && l.telefone) carregarHistoricoSdrNoLead(fundo, l)
+  if (l) carregarCoachDisc(fundo, l)
   let propostaCarregada = l && l.etapa === 'PROPOSTA'
   if (propostaCarregada) carregarPropostaLead(fundo, l, editavel)
 
@@ -34084,7 +34272,69 @@ async function coletarContextoRH () {
       `com a pessoa antes de concluir qualquer coisa.\n`
   }
 
+  texto += await blocoDiscComercialRH()
+
   return texto
+}
+
+// Cruza o perfil do consultor com o resultado dele no funil, e com o estilo
+// que o SDR leu nos clientes que ele atendeu.
+//
+// O ponto delicado aqui \u00e9 o tamanho da amostra. Com 3 leads n\u00e3o existe
+// "esse vendedor vai melhor com cliente C" \u2014 existe coincid\u00eancia. Ent\u00e3o o
+// bloco conta os casos e DIZ o n\u00famero, e quando n\u00e3o d\u00e1 pra concluir ele
+// escreve isso com todas as letras, em vez de entregar um padr\u00e3o bonito
+// que a especialista vai repetir como se fosse achado.
+async function blocoDiscComercialRH () {
+  const { data: r, error } = await db.rpc('rh_disc_comercial')
+  if (error || !r?.ok) return ''
+
+  const lista = r.consultores || []
+  const cruzados = r.cruzados || 0
+  if (!lista.length && !r.leads_sem_perfil_do_consultor) return ''
+
+  let t = `\nPERFIL DO CONSULTOR x RESULTADO NO FUNIL:\n`
+  for (const v of lista) {
+    t += `- ${v.nome} (${v.dupla || '?'}): ${v.total} lead(s) ativo(s) \u2014 ` +
+      `${v.ganhos} ganho(s), ${v.perdidos} perdido(s), ${v.andamento} em andamento\n`
+  }
+  if (!lista.length) t += `- Nenhum consultor com lead ativo tem perfil de comportamento registrado ainda.\n`
+
+  // O cruzamento com o estilo do cliente s\u00f3 existe pra lead que veio do SDR
+  // E cujo consultor tem perfil. Hoje isso costuma ser quase nada.
+  const MINIMO = 5
+  const uteis = (r.celulas || []).filter(c => c.n >= MINIMO)
+
+  t += `\nCONSULTOR x ESTILO DO CLIENTE:\n`
+  if (!cruzados) {
+    t += `- N\u00e3o existe um \u00fanico caso cruz\u00e1vel ainda. Pra cruzar, o lead precisa ter vindo do ` +
+      `SDR de WhatsApp (\u00e9 de l\u00e1 que sai a leitura do estilo do cliente) E o consultor precisa ` +
+      `ter perfil de comportamento registrado. Hoje essas duas condi\u00e7\u00f5es n\u00e3o se encontram em ` +
+      `nenhum lead. Se te perguntarem qual consultor vai melhor com qual tipo de cliente, ` +
+      `responda que o sistema ainda n\u00e3o tem como saber, e diga o que falta.\n`
+  } else if (!uteis.length) {
+    t += `- Existem ${cruzados} caso(s) cruz\u00e1veis, mas nenhuma combina\u00e7\u00e3o chega a ${MINIMO} casos. ` +
+      `Isso \u00e9 pouco demais pra afirmar qualquer coisa: com esse tamanho, sorte e padr\u00e3o t\u00eam a ` +
+      `mesma cara. Cite os casos como exemplo se ajudar a conversa, mas N\u00c3O conclua que um ` +
+      `consultor vai melhor ou pior com um tipo de cliente.\n`
+  } else {
+    for (const c of uteis.sort((a, b) => b.n - a.n)) {
+      t += `- consultor ${c.dupla} atendendo cliente ${c.estilo}: ` +
+        `${c.n} caso(s), ${c.ganhos} ganho(s), ${c.perdidos} perdido(s)\n`
+    }
+    t += `- S\u00f3 est\u00e3o listadas as combina\u00e7\u00f5es com ao menos ${MINIMO} casos. Mesmo essas s\u00e3o ` +
+      `ind\u00edcio, n\u00e3o prova: regi\u00e3o, cultura e pre\u00e7o mexem no resultado tanto quanto o jeito de ` +
+      `conversar. Trate como pergunta a investigar, n\u00e3o como conclus\u00e3o.\n`
+  }
+
+  const semPerfil = r.leads_sem_perfil_do_consultor || 0
+  if (semPerfil) {
+    t += `- Aten\u00e7\u00e3o: ${semPerfil} lead(s) ativo(s) est\u00e3o com consultores que ainda n\u00e3o t\u00eam perfil ` +
+      `de comportamento registrado, ent\u00e3o ficam de fora de tudo isso. Eles podem responder o ` +
+      `question\u00e1rio em Meu RH.\n`
+  }
+
+  return t
 }
 
 // ---------------------------------------------------------------
