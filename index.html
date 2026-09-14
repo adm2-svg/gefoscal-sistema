@@ -24299,14 +24299,60 @@ async function termometroSdr (alvo) {
 // adiante, que metade da lista foi pro lixo.
 // ---------------------------------------------------------------
 let LISTA_PESSOAS = []
+// A ordem importa: a primeira coluna que casar leva o campo. Por isso
+// 'municipio da fazenda' vem antes de 'cidade', e 'telefone' antes de
+// 'contato' — numa planilha que tem as duas, 'contato' costuma ser a
+// coluna de quem falar, não o número.
 const COLUNAS_LISTA = [
-  { campo: 'telefone',  nomes: ['telefone', 'fone', 'celular', 'whatsapp', 'whats', 'contato', 'tel'] },
-  { campo: 'nome',      nomes: ['nome', 'cliente', 'produtor', 'razao', 'razão', 'proprietario', 'proprietário'] },
-  { campo: 'municipio', nomes: ['municipio', 'município', 'cidade', 'localidade'] },
+  { campo: 'telefone',  nomes: ['telefone', 'telefones', 'fone', 'fones', 'celular', 'celulares',
+                                'whatsapp', 'whats', 'tel', 'contato'] },
+  { campo: 'nome',      nomes: ['nome', 'cliente', 'produtor', 'razaosocial', 'razao', 'razão',
+                                'proprietario', 'proprietário', 'nomeformatado'] },
+  { campo: 'documento', nomes: ['cpfcnpj', 'cnpjcpf', 'cpf', 'cnpj', 'documento', 'doc', 'inscricao'] },
+  { campo: 'email',     nomes: ['email', 'e-mail', 'emails'] },
+  // Onde fica a FAZENDA manda, não onde o dono mora: é a fazenda que
+  // recebe adubo e que define região no painel. A cidade do dono vira
+  // observação — dono em Curitiba com lavoura em Mucugê é o normal aqui.
+  { campo: 'municipio', nomes: ['municipiodafazenda', 'municipiofazenda', 'municipio', 'município',
+                                'localidade'] },
+  { campo: 'cidade_contato', nomes: ['cidadeuf', 'cidade', 'domicilio', 'domicílio', 'endereco'] },
   { campo: 'uf',        nomes: ['uf', 'estado'] },
-  { campo: 'cultura',   nomes: ['cultura', 'cultivo', 'atividade', 'lavoura'] },
-  { campo: 'observacao',nomes: ['observacao', 'observação', 'obs', 'area', 'área', 'hectares', 'ha', 'anotacao'] }
+  { campo: 'fazenda',   nomes: ['fazenda', 'fazendas', 'propriedade', 'propriedades', 'imovel', 'imóvel'] },
+  { campo: 'area',      nomes: ['area', 'área', 'areaha', 'hectares', 'ha', 'areatotal'] },
+  { campo: 'cultura',   nomes: ['cultura', 'culturas', 'cultivo', 'cultivos', 'atividade', 'lavoura'] },
+  { campo: 'classificacao', nomes: ['classificacao', 'classificação', 'classe', 'segmento',
+                                    'perfil', 'grupo', 'rota'] },
+  { campo: 'observacao',nomes: ['observacao', 'observação', 'obs', 'anotacao', 'anotação', 'detalhe'] }
 ]
+
+// Uma célula de telefone costuma trazer a lista inteira:
+//   "(41) 997979773 | (47) 36532004 | (61) 984014125"
+// O robô fala num número só. Escolhe celular (11 dígitos), porque fixo
+// de fazenda quase nunca tem WhatsApp — e guarda o resto pro consultor.
+function separarTelefones (bruto) {
+  const pedacos = String(bruto ?? '')
+    .split(/[|;\n\r]+|\s{2,}|\/(?=\s*\()/)
+    .map(x => x.replace(/\D/g, ''))
+    .filter(x => x.length >= 10 && x.length <= 13)
+    .map(x => x.replace(/^0+/, ''))
+    .map(x => x.length > 11 && x.startsWith('55') ? x.slice(2) : x)
+    .filter(x => x.length === 10 || x.length === 11)
+
+  const unicos = [...new Set(pedacos)]
+  if (!unicos.length) return { escolhido: null, extras: [] }
+  // celular = 11 dígitos começando com 9 depois do DDD
+  const celular = unicos.find(x => x.length === 11 && x[2] === '9')
+  const escolhido = celular || unicos[0]
+  return { escolhido, extras: unicos.filter(x => x !== escolhido) }
+}
+
+// "CURITIBA / PR", "MUCUGE / BA", "VITORIA DA CONQUISTA/BA" numa célula só.
+function separarCidadeUf (bruto) {
+  const t = String(bruto ?? '').trim()
+  const m = t.match(/^(.*?)[\s]*\/[\s]*([A-Za-z]{2})$/)
+  if (m) return { municipio: m[1].trim(), uf: m[2].toUpperCase() }
+  return { municipio: t || null, uf: null }
+}
 
 const chaveColuna = t => String(t ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '')
   .toLowerCase().replace(/[^a-z0-9]/g, '')
@@ -24322,16 +24368,24 @@ function acharCabecalho (linhas) {
   return -1
 }
 
+// Duas passadas: primeiro quem bate o nome exato, depois quem só se
+// parece. Sem isso, "Cidade / UF" na coluna 5 rouba o campo de município
+// da coluna "Município" que vem na 9.
 function mapearColunas (cabecalho) {
   const mapa = {}
-  cabecalho.forEach((titulo, i) => {
-    const c = chaveColuna(titulo)
-    if (!c) return
-    for (const col of COLUNAS_LISTA) {
-      if (mapa[col.campo] != null) continue
-      if (col.nomes.some(n => c === chaveColuna(n) || c.includes(chaveColuna(n)))) { mapa[col.campo] = i; break }
-    }
-  })
+  const usadas = new Set()
+  const tentar = exato => {
+    cabecalho.forEach((titulo, i) => {
+      const c = chaveColuna(titulo)
+      if (!c || usadas.has(i)) return
+      for (const col of COLUNAS_LISTA) {
+        if (mapa[col.campo] != null) continue
+        const bate = col.nomes.some(n => exato ? c === chaveColuna(n) : c.includes(chaveColuna(n)))
+        if (bate) { mapa[col.campo] = i; usadas.add(i); break }
+      }
+    })
+  }
+  tentar(true); tentar(false)
   return mapa
 }
 
@@ -24350,18 +24404,66 @@ function lerPlanilhaParaLinhas (arquivoBuffer, nomeArquivo) {
   if (mapa.telefone == null) return { erro: 'Não achei a coluna de telefone.' }
 
   const linhas = []
+  const semTelefone = []
   for (let i = iCab + 1; i < grade.length; i++) {
     const l = grade[i] || []
     const pega = campo => mapa[campo] != null ? String(l[mapa[campo]] ?? '').trim() : ''
-    const tel = pega('telefone')
-    if (!tel) continue
+    const bruto = pega('telefone')
+    const nome = pega('nome') || null
+
+    const { escolhido, extras } = separarTelefones(bruto)
+    if (!escolhido) {
+      // linha com nome mas sem número aproveitável: não some calada
+      if (nome) semTelefone.push(nome)
+      continue
+    }
+
+    // a cidade pode vir junto com a UF na mesma célula
+    const daFazenda = separarCidadeUf(pega('municipio'))
+    const doDono    = separarCidadeUf(pega('cidade_contato'))
+    // sem coluna de fazenda, a cidade do contato é o que há
+    const lugar = daFazenda.municipio ? daFazenda : doDono
+    const uf = (pega('uf') || lugar.uf || '').toUpperCase().slice(0, 2) || null
+    const outraCidade = (daFazenda.municipio && doDono.municipio &&
+      chaveColuna(daFazenda.municipio) !== chaveColuna(doDono.municipio))
+      ? [doDono.municipio, doDono.uf].filter(Boolean).join(' / ') : null
+
     linhas.push({
-      telefone: tel, nome: pega('nome') || null, municipio: pega('municipio') || null,
-      uf: pega('uf') || null, cultura: pega('cultura') || null,
-      observacao: pega('observacao') || null
+      telefone: escolhido,
+      so_fixo: !(escolhido.length === 11 && escolhido[2] === '9'),
+      telefones_extras: extras.length ? extras.map(telefoneBonito).join(' | ') : null,
+      qtd_telefones: 1 + extras.length,
+      nome,
+      documento: pega('documento') || null,
+      email: (pega('email').split(/[|;\s]+/).find(x => x.includes('@')) || null),
+      municipio: lugar.municipio || null,
+      uf,
+      fazenda: pega('fazenda') || null,
+      area: pega('area') || null,
+      cultura: pega('cultura') || null,
+      classificacao: pega('classificacao') || null,
+      cidade_contato: outraCidade,
+      observacao: [pega('observacao') || null,
+        outraCidade ? 'Contato mora em ' + outraCidade : null].filter(Boolean).join(' · ') || null
     })
   }
-  return { linhas, mapa, cabecalho: grade[iCab], linhaCabecalho: iCab + 1 }
+
+  // Telefone que aparece em mais de uma linha — inclusive quando numa é o
+  // número principal e na outra é só um dos extras. É o caso anotado na
+  // própria planilha: o mesmo (75) 98107-8764 em duas fazendas. Costuma
+  // ser escritório, contador ou família; se passar batido, a mesma pessoa
+  // é abordada duas vezes com dois nomes diferentes.
+  const ondeAparece = {}
+  linhas.forEach(l => {
+    const todos = [l.telefone, ...String(l.telefones_extras || '').split('|')
+      .map(x => x.replace(/\D/g, '')).filter(Boolean)]
+    new Set(todos).forEach(t => { (ondeAparece[t] ||= []).push(l.nome || 'sem nome') })
+  })
+  const repetidos = Object.keys(ondeAparece)
+    .filter(t => new Set(ondeAparece[t]).size > 1)
+    .map(t => ({ telefone: t, nomes: [...new Set(ondeAparece[t])] }))
+
+  return { linhas, mapa, cabecalho: grade[iCab], linhaCabecalho: iCab + 1, semTelefone, repetidos }
 }
 
 // ---------------------------------------------------------------
@@ -24374,7 +24476,13 @@ function blocoImportarPlanilha (alvo, lista, aoImportar) {
         Excel (.xlsx) ou CSV. Não precisa arrumar nada antes: eu procuro o cabeçalho e reconheço
         colunas como <b>Telefone</b>, <b>Fone</b>, <b>Celular</b>, <b>WhatsApp</b>, além de nome,
         cidade, UF e cultura. Mostro o que entendi antes de gravar.</p>
-      <input type="file" id="li-arquivo" accept=".xlsx,.xls,.csv">
+      <div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;">
+        <input type="file" id="li-arquivo" accept=".xlsx,.xls,.csv" style="flex:1;min-width:220px;">
+        <div class="campo" style="margin:0;max-width:150px;">
+          <label style="font-size:11.5px;">UF, se faltar</label>
+          <input id="li-uf" maxlength="2" placeholder="ex: BA" style="text-transform:uppercase;">
+        </div>
+      </div>
       <div id="li-previa" style="margin-top:10px;"></div>
     </div>`
 
@@ -24394,10 +24502,20 @@ function blocoImportarPlanilha (alvo, lista, aoImportar) {
         return
       }
       lidas = r.linhas
+      // Planilha que só tem "Município" (sem a UF junto) deixa a região em
+      // branco — e região em branco some do painel de objeções. Se quem
+      // importa disser a UF, ela vale só pras linhas que não têm nenhuma.
+      const ufPadrao = (alvo.querySelector('#li-uf')?.value || '').toUpperCase().slice(0, 2)
+      let preenchidas = 0
+      if (/^[A-Z]{2}$/.test(ufPadrao)) {
+        for (const l of lidas) if (!l.uf) { l.uf = ufPadrao; preenchidas++ }
+      }
+      const semUf = lidas.filter(l => !l.uf).length
       const reconhecidas = Object.keys(r.mapa)
       const ignoradas = (r.cabecalho || []).filter((t, i) =>
         String(t ?? '').trim() && !Object.values(r.mapa).includes(i))
 
+      const comVarios = lidas.filter(l => l.qtd_telefones > 1).length
       previa.innerHTML = `
         <div class="panel" style="padding:12px 14px;">
           <div style="font-size:12.5px;line-height:1.7;">
@@ -24405,15 +24523,45 @@ function blocoImportarPlanilha (alvo, lista, aoImportar) {
             <span class="texto-dim">Reconheci: ${esc(reconhecidas.join(', '))}</span>
             ${ignoradas.length ? `<br><span class="texto-dim2">Ignorei: ${esc(ignoradas.slice(0, 8).join(', '))}</span>` : ''}
           </div>
-          ${lidas.length ? `<div class="tabela-scroll" style="margin-top:10px;max-height:200px;"><table>
-            <thead><tr><th>Nome</th><th>Telefone</th><th>Cidade/UF</th><th>Cultura</th></tr></thead>
-            <tbody>${lidas.slice(0, 8).map(l => `<tr>
-              <td>${esc(l.nome || '—')}</td>
-              <td>${esc(l.telefone)}</td>
-              <td class="texto-dim2">${esc([l.municipio, l.uf].filter(Boolean).join('/') || '—')}</td>
-              <td class="texto-dim2">${esc(l.cultura || '—')}</td></tr>`).join('')}</tbody></table></div>
-            ${lidas.length > 8 ? `<p class="texto-dim2" style="font-size:11px;margin:6px 0 0;">
-              ...e mais ${lidas.length - 8}.</p>` : ''}` : ''}
+
+          ${preenchidas ? `<p class="texto-dim" style="font-size:11.5px;line-height:1.6;margin:8px 0 0;">
+            ${preenchidas} linha(s) não traziam UF — usei <b>${esc(ufPadrao)}</b> nelas.</p>` : ''}
+          ${semUf ? `<p style="font-size:11.5px;line-height:1.6;margin:8px 0 0;color:var(--warn-text);">
+            ⚠ ${semUf} linha(s) vão entrar sem UF. Elas somem da leitura por região no painel de objeções.
+            Escreva a UF no campo acima e escolha o arquivo de novo, se todas forem do mesmo estado.</p>` : ''}
+
+          ${lidas.filter(l => l.so_fixo).length ? `<p style="font-size:11.5px;line-height:1.6;margin:8px 0 0;color:var(--warn-text);">
+            ⚠ ${lidas.filter(l => l.so_fixo).length} linha(s) só têm telefone fixo, sem celular nenhum.
+            Fixo raramente tem WhatsApp: o robô vai tentar e provavelmente falhar, e isso aparece como
+            falha de envio no termômetro. Valem mais como ligação do que como mensagem.</p>` : ''}
+
+          ${comVarios ? `<p style="font-size:11.5px;line-height:1.6;margin:8px 0 0;" class="texto-dim">
+            ${comVarios} linha(s) tinham mais de um telefone. Escolhi <b>o celular</b> de cada uma pro robô
+            falar — fixo quase nunca tem WhatsApp. Os outros ficam na observação do lead,
+            pra quando o primeiro não atender.</p>` : ''}
+
+          ${(r.repetidos || []).length ? `<p style="font-size:11.5px;line-height:1.6;margin:8px 0 0;color:var(--warn-text);">
+            ⚠ ${r.repetidos.length} telefone(s) aparecem em mais de uma linha —
+            ${esc(r.repetidos.slice(0, 3).map(x => x.nomes.join(' e ')).join('; '))}${
+              r.repetidos.length > 3 ? '...' : ''}.
+            Costuma ser escritório ou contador em comum. Só a primeira entra; as outras contam como repetidas,
+            senão o mesmo número receberia a mesma mensagem duas vezes.</p>` : ''}
+
+          ${(r.semTelefone || []).length ? `<p class="texto-dim2" style="font-size:11.5px;line-height:1.6;margin:8px 0 0;">
+            ${r.semTelefone.length} linha(s) com nome e sem telefone aproveitável vão ficar de fora:
+            ${esc(r.semTelefone.slice(0, 4).join(', '))}${r.semTelefone.length > 4 ? '...' : ''}.</p>` : ''}
+
+          ${lidas.length ? `<div class="tabela-scroll" style="margin-top:10px;max-height:240px;"><table>
+            <thead><tr><th>Nome</th><th>Vai falar neste</th><th>Cidade/UF</th><th>Área</th><th>Cultivo</th></tr></thead>
+            <tbody>${lidas.slice(0, 10).map(l => `<tr>
+              <td>${esc(l.nome || '—')}${l.documento ? `<div class="texto-dim2" style="font-size:10.5px;">${esc(l.documento)}</div>` : ''}</td>
+              <td>${esc(telefoneBonito(l.telefone))}${
+                l.qtd_telefones > 1 ? `<div class="texto-dim2" style="font-size:10.5px;">+${l.qtd_telefones - 1} guardado(s)</div>` : ''}</td>
+              <td class="texto-dim2">${esc([l.municipio, l.uf].filter(Boolean).join(' / ') || '—')}</td>
+              <td class="texto-dim2">${esc(l.area || '—')}</td>
+              <td class="texto-dim2">${esc((l.cultura || '—').slice(0, 40))}</td></tr>`).join('')}</tbody></table></div>
+            ${lidas.length > 10 ? `<p class="texto-dim2" style="font-size:11px;margin:6px 0 0;">
+              ...e mais ${lidas.length - 10}.</p>` : ''}` : ''}
           <div class="acoes" style="margin-top:10px;">
             <button class="btn mini" id="li-gravar" ${lidas.length ? '' : 'disabled'}>
               Trazer ${lidas.length} contato(s) pra lista</button>
@@ -24430,13 +24578,16 @@ function blocoImportarPlanilha (alvo, lista, aoImportar) {
         const recado = previa.querySelector('#li-recado')
         if (error) { recado.textContent = error.message; recado.style.color = 'var(--warn-text)'; return }
         recado.style.color = 'var(--good-text)'
-        recado.textContent =
+        recado.innerHTML = esc(
           `${r2.criados} entraram` +
           (r2.repetidos ? ` · ${r2.repetidos} já estavam ou vieram repetidos` : '') +
           (r2.invalidos ? ` · ${r2.invalidos} com telefone inválido` : '') +
           (r2.situacao === 'aguardando_ligacao'
             ? '. Como é lista de originação, ficaram esperando ligação — o robô só entra depois que alguém ligar.'
-            : '. Entraram direto na fila do robô.')
+            : '. Entraram direto na fila do robô.')) +
+          (Number(r2.ja_no_crm) ? `<div class="texto-dim2" style="margin-top:4px;">
+            ${r2.ja_no_crm} desses já existiam como lead no CRM com o mesmo número. Entraram assim mesmo,
+            porque a lista é da Bianca — mas vale olhar se não é cliente de alguém.</div>` : '')
         if (aoImportar) aoImportar()
       }
     } catch (err) {
