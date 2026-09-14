@@ -18640,6 +18640,12 @@ let ORIG_FILTRO = 'todos'
 // Quem a gestão está olhando. '' = todo mundo. Um vendedor comum nunca
 // mexe nisso: ele já só enxerga o que é dele, por RLS.
 let ORIG_PESSOA = ''
+let ORIG_BUSCA = ''
+// A tela é redesenhada inteira a cada tecla, então o foco e a posição do
+// cursor precisam voltar na mão — senão a pessoa digita "jad" e perde o
+// campo no meio da palavra.
+let ORIG_FOCO_BUSCA = false
+let ORIG_ESPERA = null
 
 async function crmOriginacao (alvo, editavel, gerencia) {
   alvo.innerHTML = `<p class="texto-dim2">carregando fila...</p>`
@@ -18647,7 +18653,8 @@ async function crmOriginacao (alvo, editavel, gerencia) {
   const vendoArquivados = ORIG_FILTRO === 'arquivados'
   const [{ data, error }, cat] = await Promise.all([
     db.rpc('crm_fila_originacao', { p_limite: 120, p_arquivados: vendoArquivados,
-      p_pessoa_id: (gerencia && ORIG_PESSOA) ? ORIG_PESSOA : null }),
+      p_pessoa_id: (gerencia && ORIG_PESSOA) ? ORIG_PESSOA : null,
+      p_busca: ORIG_BUSCA || null }),
     catalogosNegociacao()
   ])
   if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
@@ -18785,6 +18792,28 @@ async function crmOriginacao (alvo, editavel, gerencia) {
         filtrado — os contadores acima são só dessa pessoa.</span>` : ''}
     </div>` : ''}
 
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 10px;">
+      <div style="position:relative;flex:1;min-width:230px;max-width:420px;">
+        <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);
+          font-size:13px;opacity:.55;pointer-events:none;">🔍</span>
+        <input id="org-busca" value="${esc(ORIG_BUSCA)}" autocomplete="off"
+          placeholder="nome, telefone, CPF/CNPJ, cidade ou cultivo"
+          style="width:100%;padding-left:30px;${ORIG_BUSCA ? 'padding-right:30px;border-color:var(--rust);' : ''}">
+        ${ORIG_BUSCA ? `<button type="button" id="org-limpar-busca" title="limpar"
+          style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;
+            border:none;cursor:pointer;font-size:15px;line-height:1;color:var(--dim);padding:2px 5px;">×</button>` : ''}
+      </div>
+      ${ORIG_BUSCA ? `<span class="texto-dim2" style="font-size:11.5px;">
+        ${todos.length === 0 ? 'nada encontrado' :
+          `${d.total} de ${d.total_sem_busca ?? '?'}`}</span>` : ''}
+    </div>
+
+    ${ORIG_BUSCA && todos.length === 0 ? `<p class="vazio" style="padding:20px 0;line-height:1.7;">
+      Nada com <b>${esc(ORIG_BUSCA)}</b>${(gerencia && ORIG_PESSOA) ? ' na fila dessa pessoa' : ''}.<br>
+      <span class="texto-dim2" style="font-size:12px;">A busca olha nome, telefone (inclusive os
+      guardados), CPF/CNPJ, cidade da fazenda, UF, e-mail e cultivo. Não olha observação nem nome da lista.
+      ${vendoArquivados ? '' : 'Se for alguém que saiu da fila, veja em "Fora da fila".'}</span></p>` : ''}
+
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin:0 0 12px;">
       ${filtros.map(([v, r]) => `<button type="button" class="btn-secundario mini org-filtro"
         data-f="${v}" ${v === ORIG_FILTRO ? 'style="border-color:var(--rust);color:var(--rust);"' : ''}>${esc(r)}</button>`).join('')}
@@ -18809,7 +18838,8 @@ async function crmOriginacao (alvo, editavel, gerencia) {
       : `<p class="vazio" style="padding:26px 0;">Nada nesse filtro.</p>`}
 
     ${todos.length >= 120 ? `<p class="texto-dim2" style="font-size:11px;">
-      Mostrando os 120 primeiros da fila.</p>` : ''}`
+      Mostrando 120 de ${d.total}${ORIG_BUSCA ? ' que deram com a busca' : ' na fila'}.
+      ${ORIG_BUSCA ? 'Escreva mais pra estreitar.' : 'Use a busca pra achar alguém específico.'}</p>` : ''}`
 
   blocoAtividadeComercial(alvo.querySelector('#org-atividade'), gerencia)
 
@@ -18819,6 +18849,45 @@ async function crmOriginacao (alvo, editavel, gerencia) {
 
   const selPessoa = alvo.querySelector('#org-pessoa')
   if (selPessoa) selPessoa.onchange = () => { ORIG_PESSOA = selPessoa.value; recarregar() }
+
+  const campoBusca = alvo.querySelector('#org-busca')
+  if (campoBusca) {
+    // devolve o foco e põe o cursor no fim, depois do redesenho
+    if (ORIG_FOCO_BUSCA) {
+      ORIG_FOCO_BUSCA = false
+      campoBusca.focus()
+      const fim = campoBusca.value.length
+      campoBusca.setSelectionRange(fim, fim)
+    }
+    campoBusca.oninput = () => {
+      const texto = campoBusca.value
+      clearTimeout(ORIG_ESPERA)
+      // espera a pessoa parar de digitar: uma ida ao banco por tecla é
+      // busca que pisca e devolve resultado de letra antiga
+      ORIG_ESPERA = setTimeout(() => {
+        if (texto.trim() === ORIG_BUSCA) return
+        ORIG_BUSCA = texto.trim()
+        ORIG_FOCO_BUSCA = true
+        recarregar()
+      }, 350)
+    }
+    campoBusca.onkeydown = e => {
+      if (e.key === 'Escape' && ORIG_BUSCA) {
+        clearTimeout(ORIG_ESPERA); ORIG_BUSCA = ''; ORIG_FOCO_BUSCA = true; recarregar()
+      }
+      if (e.key === 'Enter') {
+        clearTimeout(ORIG_ESPERA)
+        if (campoBusca.value.trim() !== ORIG_BUSCA) {
+          ORIG_BUSCA = campoBusca.value.trim(); ORIG_FOCO_BUSCA = true; recarregar()
+        }
+      }
+    }
+  }
+
+  const limparBusca = alvo.querySelector('#org-limpar-busca')
+  if (limparBusca) limparBusca.onclick = () => {
+    clearTimeout(ORIG_ESPERA); ORIG_BUSCA = ''; ORIG_FOCO_BUSCA = true; recarregar()
+  }
 
   // Registrar o resultado da ligação de originação. É o clique que solta
   // (ou segura) o robô: "não atendeu" libera a abordagem citando quem
