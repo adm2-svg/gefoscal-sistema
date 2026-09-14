@@ -18070,8 +18070,9 @@ let ORIG_FILTRO = 'todos'
 async function crmOriginacao (alvo, editavel, gerencia) {
   alvo.innerHTML = `<p class="texto-dim2">carregando fila...</p>`
 
+  const vendoArquivados = ORIG_FILTRO === 'arquivados'
   const [{ data, error }, cat] = await Promise.all([
-    db.rpc('crm_fila_originacao', { p_limite: 120 }),
+    db.rpc('crm_fila_originacao', { p_limite: 120, p_arquivados: vendoArquivados }),
     catalogosNegociacao()
   ])
   if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
@@ -18080,17 +18081,25 @@ async function crmOriginacao (alvo, editavel, gerencia) {
   const todos = d.itens || []
   const hojeIso = new Date().toISOString().slice(0, 10)
 
-  const filtros = [
-    ['todos', `Todos (${todos.length})`],
-    ['nunca', `Nunca ligados (${todos.filter(i => !i.ultima_ligacao).length})`],
-    ['agendados', `Com retorno marcado (${todos.filter(i => i.proximo_compromisso).length})`],
-    ['hoje', `Pra hoje (${todos.filter(i => (i.proximo_compromisso || '').slice(0, 10) === hojeIso).length})`]
-  ]
-  const lista = todos.filter(i =>
+  const filtros = vendoArquivados
+    ? [['todos', 'Voltar pra fila'], ['arquivados', `Fora da fila (${d.arquivados ?? todos.length})`]]
+    : [
+      ['todos', `Todos (${todos.length})`],
+      ['nunca', `Nunca ligados (${todos.filter(i => !i.ultima_ligacao).length})`],
+      ['agendados', `Com retorno marcado (${todos.filter(i => i.proximo_compromisso).length})`],
+      ['hoje', `Pra hoje (${todos.filter(i => (i.proximo_compromisso || '').slice(0, 10) === hojeIso).length})`],
+      ['arquivados', `Fora da fila (${d.arquivados ?? 0})`]
+    ]
+  const lista = vendoArquivados ? todos : todos.filter(i =>
     ORIG_FILTRO === 'nunca' ? !i.ultima_ligacao
       : ORIG_FILTRO === 'agendados' ? !!i.proximo_compromisso
         : ORIG_FILTRO === 'hoje' ? (i.proximo_compromisso || '').slice(0, 10) === hojeIso
           : true)
+
+  // quem pode apagar de vez é quem pode apagar lead no banco; tirar da
+  // fila é reversível, então basta poder editar
+  const podeExcluir = gerencia && editavel
+  const selecionados = new Set()
 
   const recarregar = () => crmOriginacao(alvo, editavel, gerencia)
 
@@ -18100,6 +18109,9 @@ async function crmOriginacao (alvo, editavel, gerencia) {
     return `
     <div class="panel" style="padding:12px 14px;margin-bottom:10px;" data-lead="${i.id}">
       <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:baseline;">
+        <div style="display:flex;gap:9px;align-items:flex-start;">
+          ${editavel ? `<input type="checkbox" class="org-marca" title="selecionar"
+            style="margin-top:3px;width:16px;height:16px;flex:none;cursor:pointer;">` : ''}
         <div>
           <b style="font-size:14px;">${esc(i.nome)}</b>
           <span class="${corEtapaLead(i.etapa)}" style="margin-left:6px;">${esc(ROTULO_ETAPA_LEAD[i.etapa] ?? i.etapa)}</span>
@@ -18111,6 +18123,7 @@ async function crmOriginacao (alvo, editavel, gerencia) {
             ${gerencia && i.vendedor ? ' · ' + esc(i.vendedor) : ''}
             ${i.valor_estimado ? ' · R$ ' + fmtNum(i.valor_estimado) : ''}
           </div>
+        </div>
         </div>
         <div style="text-align:right;font-size:11.5px;" class="texto-dim">
           ${i.ultima_ligacao
@@ -18141,6 +18154,13 @@ async function crmOriginacao (alvo, editavel, gerencia) {
         <button type="button" class="btn-secundario mini org-ficha">Abrir ficha</button>
         ${editavel && !i.no_sdr && !semTelefone && !i.bloqueio_lgpd
           ? `<button type="button" class="btn-secundario mini org-sdr">→ Passar pro SDR</button>` : ''}
+        ${editavel ? (i.arquivado
+          ? `<button type="button" class="btn-secundario mini org-desarquivar" style="margin-left:auto;">↩ Devolver pra fila</button>`
+          : `<button type="button" class="btn-secundario mini org-arquivar" style="margin-left:auto;"
+               title="sai da fila mas continua existindo">Tirar da fila</button>`) : ''}
+        ${podeExcluir ? `<button type="button" class="btn-secundario mini org-lixeira"
+          title="Excluir de vez" aria-label="Excluir de vez"
+          style="color:var(--critico-text);border-color:var(--critico-text);">🗑</button>` : ''}
       </div>
       <div class="org-form"></div>
     </div>`
@@ -18153,6 +18173,21 @@ async function crmOriginacao (alvo, editavel, gerencia) {
       ${filtros.map(([v, r]) => `<button type="button" class="btn-secundario mini org-filtro"
         data-f="${v}" ${v === ORIG_FILTRO ? 'style="border-color:var(--rust);color:var(--rust);"' : ''}>${esc(r)}</button>`).join('')}
     </div>
+
+    ${vendoArquivados ? `<p class="texto-dim2" style="font-size:11.5px;line-height:1.6;margin:-4px 0 12px;">
+      Estes leads saíram da fila mas continuam no sistema, com todo o histórico. Devolver é um clique.</p>` : ''}
+
+    ${editavel ? `<div id="org-barra" class="panel" style="display:none;padding:10px 14px;margin-bottom:10px;
+      position:sticky;top:0;z-index:5;align-items:center;gap:10px;flex-wrap:wrap;">
+      <b id="org-barra-conta" style="font-size:13px;"></b>
+      <button type="button" class="btn-secundario mini" id="org-limpar">limpar seleção</button>
+      <span style="flex:1;"></span>
+      ${vendoArquivados
+        ? `<button type="button" class="btn-secundario mini" id="org-lote-desarquivar">↩ Devolver pra fila</button>`
+        : `<button type="button" class="btn-secundario mini" id="org-lote-arquivar">Tirar da fila</button>`}
+      ${podeExcluir ? `<button type="button" class="btn-secundario mini" id="org-lote-excluir"
+        style="color:var(--critico-text);border-color:var(--critico-text);">🗑 Excluir de vez</button>` : ''}
+    </div>` : ''}
 
     ${lista.length ? lista.map(cartao).join('')
       : `<p class="vazio" style="padding:26px 0;">Nada nesse filtro.</p>`}
@@ -18220,7 +18255,92 @@ async function crmOriginacao (alvo, editavel, gerencia) {
       if (cx.innerHTML) { cx.innerHTML = ''; return }
       painelRelato(cx, item, recarregar)
     }
+
+    const marca = card.querySelector('.org-marca')
+    if (marca) marca.onchange = () => {
+      if (marca.checked) selecionados.add(id); else selecionados.delete(id)
+      card.style.borderColor = marca.checked ? 'var(--rust)' : ''
+      atualizarBarra()
+    }
+
+    const btnArq = card.querySelector('.org-arquivar')
+    if (btnArq) btnArq.onclick = () => arquivar([id], true, btnArq)
+    const btnDes = card.querySelector('.org-desarquivar')
+    if (btnDes) btnDes.onclick = () => arquivar([id], false, btnDes)
+
+    const lixeira = card.querySelector('.org-lixeira')
+    if (lixeira) lixeira.onclick = () => excluir([id], [item], lixeira)
   })
+
+  // ---- seleção em lote ---------------------------------------------
+  const barra = alvo.querySelector('#org-barra')
+  function atualizarBarra () {
+    if (!barra) return
+    const n = selecionados.size
+    barra.style.display = n ? 'flex' : 'none'
+    const conta = barra.querySelector('#org-barra-conta')
+    if (conta) conta.textContent = n === 1 ? '1 lead selecionado' : `${n} leads selecionados`
+  }
+  atualizarBarra()
+
+  if (barra) {
+    barra.querySelector('#org-limpar').onclick = () => { selecionados.clear(); recarregar() }
+    const loteArq = barra.querySelector('#org-lote-arquivar')
+    if (loteArq) loteArq.onclick = () => arquivar([...selecionados], true, loteArq)
+    const loteDes = barra.querySelector('#org-lote-desarquivar')
+    if (loteDes) loteDes.onclick = () => arquivar([...selecionados], false, loteDes)
+    const loteEx = barra.querySelector('#org-lote-excluir')
+    if (loteEx) loteEx.onclick = () => excluir([...selecionados],
+      [...selecionados].map(x => lista.find(i => i.id === x)).filter(Boolean), loteEx)
+  }
+
+  // Tirar da fila é reversível — não pede confirmação, avisa depois.
+  async function arquivar (ids, arquivar_, botao) {
+    if (!ids.length) return
+    const antes = botao.textContent
+    botao.disabled = true; botao.textContent = '...'
+    const { error } = await db.rpc('crm_arquivar_leads', { p_ids: ids, p_arquivar: arquivar_ })
+    if (error) { alert(error.message); botao.disabled = false; botao.textContent = antes; return }
+    selecionados.clear()
+    recarregar()
+  }
+
+  // Excluir apaga junto tudo que estava pendurado no lead. Quem vai
+  // apagar precisa ver o que vai junto ANTES, não descobrir depois.
+  async function excluir (ids, itens, botao) {
+    if (!ids.length) return
+    const nomes = itens.slice(0, 6).map(i => '· ' + i.nome).join('\n')
+    const resto = itens.length > 6 ? `\n· ...e mais ${itens.length - 6}` : ''
+    const comHistorico = itens.filter(i => Number(i.tentativas) > 0 || i.objecoes_abertas)
+    const noSdr = itens.filter(i => i.no_sdr)
+
+    const texto =
+      `Excluir ${ids.length === 1 ? 'este lead' : `estes ${ids.length} leads`} de vez?\n\n${nomes}${resto}\n\n` +
+      'Vai junto TUDO que está preso a eles: objeções, histórico de preço, ligações, ' +
+      'compromissos, propostas e o registro de perda. Não dá pra desfazer.\n\n' +
+      (comHistorico.length
+        ? `⚠ ${comHistorico.length} ${comHistorico.length === 1 ? 'tem' : 'têm'} ligação ou objeção registrada — ` +
+          'isso some do painel de objeções.\n'
+        : '') +
+      (noSdr.length ? `⚠ ${noSdr.length} está(ão) no SDR do WhatsApp; a conversa lá continua, só perde o vínculo.\n` : '') +
+      '\nSe for só pra tirar da frente, use "Tirar da fila" — some da lista e continua no sistema.'
+
+    if (!confirm(texto)) return
+    const motivo = prompt('Por que está excluindo? (fica no log de exclusões)', 'lead sem qualidade / teste')
+    if (motivo === null) return
+
+    const antes = botao.textContent
+    botao.disabled = true; botao.textContent = '...'
+    const { data: r, error } = await db.rpc('crm_excluir_leads',
+      { p_ids: ids, p_motivo: motivo.trim() || null })
+    if (error) { alert(error.message); botao.disabled = false; botao.textContent = antes; return }
+
+    if (Number(r?.apagados) < ids.length) {
+      alert(`Excluí ${r.apagados} de ${ids.length}. Os outros são de vendedor que você não gerencia.`)
+    }
+    selecionados.clear()
+    recarregar()
+  }
 }
 
 // Formulário do pós-ligação. Poucos cliques de propósito: resultado,
