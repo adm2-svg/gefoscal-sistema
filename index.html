@@ -28,6 +28,40 @@
    uma palavra por linha em telas estreitas, mesmo com o layout certo. */
 html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 
+/* ---- perfil no canto de cima (como no modelo) --------------------
+   O cartão sai do menu lateral e vai pra barra de cima. Os elementos
+   são os MESMOS nós de antes, só mudam de lugar — assim todo código
+   que já escreve em #quem-sou-avatar, #quem-sou-nome e #notif-bell
+   continua funcionando sem saber que a tela mudou. */
+.perfil-topo { display:flex; align-items:center; gap:10px; margin-left:auto; position:relative; }
+.perfil-topo .perfil-botao {
+  display:flex; align-items:center; gap:10px; background:none; border:1px solid transparent;
+  border-radius:40px; padding:4px 8px 4px 4px; cursor:pointer; color:inherit; font:inherit;
+  transition:background .15s, border-color .15s; }
+.perfil-topo .perfil-botao:hover { background:var(--hover-bg); border-color:var(--line2); }
+.perfil-topo .perfil-quem { text-align:left; line-height:1.2; min-width:0; }
+.perfil-topo .perfil-quem .pt-nome {
+  font-size:13px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:170px; }
+.perfil-topo .perfil-quem .pt-papel {
+  font-size:11.5px; color:var(--dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:170px; }
+.perfil-topo .pt-seta { flex:none; opacity:.55; width:15px; height:15px; }
+.perfil-topo #quem-sou-avatar, .perfil-topo .inicial { flex:none; }
+
+.perfil-menu {
+  position:absolute; top:calc(100% + 7px); right:0; z-index:60; min-width:216px;
+  background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:6px;
+  box-shadow:0 12px 34px rgba(0,0,0,.22); }
+.perfil-menu button {
+  display:flex; align-items:center; gap:9px; width:100%; text-align:left; background:none; border:none;
+  color:inherit; font:inherit; font-size:13px; padding:9px 10px; border-radius:8px; cursor:pointer; }
+.perfil-menu button:hover { background:var(--hover-bg); }
+.perfil-menu .pm-cabeca { padding:8px 10px 10px; border-bottom:1px solid var(--line2); margin-bottom:5px; }
+
+/* no celular o nome sai e fica só a bolinha, pra não espremer a barra */
+@media (max-width: 620px) {
+  .perfil-topo .perfil-quem, .perfil-topo .pt-seta { display:none; }
+}
+
 /* Layout do app. Usa só os tokens das skins — nenhuma cor fixa aqui. */
 :root {
   /* --warn-text já é usado em vários lugares pra "alerta" (tom âmbar) —
@@ -1169,6 +1203,7 @@ button.mini.btn-so-icone svg { width:15px; height:15px; display:block; }
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
       </button>
       <div class="status-conexao" id="status-conexao"><span class="ponto"></span><span class="texto">Online</span></div>
+      <div class="perfil-topo" id="perfil-topo"></div>
     </div>
 
     <div class="topo">
@@ -2193,7 +2228,8 @@ const PESSOA_PAINEL_DIRETOR = 'b22d848d-8b11-4cb7-b6c8-4dc8f2ca8c62'
 const PESSOA_PAINEL_MIKAEL = '69f85bf3-f405-4340-ab9f-8dd7133828a7' // responde por Jurídico + Frota de Escritório/Comercial/Sócios (ver pessoa_frota_setor)
 
 let PERFIL = {
-  userId: '', email: '', nome: '', fotoUrl: null,
+  userId: '', email: '', nome: '', fotoUrl: null, capaUrl: null,
+  cargo: null, setorNome: null,
   pessoaId: null, setorId: null,
   papeis: [], modulos: [], permissoes: [], setoresGeridos: [], souGestorComercial: false
 }
@@ -2208,7 +2244,7 @@ async function abrirApp () {
     db.from('usuario_papel').select('papel').eq('user_id', user.id),
     db.from('modulo').select('id,chave,nome,ordem').order('ordem'),
     db.from('usuario_perfil')
-      .select('pessoa_id,setor_id,ativo,pessoa:pessoa_id(nome,setor_id,foto_url,telefone)')
+      .select('pessoa_id,setor_id,ativo,pessoa:pessoa_id(nome,setor_id,foto_url,capa_url,telefone,cargo,setor:setor_id(nome))')
       .eq('user_id', user.id).maybeSingle()
   ])
 
@@ -2221,6 +2257,9 @@ async function abrirApp () {
   PERFIL.setorId = perfil?.setor_id ?? perfil?.pessoa?.setor_id ?? null
   PERFIL.nome = perfil?.pessoa?.nome || user.email
   PERFIL.fotoUrl = perfil?.pessoa?.foto_url ?? null
+  PERFIL.capaUrl = perfil?.pessoa?.capa_url ?? null
+  PERFIL.cargo = perfil?.pessoa?.cargo ?? null
+  PERFIL.setorNome = perfil?.pessoa?.setor?.nome ?? null
   PERFIL.telefone = perfil?.pessoa?.telefone ?? null
 
   if (PERFIL.papeis.length === 0 || perfil?.ativo === false) {
@@ -2255,6 +2294,7 @@ async function abrirApp () {
     ? `<span class="selo forte">${esc(formatarPapel(PERFIL.papeis[0]))}</span>`
     : ''
   $('#btn-meu-perfil').onclick = abrirMeuPerfil
+  montarPerfilNoTopo()
   montarMenu()
   $('#tela-login').classList.add('oculto')
   $('#tela-app').classList.remove('oculto')
@@ -4789,19 +4829,33 @@ async function vgCabecalho (area) {
   const agora = new Date()
   const dataExtenso = agora.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })
 
+  // Com imagem de fundo escolhida pela pessoa, o texto passa a ficar sobre
+  // uma foto que eu não escolhi e não conheço. Por isso a faixa escura por
+  // cima: garante contraste em foto clara, escura ou cheia de detalhe, sem
+  // depender de sorte. Sem imagem, volta pro degradê do tema.
+  const temCapa = !!PERFIL.capaUrl
+  const fundoHero = temCapa
+    ? `background-image:
+         linear-gradient(100deg, rgba(0,0,0,.74) 0%, rgba(0,0,0,.52) 45%, rgba(0,0,0,.24) 100%),
+         url('${esc(PERFIL.capaUrl)}');
+       background-size:cover; background-position:center;`
+    : `background:linear-gradient(120deg, rgba(var(--rust-rgb),.14), rgba(var(--gold-rgb),.07) 55%, transparent);`
+  // sobre foto o texto é sempre claro, não o do tema
+  const corTexto = temCapa ? 'color:#fff;' : ''
+  const corFraca = temCapa ? 'color:rgba(255,255,255,.82);' : ''
+
   const hero = document.createElement('div')
   hero.className = 'panel'
   hero.style.cssText = `padding:0;margin-bottom:16px;overflow:hidden;border:1px solid var(--line);`
   hero.innerHTML = `
     <div style="display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;align-items:center;
-      padding:26px 28px;background:
-        linear-gradient(120deg, rgba(var(--rust-rgb),.14), rgba(var(--gold-rgb),.07) 55%, transparent);">
+      padding:${temCapa ? '38px 28px' : '26px 28px'};${fundoHero}${corTexto}">
       <div style="min-width:220px;">
-        <div class="texto-dim" style="font-size:15px;line-height:1.2;">${vgSaudacao()},</div>
-        <h2 style="font-family:var(--serif);font-size:34px;margin:2px 0 0;line-height:1.05;">
+        <div style="font-size:15px;line-height:1.2;${corFraca || 'color:var(--dim);'}">${vgSaudacao()},</div>
+        <h2 style="font-family:var(--serif);font-size:34px;margin:2px 0 0;line-height:1.05;${corTexto}">
           ${esc(primeiro || 'bem-vindo')}</h2>
         <div style="width:46px;height:2px;background:var(--gold);margin:10px 0 8px;"></div>
-        <div class="texto-dim2" style="font-size:12.5px;text-transform:capitalize;">${esc(dataExtenso)}</div>
+        <div style="font-size:12.5px;text-transform:capitalize;${corFraca || 'color:var(--dim2);'}">${esc(dataExtenso)}</div>
       </div>
       <div id="vg-clima" style="min-width:190px;"></div>
     </div>`
@@ -4820,18 +4874,25 @@ async function vgClima (alvo) {
     const c = (data || {}).clima
     if (error || !c || c.temperatura_atual == null) { alvo.remove(); return }
     const p = (c.previsao_3_dias || []).slice(0, 3)
+    // sobre foto o cartão vira vidro escuro; sem foto, painel normal do tema
+    const naFoto = !!PERFIL.capaUrl
+    const caixa = naFoto
+      ? 'border:1px solid rgba(255,255,255,.22);background:rgba(0,0,0,.34);backdrop-filter:blur(3px);color:#fff;'
+      : 'border:1px solid var(--line2);background:var(--surface2);'
+    const fraco = naFoto ? 'color:rgba(255,255,255,.78);' : 'color:var(--dim2);'
+    const linha = naFoto ? 'rgba(255,255,255,.2)' : 'var(--line2)'
     alvo.innerHTML = `
-      <div style="border:1px solid var(--line2);border-radius:10px;padding:12px 14px;background:var(--surface2);">
+      <div style="border-radius:10px;padding:12px 14px;${caixa}">
         <div style="display:flex;align-items:baseline;gap:8px;">
           <span style="font-family:var(--serif);font-size:26px;">${fmtNum(c.temperatura_atual, 0)}°C</span>
           ${c.chuva_hoje_mm != null
-            ? `<span class="texto-dim" style="font-size:12px;">${fmtNum(c.chuva_hoje_mm, 1)} mm hoje</span>` : ''}
+            ? `<span style="font-size:12px;${fraco}">${fmtNum(c.chuva_hoje_mm, 1)} mm hoje</span>` : ''}
         </div>
-        <div class="texto-dim2" style="font-size:11.5px;margin-top:1px;">
+        <div style="font-size:11.5px;margin-top:1px;${fraco}">
           ${esc(c.cidade_referencia || 'referência da região')}</div>
-        ${p.length ? `<div style="display:flex;gap:10px;margin-top:8px;padding-top:7px;border-top:1px solid var(--line2);">
+        ${p.length ? `<div style="display:flex;gap:10px;margin-top:8px;padding-top:7px;border-top:1px solid ${linha};">
           ${p.map(d => `<div style="font-size:11px;line-height:1.35;">
-            <div class="texto-dim2">${esc((fmtData(d.data) || '').slice(0, 5))}</div>
+            <div style="${fraco}">${esc((fmtData(d.data) || '').slice(0, 5))}</div>
             <div>${d.temp_max != null ? fmtNum(d.temp_max, 0) + '°' : '—'}</div>
           </div>`).join('')}</div>` : ''}
       </div>`
@@ -7672,6 +7733,86 @@ async function abrirAcessoPessoaMa (p, pc, vinculos, aoFechar) {
 
 // ----- "Meu perfil" — o próprio usuário edita foto/telefone e troca a
 // senha (com confirmação por e-mail), sem precisar de um admin -----------
+// ---------------------------------------------------------------
+// Cartão de quem está logado, no canto de cima (como no modelo).
+//
+// Os elementos são MOVIDOS, não recriados: #quem-sou-avatar e o sino
+// continuam sendo os mesmos nós, então tudo que já escrevia neles
+// (contador de notificação, troca de foto no Meu perfil) segue
+// funcionando sem saber que mudaram de lugar.
+//
+// A linha de baixo é o setor, e não o papel: "Marketing" diz onde a
+// pessoa trabalha; "LEITOR" diz como o banco a trata. Quem quiser ver
+// os papéis abre Meu perfil, onde eles estão todos.
+function rotuloDoPerfil () {
+  return PERFIL.setorNome || PERFIL.cargo
+    || (PERFIL.papeis.length ? formatarPapel(PERFIL.papeis[0]) : '')
+}
+
+function montarPerfilNoTopo () {
+  const alvo = $('#perfil-topo')
+  const cartaoAntigo = $('#quem-sou')
+  if (!alvo || !cartaoAntigo) return
+
+  const sino = $('#notif-bell')
+  const avatar = $('#quem-sou-avatar')
+  if (!avatar) return
+
+  alvo.innerHTML = `
+    <button type="button" class="perfil-botao" id="pt-abrir" aria-haspopup="true" aria-expanded="false">
+      <span id="pt-slot-avatar"></span>
+      <span class="perfil-quem">
+        <span class="pt-nome">${esc(PERFIL.nome || '')}</span>
+        <span class="pt-papel">${esc(rotuloDoPerfil())}</span>
+      </span>
+      <svg class="pt-seta" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+    </button>`
+
+  if (sino) alvo.insertBefore(sino, alvo.firstChild)
+  alvo.querySelector('#pt-slot-avatar').appendChild(avatar)
+  // o cartão do menu lateral fica vazio: esconde pra não deixar buraco
+  cartaoAntigo.style.display = 'none'
+
+  const botao = alvo.querySelector('#pt-abrir')
+  let menu = null
+  const fechar = () => {
+    if (!menu) return
+    menu.remove(); menu = null
+    botao.setAttribute('aria-expanded', 'false')
+    document.removeEventListener('click', foraDaqui, true)
+    document.removeEventListener('keydown', comEsc)
+  }
+  const foraDaqui = e => { if (!alvo.contains(e.target)) fechar() }
+  const comEsc = e => { if (e.key === 'Escape') fechar() }
+
+  botao.onclick = e => {
+    e.stopPropagation()
+    if (menu) { fechar(); return }
+    menu = document.createElement('div')
+    menu.className = 'perfil-menu'
+    menu.innerHTML = `
+      <div class="pm-cabeca">
+        <div style="font-size:13px;font-weight:700;">${esc(PERFIL.nome || '')}</div>
+        <div class="texto-dim2" style="font-size:11.5px;">${esc(PERFIL.email || '')}</div>
+        <div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap;">
+          ${PERFIL.papeis.map((p, i) => `<span class="selo ${i === 0 ? 'forte' : ''}">${esc(formatarPapel(p))}</span>`).join('')
+            || '<span class="texto-dim2" style="font-size:11px;">sem papel definido</span>'}
+        </div>
+      </div>
+      <button type="button" id="pm-perfil">⚙️ Meu perfil e imagem de fundo</button>
+      <button type="button" id="pm-sair">↩ Sair</button>`
+    alvo.appendChild(menu)
+    botao.setAttribute('aria-expanded', 'true')
+    menu.querySelector('#pm-perfil').onclick = () => { fechar(); abrirMeuPerfil() }
+    menu.querySelector('#pm-sair').onclick = () => { fechar(); sair() }
+    setTimeout(() => {
+      document.addEventListener('click', foraDaqui, true)
+      document.addEventListener('keydown', comEsc)
+    }, 0)
+  }
+}
+
 async function abrirMeuPerfil () {
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
@@ -7692,6 +7833,25 @@ async function abrirMeuPerfil () {
       <input value="${esc(PERFIL.email)}" disabled style="opacity:.65;"></div>
     <div class="campo" style="margin-bottom:16px;"><label>Telefone</label>
       <input id="mp-telefone" value="${esc(PERFIL.telefone || '')}" placeholder="(00) 00000-0000"></div>
+
+    <div style="height:1px;background:var(--line);margin:16px 0;"></div>
+    <div class="cabeca-secao" style="margin-bottom:6px;"><h3 style="font-size:14px;">Imagem de fundo</h3></div>
+    <p class="texto-dim2" style="font-size:12px;line-height:1.55;margin:0 0 9px;">
+      Aparece atrás do "bom dia" na sua Visão Geral, e é só sua — ninguém mais vê.
+      Foto larga funciona melhor (paisagem, lavoura, a fábrica). Escureço um pouco
+      por cima pra o texto continuar legível em qualquer imagem.</p>
+    <div id="mp-capa-previa" style="margin-bottom:8px;">
+      ${PERFIL.capaUrl
+        ? `<div style="position:relative;border-radius:10px;overflow:hidden;border:1px solid var(--line2);">
+             <img src="${esc(PERFIL.capaUrl)}" style="width:100%;height:96px;object-fit:cover;display:block;">
+           </div>`
+        : `<div class="texto-dim2" style="font-size:12px;border:1px dashed var(--line2);border-radius:10px;
+             padding:16px;text-align:center;">nenhuma imagem — o fundo fica com a cor do tema</div>`}
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:16px;">
+      <input type="file" id="mp-capa" accept="image/*" style="flex:1;min-width:190px;">
+      ${PERFIL.capaUrl ? `<button type="button" class="btn-secundario mini" id="mp-capa-tirar">tirar imagem</button>` : ''}
+    </div>
 
     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:16px;">
       ${PERFIL.papeis.map((p, i) => `<span class="selo ${i === 0 ? 'forte' : ''}">${esc(formatarPapel(p))}</span>`).join('')}
@@ -7719,6 +7879,26 @@ async function abrirMeuPerfil () {
   const fechar = () => fundo.remove()
   fundo.onclick = e => { if (e.target === fundo) fechar() }
   fundo.querySelector('#mp-fechar').onclick = fechar
+
+  let tirarCapa = false
+  const btnTirarCapa = fundo.querySelector('#mp-capa-tirar')
+  if (btnTirarCapa) btnTirarCapa.onclick = () => {
+    tirarCapa = true
+    fundo.querySelector('#mp-capa').value = ''
+    fundo.querySelector('#mp-capa-previa').innerHTML =
+      `<div class="texto-dim2" style="font-size:12px;border:1px dashed var(--line2);border-radius:10px;
+         padding:16px;text-align:center;">vai sair quando você salvar</div>`
+    btnTirarCapa.remove()
+  }
+
+  fundo.querySelector('#mp-capa').addEventListener('change', () => {
+    const arq = fundo.querySelector('#mp-capa').files[0]
+    if (!arq) return
+    tirarCapa = false
+    fundo.querySelector('#mp-capa-previa').innerHTML =
+      `<div style="position:relative;border-radius:10px;overflow:hidden;border:1px solid var(--line2);">
+         <img src="${URL.createObjectURL(arq)}" style="width:100%;height:96px;object-fit:cover;display:block;"></div>`
+  })
 
   fundo.querySelector('#mp-foto').addEventListener('change', () => {
     const arq = fundo.querySelector('#mp-foto').files[0]
@@ -7748,15 +7928,42 @@ async function abrirMeuPerfil () {
       }
     }
 
+    let capaUrl = PERFIL.capaUrl
+    const arquivoCapa = fundo.querySelector('#mp-capa').files[0]
+    if (tirarCapa) capaUrl = null
+    if (arquivoCapa) {
+      // imagem de fundo é grande por natureza; 8 MB já é foto de celular
+      // inteira e mais que isso só deixa a tela lenta pra própria pessoa
+      if (arquivoCapa.size > 8 * 1024 * 1024) {
+        avisoEl('Essa imagem tem mais de 8 MB. Escolha uma menor — senão sua Visão Geral fica lenta.', true)
+        btn.disabled = false; btn.innerHTML = `${icDp('salvar')}Salvar alterações`
+        return
+      }
+      try {
+        const enviado = await enviarArquivo(arquivoCapa, 'capas-perfil')
+        const { data: signed } = await db.storage.from('documentos')
+          .createSignedUrl(enviado.caminho, 60 * 60 * 24 * 365 * 5)
+        capaUrl = signed?.signedUrl || enviado.caminho
+      } catch (e) {
+        avisoEl('Não deu pra enviar a imagem de fundo: ' + e.message, true)
+        btn.disabled = false; btn.innerHTML = `${icDp('salvar')}Salvar alterações`
+        return
+      }
+    }
+
     const telefone = fundo.querySelector('#mp-telefone').value.trim() || null
-    const { error } = await db.from('pessoa').update({ foto_url: fotoUrl, telefone }).eq('id', PERFIL.pessoaId)
+    const { error } = await db.from('pessoa')
+      .update({ foto_url: fotoUrl, capa_url: capaUrl, telefone }).eq('id', PERFIL.pessoaId)
     btn.disabled = false; btn.innerHTML = `${icDp('salvar')}Salvar alterações`
     if (error) { avisoEl('Não deu certo: ' + error.message, true); return }
 
     PERFIL.fotoUrl = fotoUrl
+    PERFIL.capaUrl = capaUrl
     PERFIL.telefone = telefone
     $('#quem-sou-avatar').innerHTML = avatarHtml(PERFIL.fotoUrl, PERFIL.nome, 36)
-    avisoEl('Perfil atualizado!')
+    avisoEl(capaUrl !== null || !tirarCapa
+      ? 'Perfil atualizado! A imagem de fundo aparece na Visão Geral.'
+      : 'Perfil atualizado!')
   }
 
   fundo.querySelector('#mp-trocar-senha').onclick = async () => {
