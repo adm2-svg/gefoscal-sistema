@@ -15520,6 +15520,7 @@ async function paginaCrm () {
   if (!CRM_CACHE.vendedores.length) CRM_CACHE.vendedores = CRM_CACHE.pessoas
 
   const abas = [['painel', 'Painel'], ['funil', 'Funil'], ['progresso', 'Progresso'],
+                ['originacao', 'Originação'], ['objecoes', 'Objeções'],
                 ['pedidos', 'Meus pedidos'], ['calendario', 'Meu Dia']]
   if (gerencia) abas.push(['gestao', 'Gestão'])
   if (!gerencia && souPreVendas()) abas.push(['atribuir', 'Prospecção'])
@@ -15551,6 +15552,8 @@ function abrirCrm (sub, editavel, gerencia) {
   if (sub === 'progresso') crmProgressoIndividual(alvo, editavel, gerencia)
   if (sub === 'calendario') crmMeuDia(alvo, editavel, gerencia)
   if (sub === 'pedidos') crmMeusPedidos(alvo, editavel, gerencia)
+  if (sub === 'objecoes') crmPainelObjecoes(alvo)
+  if (sub === 'originacao') crmOriginacao(alvo, editavel, gerencia)
   if (sub === 'atribuir') crmAtribuir(alvo)
   if (sub === 'gestao') crmGestaoTab(alvo, editavel).then(() => {
     const comparativo = document.createElement('div')
@@ -17392,6 +17395,1159 @@ async function emitirPedidoDoLead (l) {
   formPedidoVenda(null, { clienteId, vendedorId: l.vendedor_id })
 }
 
+// ---------------------------------------------------------------
+// Negociação do lead: preço, objeções e perda.
+//
+// Três coisas que antes só existiam na cabeça do vendedor:
+//
+//  1. Qual preço foi passado, quando, e quem mandou passar. Sem isso,
+//     um reajuste no meio da conversa some do registro e a perda cai
+//     na conta de quem estava ligando.
+//  2. O que o cliente respondeu, escolhido de uma lista fechada. Texto
+//     livre não cruza com nada — cada um escreve "achou caro" de um
+//     jeito e no fim do mês não dá pra somar.
+//  3. Por que perdeu, com a causa atribuída a quem de fato causou.
+//
+// O catálogo é fechado de propósito, mas editável pela gestão em
+// Administração. Observação livre existe ao lado, nunca no lugar.
+// ---------------------------------------------------------------
+// ---------------------------------------------------------------
+// Relato falado do pós-ligação.
+//
+// O que isto NÃO é: gravação da ligação. A ligação sai do celular e o
+// navegador não tem como escutá-la — nem a voz do cliente, nem a do
+// consultor. Prometer isso seria entregar um botão que grava silêncio.
+//
+// O que isto é: o consultor desliga e conta em trinta segundos o que
+// aconteceu. O sistema transcreve, entende e devolve o CRM preenchido
+// pra ele conferir. Ele não digita; ele confirma.
+//
+// A sugestão nunca é aplicada sozinha. Quem ouviu a conversa foi ele.
+// ---------------------------------------------------------------
+function navegadorGrava () {
+  return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder)
+}
+
+function blobParaBase64 (blob) {
+  return new Promise((ok, falha) => {
+    const leitor = new FileReader()
+    leitor.onloadend = () => ok(String(leitor.result))
+    leitor.onerror = falha
+    leitor.readAsDataURL(blob)
+  })
+}
+
+// Devolve um controle simples: começar, parar (com o blob), cancelar.
+async function abrirMicrofone () {
+  const fluxo = await navigator.mediaDevices.getUserMedia({ audio: true })
+  const tipos = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus']
+  const tipo = tipos.find(t => window.MediaRecorder.isTypeSupported?.(t)) || ''
+  const gravador = new MediaRecorder(fluxo, tipo ? { mimeType: tipo } : undefined)
+  const pedacos = []
+  gravador.ondataavailable = e => { if (e.data.size) pedacos.push(e.data) }
+  gravador.start()
+  return {
+    mime: gravador.mimeType || tipo || 'audio/webm',
+    parar: () => new Promise(ok => {
+      gravador.onstop = () => {
+        fluxo.getTracks().forEach(t => t.stop())
+        ok(new Blob(pedacos, { type: gravador.mimeType || 'audio/webm' }))
+      }
+      gravador.stop()
+    }),
+    cancelar: () => { try { gravador.stop() } catch {} fluxo.getTracks().forEach(t => t.stop()) }
+  }
+}
+
+function painelRelato (caixa, lead, aoTerminar) {
+  if (!navegadorGrava()) {
+    caixa.innerHTML = `<p class="texto-dim2" style="font-size:12px;margin:8px 0 0;line-height:1.55;">
+      Este navegador não deixa gravar áudio. No celular, funciona no Chrome (Android) e no Safari (iPhone);
+      no computador, no Chrome ou Edge. Dá pra escrever a observação normalmente.</p>`
+    return
+  }
+
+  caixa.innerHTML = `
+    <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line);">
+      <p class="texto-dim2" style="font-size:11.5px;line-height:1.6;margin:0 0 8px;">
+        Fala o que aconteceu como você contaria pra um colega: com quem falou, o que ele disse,
+        que preço foi conversado e o que ficou combinado. Trinta segundos bastam —
+        o sistema preenche o resto e te mostra antes de salvar.</p>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <button type="button" class="btn mini rel-gravar">🎙️ Começar a falar</button>
+        <span class="rel-tempo texto-dim" style="font-size:12px;"></span>
+      </div>
+      <div class="rel-saida"></div>
+    </div>`
+
+  const btn = caixa.querySelector('.rel-gravar')
+  const relogio = caixa.querySelector('.rel-tempo')
+  const saida = caixa.querySelector('.rel-saida')
+  let mic = null, contador = null, segundos = 0
+
+  const pararRelogio = () => { clearInterval(contador); contador = null }
+
+  btn.onclick = async () => {
+    if (mic) {
+      pararRelogio()
+      btn.disabled = true
+      btn.textContent = 'processando...'
+      btn.classList.remove('gravando-voz')
+      const blob = await mic.parar()
+      const mime = mic.mime
+      mic = null
+      relogio.textContent = ''
+
+      if (blob.size < 2000) {
+        saida.innerHTML = `<p class="texto-dim2" style="font-size:12px;">Não gravou nada. Tenta de novo.</p>`
+        btn.disabled = false; btn.textContent = '🎙️ Começar a falar'; return
+      }
+
+      const b64 = await blobParaBase64(blob)
+      const { data, error } = await db.functions.invoke('ligacao-resumir', {
+        body: { lead_id: lead.id, audio_base64: b64, mime, resultado: 'ATENDEU' }
+      })
+      btn.disabled = false; btn.textContent = '🎙️ Falar de novo'
+
+      if (error || data?.erro) {
+        let msg = data?.erro || error?.message || 'Não consegui processar.'
+        if (error?.context?.json) { try { const c = await error.context.json(); msg = c?.erro || msg } catch {} }
+        saida.innerHTML = `<p style="font-size:12px;color:var(--warn-text);line-height:1.55;">${esc(msg)}</p>`
+        return
+      }
+      mostrarSugestao(saida, lead, data, aoTerminar)
+      return
+    }
+
+    try { mic = await abrirMicrofone() } catch (e) {
+      saida.innerHTML = `<p class="texto-dim2" style="font-size:12px;line-height:1.55;">
+        O navegador não liberou o microfone. No celular, confere a permissão do site nas configurações.</p>`
+      return
+    }
+    segundos = 0
+    btn.textContent = '⏹ Parar e enviar'
+    btn.classList.add('gravando-voz')
+    relogio.textContent = '0:00'
+    contador = setInterval(() => {
+      segundos++
+      relogio.textContent = `${Math.floor(segundos / 60)}:${String(segundos % 60).padStart(2, '0')}`
+      if (segundos >= 180) btn.click()   // teto de 3 minutos; é relato, não conversa
+    }, 1000)
+  }
+}
+
+function mostrarSugestao (saida, lead, data, aoTerminar) {
+  const s = data.sugestao || {}
+  const cat = CAT_NEGOCIACAO || { objecoes: [], motivos_perda: [] }
+  const rotuloObj = c => cat.objecoes.find(o => o.codigo === c)?.rotulo || c
+  const rotuloMot = c => cat.motivos_perda.find(m => m.codigo === c)?.rotulo || c
+
+  const linhas = [
+    s.etapa ? ['Etapa', ROTULO_ETAPA_LEAD[s.etapa] || s.etapa] : null,
+    s.objecao ? ['Objeção', rotuloObj(s.objecao)] : null,
+    s.motivo_perda ? ['Motivo da perda', rotuloMot(s.motivo_perda)] : null,
+    s.preco_mencionado ? ['Preço que passamos', 'R$ ' + fmtNum(s.preco_mencionado)] : null,
+    s.preco_concorrente ? ['Preço do concorrente', 'R$ ' + fmtNum(s.preco_concorrente)] : null,
+    s.concorrente ? ['Concorrente', s.concorrente] : null,
+    s.proximo_passo ? ['Próximo passo', s.proximo_passo] : null,
+    s.proximo_em ? ['Voltar a falar em', fmtData(s.proximo_em) || s.proximo_em] : null
+  ].filter(Boolean)
+
+  saida.innerHTML = `
+    <div style="margin-top:10px;padding:10px 12px;background:var(--hover-bg);border-left:3px solid var(--rust);font-size:12.5px;line-height:1.6;">
+      <b>O que eu entendi</b>
+      <p style="margin:4px 0 8px;">${esc(s.resumo || data.transcricao || '')}</p>
+      ${linhas.length ? `<div style="display:grid;grid-template-columns:auto 1fr;gap:3px 12px;">
+        ${linhas.map(([r, v]) => `<span class="texto-dim2">${esc(r)}</span><span>${esc(String(v))}</span>`).join('')}
+      </div>` : `<p class="texto-dim2" style="margin:0;">Não dá pra tirar mais nada do relato — só o resumo mesmo.</p>`}
+      ${linhas.length ? `<div class="acoes" style="margin-top:10px;">
+        <button type="button" class="btn mini rel-aplicar">Confere, pode aplicar</button>
+        <button type="button" class="btn-secundario mini rel-descartar">Só o resumo, não aplica</button>
+      </div>` : ''}
+      <details style="margin-top:8px;">
+        <summary style="cursor:pointer;font-size:11.5px;color:var(--dim);">ver o que eu ouvi, palavra por palavra</summary>
+        <p class="texto-dim" style="font-size:11.5px;margin:5px 0 0;">${esc(data.transcricao || '')}</p>
+      </details>
+      ${data.armazenamento?.apagados ? `<p class="texto-dim2" style="font-size:11px;margin:6px 0 0;">
+        ${data.armazenamento.apagados} áudio(s) antigo(s) apagado(s) pra caber no espaço reservado.</p>` : ''}
+    </div>`
+
+  const descartar = saida.querySelector('.rel-descartar')
+  if (descartar) descartar.onclick = () => { saida.innerHTML = ''; if (aoTerminar) aoTerminar() }
+
+  const aplicar = saida.querySelector('.rel-aplicar')
+  if (aplicar) aplicar.onclick = async () => {
+    aplicar.disabled = true; aplicar.textContent = 'aplicando...'
+    const erros = []
+
+    if (s.etapa && s.etapa !== 'PERDIDO') {
+      const { error } = await db.from('lead')
+        .update({ etapa: s.etapa, atualizado_em: new Date().toISOString() }).eq('id', lead.id)
+      if (error) erros.push('etapa: ' + error.message)
+      else await db.from('lead_historico').insert({
+        lead_id: lead.id, etapa_para: s.etapa, observacao: 'Da ligação relatada', pessoa_id: PERFIL.pessoaId })
+    }
+    if (s.preco_mencionado) {
+      const { error } = await db.rpc('crm_registrar_preco', {
+        p_lead_id: lead.id, p_preco: s.preco_mencionado, p_motivo: 'informado na ligação' })
+      if (error) erros.push('preço: ' + error.message)
+    }
+    if (s.objecao) {
+      const { error } = await db.rpc('crm_registrar_objecao', {
+        p_lead_id: lead.id, p_codigo: s.objecao, p_origem: 'LIGACAO', p_observacao: s.resumo || null })
+      if (error) erros.push('objeção: ' + error.message)
+    }
+    if (s.proximo_em) {
+      const { error } = await db.from('lead_compromisso').insert({
+        lead_id: lead.id, data_hora: new Date(s.proximo_em + 'T09:00:00').toISOString(),
+        titulo: s.proximo_passo || 'Retornar a ligação', criado_por: PERFIL.pessoaId, origem: 'ORIGINACAO' })
+      if (error) erros.push('compromisso: ' + error.message)
+    }
+    // perda é decisão pesada: não aplica sozinha, só avisa
+    if (s.motivo_perda) {
+      alert('Anotei que o negócio caiu por "' + rotuloMot(s.motivo_perda) + '".\n\n' +
+            'Marcar como perdido eu deixo pra você, na ficha do lead — é registro que vai pro painel da gestão ' +
+            'e não quero fechar negócio de ninguém por conta de um áudio.')
+    }
+
+    if (erros.length) alert('Apliquei o que deu. Ficou de fora:\n\n' + erros.join('\n'))
+    if (aoTerminar) aoTerminar()
+  }
+}
+
+let CAT_NEGOCIACAO = null
+
+async function catalogosNegociacao () {
+  if (CAT_NEGOCIACAO) return CAT_NEGOCIACAO
+  const { data, error } = await db.rpc('crm_catalogos')
+  if (error || !data) return { objecoes: [], motivos_perda: [] }
+  CAT_NEGOCIACAO = data
+  return data
+}
+
+const ROTULO_ATRIBUICAO = {
+  NOSSO: 'decisão nossa',
+  CLIENTE: 'do cliente',
+  MERCADO: 'de mercado',
+  CONCORRENCIA: 'do concorrente',
+  SEM_INFO: 'não se sabe'
+}
+
+function corAtribuicao (a) {
+  if (a === 'NOSSO') return 'var(--warn-text)'
+  if (a === 'CONCORRENCIA') return 'var(--critico-text)'
+  return 'var(--dim)'
+}
+
+// diferença entre dois preços, já no jeito que a gente fala
+function variacaoPreco (de, para) {
+  if (de == null || para == null || Number(de) === 0) return null
+  const dif = Number(para) - Number(de)
+  const pct = dif * 100 / Number(de)
+  return { dif, pct, subiu: dif > 0, caiu: dif < 0 }
+}
+
+async function blocoNegociacaoLead (fundo, l, editavel) {
+  const alvo = fundo.querySelector('#ld-negociacao')
+  if (!alvo || !l) return
+
+  const [cat, dossie, { data: ligacoes }] = await Promise.all([
+    catalogosNegociacao(),
+    db.rpc('crm_dossie_lead', { p_lead_id: l.id }).then(r => r.data || {}),
+    db.from('lead_ligacao')
+      .select('id,resultado,observacao,resumo_ia,transcricao,audio_url,criado_em,pessoa:pessoa_id(nome)')
+      .eq('lead_id', l.id).order('criado_em', { ascending: false }).limit(20)
+  ])
+
+  const precos = dossie.precos || []
+  const objecoes = dossie.objecoes || []
+  const perda = dossie.perda || null
+  const primeiro = precos[0]
+  const ultimo = precos[precos.length - 1]
+  const mov = precos.length > 1 ? variacaoPreco(primeiro.preco, ultimo.preco) : null
+
+  const recarregar = () => blocoNegociacaoLead(fundo, l, editavel)
+
+  // ---- preço -------------------------------------------------------
+  const linhaPreco = (p, i) => {
+    const ant = i > 0 ? precos[i - 1] : null
+    const v = ant ? variacaoPreco(ant.preco, p.preco) : null
+    return `
+      <div style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;font-size:12.5px;padding:4px 0;border-top:${i ? '1px solid var(--line2)' : 'none'};">
+        <b style="min-width:120px;">R$ ${fmtNum(p.preco)}<span class="texto-dim2" style="font-weight:400;font-size:11px;">/${esc((p.unidade || 'TONELADA').toLowerCase())}</span></b>
+        ${v ? `<span style="font-weight:700;color:${v.subiu ? 'var(--critico-text)' : 'var(--good-text)'};">
+            ${v.subiu ? '▲' : '▼'} R$ ${fmtNum(Math.abs(v.dif))} (${v.subiu ? '+' : '−'}${Math.abs(v.pct).toFixed(1)}%)</span>` : ''}
+        <span class="texto-dim">${fmtData(p.quando) || ''}</span>
+        ${p.produto ? `<span class="chip">${esc(p.produto)}</span>` : ''}
+        ${p.volume ? `<span class="texto-dim2">${fmtNum(p.volume)} t</span>` : ''}
+        ${p.condicao ? `<span class="texto-dim2">${esc(p.condicao)}</span>` : ''}
+        ${p.frete ? `<span class="texto-dim2">${esc(p.frete)}</span>` : ''}
+        ${p.definido_por ? `<span class="texto-dim2">definido por ${esc(p.definido_por)}</span>` : ''}
+        ${p.motivo ? `<span class="texto-dim2" style="font-style:italic;">${esc(p.motivo)}</span>` : ''}
+      </div>`
+  }
+
+  const avisoReajuste = mov && mov.subiu ? `
+    <div style="margin-top:8px;padding:9px 11px;border-left:3px solid var(--warn-text);background:var(--hover-bg);font-size:12.5px;line-height:1.55;">
+      <b style="color:var(--warn-text);">O preço mudou durante a negociação.</b>
+      De R$ ${fmtNum(primeiro.preco)} para R$ ${fmtNum(ultimo.preco)} —
+      <b>+R$ ${fmtNum(mov.dif)} (${mov.pct.toFixed(1)}%)</b>.
+      ${ultimo.definido_por ? `Quem definiu o preço novo: <b>${esc(ultimo.definido_por)}</b>.` : ''}
+      <span class="texto-dim2">Se o negócio cair, isso fica registrado: a perda é do reajuste, não de quem estava negociando.</span>
+    </div>` : ''
+
+  // ---- objeções ----------------------------------------------------
+  const familias = {}
+  for (const o of cat.objecoes) (familias[o.familia] ||= []).push(o)
+  const ROTULO_FAMILIA = {
+    PRECO: 'Preço', CONCORRENCIA: 'Concorrência', PRAZO: 'Prazo',
+    MOMENTO: 'Momento', CONFIANCA: 'Confiança', DECISOR: 'Decisor',
+    PRODUTO: 'Produto', LOGISTICA: 'Logística', OUTRO: 'Outras'
+  }
+
+  const botoesObjecao = !editavel ? '' : `
+    <div style="margin-top:6px;">
+      ${Object.keys(familias).map(f => `
+        <div style="margin-bottom:7px;">
+          <div class="texto-dim2" style="font-size:11px;margin-bottom:3px;">${esc(ROTULO_FAMILIA[f] || f)}</div>
+          <div style="display:flex;gap:5px;flex-wrap:wrap;">
+            ${familias[f].map(o => `<button type="button" class="btn-secundario mini obj-btn"
+              data-codigo="${esc(o.codigo)}">${esc(o.rotulo)}</button>`).join('')}
+          </div>
+        </div>`).join('')}
+    </div>`
+
+  const achaObjecao = cod => cat.objecoes.find(o => o.codigo === cod)
+
+  const linhaObjecao = o => {
+    const doCat = achaObjecao(o.codigo)
+    const sugestoes = (doCat?.respostas || [])
+    return `
+      <div style="padding:8px 0;border-top:1px solid var(--line2);font-size:12.5px;">
+        <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;">
+          <b>${esc(o.rotulo)}</b>
+          <span class="texto-dim2">${fmtData(o.quando) || ''}${o.quem ? ' · ' + esc(o.quem) : ''} · ${esc((o.origem || '').toLowerCase())}</span>
+          ${o.contornada
+            ? `<span class="badge-bom">contornada</span>`
+            : (editavel ? `<button type="button" class="btn-secundario mini obj-contornar" data-id="${o.id}">marcar contornada</button>` : '')}
+        </div>
+        ${o.observacao ? `<div class="texto-dim" style="margin-top:3px;">${esc(o.observacao)}</div>` : ''}
+        ${o.contornada && o.resposta ? `<div class="texto-dim" style="margin-top:3px;">↳ ${esc(o.resposta)}</div>` : ''}
+        ${!o.contornada && sugestoes.length ? `
+          <details style="margin-top:4px;">
+            <summary style="cursor:pointer;font-size:11.5px;color:var(--dim);">como costuma funcionar (${sugestoes.length})</summary>
+            <ul style="margin:5px 0 0;padding-left:18px;line-height:1.55;font-size:12px;" class="texto-dim">
+              ${sugestoes.map(s => `<li>${esc(s.texto)}</li>`).join('')}
+            </ul>
+          </details>` : ''}
+      </div>`
+  }
+
+  // ---- perda -------------------------------------------------------
+  const blocoPerda = perda ? `
+    <div style="margin-top:8px;padding:10px 12px;border-left:3px solid ${corAtribuicao(perda.atribuicao)};background:var(--hover-bg);font-size:12.5px;line-height:1.6;">
+      <div><b>Perdido:</b> ${esc(perda.rotulo)}
+        <span class="texto-dim2">(causa ${esc(ROTULO_ATRIBUICAO[perda.atribuicao] || perda.atribuicao)})</span></div>
+      ${perda.observacao ? `<div class="texto-dim">${esc(perda.observacao)}</div>` : ''}
+      ${perda.concorrente ? `<div class="texto-dim">Concorrente: ${esc(perda.concorrente)}${
+        perda.preco_concorrente ? ` a R$ ${fmtNum(perda.preco_concorrente)}` : ''}</div>` : ''}
+      ${perda.houve_reajuste ? `<div style="color:var(--warn-text);margin-top:3px;">
+        Nosso preço tinha subido de R$ ${fmtNum(perda.preco_inicial)} para R$ ${fmtNum(perda.preco_final)}
+        (+${Number(perda.variacao_pct).toFixed(1)}%) antes da perda.</div>` : ''}
+      <div class="texto-dim2" style="font-size:11px;">registrado por ${esc(perda.quem || '—')} em ${fmtData(perda.quando) || '—'}</div>
+    </div>` : ''
+
+  alvo.innerHTML = `
+    <div class="cabeca-secao" style="margin-top:16px;margin-bottom:4px;">
+      <h3 style="font-family:var(--serif);font-size:14px;">💬 Negociação</h3></div>
+    <p class="texto-dim2" style="font-size:11.5px;margin:-2px 0 8px;">
+      Preço passado, o que o cliente respondeu e, se cair, por quê. É daqui que sai o painel de objeções.</p>
+
+    <div class="panel" style="padding:12px 14px;margin-bottom:10px;">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;">
+        <b style="font-size:13px;">Preço informado ao cliente</b>
+        ${editavel ? `<button type="button" class="btn-secundario mini" id="ng-novo-preco">+ registrar preço</button>` : ''}
+      </div>
+      ${precos.length
+        ? `<div style="margin-top:6px;">${precos.map(linhaPreco).join('')}</div>${avisoReajuste}`
+        : `<p class="texto-dim2" style="font-size:12px;margin:6px 0 0;line-height:1.55;">
+             Nenhum preço registrado. Registrar o primeiro preço agora é o que permite provar, depois,
+             que ele mudou — sem isso não existe "subiu no meio da negociação", existe só a palavra de cada um.</p>`}
+      <div id="ng-form-preco"></div>
+    </div>
+
+    <div class="panel" style="padding:12px 14px;margin-bottom:10px;">
+      <b style="font-size:13px;">Objeções ${objecoes.length ? `<span class="texto-dim2">(${objecoes.length})</span>` : ''}</b>
+      ${editavel ? `<p class="texto-dim2" style="font-size:11.5px;margin:4px 0 0;">Um clique registra. A observação é opcional.</p>` : ''}
+      ${botoesObjecao}
+      ${objecoes.length ? `<div style="margin-top:8px;">${objecoes.map(linhaObjecao).join('')}</div>` : ''}
+    </div>
+
+    <div class="panel" style="padding:12px 14px;margin-bottom:10px;">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;">
+        <b style="font-size:13px;">Ligações ${(ligacoes || []).length ? `<span class="texto-dim2">(${ligacoes.length})</span>` : ''}</b>
+        ${editavel ? `<button type="button" class="btn-secundario mini" id="ng-relato">🎙️ Contar como foi a ligação</button>` : ''}
+      </div>
+      ${(ligacoes || []).length
+        ? `<div style="margin-top:6px;">${ligacoes.map((g, i) => `
+            <div style="padding:7px 0;border-top:${i ? '1px solid var(--line2)' : 'none'};font-size:12.5px;">
+              <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;">
+                <b>${esc(ROTULO_RESULTADO_LIGACAO[g.resultado] || g.resultado)}</b>
+                <span class="texto-dim2">${fmtQuando(g.criado_em) || ''}${g.pessoa?.nome ? ' · ' + esc(g.pessoa.nome) : ''}</span>
+                ${g.audio_url ? `<button type="button" class="btn-secundario mini ng-ouvir" data-caminho="${esc(g.audio_url)}">ouvir</button>` : ''}
+              </div>
+              ${g.resumo_ia || g.observacao ? `<div class="texto-dim" style="margin-top:2px;">${esc(g.resumo_ia || g.observacao)}</div>` : ''}
+            </div>`).join('')}</div>`
+        : `<p class="texto-dim2" style="font-size:12px;margin:6px 0 0;">Nenhuma ligação registrada.</p>`}
+      <div id="ng-form-relato"></div>
+    </div>
+
+    <div class="panel" style="padding:12px 14px;">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;">
+        <b style="font-size:13px;">Perda</b>
+        ${editavel && !perda ? `<button type="button" class="btn-secundario mini" id="ng-perder">Marcar como perdido</button>` : ''}
+      </div>
+      ${blocoPerda || `<p class="texto-dim2" style="font-size:12px;margin:6px 0 0;">Negócio ainda aberto.</p>`}
+      <div id="ng-form-perda"></div>
+    </div>`
+
+  if (!editavel) return
+
+  // ---- registrar preço ---------------------------------------------
+  const btnPreco = alvo.querySelector('#ng-novo-preco')
+  if (btnPreco) btnPreco.onclick = () => {
+    const cx = alvo.querySelector('#ng-form-preco')
+    if (cx.innerHTML) { cx.innerHTML = ''; return }
+    const nomes = (CRM_CACHE.pessoas || []).map(p => `<option value="${esc(p.nome)}"></option>`).join('')
+    cx.innerHTML = `
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line);">
+        <div class="form-grade" style="grid-template-columns:repeat(3,1fr);">
+          <div class="campo"><label>Preço (R$) *</label><input id="ng-p-valor" type="number" step="0.01" inputmode="decimal"></div>
+          <div class="campo"><label>Unidade</label>
+            <select id="ng-p-unidade"><option value="TONELADA">por tonelada</option>
+              <option value="SACA">por saca</option><option value="TOTAL">valor total</option></select></div>
+          <div class="campo"><label>Produto</label><input id="ng-p-produto" placeholder="ex: MAP, KCl..."></div>
+          <div class="campo"><label>Volume (t)</label><input id="ng-p-volume" type="number" step="0.01"></div>
+          <div class="campo"><label>Condição</label><input id="ng-p-condicao" placeholder="ex: 30/60/90, à vista"></div>
+          <div class="campo"><label>Frete</label>
+            <select id="ng-p-frete"><option value="">—</option><option value="CIF">CIF</option><option value="FOB">FOB</option></select></div>
+          <div class="campo"><label>Quem definiu o preço</label>
+            <input id="ng-p-quem" list="ng-pessoas" placeholder="quem mandou passar esse preço">
+            <datalist id="ng-pessoas">${nomes}</datalist></div>
+          <div class="campo" style="grid-column:span 2;"><label>Por que esse preço / o que mudou</label>
+            <input id="ng-p-motivo" placeholder="ex: reajuste de agosto, tabela nova, desconto por volume"></div>
+        </div>
+        <div class="acoes" style="margin-top:6px;">
+          <button type="button" class="btn mini" id="ng-p-salvar">Registrar</button>
+          <button type="button" class="btn-secundario mini" id="ng-p-cancelar">Cancelar</button>
+        </div>
+      </div>`
+    cx.querySelector('#ng-p-cancelar').onclick = () => { cx.innerHTML = '' }
+    cx.querySelector('#ng-p-salvar').onclick = async () => {
+      const valor = Number(cx.querySelector('#ng-p-valor').value)
+      if (!valor || valor <= 0) { alert('Escreva o preço.'); return }
+      const b = cx.querySelector('#ng-p-salvar')
+      b.disabled = true; b.textContent = 'salvando...'
+      const { error } = await db.rpc('crm_registrar_preco', {
+        p_lead_id: l.id,
+        p_preco: valor,
+        p_produto: cx.querySelector('#ng-p-produto').value.trim() || null,
+        p_unidade: cx.querySelector('#ng-p-unidade').value,
+        p_volume: cx.querySelector('#ng-p-volume').value || null,
+        p_condicao: cx.querySelector('#ng-p-condicao').value.trim() || null,
+        p_frete: cx.querySelector('#ng-p-frete').value || null,
+        p_definido_por_nome: cx.querySelector('#ng-p-quem').value.trim() || null,
+        p_motivo: cx.querySelector('#ng-p-motivo').value.trim() || null
+      })
+      if (error) { alert(error.message); b.disabled = false; b.textContent = 'Registrar'; return }
+      recarregar()
+    }
+  }
+
+  // ---- registrar objeção -------------------------------------------
+  alvo.querySelectorAll('.obj-btn').forEach(b => {
+    b.onclick = async () => {
+      const obs = prompt(`Objeção: ${b.textContent}\n\nQuer anotar alguma coisa? (opcional — pode deixar em branco)`)
+      if (obs === null) return
+      b.disabled = true
+      const { error } = await db.rpc('crm_registrar_objecao', {
+        p_lead_id: l.id, p_codigo: b.dataset.codigo,
+        p_origem: 'LIGACAO', p_observacao: obs.trim() || null
+      })
+      if (error) { alert(error.message); b.disabled = false; return }
+      recarregar()
+    }
+  })
+
+  alvo.querySelectorAll('.obj-contornar').forEach(b => {
+    b.onclick = async () => {
+      const como = prompt('Como você contornou? (opcional)')
+      if (como === null) return
+      b.disabled = true
+      const { error } = await db.rpc('crm_contornar_objecao', {
+        p_id: b.dataset.id, p_resposta_id: null, p_resposta_livre: como.trim() || null
+      })
+      if (error) { alert(error.message); b.disabled = false; return }
+      recarregar()
+    }
+  })
+
+  // ---- relato falado e audio ---------------------------------------
+  const btnRelato = alvo.querySelector('#ng-relato')
+  if (btnRelato) btnRelato.onclick = () => {
+    const cx = alvo.querySelector('#ng-form-relato')
+    if (cx.innerHTML) { cx.innerHTML = ''; return }
+    painelRelato(cx, l, recarregar)
+  }
+
+  alvo.querySelectorAll('.ng-ouvir').forEach(b => {
+    b.onclick = async () => {
+      b.disabled = true
+      const { data: u, error } = await db.storage.from('ligacoes').createSignedUrl(b.dataset.caminho, 300)
+      b.disabled = false
+      if (error || !u?.signedUrl) { alert('Esse áudio não está mais guardado.'); return }
+      const player = document.createElement('audio')
+      player.controls = true; player.src = u.signedUrl; player.style.cssText = 'display:block;margin-top:6px;width:100%;max-width:320px;'
+      b.replaceWith(player)
+      player.play().catch(() => {})
+    }
+  })
+
+  // ---- registrar perda ---------------------------------------------
+  const btnPerder = alvo.querySelector('#ng-perder')
+  if (btnPerder) btnPerder.onclick = () => abrirFormPerda(alvo, l, cat, mov, recarregar)
+}
+
+// Formulário de perda. Mostra, antes de gravar, o que vai ficar
+// registrado sobre o preço — quem está marcando a perda vê na hora que
+// o reajuste vai junto, e não precisa confiar que alguém vai lembrar.
+function abrirFormPerda (alvo, l, cat, mov, recarregar) {
+  const cx = alvo.querySelector('#ng-form-perda')
+  if (cx.innerHTML) { cx.innerHTML = ''; return }
+
+  const sugerido = mov && mov.subiu ? 'PRECO_NOSSO_SUBIU' : ''
+  cx.innerHTML = `
+    <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line);">
+      ${mov && mov.subiu ? `
+        <div style="margin-bottom:8px;padding:8px 10px;border-left:3px solid var(--warn-text);background:var(--hover-bg);font-size:12px;line-height:1.55;">
+          Vai ficar registrado junto com a perda: <b>nosso preço subiu ${mov.pct.toFixed(1)}%</b>
+          (R$ ${fmtNum(mov.dif)}) durante a negociação. Isso é gravado qualquer que seja o motivo escolhido.
+        </div>` : ''}
+      <div class="form-grade" style="grid-template-columns:1fr;">
+        <div class="campo"><label>Por que perdeu *</label>
+          <select id="ng-pd-motivo">
+            <option value="">escolha...</option>
+            ${cat.motivos_perda.map(m => `<option value="${esc(m.codigo)}" ${m.codigo === sugerido ? 'selected' : ''}>
+              ${esc(m.rotulo)} — ${esc(ROTULO_ATRIBUICAO[m.atribuicao] || m.atribuicao)}</option>`).join('')}
+          </select>
+          <div id="ng-pd-explica" class="texto-dim2" style="font-size:11.5px;line-height:1.5;margin-top:4px;"></div></div>
+      </div>
+      <div class="form-grade" style="grid-template-columns:1.4fr 1fr;">
+        <div class="campo"><label>Concorrente (se souber)</label><input id="ng-pd-conc" placeholder="quem levou"></div>
+        <div class="campo"><label>Preço dele (R$)</label><input id="ng-pd-conc-preco" type="number" step="0.01"></div>
+      </div>
+      <div class="campo"><label>Observação</label>
+        <textarea id="ng-pd-obs" style="min-height:70px;" placeholder="o que o cliente disse, com as palavras dele"></textarea></div>
+      <div class="acoes" style="margin-top:6px;">
+        <button type="button" class="btn mini" id="ng-pd-salvar">Registrar perda</button>
+        <button type="button" class="btn-secundario mini" id="ng-pd-cancelar">Cancelar</button>
+      </div>
+    </div>`
+
+  const sel = cx.querySelector('#ng-pd-motivo')
+  const exp = cx.querySelector('#ng-pd-explica')
+  const mostrarExplicacao = () => {
+    const m = cat.motivos_perda.find(x => x.codigo === sel.value)
+    exp.textContent = m?.explicacao || ''
+  }
+  sel.onchange = mostrarExplicacao
+  mostrarExplicacao()
+
+  cx.querySelector('#ng-pd-cancelar').onclick = () => { cx.innerHTML = '' }
+  cx.querySelector('#ng-pd-salvar').onclick = async () => {
+    if (!sel.value) { alert('Escolha o motivo.'); return }
+    const b = cx.querySelector('#ng-pd-salvar')
+    b.disabled = true; b.textContent = 'salvando...'
+    const { error } = await db.rpc('crm_registrar_perda', {
+      p_lead_id: l.id,
+      p_motivo_codigo: sel.value,
+      p_observacao: cx.querySelector('#ng-pd-obs').value.trim() || null,
+      p_concorrente: cx.querySelector('#ng-pd-conc').value.trim() || null,
+      p_preco_concorrente: cx.querySelector('#ng-pd-conc-preco').value || null
+    })
+    if (error) { alert(error.message); b.disabled = false; b.textContent = 'Registrar perda'; return }
+    recarregar()
+  }
+}
+
+// ---------------------------------------------------------------
+// Painel de objeções: o que o mercado está respondendo, e de quem foi
+// a causa quando o negócio cai.
+//
+// O bloco de reajuste vem primeiro de propósito. Ele responde à única
+// pergunta que o resto do painel não responde: quanto do que a gente
+// chama de "não fechou" foi, na verdade, preço que mudou depois que
+// o vendedor já tinha passado o número.
+//
+// Cada um vê o que o RLS do lead deixa: vendedor vê a carteira dele,
+// gestor vê a equipe, diretoria vê tudo. Não existe recorte aqui no
+// navegador — o corte é no banco.
+// ---------------------------------------------------------------
+// ---------------------------------------------------------------
+// Originação — a fila de quem ligar hoje.
+//
+// A ligação sai do celular: o botão "Ligar" é um link tel:, que no
+// telefone abre o discador e no computador não faz nada de útil. Por
+// isso o registro do resultado fica separado do botão de ligar — a
+// pessoa disca, conversa, desliga e volta aqui pra marcar o que deu.
+//
+// Ordem da fila: quem nunca foi chamado primeiro, depois quem está
+// parado há mais tempo. Não há score nem prioridade inventada.
+// ---------------------------------------------------------------
+const ROTULO_RESULTADO_LIGACAO = {
+  ATENDEU: 'Atendeu', NAO_ATENDEU: 'Não atendeu', CAIXA_POSTAL: 'Caixa postal',
+  REMARCAR: 'Pediu pra ligar depois', NUMERO_ERRADO: 'Número errado', OUTRO: 'Outro'
+}
+const RESULTADO_LIGACAO = [
+  ['ATENDEU', 'Atendeu'],
+  ['NAO_ATENDEU', 'Não atendeu'],
+  ['CAIXA_POSTAL', 'Caixa postal'],
+  ['REMARCAR', 'Pediu pra ligar depois'],
+  ['NUMERO_ERRADO', 'Número errado'],
+  ['OUTRO', 'Outro']
+]
+
+let ORIG_FILTRO = 'todos'
+
+async function crmOriginacao (alvo, editavel, gerencia) {
+  alvo.innerHTML = `<p class="texto-dim2">carregando fila...</p>`
+
+  const [{ data, error }, cat] = await Promise.all([
+    db.rpc('crm_fila_originacao', { p_limite: 120 }),
+    catalogosNegociacao()
+  ])
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  const d = data || {}
+  const todos = d.itens || []
+  const hojeIso = new Date().toISOString().slice(0, 10)
+
+  const filtros = [
+    ['todos', `Todos (${todos.length})`],
+    ['nunca', `Nunca ligados (${todos.filter(i => !i.ultima_ligacao).length})`],
+    ['agendados', `Com retorno marcado (${todos.filter(i => i.proximo_compromisso).length})`],
+    ['hoje', `Pra hoje (${todos.filter(i => (i.proximo_compromisso || '').slice(0, 10) === hojeIso).length})`]
+  ]
+  const lista = todos.filter(i =>
+    ORIG_FILTRO === 'nunca' ? !i.ultima_ligacao
+      : ORIG_FILTRO === 'agendados' ? !!i.proximo_compromisso
+        : ORIG_FILTRO === 'hoje' ? (i.proximo_compromisso || '').slice(0, 10) === hojeIso
+          : true)
+
+  const recarregar = () => crmOriginacao(alvo, editavel, gerencia)
+
+  const cartao = i => {
+    const tel = String(i.telefone || '').replace(/\D/g, '')
+    const semTelefone = tel.length < 10
+    return `
+    <div class="panel" style="padding:12px 14px;margin-bottom:10px;" data-lead="${i.id}">
+      <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:baseline;">
+        <div>
+          <b style="font-size:14px;">${esc(i.nome)}</b>
+          <span class="${corEtapaLead(i.etapa)}" style="margin-left:6px;">${esc(ROTULO_ETAPA_LEAD[i.etapa] ?? i.etapa)}</span>
+          ${i.no_sdr ? `<span class="chip" style="margin-left:5px;">já no SDR</span>` : ''}
+          ${i.bloqueio_lgpd ? `<span style="margin-left:5px;color:var(--critico-text);font-size:11.5px;">🚫 LGPD</span>` : ''}
+          <div class="texto-dim2" style="font-size:11.5px;margin-top:2px;">
+            ${esc([i.municipio, i.uf].filter(Boolean).join(' / ') || 'sem região')}
+            ${i.origem ? ' · ' + esc(i.origem) : ''}
+            ${gerencia && i.vendedor ? ' · ' + esc(i.vendedor) : ''}
+            ${i.valor_estimado ? ' · R$ ' + fmtNum(i.valor_estimado) : ''}
+          </div>
+        </div>
+        <div style="text-align:right;font-size:11.5px;" class="texto-dim">
+          ${i.ultima_ligacao
+            ? `${i.tentativas} tentativa(s) · última ${fmtData(i.ultima_ligacao) || ''}`
+            : '<span style="color:var(--gold);">nunca foi chamado</span>'}
+          ${i.proximo_compromisso ? `<div>retorno marcado: ${fmtQuando(i.proximo_compromisso) || ''}</div>` : ''}
+        </div>
+      </div>
+
+      ${i.objecoes_abertas ? `<div class="texto-dim" style="font-size:11.5px;margin-top:5px;">
+        Objeção em aberto: ${esc(i.objecoes_abertas)}</div>` : ''}
+
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:9px;">
+        ${semTelefone || i.bloqueio_lgpd
+          ? `<span class="texto-dim2" style="font-size:11.5px;align-self:center;">${
+              i.bloqueio_lgpd ? 'contato bloqueado por LGPD' : 'sem telefone no cadastro'}</span>`
+          : `<a class="btn mini" href="tel:${esc(tel)}" style="text-decoration:none;">📞 Ligar</a>`}
+        ${editavel ? `<button type="button" class="btn-secundario mini org-resultado">Registrar resultado</button>` : ''}
+        ${editavel ? `<button type="button" class="btn-secundario mini org-relato">🎙️ Contar como foi</button>` : ''}
+        <button type="button" class="btn-secundario mini org-ficha">Abrir ficha</button>
+        ${editavel && !i.no_sdr && !semTelefone && !i.bloqueio_lgpd
+          ? `<button type="button" class="btn-secundario mini org-sdr">→ Passar pro SDR</button>` : ''}
+      </div>
+      <div class="org-form"></div>
+    </div>`
+  }
+
+  alvo.innerHTML = `
+    <div id="org-atividade"></div>
+
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin:0 0 12px;">
+      ${filtros.map(([v, r]) => `<button type="button" class="btn-secundario mini org-filtro"
+        data-f="${v}" ${v === ORIG_FILTRO ? 'style="border-color:var(--rust);color:var(--rust);"' : ''}>${esc(r)}</button>`).join('')}
+    </div>
+
+    ${lista.length ? lista.map(cartao).join('')
+      : `<p class="vazio" style="padding:26px 0;">Nada nesse filtro.</p>`}
+
+    ${todos.length >= 120 ? `<p class="texto-dim2" style="font-size:11px;">
+      Mostrando os 120 primeiros da fila.</p>` : ''}`
+
+  blocoAtividadeComercial(alvo.querySelector('#org-atividade'), gerencia)
+
+  alvo.querySelectorAll('.org-filtro').forEach(b => {
+    b.onclick = () => { ORIG_FILTRO = b.dataset.f; recarregar() }
+  })
+
+  alvo.querySelectorAll('[data-lead]').forEach(card => {
+    const id = card.dataset.lead
+    const item = lista.find(x => x.id === id)
+
+    const btnFicha = card.querySelector('.org-ficha')
+    if (btnFicha) btnFicha.onclick = async () => {
+      btnFicha.disabled = true
+      const { data: l } = await db.from('lead').select(selLead).eq('id', id).single()
+      btnFicha.disabled = false
+      if (l) formLead(l, editavel, gerencia, recarregar)
+    }
+
+    const btnSdr = card.querySelector('.org-sdr')
+    if (btnSdr) btnSdr.onclick = async () => {
+      const instr = prompt('O que o SDR precisa saber pra continuar essa conversa?\n' +
+                           '(some pro bot como instrução — pode deixar em branco)')
+      if (instr === null) return
+      btnSdr.disabled = true; btnSdr.textContent = 'passando...'
+      const { data: r, error: e } = await db.rpc('crm_transferir_para_sdr',
+        { p_lead_id: id, p_instrucoes: instr.trim() || null })
+      if (e) { alert(e.message); btnSdr.disabled = false; btnSdr.textContent = '→ Passar pro SDR'; return }
+      alert(r?.ja_existia
+        ? 'Esse número já estava no SDR — liguei os dois cadastros.'
+        : 'Pronto, o lead está na fila do SDR do WhatsApp.')
+      recarregar()
+    }
+
+    const btnRes = card.querySelector('.org-resultado')
+    if (btnRes) btnRes.onclick = () => formResultadoLigacao(card, item, cat, recarregar)
+
+    const btnRel = card.querySelector('.org-relato')
+    if (btnRel) btnRel.onclick = () => {
+      const cx = card.querySelector('.org-form')
+      if (cx.innerHTML) { cx.innerHTML = ''; return }
+      painelRelato(cx, item, recarregar)
+    }
+  })
+}
+
+// Formulário do pós-ligação. Poucos cliques de propósito: resultado,
+// etapa, quando voltar. A objeção entra por botão, não por digitação.
+function formResultadoLigacao (card, item, cat, recarregar) {
+  const cx = card.querySelector('.org-form')
+  if (cx.innerHTML) { cx.innerHTML = ''; return }
+
+  const familias = {}
+  for (const o of cat.objecoes) (familias[o.familia] ||= []).push(o)
+
+  cx.innerHTML = `
+    <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line);">
+      <div class="form-grade" style="grid-template-columns:1fr 1fr 1fr 1.2fr;">
+        <div class="campo"><label>Deu o quê</label>
+          <select class="rl-resultado">${RESULTADO_LIGACAO.map(([v, r]) =>
+            `<option value="${v}">${r}</option>`).join('')}</select></div>
+        <div class="campo"><label>Etapa depois da ligação</label>
+          <select class="rl-etapa"><option value="">deixar como está</option>
+            ${ETAPAS_LEAD.map(e => `<option value="${e}" ${e === item.etapa ? 'selected' : ''}>${ROTULO_ETAPA_LEAD[e]}</option>`).join('')}</select></div>
+        <div class="campo"><label>Voltar a falar em</label><input type="date" class="rl-data"></div>
+        <div class="campo"><label>O que ficou combinado</label>
+          <input class="rl-titulo" placeholder="ex: mandar proposta, falar com o sócio"></div>
+      </div>
+
+      <div class="campo"><label>Objeção que ele levantou (opcional)</label>
+        <div style="display:flex;gap:5px;flex-wrap:wrap;">
+          ${Object.keys(familias).map(f => familias[f].map(o =>
+            `<button type="button" class="btn-secundario mini rl-obj" data-codigo="${esc(o.codigo)}">${esc(o.rotulo)}</button>`
+          ).join('')).join('')}
+        </div>
+        <div class="rl-obj-escolhida texto-dim" style="font-size:11.5px;margin-top:4px;"></div></div>
+
+      <div class="campo"><label>Observação</label>
+        <textarea class="rl-obs" style="min-height:64px;" placeholder="o que ele falou, com as palavras dele"></textarea></div>
+
+      <div class="acoes" style="margin-top:4px;">
+        <button type="button" class="btn mini rl-salvar">Salvar</button>
+        <button type="button" class="btn-secundario mini rl-cancelar">Cancelar</button>
+      </div>
+    </div>`
+
+  let objecaoEscolhida = null
+  const marcador = cx.querySelector('.rl-obj-escolhida')
+  cx.querySelectorAll('.rl-obj').forEach(b => {
+    b.onclick = () => {
+      const jaEra = objecaoEscolhida === b.dataset.codigo
+      objecaoEscolhida = jaEra ? null : b.dataset.codigo
+      cx.querySelectorAll('.rl-obj').forEach(x => { x.style.borderColor = ''; x.style.color = '' })
+      if (!jaEra) { b.style.borderColor = 'var(--rust)'; b.style.color = 'var(--rust)' }
+      marcador.textContent = objecaoEscolhida ? `vai registrar: ${b.textContent}` : ''
+    }
+  })
+
+  cx.querySelector('.rl-cancelar').onclick = () => { cx.innerHTML = '' }
+  cx.querySelector('.rl-salvar').onclick = async () => {
+    const btn = cx.querySelector('.rl-salvar')
+    btn.disabled = true; btn.textContent = 'salvando...'
+    const dataRetorno = cx.querySelector('.rl-data').value
+    const obs = cx.querySelector('.rl-obs').value.trim()
+
+    const { error } = await db.rpc('crm_registrar_ligacao', {
+      p_lead_id: item.id,
+      p_resultado: cx.querySelector('.rl-resultado').value,
+      p_observacao: obs || null,
+      p_etapa: cx.querySelector('.rl-etapa').value || null,
+      p_proximo_em: dataRetorno ? new Date(dataRetorno + 'T09:00:00').toISOString() : null,
+      p_proximo_titulo: cx.querySelector('.rl-titulo').value.trim() || null
+    })
+    if (error) { alert(error.message); btn.disabled = false; btn.textContent = 'Salvar'; return }
+
+    if (objecaoEscolhida) {
+      const { error: e2 } = await db.rpc('crm_registrar_objecao', {
+        p_lead_id: item.id, p_codigo: objecaoEscolhida,
+        p_origem: 'LIGACAO', p_observacao: obs || null
+      })
+      if (e2) alert('A ligação foi salva, mas a objeção não: ' + e2.message)
+    }
+    recarregar()
+  }
+}
+
+// Atividade do período — insumo pro PLR. Atividade, não nota: quem
+// pesa cada número é a gestão, e não este quadro.
+async function blocoAtividadeComercial (alvo, gerencia) {
+  if (!alvo) return
+  const { data, error } = await db.rpc('crm_produtividade')
+  if (error || !data) return
+  const pessoas = data.pessoas || []
+  if (!pessoas.length) return
+
+  alvo.innerHTML = `
+    <details class="panel" style="padding:12px 14px;margin-bottom:12px;" ${gerencia ? '' : 'open'}>
+      <summary style="cursor:pointer;font-weight:700;font-size:13px;">Atividade dos últimos 30 dias</summary>
+      <div class="tabela-scroll" style="margin-top:8px;"><table>
+        <thead><tr><th>Pessoa</th><th class="num">Ligações</th><th class="num">Atenderam</th>
+          <th class="num">Leads tocados</th><th class="num">Objeções</th><th class="num">Contornadas</th>
+          <th class="num">Propostas</th><th class="num">Ganhos</th><th class="num">Perdas</th></tr></thead>
+        <tbody>${pessoas.map(p => `<tr>
+          <td><b>${esc(p.pessoa)}</b></td>
+          <td class="num">${p.ligacoes}</td><td class="num">${p.atendidas}</td>
+          <td class="num">${p.leads_tocados}</td><td class="num">${p.objecoes}</td>
+          <td class="num">${p.contornadas}</td><td class="num">${p.propostas}</td>
+          <td class="num">${p.ganhos}</td><td class="num">${p.perdas}</td></tr>`).join('')}</tbody>
+      </table></div>
+      <p class="texto-dim2" style="font-size:11px;line-height:1.55;margin:8px 0 0;">
+        São números de atividade, não de mérito: só conta o que foi registrado no sistema.
+        Uma ligação feita e não marcada aqui não existe pra esse quadro.</p>
+    </details>`
+}
+
+// ---------------------------------------------------------------
+// Ajustes do registro de objeções — só pra gestão.
+//
+// A lista é fechada pra poder somar, não pra ser imutável. Quem vende
+// descobre objeção nova toda semana; o que não pode é cada um escrever
+// a mesma coisa de um jeito. Aqui a gestão acrescenta ao catálogo, e
+// a partir daí ela aparece como botão pra todo mundo.
+// ---------------------------------------------------------------
+const FAMILIAS_OBJECAO = [
+  ['PRECO', 'Preço'], ['CONCORRENCIA', 'Concorrência'], ['PRAZO', 'Prazo'],
+  ['MOMENTO', 'Momento'], ['CONFIANCA', 'Confiança'], ['DECISOR', 'Decisor'],
+  ['PRODUTO', 'Produto'], ['LOGISTICA', 'Logística'], ['OUTRO', 'Outras']
+]
+
+async function blocoAjustesObjecoes (alvo) {
+  if (!alvo || !souGerenciaCrm()) return
+  const cat = await catalogosNegociacao()
+
+  const { data: arm } = await db.from('ligacao_armazenamento').select('*').eq('id', true).maybeSingle()
+  const ehTotalAqui = ehTotal()
+
+  alvo.innerHTML = `
+    <details class="panel" style="padding:14px 16px;margin-top:16px;">
+      <summary style="cursor:pointer;font-weight:700;font-size:13.5px;">Ajustes</summary>
+
+      <div style="margin-top:12px;">
+        <b style="font-size:13px;">Acrescentar objeção ao catálogo</b>
+        <p class="texto-dim2" style="font-size:11.5px;margin:3px 0 8px;line-height:1.55;">
+          Só acrescenta. Objeção que já foi registrada em algum lead não some do painel se você a desativar depois.</p>
+        <div class="form-grade" style="grid-template-columns:1.6fr 1fr auto;align-items:end;">
+          <div class="campo"><label>Como o cliente fala</label>
+            <input id="ao-rotulo" placeholder="ex: quer ver resultado na lavoura do vizinho"></div>
+          <div class="campo"><label>Família</label>
+            <select id="ao-familia">${FAMILIAS_OBJECAO.map(([v, r]) => `<option value="${v}">${r}</option>`).join('')}</select></div>
+          <button type="button" class="btn-secundario mini" id="ao-add" style="height:38px;">+ Acrescentar</button>
+        </div>
+      </div>
+
+      <div style="margin-top:16px;">
+        <b style="font-size:13px;">Como contornar</b>
+        <p class="texto-dim2" style="font-size:11.5px;margin:3px 0 8px;line-height:1.55;">
+          O que você escrever aqui aparece pro vendedor na hora em que ele marca essa objeção no lead,
+          e vai junto quando o conhecimento for mandado pro bot.</p>
+        <div class="form-grade" style="grid-template-columns:1fr 2fr auto;align-items:end;">
+          <div class="campo"><label>Objeção</label>
+            <select id="ar-objecao">${cat.objecoes.map(o =>
+              `<option value="${esc(o.codigo)}">${esc(o.rotulo)}</option>`).join('')}</select></div>
+          <div class="campo"><label>O que funciona</label>
+            <input id="ar-texto" placeholder="uma abordagem por linha — acrescenta uma de cada vez"></div>
+          <button type="button" class="btn-secundario mini" id="ar-add" style="height:38px;">+ Acrescentar</button>
+        </div>
+        <div id="ar-lista" style="margin-top:8px;"></div>
+      </div>
+
+      ${ehTotalAqui && arm ? `
+      <div style="margin-top:18px;padding-top:12px;border-top:1px solid var(--line);">
+        <b style="font-size:13px;">Espaço dos relatos de ligação</b>
+        <p class="texto-dim2" style="font-size:11.5px;margin:3px 0 8px;line-height:1.6;">
+          O áudio é o relato do consultor depois de desligar, não a conversa com o cliente —
+          o navegador não tem como gravar a ligação do celular. A transcrição fica sempre;
+          o áudio é só pra conferir depois. Quando passa do teto, o mais antigo é apagado sozinho.</p>
+        <div class="form-grade" style="grid-template-columns:auto 1fr 1fr auto;align-items:end;">
+          <div class="campo"><label>Guardar o áudio</label>
+            <select id="ag-guardar">
+              <option value="1" ${arm.guardar_audio ? 'selected' : ''}>sim</option>
+              <option value="0" ${arm.guardar_audio ? '' : 'selected'}>não, só a transcrição</option></select></div>
+          <div class="campo"><label>Teto (MB)</label>
+            <input id="ag-limite" type="number" min="10" step="10" value="${arm.limite_mb}"></div>
+          <div class="campo"><label>Guardar por (dias)</label>
+            <input id="ag-dias" type="number" min="7" step="1" value="${arm.manter_dias}"></div>
+          <button type="button" class="btn-secundario mini" id="ag-salvar" style="height:38px;">Salvar</button>
+        </div>
+      </div>` : ''}
+    </details>`
+
+  const recarregar = () => { CAT_NEGOCIACAO = null; blocoAjustesObjecoes(alvo) }
+
+  const mostrarRespostas = () => {
+    const cod = alvo.querySelector('#ar-objecao').value
+    const o = cat.objecoes.find(x => x.codigo === cod)
+    const lista = alvo.querySelector('#ar-lista')
+    lista.innerHTML = (o?.respostas || []).length
+      ? `<ul style="margin:0;padding-left:18px;font-size:12px;line-height:1.6;" class="texto-dim">
+           ${o.respostas.map(r => `<li>${esc(r.texto)}</li>`).join('')}</ul>`
+      : `<p class="texto-dim2" style="font-size:11.5px;margin:0;">Nada cadastrado pra essa objeção ainda.</p>`
+  }
+  alvo.querySelector('#ar-objecao').onchange = mostrarRespostas
+  mostrarRespostas()
+
+  alvo.querySelector('#ao-add').onclick = async () => {
+    const rotulo = alvo.querySelector('#ao-rotulo').value.trim()
+    if (!rotulo) { alert('Escreva como o cliente fala.'); return }
+    const codigo = rotulo.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 40)
+    const b = alvo.querySelector('#ao-add'); b.disabled = true
+    const { error } = await db.from('objecao_tipo').insert({
+      codigo, rotulo, familia: alvo.querySelector('#ao-familia').value, ordem: 500 })
+    b.disabled = false
+    if (error) { alert(error.message); return }
+    recarregar()
+  }
+
+  alvo.querySelector('#ar-add').onclick = async () => {
+    const texto = alvo.querySelector('#ar-texto').value.trim()
+    if (!texto) { alert('Escreva o que funciona.'); return }
+    const cod = alvo.querySelector('#ar-objecao').value
+    const { data: tipo } = await db.from('objecao_tipo').select('id').eq('codigo', cod).single()
+    if (!tipo) { alert('Objeção não encontrada.'); return }
+    const b = alvo.querySelector('#ar-add'); b.disabled = true
+    const { error } = await db.from('objecao_resposta').insert({
+      objecao_id: tipo.id, texto, ordem: 500, criado_por: PERFIL.pessoaId })
+    b.disabled = false
+    if (error) { alert(error.message); return }
+    recarregar()
+  }
+
+  const btnArm = alvo.querySelector('#ag-salvar')
+  if (btnArm) btnArm.onclick = async () => {
+    btnArm.disabled = true
+    const { error } = await db.from('ligacao_armazenamento').update({
+      guardar_audio: alvo.querySelector('#ag-guardar').value === '1',
+      limite_mb: Number(alvo.querySelector('#ag-limite').value) || 500,
+      manter_dias: Number(alvo.querySelector('#ag-dias').value) || 180,
+      atualizado_por: PERFIL.pessoaId,
+      atualizado_em: new Date().toISOString()
+    }).eq('id', true)
+    btnArm.disabled = false
+    if (error) { alert(error.message); return }
+    aviso3s('Salvo.')
+  }
+}
+
+let OBJ_PERIODO = 90
+
+async function crmPainelObjecoes (alvo) {
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  const ate = new Date()
+  const de = new Date(Date.now() - OBJ_PERIODO * 86400000)
+  const iso = d => d.toISOString().slice(0, 10)
+
+  const { data, error } = await db.rpc('crm_painel_objecoes', { p_de: iso(de), p_ate: iso(ate) })
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  const d = data || {}
+  const obj = d.objecoes || []
+  const perdas = d.perdas || []
+  const atrib = d.por_atribuicao || {}
+  const vend = d.por_vendedor || []
+  const ufs = d.por_uf || []
+  const rj = d.reajuste || {}
+
+  const totalObj = Number(d.total_objecoes || 0)
+  const totalPerdas = Number(d.total_perdas || 0)
+  const contornadas = obj.reduce((s, o) => s + Number(o.contornadas || 0), 0)
+  const taxaContorno = totalObj ? Math.round(contornadas * 100 / totalObj) : null
+  const nossas = Number(atrib.NOSSO || 0)
+  const semReajusteMarcado = Number(rj.perdas_apos_reajuste || 0) - Number(rj.perdas_marcadas_como_reajuste || 0)
+
+  alvo.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+      <div class="campo" style="margin:0;max-width:220px;">
+        <label>Período</label>
+        <select id="obj-periodo">
+          ${[[30, 'últimos 30 dias'], [90, 'últimos 90 dias'], [180, 'últimos 6 meses'], [365, 'último ano']]
+            .map(([v, r]) => `<option value="${v}" ${v === OBJ_PERIODO ? 'selected' : ''}>${r}</option>`).join('')}
+        </select>
+      </div>
+      ${souGerenciaCrm() ? `<button class="btn-secundario mini" id="obj-para-ia">
+        Mandar o que aprendemos pro bot do WhatsApp</button>` : ''}
+    </div>
+
+    <div class="crm-kpis">
+      ${[
+        ['💬', 'Objeções registradas', totalObj, 'no período', ''],
+        ['✅', 'Contornadas', taxaContorno != null ? taxaContorno + '%' : '—', `${contornadas} de ${totalObj}`, ''],
+        ['📉', 'Negócios perdidos', totalPerdas, 'com motivo registrado', ''],
+        ['🏭', 'Perdas por decisão nossa', nossas, 'preço, prazo, crédito, atendimento', nossas ? 'alerta' : '']
+      ].map(([icone, rot, val, nota, cl]) => `
+        <div class="crm-kpi ${cl}"><div class="icone">${icone}</div>
+          <div class="rot">${rot}</div><div class="val">${esc(String(val))}</div>
+          <div class="nota">${esc(nota)}</div></div>`).join('')}
+    </div>
+
+    <div class="panel" style="padding:16px 18px;margin-top:16px;border-left:3px solid ${
+      Number(rj.perdas_apos_reajuste || 0) > 0 ? 'var(--warn-text)' : 'var(--line)'};">
+      <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 4px;">Preço que mudou no meio da negociação</h3>
+      ${Number(rj.leads_com_mais_de_um_preco || 0) === 0
+        ? `<p class="texto-dim2" style="font-size:12px;line-height:1.6;margin:6px 0 0;">
+             Nenhum lead tem mais de um preço registrado ainda, então não dá pra dizer nada sobre reajuste —
+             nem que houve, nem que não houve. Esse bloco só passa a valer quando o preço for registrado na
+             ficha do lead cada vez que o número mudar.</p>`
+        : `<div style="display:flex;gap:28px;flex-wrap:wrap;margin-top:10px;">
+             ${[[rj.leads_com_mais_de_um_preco, 'leads com mais de um preço'],
+                [rj.perdas_apos_reajuste, 'perdidos depois de o preço subir'],
+                [rj.variacao_media_pct != null ? Number(rj.variacao_media_pct).toFixed(1) + '%' : '—', 'aumento médio nesses casos'],
+                [rj.perdas_marcadas_como_reajuste, 'marcados como perda por reajuste']]
+               .map(([v, r]) => `<div><div style="font-size:22px;font-weight:700;font-family:var(--serif);">${esc(String(v ?? 0))}</div>
+                 <div class="texto-dim2" style="font-size:11.5px;max-width:160px;line-height:1.45;">${esc(r)}</div></div>`).join('')}
+           </div>
+           ${semReajusteMarcado > 0
+             ? `<p style="font-size:11.5px;line-height:1.6;margin:12px 0 0;color:var(--warn-text);">
+                  ${semReajusteMarcado} negócio(s) caíram depois de o preço subir mas foram marcados com outro motivo.
+                  Pode estar certo — o cliente pode ter sumido por outra razão — mas vale conferir antes de
+                  cobrar quem estava negociando.</p>` : ''}`}
+    </div>
+
+    <div class="panel" style="padding:16px 18px;margin-top:16px;">
+      <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 10px;">O que o cliente responde</h3>
+      ${obj.length ? `<div class="tabela-scroll"><table>
+          <thead><tr><th>Objeção</th><th>Família</th><th class="num">Vezes</th><th class="num">Contornada</th></tr></thead>
+          <tbody>${obj.map(o => `<tr>
+            <td><b>${esc(o.rotulo)}</b></td>
+            <td class="texto-dim2">${esc(o.familia)}</td>
+            <td class="num">${o.vezes}</td>
+            <td class="num">${o.taxa_contorno != null ? o.taxa_contorno + '%' : '—'}</td>
+          </tr>`).join('')}</tbody></table></div>`
+        : `<p class="texto-dim2" style="font-size:12px;margin:0;">Nenhuma objeção registrada no período.</p>`}
+    </div>
+
+    <div class="panel" style="padding:16px 18px;margin-top:16px;">
+      <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 10px;">De quem foi a causa da perda</h3>
+      ${totalPerdas ? `
+        ${barrasHorizontais(Object.entries(atrib)
+            .map(([k, v]) => ({ rotulo: ROTULO_ATRIBUICAO[k] || k, valor: Number(v) }))
+            .sort((a, b) => b.valor - a.valor), { unidade: '' })}
+        <div class="tabela-scroll" style="margin-top:14px;"><table>
+          <thead><tr><th>Motivo</th><th>Causa</th><th class="num">Vezes</th></tr></thead>
+          <tbody>${perdas.map(p => `<tr>
+            <td>${esc(p.rotulo)}</td>
+            <td class="texto-dim2">${esc(ROTULO_ATRIBUICAO[p.atribuicao] || p.atribuicao)}</td>
+            <td class="num">${p.vezes}</td></tr>`).join('')}</tbody></table></div>`
+        : `<p class="texto-dim2" style="font-size:12px;margin:0;line-height:1.6;">
+             Nenhuma perda registrada no período. Isso não quer dizer que nenhum negócio caiu —
+             quer dizer que ninguém marcou ainda.</p>`}
+    </div>
+
+    ${vend.length ? `
+      <div class="panel" style="padding:16px 18px;margin-top:16px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 2px;">Por vendedor</h3>
+        <p class="texto-dim2" style="font-size:11.5px;margin:0 0 10px;line-height:1.55;">
+          A coluna "por reajuste" sai da conta de quem perdeu: aquele negócio caiu porque o preço mudou depois.</p>
+        <div class="tabela-scroll"><table>
+          <thead><tr><th>Vendedor</th><th class="num">Objeções</th><th class="num">Contornadas</th>
+            <th class="num">Perdas</th><th class="num">Por decisão nossa</th><th class="num">Por reajuste</th></tr></thead>
+          <tbody>${vend.map(v => `<tr>
+            <td><b>${esc(v.vendedor)}</b></td>
+            <td class="num">${v.objecoes}</td>
+            <td class="num">${v.contornadas}</td>
+            <td class="num">${v.perdas}</td>
+            <td class="num">${v.perdas_nossas}</td>
+            <td class="num" style="${Number(v.perdas_por_reajuste) ? 'color:var(--warn-text);font-weight:700;' : ''}">${v.perdas_por_reajuste}</td>
+          </tr>`).join('')}</tbody></table></div>
+      </div>` : ''}
+
+    ${ufs.length ? `
+      <div class="panel" style="padding:16px 18px;margin-top:16px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 10px;">Por região</h3>
+        <div class="tabela-scroll"><table>
+          <thead><tr><th>UF</th><th class="num">Objeções</th><th class="num">Perdas</th></tr></thead>
+          <tbody>${ufs.map(u => `<tr><td><b>${esc(u.uf)}</b></td>
+            <td class="num">${u.objecoes}</td><td class="num">${u.perdas}</td></tr>`).join('')}</tbody></table></div>
+      </div>` : ''}
+
+    <div id="obj-ajustes"></div>
+
+    <p class="texto-dim2" style="font-size:11px;line-height:1.6;margin-top:14px;">
+      Tudo aqui depende de alguém ter registrado. Painel vazio não quer dizer que não houve objeção
+      nem perda — quer dizer que não foi marcado. Os botões ficam na ficha do lead, na seção "Negociação".
+    </p>`
+
+  blocoAjustesObjecoes(alvo.querySelector('#obj-ajustes'))
+
+  alvo.querySelector('#obj-periodo').onchange = e => {
+    OBJ_PERIODO = Number(e.target.value)
+    crmPainelObjecoes(alvo)
+  }
+
+  const btnIa = alvo.querySelector('#obj-para-ia')
+  if (btnIa) btnIa.onclick = async () => {
+    if (!confirm('Isso reescreve as entradas de objeção no conhecimento do bot do WhatsApp, ' +
+                 'com o que está cadastrado hoje e o que deu certo na prática.\n\nPode ir?')) return
+    btnIa.disabled = true; btnIa.textContent = 'atualizando...'
+    const { data: r, error: e } = await db.rpc('crm_objecoes_para_ia')
+    btnIa.disabled = false; btnIa.textContent = 'Mandar o que aprendemos pro bot do WhatsApp'
+    if (e) { alert(e.message); return }
+    alert(`Pronto: ${r?.entradas ?? 0} objeções no conhecimento do bot.\n\n` +
+          'Dá pra ver e editar cada uma em SDR WhatsApp → Treinar IA.')
+  }
+}
+
 function formLead (l, editavel, gerencia, aoFechar) {
   const podeReatribuir = editavel && gerencia // trocar o vendedor é ação de quem gerencia
   const podeExcluir = editavel && gerencia && l
@@ -17478,6 +18634,7 @@ function formLead (l, editavel, gerencia, aoFechar) {
       </div>` : ''}
       <textarea id="ld-obs" style="min-height:260px;font-size:14.5px;line-height:1.5;" ${editavel ? '' : 'disabled'}>${esc(l?.observacoes ?? '')}</textarea></div>
     ${l ? `<div id="ld-coach"></div>` : ''}
+    ${l ? `<div id="ld-negociacao"></div>` : ''}
     ${l ? `<div id="ld-sdr-historico"></div>` : ''}
     ${l ? `<div id="ld-bomdia"></div>` : ''}
     ${l ? `<div id="ld-lgpd"></div>` : ''}
@@ -17621,6 +18778,7 @@ function formLead (l, editavel, gerencia, aoFechar) {
   })
   if (l && l.origem === 'whatsapp_sdr' && l.telefone) carregarHistoricoSdrNoLead(fundo, l)
   if (l) carregarCoachDisc(fundo, l)
+  if (l) blocoNegociacaoLead(fundo, l, editavel)
   let propostaCarregada = l && l.etapa === 'PROPOSTA'
   if (propostaCarregada) carregarPropostaLead(fundo, l, editavel)
 
@@ -17638,6 +18796,13 @@ function formLead (l, editavel, gerencia, aoFechar) {
           if (mostrarProposta && !propostaCarregada) { propostaCarregada = true; carregarPropostaLead(fundo, l, editavel) }
         }
         if (wrapPedido) wrapPedido.style.display = selEtapa.value === 'GANHO' ? '' : 'none'
+        // marcar PERDIDO sem dizer por quê é o que gera o relatório que
+        // não explica nada — então o formulário de perda abre sozinho
+        if (selEtapa.value === 'PERDIDO') {
+          const ng = fundo.querySelector('#ld-negociacao')
+          const btn = ng?.querySelector('#ng-perder')
+          if (btn) { ng.scrollIntoView({ behavior: 'smooth', block: 'center' }); btn.click() }
+        }
       })
     }
   }
