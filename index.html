@@ -2268,6 +2268,7 @@ async function abrirApp () {
   ligarChecagemPeriodicaNotificacoes()
   tocarSomNotificacao()
   avisarPedidosProrrogacaoPendentes()
+  checarTermoDeUso()
 }
 
 // ----- Notificações pessoais: sino no topo. Dispara quando: uma solicitação
@@ -3501,6 +3502,420 @@ function rotuloDiaAgenda (iso) {
   if (d === -1) return 'Ontem'
   if (d < 0) return `${fmtData(iso)} · há ${-d} dias`
   return fmtData(iso)
+}
+
+// ---------------------------------------------------------------
+// Termo de responsabilidade pelo uso do sistema
+//
+// Aparece ao entrar, uma vez por sessão, enquanto a pessoa não aceitar.
+// Dá pra adiar — mas volta na próxima entrada, e o RH vê quem falta.
+//
+// A "assinatura" aqui é o registro eletrônico: quem, quando, de qual
+// endereço, e o hash do texto que foi lido. Guardar o hash importa: sem
+// ele, "fulano aceitou o termo" perde o sentido no dia em que alguém
+// editar o texto. Com ele, dá pra provar qual texto estava na tela.
+// ---------------------------------------------------------------
+let TERMO_ADIADO_NESTA_SESSAO = false
+
+async function checarTermoDeUso () {
+  if (TERMO_ADIADO_NESTA_SESSAO) return
+  const { data, error } = await db.rpc('termo_vigente')
+  if (error || !data?.existe || data.ja_aceitei) return
+  abrirTermoDeUso(data)
+}
+
+function textoDoTermoEmHtml (texto) {
+  // o texto veio do Jurídico em parágrafos; títulos de cláusula são as
+  // linhas que começam com "N —". Nada de markdown: é documento legal,
+  // renderiza como está.
+  return String(texto || '').split('\n').map(l => {
+    const linha = l.trim()
+    if (!linha) return ''
+    if (/^\d+\s*—/.test(linha)) {
+      return `<h4 style="font-size:13px;font-weight:700;margin:16px 0 6px;">${esc(linha)}</h4>`
+    }
+    if (/^[a-z]\)/.test(linha)) {
+      return `<p style="margin:4px 0 4px 16px;font-size:12.5px;line-height:1.6;">${esc(linha)}</p>`
+    }
+    return `<p style="margin:6px 0;font-size:12.5px;line-height:1.65;text-align:justify;">${esc(linha)}</p>`
+  }).join('')
+}
+
+function abrirTermoDeUso (termo) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.style.zIndex = '9000'
+  fundo.innerHTML = `
+    <div class="modal" style="max-width:760px;display:flex;flex-direction:column;max-height:88vh;">
+      <div style="flex:none;">
+        <div class="texto-dim2" style="font-size:11px;text-transform:uppercase;letter-spacing:.1em;">
+          ${esc(termo.empresa || '')}</div>
+        <h3 style="margin:4px 0 2px;">${esc(termo.titulo)}</h3>
+        <div class="texto-dim2" style="font-size:11.5px;">
+          Versão ${termo.versao}${termo.publicado_em ? ' · publicado em ' + (fmtData(termo.publicado_em) || '') : ''}
+        </div>
+      </div>
+
+      <div id="termo-corpo" style="flex:1;overflow-y:auto;margin:14px 0;padding:14px 16px;
+        border:1px solid var(--line);border-radius:8px;background:var(--panel);">
+        <div class="caixa-texto" style="margin-bottom:12px;">
+          <div class="rot">Qualificação do usuário</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;font-size:12.5px;margin-top:6px;">
+            <div><b>Nome:</b> ${esc(PERFIL.nome || '—')}</div>
+            <div><b>E-mail:</b> ${esc(PERFIL.email || '—')}</div>
+            <div id="termo-cpf"><b>CPF:</b> <span class="texto-dim2">carregando...</span></div>
+            <div id="termo-cargo"><b>Cargo:</b> <span class="texto-dim2">carregando...</span></div>
+            <div style="grid-column:1/-1;" id="termo-setor"><b>Setor:</b> <span class="texto-dim2">carregando...</span></div>
+          </div>
+        </div>
+        ${textoDoTermoEmHtml(termo.texto)}
+      </div>
+
+      <div class="recado oculto" id="termo-recado" style="flex:none;"></div>
+      <div style="flex:none;">
+        <label style="display:flex;gap:8px;align-items:flex-start;font-size:12.5px;line-height:1.5;cursor:pointer;">
+          <input type="checkbox" id="termo-li" style="margin-top:2px;width:17px;height:17px;flex:none;">
+          <span>Declaro que li, compreendi e aceito integralmente o termo acima.
+            Estou ciente de que este aceite é registrado com meu nome, data, hora e
+            endereço de acesso, e vale como assinatura.</span>
+        </label>
+        <div class="acoes" style="margin-top:12px;">
+          <button class="btn" id="termo-aceitar" disabled>Aceitar e assinar</button>
+          <button class="btn-secundario" id="termo-depois">Agora não</button>
+          <span class="texto-dim2" style="font-size:11px;">
+            Se adiar, o termo volta a aparecer na próxima vez que você entrar.</span>
+        </div>
+      </div>
+    </div>`
+  document.body.appendChild(fundo)
+  const q = s => fundo.querySelector(s)
+
+  // os dados da qualificação vêm do cadastro, não digitados: o termo
+  // precisa dizer quem é a pessoa segundo a empresa
+  if (PERFIL.pessoaId) {
+    db.from('pessoa').select('cpf,cargo,setor:setor_id(nome)').eq('id', PERFIL.pessoaId).maybeSingle()
+      .then(({ data: p }) => {
+        q('#termo-cpf').innerHTML = `<b>CPF:</b> ${p?.cpf ? esc(p.cpf) : '<span class="texto-dim2">não cadastrado</span>'}`
+        q('#termo-cargo').innerHTML = `<b>Cargo:</b> ${p?.cargo ? esc(p.cargo) : '<span class="texto-dim2">não cadastrado</span>'}`
+        q('#termo-setor').innerHTML = `<b>Setor:</b> ${p?.setor?.nome ? esc(p.setor.nome) : '<span class="texto-dim2">não cadastrado</span>'}`
+      })
+  }
+
+  // o botão só libera depois de rolar até o fim E marcar a caixa — ler é
+  // parte do aceite, não formalidade
+  const corpo = q('#termo-corpo')
+  const caixa = q('#termo-li')
+  const btn = q('#termo-aceitar')
+  let rolouAteOFim = false
+
+  const conferir = () => { btn.disabled = !(rolouAteOFim && caixa.checked) }
+  corpo.onscroll = () => {
+    if (corpo.scrollTop + corpo.clientHeight >= corpo.scrollHeight - 30) {
+      rolouAteOFim = true
+      conferir()
+    }
+  }
+  // texto curto que já cabe na tela não precisa de rolagem
+  setTimeout(() => {
+    if (corpo.scrollHeight <= corpo.clientHeight + 10) { rolouAteOFim = true; conferir() }
+  }, 200)
+  caixa.onchange = conferir
+
+  q('#termo-depois').onclick = () => {
+    TERMO_ADIADO_NESTA_SESSAO = true
+    fundo.remove()
+  }
+
+  q('#termo-aceitar').onclick = async () => {
+    btn.disabled = true; btn.textContent = 'Registrando...'
+    const { data, error } = await db.rpc('termo_aceitar', { p_termo_id: termo.id })
+    if (error || !data?.ok) {
+      const r = q('#termo-recado')
+      r.classList.remove('oculto')
+      r.textContent = error?.message || data?.erro || 'Não consegui registrar agora.'
+      btn.disabled = false; btn.textContent = 'Aceitar e assinar'
+      return
+    }
+    fundo.remove()
+    aviso3s('Termo assinado. O comprovante está em Meu RH.')
+  }
+}
+
+function aviso3s (texto) {
+  const t = document.createElement('div')
+  t.style.cssText = 'position:fixed;bottom:22px;left:50%;transform:translateX(-50%);z-index:9500;' +
+    'background:var(--rust);color:#fff;padding:11px 18px;border-radius:999px;font-size:13px;' +
+    'box-shadow:0 6px 20px rgba(0,0,0,.25);'
+  t.textContent = texto
+  document.body.appendChild(t)
+  setTimeout(() => t.remove(), 3500)
+}
+
+// ----- Comprovante em Meu RH -----
+async function blocoMeuTermo (alvo) {
+  const { data, error } = await db.rpc('termo_vigente')
+  if (error || !data?.existe) return
+
+  const bloco = document.createElement('div')
+  bloco.className = 'panel'
+  bloco.style.cssText = 'padding:18px;margin-bottom:16px;'
+
+  if (!data.ja_aceitei) {
+    bloco.style.borderLeft = '3px solid var(--warn-text)'
+    bloco.innerHTML = `
+      <div class="cabeca-secao" style="margin-bottom:6px;">
+        <h3 style="font-family:var(--serif);font-size:16px;">Termo de responsabilidade</h3>
+        <span class="badge-alerta" style="font-size:10.5px;">não assinado</span>
+      </div>
+      <p class="texto-dim" style="font-size:13px;line-height:1.6;margin:0 0 12px;">
+        Você ainda não assinou o termo de uso do sistema. Leva um minuto.
+      </p>
+      <button class="btn" id="meu-termo-assinar">Ler e assinar agora</button>`
+    alvo.prepend(bloco)
+    bloco.querySelector('#meu-termo-assinar').onclick = () => abrirTermoDeUso(data)
+    return
+  }
+
+  bloco.innerHTML = `
+    <div class="cabeca-secao" style="margin-bottom:6px;">
+      <h3 style="font-family:var(--serif);font-size:16px;">Termo de responsabilidade</h3>
+      <span class="badge-bom" style="font-size:10.5px;">✓ assinado</span>
+    </div>
+    <p class="texto-dim" style="font-size:13px;line-height:1.6;margin:0 0 12px;">
+      Versão ${data.versao}, assinado em ${fmtQuando(data.aceito_em) || '—'}.
+    </p>
+    <button class="btn-secundario" id="meu-termo-ver">Ver comprovante</button>`
+  alvo.prepend(bloco)
+  bloco.querySelector('#meu-termo-ver').onclick = () => abrirComprovanteTermo(PERFIL.pessoaId)
+}
+
+// O comprovante usa a mesma folha ".doc" dos outros documentos do
+// sistema, então imprime e vira PDF pelo próprio navegador — sem
+// biblioteca nova e sem arquivo guardado que possa divergir do registro.
+async function abrirComprovanteTermo (pessoaId) {
+  const { data: a, error } = await db.from('termo_aceite')
+    .select('*, termo:termo_id(titulo,empresa,texto,versao,publicado_em)')
+    .eq('pessoa_id', pessoaId)
+    .order('aceito_em', { ascending: false }).limit(1).maybeSingle()
+  if (error || !a) { alert('Não encontrei o comprovante.'); return }
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal" style="max-width:860px;">
+      <div class="acoes" style="margin-bottom:10px;" data-nao-imprimir>
+        <button class="btn" id="tc-imprimir">Salvar em PDF / imprimir</button>
+        <button class="btn-secundario" id="tc-fechar">Fechar</button>
+        <span class="texto-dim2" style="font-size:11.5px;">
+          Na janela de impressão, escolha "Salvar como PDF".</span>
+      </div>
+      <div class="doc" id="tc-folha">
+        <div style="text-align:center;margin-bottom:14px;">
+          <div style="font-size:11px;letter-spacing:.08em;">${esc(a.termo?.empresa || '')}</div>
+          <h2 style="margin:6px 0 0;font-size:15px;">${esc(a.termo?.titulo || 'Termo de responsabilidade')}</h2>
+          <div style="font-size:11px;">Versão ${a.versao}</div>
+        </div>
+
+        <div class="caixa-texto" style="margin-bottom:12px;">
+          <div class="rot">Qualificação do usuário</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:3px 16px;font-size:11.5px;margin-top:5px;">
+            <div><b>Nome:</b> ${esc(a.nome_no_aceite || '—')}</div>
+            <div><b>CPF:</b> ${esc(a.cpf_no_aceite || 'não cadastrado')}</div>
+            <div><b>Cargo:</b> ${esc(a.cargo_no_aceite || 'não cadastrado')}</div>
+            <div><b>Setor:</b> ${esc(a.setor_no_aceite || 'não cadastrado')}</div>
+            <div style="grid-column:1/-1;"><b>E-mail de acesso:</b> ${esc(a.email_no_aceite || '—')}</div>
+          </div>
+        </div>
+
+        ${textoDoTermoEmHtml(a.termo?.texto)}
+
+        <div class="caixa-texto" style="margin-top:18px;">
+          <div class="rot">Aceite eletrônico</div>
+          <p style="font-size:11.5px;line-height:1.6;margin:6px 0 0;">
+            Este documento foi aceito eletronicamente por
+            <b>${esc(a.nome_no_aceite || '—')}</b>, autenticado no sistema com o e-mail
+            <b>${esc(a.email_no_aceite || '—')}</b>, em
+            <b>${new Date(a.aceito_em).toLocaleString('pt-BR')}</b>${
+              a.ip ? `, a partir do endereço IP <b>${esc(a.ip)}</b>` : ''}.
+          </p>
+          <p style="font-size:10.5px;line-height:1.6;margin:8px 0 0;">
+            Identificação do texto aceito (SHA-256):<br>
+            <code style="font-size:9.5px;word-break:break-all;">${esc(a.hash_texto)}</code>
+          </p>
+          <p style="font-size:10.5px;line-height:1.55;margin:8px 0 0;">
+            O registro eletrônico deste aceite, com os dados acima, está armazenado no
+            sistema da EMPRESA e substitui a assinatura manuscrita para os fins da
+            Cláusula 5.3 deste Termo.
+          </p>
+        </div>
+
+        <div style="margin-top:16px;font-size:10.5px;text-align:center;">
+          Luís Eduardo Magalhães/BA, ${new Date(a.aceito_em).toLocaleDateString('pt-BR',
+            { day: '2-digit', month: 'long', year: 'numeric' })}.
+        </div>
+      </div>
+    </div>`
+  document.body.appendChild(fundo)
+  fundo.querySelector('#tc-fechar').onclick = () => fundo.remove()
+  fundo.querySelector('#tc-imprimir').onclick = () => window.print()
+}
+
+// ----- Quem assinou e quem falta: visão do RH -----
+async function desempTermos (alvo) {
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  const [{ data: lista, error }, { data: termos }] = await Promise.all([
+    db.rpc('termo_quem_falta'),
+    db.from('termo_uso').select('*').order('versao', { ascending: false })
+  ])
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  const pessoas = lista || []
+  const assinaram = pessoas.filter(p => p.aceito_em)
+  const faltam = pessoas.filter(p => !p.aceito_em)
+  const faltamComLogin = faltam.filter(p => p.tem_login)
+  const ativo = (termos || []).find(t => t.ativo)
+  const editavel = podeEditar('desempenho')
+
+  alvo.innerHTML = `
+    ${!ativo ? `
+      <div class="panel" style="padding:16px 18px;margin-bottom:14px;border-left:3px solid var(--warn-text);">
+        <b style="font-size:13.5px;">Nenhum termo publicado</b>
+        <p class="texto-dim" style="font-size:12.5px;line-height:1.55;margin:6px 0 0;">
+          Existe ${(termos || []).length} versão(ões) cadastrada(s), mas nenhuma está valendo.
+          Enquanto não publicar, ninguém vê o termo ao entrar no sistema.
+        </p>
+      </div>` : `
+      <div class="resumo-topo" style="margin-bottom:14px;">
+        <div class="bloco"><div class="rot">✓ Assinaram</div><div class="val">${assinaram.length}</div></div>
+        <div class="bloco"><div class="rot">⏳ Faltam</div>
+          <div class="val" style="color:${faltam.length ? 'var(--warn-text)' : 'inherit'};">${faltam.length}</div></div>
+        <div class="bloco"><div class="rot">Faltam, e têm login</div>
+          <div class="val">${faltamComLogin.length}</div></div>
+        <div class="bloco"><div class="rot">Versão em vigor</div><div class="val">${ativo.versao}</div></div>
+      </div>`}
+
+    <div class="panel" style="padding:14px 16px;margin-bottom:14px;">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;">
+        <b style="font-size:13.5px;">Texto do termo</b>
+        ${editavel ? `<div style="display:flex;gap:6px;">
+          <button class="btn-secundario mini" id="termo-ver-texto">ver texto</button>
+          ${ativo
+            ? `<button class="btn-secundario mini" id="termo-nova-versao">nova versão</button>`
+            : `<button class="btn mini" id="termo-publicar">publicar versão ${(termos || [])[0]?.versao ?? ''}</button>`}
+        </div>` : ''}
+      </div>
+      <p class="texto-dim2" style="font-size:11.5px;line-height:1.55;margin:8px 0 0;">
+        Mudar o texto cria uma <b>versão nova</b>, e todo mundo assina de novo — o aceite
+        antigo continua guardado, ligado ao texto que a pessoa realmente leu.
+      </p>
+    </div>
+
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>Pessoa</th><th>Cargo</th><th>Setor</th><th>Login</th><th>Assinou</th><th></th>
+      </tr></thead><tbody>
+        ${pessoas.map(p => `<tr>
+          <td><b style="font-size:12.5px;">${esc(p.nome)}</b></td>
+          <td class="texto-dim2" style="font-size:11.5px;">${esc(p.cargo || '—')}</td>
+          <td class="texto-dim2" style="font-size:11.5px;">${esc(p.setor || '—')}</td>
+          <td>${p.tem_login
+            ? '<span class="texto-dim2" style="font-size:11px;">sim</span>'
+            : '<span class="texto-dim2" style="font-size:11px;">sem login</span>'}</td>
+          <td>${p.aceito_em
+            ? `<span class="badge-bom" style="font-size:10.5px;">${fmtData(p.aceito_em)}</span>`
+            : `<span class="${p.tem_login ? 'badge-alerta' : 'texto-dim2'}" style="font-size:10.5px;">${
+                p.tem_login ? 'falta assinar' : 'não tem acesso'}</span>`}</td>
+          <td class="num">${p.aceito_em
+            ? `<button class="btn-secundario mini" data-comprov="${p.pessoa_id}">comprovante</button>` : ''}</td>
+        </tr>`).join('')}
+      </tbody></table>
+    </div></div>
+
+    ${faltam.length && faltam.length > faltamComLogin.length ? `
+      <p class="texto-dim2" style="font-size:11.5px;line-height:1.55;margin-top:10px;">
+        ${faltam.length - faltamComLogin.length} das pessoas que faltam <b>não têm login</b> no
+        sistema, então não têm como assinar por aqui. Pra elas, ou se cria o acesso, ou o termo
+        é assinado em papel e guardado fora do sistema.
+      </p>` : ''}`
+
+  alvo.querySelectorAll('[data-comprov]').forEach(b => {
+    b.onclick = () => abrirComprovanteTermo(b.dataset.comprov)
+  })
+  if (!editavel) return
+
+  const btnVer = alvo.querySelector('#termo-ver-texto')
+  if (btnVer) btnVer.onclick = () => {
+    const t = ativo || (termos || [])[0]
+    if (t) abrirTermoDeUso({ ...t, ja_aceitei: true, id: t.id })
+  }
+
+  const btnPub = alvo.querySelector('#termo-publicar')
+  if (btnPub) btnPub.onclick = async () => {
+    const alvoT = (termos || [])[0]
+    if (!alvoT) return
+    if (!confirm(`Publicar a versão ${alvoT.versao}?\n\n` +
+      `A partir de agora o termo aparece pra todo mundo ao entrar no sistema, ` +
+      `e o RH passa a ver quem assinou e quem falta.`)) return
+    const { error: e } = await db.from('termo_uso')
+      .update({ ativo: true, publicado_em: new Date().toISOString(), publicado_por: PERFIL.pessoaId })
+      .eq('id', alvoT.id)
+    if (e) { alert(e.message); return }
+    desempTermos(alvo)
+  }
+
+  const btnNova = alvo.querySelector('#termo-nova-versao')
+  if (btnNova) btnNova.onclick = () => formNovaVersaoTermo(ativo, () => desempTermos(alvo))
+}
+
+function formNovaVersaoTermo (base, aoSalvar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal" style="max-width:760px;">
+      <h3>Nova versão do termo</h3>
+      <p class="texto-dim" style="font-size:12.5px;line-height:1.55;margin:0 0 12px;">
+        A versão ${base.versao} continua guardada com os aceites dela. Ao publicar a nova,
+        <b>todo mundo precisa assinar de novo</b> — inclusive quem já tinha assinado.
+      </p>
+      <div class="campo"><label>Título</label>
+        <input id="nt-titulo" value="${esc(base.titulo)}"></div>
+      <div class="campo"><label>Texto do termo</label>
+        <textarea id="nt-texto" style="min-height:320px;font-size:12.5px;line-height:1.5;">${esc(base.texto)}</textarea>
+        <span class="texto-dim2" style="font-size:11px;">
+          Linhas que começam com "N —" viram título de cláusula na tela.</span></div>
+      <div class="recado oculto" id="nt-recado"></div>
+      <div class="acoes" style="margin-top:12px;">
+        <button class="btn" id="nt-salvar">Criar e publicar</button>
+        <button class="btn-secundario" id="nt-fechar">Cancelar</button>
+      </div>
+    </div>`
+  document.body.appendChild(fundo)
+  const q = s => fundo.querySelector(s)
+  q('#nt-fechar').onclick = () => fundo.remove()
+
+  q('#nt-salvar').onclick = async () => {
+    const texto = q('#nt-texto').value.trim()
+    if (texto.length < 200) {
+      const r = q('#nt-recado'); r.classList.remove('oculto')
+      r.textContent = 'O texto está curto demais pra ser um termo.'
+      return
+    }
+    if (!confirm('Publicar a nova versão? Todos vão precisar assinar de novo.')) return
+
+    // tira a antiga do ar antes de pôr a nova: o índice garante um ativo só
+    await db.from('termo_uso').update({ ativo: false }).eq('id', base.id)
+    const { error } = await db.from('termo_uso').insert({
+      versao: base.versao + 1, titulo: q('#nt-titulo').value.trim() || base.titulo,
+      empresa: base.empresa, texto, ativo: true,
+      publicado_em: new Date().toISOString(), publicado_por: PERFIL.pessoaId
+    })
+    if (error) {
+      await db.from('termo_uso').update({ ativo: true }).eq('id', base.id)
+      const r = q('#nt-recado'); r.classList.remove('oculto'); r.textContent = error.message
+      return
+    }
+    fundo.remove(); if (aoSalvar) aoSalvar()
+  }
 }
 
 async function blocoAgendaPessoal (area) {
@@ -35749,6 +36164,7 @@ async function paginaDesempenho () {
 
   const abas = [
     ['painel', '📊', 'Painel'], ['especialista', '🎯', 'Especialista RH'], ['disc', '🧭', 'Perfis DISC'],
+    ['termos', '📜', 'Termo de uso'],
     ['agilidade', '⚡', 'Agilidade e prazos'],
     ['individual', '👤', 'Acompanhamento Individual'], ['prestadores', '🏢', 'Prestadores Atrelados'], ['recrutamento', '🗂️', 'Recrutamento e Seleção'],
     ['360', '🔄', 'Avaliação 360'], ['pdi', '🌱', 'Planos de desenvolvimento'],
@@ -35792,6 +36208,7 @@ function abrirDesempenho (sub, editavel) {
   if (sub === 'trilhas') desempTrilhas(alvo, editavel)
   if (sub === 'especialista') desempEspecialistaRH(alvo)
   if (sub === 'disc') desempPerfisDisc(alvo)
+  if (sub === 'termos') desempTermos(alvo)
   if (sub === 'meu') desempMeu(alvo)
 }
 
@@ -39084,6 +39501,7 @@ async function desempMeu (alvo) {
   // o cartão do próprio perfil de comportamento entra no topo,
   // depois que o resto da página já desenhou
   await blocoMeuDisc(alvo)
+  await blocoMeuTermo(alvo)   // o termo fica acima de tudo em Meu RH
 }
 
 // ----- Fazer uma trilha: lista os módulos, marca como concluído, e ao
