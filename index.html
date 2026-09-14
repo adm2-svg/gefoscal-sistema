@@ -17505,7 +17505,8 @@ function painelRelato (caixa, lead, aoTerminar) {
 
       const b64 = await blobParaBase64(blob)
       const { data, error } = await db.functions.invoke('ligacao-resumir', {
-        body: { lead_id: lead.id, audio_base64: b64, mime, resultado: 'ATENDEU' }
+        body: { lead_id: lead.id, audio_base64: b64, mime, resultado: 'ATENDEU',
+                ligacao_id: lead.ligacao_aberta_id || null }
       })
       btn.disabled = false; btn.textContent = '🎙️ Falar de novo'
 
@@ -17655,7 +17656,7 @@ async function blocoNegociacaoLead (fundo, l, editavel) {
     catalogosNegociacao(),
     db.rpc('crm_dossie_lead', { p_lead_id: l.id }).then(r => r.data || {}),
     db.from('lead_ligacao')
-      .select('id,resultado,observacao,resumo_ia,transcricao,audio_url,criado_em,pessoa:pessoa_id(nome)')
+      .select('id,resultado,observacao,resumo_ia,transcricao,audio_url,criado_em,pessoa_id,pessoa:pessoa_id(nome)')
       .eq('lead_id', l.id).order('criado_em', { ascending: false }).limit(20)
   ])
 
@@ -17667,6 +17668,13 @@ async function blocoNegociacaoLead (fundo, l, editavel) {
   const mov = precos.length > 1 ? variacaoPreco(primeiro.preco, ultimo.preco) : null
 
   const recarregar = () => blocoNegociacaoLead(fundo, l, editavel)
+
+  // discagem desta pessoa neste lead, ainda sem resultado — é ela que o
+  // relato ou o formulário devem FECHAR, em vez de abrir outra linha
+  const doze = Date.now() - 12 * 3600 * 1000
+  const abertaAqui = (ligacoes || []).find(g =>
+    g.resultado === 'DISCOU' && g.pessoa_id === PERFIL.pessoaId && new Date(g.criado_em).getTime() > doze)
+  l.ligacao_aberta_id = abertaAqui?.id ?? null
 
   // ---- preço -------------------------------------------------------
   const linhaPreco = (p, i) => {
@@ -17786,8 +17794,20 @@ async function blocoNegociacaoLead (fundo, l, editavel) {
     <div class="panel" style="padding:12px 14px;margin-bottom:10px;">
       <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;">
         <b style="font-size:13px;">Ligações ${(ligacoes || []).length ? `<span class="texto-dim2">(${ligacoes.length})</span>` : ''}</b>
+        <span style="display:flex;gap:6px;flex-wrap:wrap;">
+        ${editavel && l.telefone && !l.bloqueio_lgpd
+          ? (ehCelular()
+            ? `<a class="btn mini" id="ng-ligar" href="tel:${esc(String(l.telefone).replace(/\D/g, ''))}" style="text-decoration:none;">📞 Ligar</a>`
+            : `<button type="button" class="btn mini" id="ng-ligar">📞 Liguei pra ${esc(telefoneBonito(l.telefone))}</button>`)
+          : ''}
         ${editavel ? `<button type="button" class="btn-secundario mini" id="ng-relato">🎙️ Contar como foi a ligação</button>` : ''}
+        </span>
       </div>
+      ${abertaAqui ? `<div style="margin-top:7px;padding:7px 10px;border-left:3px solid var(--gold);
+        background:var(--hover-bg);font-size:12px;line-height:1.5;">
+        <b>Discagem registrada ${fmtQuando(abertaAqui.criado_em) || ''}.</b>
+        <span class="texto-dim">Conta o que deu — pelo microfone ou pelo formulário — pra essa ligação
+        deixar de ser só uma tentativa.</span></div>` : ''}
       ${(ligacoes || []).length
         ? `<div style="margin-top:6px;">${ligacoes.map((g, i) => `
             <div style="padding:7px 0;border-top:${i ? '1px solid var(--line2)' : 'none'};font-size:12.5px;">
@@ -17891,6 +17911,19 @@ async function blocoNegociacaoLead (fundo, l, editavel) {
       recarregar()
     }
   })
+
+  // ---- discagem ----------------------------------------------------
+  const btnLigarFicha = alvo.querySelector('#ng-ligar')
+  if (btnLigarFicha) btnLigarFicha.onclick = () => {
+    const chamada = db.rpc('crm_iniciar_ligacao', {
+      p_lead_id: l.id, p_dispositivo: ehCelular() ? 'CELULAR' : 'COMPUTADOR' })
+    if (ehCelular()) { setTimeout(recarregar, 1500); return }
+    btnLigarFicha.disabled = true
+    chamada.then(({ error }) => {
+      if (error) { alert(error.message); btnLigarFicha.disabled = false; return }
+      recarregar()
+    })
+  }
 
   // ---- relato falado e audio ---------------------------------------
   const btnRelato = alvo.querySelector('#ng-relato')
@@ -18005,9 +18038,24 @@ function abrirFormPerda (alvo, l, cat, mov, recarregar) {
 // parado há mais tempo. Não há score nem prioridade inventada.
 // ---------------------------------------------------------------
 const ROTULO_RESULTADO_LIGACAO = {
+  DISCOU: 'Discou — falta dizer o que deu',
   ATENDEU: 'Atendeu', NAO_ATENDEU: 'Não atendeu', CAIXA_POSTAL: 'Caixa postal',
   REMARCAR: 'Pediu pra ligar depois', NUMERO_ERRADO: 'Número errado', OUTRO: 'Outro'
 }
+// No celular o botão "Ligar" abre o discador; no computador ele não tem
+// o que abrir, então vira "já liguei daqui" e mostra o número pra digitar.
+// Nos dois casos o clique é o que conta a discagem.
+const ehCelular = () =>
+  /Android|iPhone|iPad|iPod|Opera Mini|IEMobile/i.test(navigator.userAgent) ||
+  (navigator.maxTouchPoints > 1 && window.matchMedia('(max-width: 900px)').matches)
+
+function telefoneBonito (t) {
+  const d = String(t || '').replace(/\D/g, '')
+  if (d.length === 11) return `(${d.slice(0,2)}) ${d.slice(2,7)}-${d.slice(7)}`
+  if (d.length === 10) return `(${d.slice(0,2)}) ${d.slice(2,6)}-${d.slice(6)}`
+  return d
+}
+
 const RESULTADO_LIGACAO = [
   ['ATENDEU', 'Atendeu'],
   ['NAO_ATENDEU', 'Não atendeu'],
@@ -18075,11 +18123,19 @@ async function crmOriginacao (alvo, editavel, gerencia) {
       ${i.objecoes_abertas ? `<div class="texto-dim" style="font-size:11.5px;margin-top:5px;">
         Objeção em aberto: ${esc(i.objecoes_abertas)}</div>` : ''}
 
+      ${i.ligacao_aberta_id ? `<div style="margin-top:7px;padding:7px 10px;border-left:3px solid var(--gold);
+        background:var(--hover-bg);font-size:12px;line-height:1.5;">
+        <b>Discagem registrada ${fmtQuando(i.ligacao_aberta_em) || ''}.</b>
+        <span class="texto-dim">Falta dizer o que deu — enquanto não disser, conta como ligação sem resultado.</span>
+      </div>` : ''}
+
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:9px;">
         ${semTelefone || i.bloqueio_lgpd
           ? `<span class="texto-dim2" style="font-size:11.5px;align-self:center;">${
               i.bloqueio_lgpd ? 'contato bloqueado por LGPD' : 'sem telefone no cadastro'}</span>`
-          : `<a class="btn mini" href="tel:${esc(tel)}" style="text-decoration:none;">📞 Ligar</a>`}
+          : (ehCelular()
+            ? `<a class="btn mini org-ligar" href="tel:${esc(tel)}" style="text-decoration:none;">📞 Ligar</a>`
+            : `<button type="button" class="btn mini org-ligar">📞 Liguei pra ${esc(telefoneBonito(tel))}</button>`)}
         ${editavel ? `<button type="button" class="btn-secundario mini org-resultado">Registrar resultado</button>` : ''}
         ${editavel ? `<button type="button" class="btn-secundario mini org-relato">🎙️ Contar como foi</button>` : ''}
         <button type="button" class="btn-secundario mini org-ficha">Abrir ficha</button>
@@ -18135,6 +18191,24 @@ async function crmOriginacao (alvo, editavel, gerencia) {
         ? 'Esse número já estava no SDR — liguei os dois cadastros.'
         : 'Pronto, o lead está na fila do SDR do WhatsApp.')
       recarregar()
+    }
+
+    const btnLigar = card.querySelector('.org-ligar')
+    if (btnLigar) btnLigar.onclick = () => {
+      // no celular o href tel: segue adiante sozinho; não dá pra esperar
+      // a resposta do banco sem atrapalhar a discagem, então dispara e
+      // deixa correr — e a tela só é redesenhada depois
+      const chamada = db.rpc('crm_iniciar_ligacao', {
+        p_lead_id: id, p_dispositivo: ehCelular() ? 'CELULAR' : 'COMPUTADOR' })
+      if (!ehCelular()) {
+        btnLigar.disabled = true
+        chamada.then(({ error }) => {
+          if (error) { alert(error.message); btnLigar.disabled = false; return }
+          recarregar()
+        })
+      } else {
+        setTimeout(recarregar, 1500)
+      }
     }
 
     const btnRes = card.querySelector('.org-resultado')
@@ -18214,7 +18288,8 @@ function formResultadoLigacao (card, item, cat, recarregar) {
       p_observacao: obs || null,
       p_etapa: cx.querySelector('.rl-etapa').value || null,
       p_proximo_em: dataRetorno ? new Date(dataRetorno + 'T09:00:00').toISOString() : null,
-      p_proximo_titulo: cx.querySelector('.rl-titulo').value.trim() || null
+      p_proximo_titulo: cx.querySelector('.rl-titulo').value.trim() || null,
+      p_ligacao_id: item.ligacao_aberta_id || null
     })
     if (error) { alert(error.message); btn.disabled = false; btn.textContent = 'Salvar'; return }
 
@@ -18242,19 +18317,24 @@ async function blocoAtividadeComercial (alvo, gerencia) {
     <details class="panel" style="padding:12px 14px;margin-bottom:12px;" ${gerencia ? '' : 'open'}>
       <summary style="cursor:pointer;font-weight:700;font-size:13px;">Atividade dos últimos 30 dias</summary>
       <div class="tabela-scroll" style="margin-top:8px;"><table>
-        <thead><tr><th>Pessoa</th><th class="num">Ligações</th><th class="num">Atenderam</th>
+        <thead><tr><th>Pessoa</th><th class="num">Discagens</th><th class="num">Com resultado</th>
+          <th class="num">Sem resultado</th><th class="num">Atenderam</th>
           <th class="num">Leads tocados</th><th class="num">Objeções</th><th class="num">Contornadas</th>
           <th class="num">Propostas</th><th class="num">Ganhos</th><th class="num">Perdas</th></tr></thead>
         <tbody>${pessoas.map(p => `<tr>
           <td><b>${esc(p.pessoa)}</b></td>
-          <td class="num">${p.ligacoes}</td><td class="num">${p.atendidas}</td>
+          <td class="num">${p.discagens}</td><td class="num">${p.relatadas}</td>
+          <td class="num" style="${Number(p.sem_relato) ? 'color:var(--warn-text);' : ''}">${p.sem_relato}</td>
+          <td class="num">${p.atendidas}</td>
           <td class="num">${p.leads_tocados}</td><td class="num">${p.objecoes}</td>
           <td class="num">${p.contornadas}</td><td class="num">${p.propostas}</td>
           <td class="num">${p.ganhos}</td><td class="num">${p.perdas}</td></tr>`).join('')}</tbody>
       </table></div>
       <p class="texto-dim2" style="font-size:11px;line-height:1.55;margin:8px 0 0;">
-        São números de atividade, não de mérito: só conta o que foi registrado no sistema.
-        Uma ligação feita e não marcada aqui não existe pra esse quadro.</p>
+        <b>Discagem</b> é o clique em "Ligar" — o sistema não sabe se o telefone chegou a chamar,
+        só que a pessoa foi ligar. <b>Com resultado</b> é quando alguém voltou e disse o que deu.
+        A diferença entre as duas é o buraco do processo, e está aqui de propósito.
+        Ligação feita sem clicar em nada não aparece neste quadro.</p>
     </details>`
 }
 
