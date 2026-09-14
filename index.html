@@ -10527,6 +10527,115 @@ function formSolicitacao (s = null) {
   }
 }
 
+// ---------------------------------------------------------------
+// Aprovação por WhatsApp — o painel de quem administra.
+//
+// Fica na própria tela de Aprovação, porque quem olha essa fila é quem
+// precisa saber que parte dela pode ser decidida por fora do sistema.
+// Decisão tomada no WhatsApp que não aparece aqui é decisão invisível.
+// ---------------------------------------------------------------
+async function blocoAprovacaoWhatsApp (alvo) {
+  if (!alvo || !ehTotal()) return
+
+  const [{ data: aprovadores }, { data: eventos }] = await Promise.all([
+    db.from('compra_aprovador_whatsapp')
+      .select('*, pessoa:pessoa_id(nome,telefone)').order('criado_em'),
+    db.from('compra_aprovacao_wa_evento')
+      .select('id,tipo,direcao,texto,transcricao,audio,criado_em,solicitacao_id,sessao:sessao_id(pessoa:pessoa_id(nome))')
+      .in('tipo', ['CONFIRMOU_APROVAR', 'CONFIRMOU_REPROVAR'])
+      .order('criado_em', { ascending: false }).limit(15)
+  ])
+
+  const lista = aprovadores || []
+  const decisoes = eventos || []
+
+  alvo.innerHTML = `
+    <details class="panel" style="padding:14px 16px;margin-bottom:16px;">
+      <summary style="cursor:pointer;font-weight:700;font-size:13.5px;">
+        📱 Aprovação por WhatsApp
+        <span class="texto-dim2" style="font-weight:400;">
+          — ${lista.filter(a => a.ativo).length} pessoa(s) podem decidir por lá</span>
+      </summary>
+
+      <p class="texto-dim2" style="font-size:11.5px;line-height:1.6;margin:10px 0;">
+        Todo dia útil às 8h05 o sistema manda pra essas pessoas a lista do que está parado aqui.
+        Elas respondem por texto ou áudio, o robô repete o item e o valor, e só executa depois
+        que a pessoa confirma. Aprovou, o financeiro é avisado na hora.
+        Quem perde o papel de Diretoria no sistema perde junto a aprovação pelo WhatsApp.
+      </p>
+
+      ${lista.length ? `<div class="tabela-scroll"><table>
+        <thead><tr><th>Quem</th><th>Telefone</th><th>Resumo diário</th><th>Situação</th><th></th></tr></thead>
+        <tbody>${lista.map(a => `<tr style="${a.ativo ? '' : 'opacity:.55;'}">
+          <td><b>${esc(a.pessoa?.nome ?? '—')}</b></td>
+          <td class="texto-dim2">${esc(a.pessoa?.telefone || 'sem telefone no cadastro')}</td>
+          <td class="texto-dim2">${a.recebe_resumo ? 'recebe' : 'não recebe'}</td>
+          <td>${a.ativo ? '<span class="badge-bom">ativo</span>' : '<span class="chip">desligado</span>'}</td>
+          <td><button type="button" class="btn-secundario mini aw-alternar"
+                data-id="${a.pessoa_id}" data-ativo="${a.ativo ? 1 : 0}">
+                ${a.ativo ? 'desligar' : 'ligar'}</button></td>
+        </tr>`).join('')}</tbody></table></div>`
+        : `<p class="texto-dim2" style="font-size:12px;">Ninguém habilitado ainda.</p>`}
+
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+        <button type="button" class="btn-secundario mini" id="aw-mandar">Mandar o resumo agora</button>
+      </div>
+      <div id="aw-recado" class="texto-dim2" style="font-size:11.5px;margin-top:8px;"></div>
+
+      ${decisoes.length ? `
+        <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--line2);">
+          <b style="font-size:13px;">Últimas decisões tomadas por WhatsApp</b>
+          <div style="margin-top:6px;">
+            ${decisoes.map(e => `
+              <div style="padding:6px 0;border-top:1px solid var(--line2);font-size:12.5px;">
+                <b>${e.tipo === 'CONFIRMOU_APROVAR' ? '✅ Aprovou' : '❌ Reprovou'}</b>
+                <span class="texto-dim2">${esc(e.sessao?.pessoa?.nome ?? '—')} · ${fmtQuando(e.criado_em) || ''}${
+                  e.audio ? ' · por áudio' : ''}</span>
+                ${e.transcricao || e.texto
+                  ? `<div class="texto-dim" style="margin-top:2px;">"${esc(e.transcricao || e.texto)}"</div>` : ''}
+              </div>`).join('')}
+          </div>
+        </div>` : ''}
+
+      <p class="texto-dim2" style="font-size:11px;line-height:1.6;margin:12px 0 0;">
+        Tudo que foi dito de parte a parte fica gravado, com a transcrição de cada áudio.
+        Não existe aprovação em lote por WhatsApp — uma mensagem, uma decisão.
+      </p>
+    </details>`
+
+  const recado = alvo.querySelector('#aw-recado')
+
+  alvo.querySelectorAll('.aw-alternar').forEach(b => {
+    b.onclick = async () => {
+      const ligando = b.dataset.ativo === '0'
+      if (!ligando && !confirm('Desligar a aprovação por WhatsApp dessa pessoa?')) return
+      b.disabled = true
+      const { error } = await db.from('compra_aprovador_whatsapp')
+        .update({ ativo: ligando, atualizado_em: new Date().toISOString() })
+        .eq('pessoa_id', b.dataset.id)
+      if (error) { alert(error.message); b.disabled = false; return }
+      blocoAprovacaoWhatsApp(alvo)
+    }
+  })
+
+  const btn = alvo.querySelector('#aw-mandar')
+  if (btn) btn.onclick = async () => {
+    if (!confirm('Isso manda a lista AGORA no WhatsApp de quem está ativo.\n\nPode ir?')) return
+    btn.disabled = true; btn.textContent = 'mandando...'
+    const { data: r, error } = await db.rpc('compra_wa_disparar_resumo')
+    btn.disabled = false; btn.textContent = 'Mandar o resumo agora'
+    if (error || r?.erro) {
+      recado.textContent = 'Não consegui: ' + (r?.erro || error?.message || 'erro desconhecido')
+      recado.style.color = 'var(--warn-text)'
+      return
+    }
+    // o envio roda por fora do banco: o que dá pra afirmar aqui é que foi
+    // pedido, não que chegou. Confira no WhatsApp.
+    recado.textContent = 'Pedi o envio agora. Confere no WhatsApp de quem está ativo — se não chegar em 1 minuto, me avise.'
+    recado.style.color = 'var(--good-text)'
+  }
+}
+
 // ----- Compras › Coordenação e Aprovação -----
 // A mesma fila serve as duas etapas; muda o status filtrado e quem assina.
 const ETAPAS = {
@@ -10588,7 +10697,10 @@ async function comprasDecidir (alvo, nomeEtapa) {
       <span class="texto-dim2" style="font-size:12px;">${(data || []).length} pendente(s)${esc(meus)}</span>
     </div>
     <p class="aviso" style="margin-top:0;margin-bottom:14px;">${etapa.explica}</p>
+    ${nomeEtapa === 'aprovacao' ? `<div id="c-aprov-wa"></div>` : ''}
     <div id="c-fila"></div>`
+
+  if (nomeEtapa === 'aprovacao') blocoAprovacaoWhatsApp(alvo.querySelector('#c-aprov-wa'))
 
   $('#c-fila').innerHTML = (data || []).map(s => `
     <div class="cartao-sol">
