@@ -4741,6 +4741,376 @@ async function blocoLeadsSdrDoVendedor (area) {
   })
 }
 
+// ---------------------------------------------------------------
+// Visão Geral — cabeçalho novo.
+//
+// O layout veio de um mockup, mas com três desvios deliberados:
+//
+// 1) As cores saem das variáveis do tema, não do mockup. O sistema tem
+//    skins; um verde cravado na mão ficaria certo em uma e errado nas
+//    outras.
+//
+// 2) Os quatro números não são fixos. O mockup mostrava "Compras em
+//    processamento" e "Colaboradores no time" pra uma pessoa que não tem
+//    Compras nem RH no perfil. Aqui os cartões são montados pelo que cada
+//    um pode ver — e os count() passam pela RLS, então o número é o que a
+//    pessoa realmente enxerga.
+//
+// 3) A comparação percentual é sobre ENTRADAS do período, não sobre o
+//    número grande. Comparar "quantos estão abertos hoje" com "quantos
+//    estavam abertos semana passada" exigiria um histórico de status que
+//    o sistema não guarda. E percentual com pouca coisa é ruído: de 1 pra
+//    2 vira "+100%". Abaixo de 3 eventos nos dois lados, mostra a
+//    diferença absoluta e cala a porcentagem.
+// ---------------------------------------------------------------
+const VG_MINIMO_COMPARAR = 3
+
+function vgSaudacao () {
+  const h = new Date().getHours()
+  return h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite'
+}
+
+// "+25%" só quando o percentual significa alguma coisa.
+function vgVariacao (novos, antes) {
+  if (novos == null || antes == null) return null
+  const n = Number(novos), a = Number(antes)
+  if (n < VG_MINIMO_COMPARAR && a < VG_MINIMO_COMPARAR) {
+    if (n === a) return { texto: 'igual à semana passada', dir: 0, fraco: true }
+    return { texto: `${n > a ? '+' : ''}${n - a} vs. semana passada`, dir: n > a ? 1 : -1, fraco: true }
+  }
+  if (a === 0) return { texto: `+${n} vs. nenhuma na semana passada`, dir: 1, fraco: true }
+  const pct = Math.round(((n - a) / a) * 100)
+  return { texto: `${pct > 0 ? '+' : ''}${pct}% vs. semana passada`, dir: Math.sign(pct), fraco: false }
+}
+
+// ---------------------------------------------------------------
+async function vgCabecalho (area) {
+  const primeiro = (PERFIL.nome || '').split(' ')[0]
+  const agora = new Date()
+  const dataExtenso = agora.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })
+
+  const hero = document.createElement('div')
+  hero.className = 'panel'
+  hero.style.cssText = `padding:0;margin-bottom:16px;overflow:hidden;border:1px solid var(--line);`
+  hero.innerHTML = `
+    <div style="display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;align-items:center;
+      padding:26px 28px;background:
+        linear-gradient(120deg, rgba(var(--rust-rgb),.14), rgba(var(--gold-rgb),.07) 55%, transparent);">
+      <div style="min-width:220px;">
+        <div class="texto-dim" style="font-size:15px;line-height:1.2;">${vgSaudacao()},</div>
+        <h2 style="font-family:var(--serif);font-size:34px;margin:2px 0 0;line-height:1.05;">
+          ${esc(primeiro || 'bem-vindo')}</h2>
+        <div style="width:46px;height:2px;background:var(--gold);margin:10px 0 8px;"></div>
+        <div class="texto-dim2" style="font-size:12.5px;text-transform:capitalize;">${esc(dataExtenso)}</div>
+      </div>
+      <div id="vg-clima" style="min-width:190px;"></div>
+    </div>`
+  area.appendChild(hero)
+
+  // o clima vem de fora (edge function). Não segura a tela: entra quando
+  // chegar, e se não chegar a tela simplesmente não mostra clima nenhum
+  // em vez de ficar com um "—" eterno no canto.
+  vgClima(hero.querySelector('#vg-clima'))
+}
+
+async function vgClima (alvo) {
+  if (!alvo) return
+  try {
+    const { data, error } = await db.functions.invoke('mercado-agro', { body: {} })
+    const c = (data || {}).clima
+    if (error || !c || c.temperatura_atual == null) { alvo.remove(); return }
+    const p = (c.previsao_3_dias || []).slice(0, 3)
+    alvo.innerHTML = `
+      <div style="border:1px solid var(--line2);border-radius:10px;padding:12px 14px;background:var(--surface2);">
+        <div style="display:flex;align-items:baseline;gap:8px;">
+          <span style="font-family:var(--serif);font-size:26px;">${fmtNum(c.temperatura_atual, 0)}°C</span>
+          ${c.chuva_hoje_mm != null
+            ? `<span class="texto-dim" style="font-size:12px;">${fmtNum(c.chuva_hoje_mm, 1)} mm hoje</span>` : ''}
+        </div>
+        <div class="texto-dim2" style="font-size:11.5px;margin-top:1px;">
+          ${esc(c.cidade_referencia || 'referência da região')}</div>
+        ${p.length ? `<div style="display:flex;gap:10px;margin-top:8px;padding-top:7px;border-top:1px solid var(--line2);">
+          ${p.map(d => `<div style="font-size:11px;line-height:1.35;">
+            <div class="texto-dim2">${esc((fmtData(d.data) || '').slice(0, 5))}</div>
+            <div>${d.temp_max != null ? fmtNum(d.temp_max, 0) + '°' : '—'}</div>
+          </div>`).join('')}</div>` : ''}
+      </div>`
+  } catch { alvo.remove() }
+}
+
+// ---------------------------------------------------------------
+async function vgIndicadores (area) {
+  const caixa = document.createElement('div')
+  caixa.style.cssText = 'margin-bottom:16px;'
+  caixa.innerHTML = `<p class="texto-dim2" style="font-size:12px;">carregando seus números...</p>`
+  area.appendChild(caixa)
+
+  const { data, error } = await db.rpc('visao_geral_indicadores', { p_dias: 7 })
+  if (error || !data?.itens?.length) { caixa.remove(); return }
+
+  // Ordem dos quatro lugares: primeiro o que está parado esperando a
+  // pessoa, depois o que é o trabalho dela (peso 1), por último o que
+  // todo mundo tem (peso 2 e 3). Indicador urgente ZERADO não sobe —
+  // "0 esperando sua ligação" não é urgência, é tranquilidade.
+  const posicao = i => (i.urgente && Number(i.valor) > 0) ? -1 : Number(i.peso ?? 2)
+  const itens = [...data.itens].sort((a, b) => posicao(a) - posicao(b))
+  const mostrar = itens.slice(0, 4)
+
+  caixa.innerHTML = `
+    <div style="display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));">
+      ${mostrar.map(i => {
+        const v = vgVariacao(i.novos, i.antes)
+        const chama = i.urgente && Number(i.valor) > 0
+        return `
+        <button type="button" class="vg-cartao" data-pagina="${esc(i.pagina || '')}" data-sub="${esc(i.sub || '')}"
+          style="text-align:left;background:var(--card);border:1px solid ${chama ? 'var(--gold)' : 'var(--line)'};
+            border-radius:12px;padding:15px 16px;cursor:pointer;display:flex;gap:13px;align-items:flex-start;
+            font:inherit;color:inherit;width:100%;">
+          <span style="font-size:19px;line-height:1;flex:none;background:rgba(var(--gold-rgb),.13);
+            border-radius:9px;padding:8px;">${i.icone || '•'}</span>
+          <span style="flex:1;min-width:0;">
+            <span class="texto-dim" style="display:block;font-size:12.5px;line-height:1.35;">${esc(i.rotulo)}</span>
+            <span style="display:block;font-family:var(--serif);font-size:29px;line-height:1.15;margin-top:1px;
+              ${chama ? 'color:var(--gold);' : ''}">${fmtNum(i.valor, 0)}</span>
+            ${v ? `<span style="display:block;font-size:11.5px;margin-top:2px;
+                     color:${v.fraco ? 'var(--dim2)' : v.dir > 0 ? 'var(--good-text)' : v.dir < 0 ? 'var(--warn-text)' : 'var(--dim2)'};">
+                     ${v.dir > 0 ? '↑' : v.dir < 0 ? '↓' : ''} ${esc(v.texto)}</span>`
+                 : `<span class="texto-dim2" style="display:block;font-size:11px;margin-top:2px;">${esc(i.rodape || '')}</span>`}
+            ${v && i.rodape ? `<span class="texto-dim2" style="display:block;font-size:10.5px;margin-top:1px;">${esc(i.rodape)}</span>` : ''}
+          </span>
+        </button>`
+      }).join('')}
+    </div>
+    ${mostrar.some(i => vgVariacao(i.novos, i.antes)) ? `
+      <p class="texto-dim2" style="font-size:10.5px;line-height:1.5;margin:7px 0 0;">
+        A comparação é de quantos <b>entraram</b> nos últimos 7 dias contra os 7 anteriores — não do número
+        grande, que é quanto está aberto agora. Com menos de ${VG_MINIMO_COMPARAR} dos dois lados,
+        mostro a diferença em vez da porcentagem.</p>` : ''}`
+
+  caixa.querySelectorAll('.vg-cartao').forEach(b => {
+    b.onclick = () => {
+      if (!b.dataset.pagina) return
+      if (b.dataset.sub) CRM_SUBABA_INICIAL = b.dataset.sub
+      irPara(b.dataset.pagina)
+    }
+  })
+}
+
+// ---------------------------------------------------------------
+// Avisos + o que está esperando a pessoa, lado a lado.
+async function vgAvisosEDestaque (area, avisos) {
+  const linha = document.createElement('div')
+  linha.style.cssText = 'display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));margin-bottom:16px;'
+  area.appendChild(linha)
+
+  // --- avisos -----------------------------------------------------
+  const esq = document.createElement('div')
+  esq.className = 'panel'
+  esq.style.cssText = 'padding:16px 18px;'
+  esq.innerHTML = avisos?.length
+    ? `<div class="cabeca-secao" style="margin-bottom:6px;">
+         <h3 style="font-family:var(--serif);font-size:16px;">📣 Avisos importantes</h3>
+         <button class="btn-secundario mini" id="vg-av-limpar">marcar como lidos</button>
+       </div>
+       ${avisos.slice(0, 4).map(a => `
+         <div style="display:flex;gap:10px;padding:9px 0;border-top:1px solid var(--line2);">
+           <span style="flex:none;width:7px;height:7px;border-radius:50%;background:var(--gold);margin-top:6px;"></span>
+           <div style="min-width:0;">
+             <div style="font-size:13px;font-weight:600;line-height:1.35;">${esc(a.titulo)}</div>
+             ${a.texto ? `<div class="texto-dim" style="font-size:12px;line-height:1.5;margin-top:1px;">${esc(a.texto)}</div>` : ''}
+             <div class="texto-dim2" style="font-size:11px;margin-top:2px;">${fmtQuando(a.criado_em) || ''}</div>
+           </div>
+         </div>`).join('')}
+       ${avisos.length > 4 ? `<p class="texto-dim2" style="font-size:11.5px;margin:8px 0 0;">
+          e mais ${avisos.length - 4}.</p>` : ''}`
+    : `<h3 style="font-family:var(--serif);font-size:16px;margin:0 0 4px;">📣 Avisos</h3>
+       <p class="texto-dim2" style="font-size:12.5px;line-height:1.6;margin:0;">
+         Nenhum aviso novo. Aqui aparecem os avisos que o sistema manda pra você —
+         compra aprovada, prazo chegando, solicitação respondida.</p>`
+  linha.appendChild(esq)
+
+  const btnLimpar = esq.querySelector('#vg-av-limpar')
+  if (btnLimpar) btnLimpar.onclick = async () => {
+    await db.from('aviso').update({ lido_em: new Date().toISOString() })
+      .in('id', avisos.map(a => a.id))
+    irPara('visao_geral')
+  }
+
+  // --- o que está esperando você ----------------------------------
+  const dir = document.createElement('div')
+  dir.className = 'panel'
+  dir.style.cssText = `padding:18px 20px;border:1px solid var(--line);
+    background:linear-gradient(135deg, rgba(var(--rust-rgb),.16), rgba(var(--gold-rgb),.06));`
+  dir.innerHTML = `<p class="texto-dim2" style="font-size:12px;margin:0;">vendo o que precisa de você...</p>`
+  linha.appendChild(dir)
+  vgPrecisaDeVoce(dir)
+}
+
+// Este bloco ocupa o lugar que no mockup era o banner de marketing.
+// Espaço nobre numa ferramenta de trabalho vale mais mostrando o que
+// está parado esperando a pessoa. A mensagem institucional continua lá,
+// mas só quando não há nada pendente.
+async function vgPrecisaDeVoce (alvo) {
+  const hoje = hojeISO()
+  const linhas = []
+
+  try {
+    const { data: atrasadas } = await db.from('solicitacao_interna')
+      .select('id,codigo,titulo,data_limite,status')
+      .in('status', ['ABERTA', 'EM_ANDAMENTO'])
+      .eq('responsavel_id', PERFIL.pessoaId)
+      .lt('data_limite', hoje).order('data_limite').limit(3)
+    ;(atrasadas || []).forEach(s => linhas.push({
+      icone: '⏰', titulo: s.titulo,
+      nota: 'passou do prazo' + (fmtData(s.data_limite) ? ' em ' + fmtData(s.data_limite) : ''),
+      pagina: 'solicitacoes', critico: true
+    }))
+
+    const { data: minhas } = await db.from('solicitacao_interna')
+      .select('id,titulo,data_limite').in('status', ['ABERTA', 'EM_ANDAMENTO'])
+      .eq('responsavel_id', PERFIL.pessoaId).gte('data_limite', hoje)
+      .order('data_limite').limit(2)
+    ;(minhas || []).forEach(s => linhas.push({
+      icone: '📌', titulo: s.titulo,
+      nota: fmtData(s.data_limite) ? 'até ' + fmtData(s.data_limite) : 'sem prazo',
+      pagina: 'solicitacoes'
+    }))
+  } catch { /* sem pendência é um resultado válido, não um erro de tela */ }
+
+  if (!linhas.length) {
+    alvo.innerHTML = `
+      <div style="display:flex;flex-direction:column;height:100%;justify-content:center;">
+        <span style="font-size:22px;">🌱</span>
+        <h3 style="font-family:var(--serif);font-size:19px;margin:8px 0 4px;line-height:1.25;">
+          Nada parado esperando você.</h3>
+        <p class="texto-dim" style="font-size:12.5px;line-height:1.6;margin:0;">
+          Nenhuma solicitação sua venceu nem vence hoje. Do planejamento à colheita de resultados —
+          pessoas, processos e tecnologia para impulsionar o agro.</p>
+      </div>`
+    return
+  }
+
+  alvo.innerHTML = `
+    <h3 style="font-family:var(--serif);font-size:18px;margin:0 0 3px;">Precisa de você</h3>
+    <p class="texto-dim2" style="font-size:11.5px;margin:0 0 10px;">
+      ${linhas.filter(l => l.critico).length
+        ? `${linhas.filter(l => l.critico).length} passou do prazo.`
+        : 'nada atrasado, só o que está na sua mão.'}</p>
+    ${linhas.map(l => `
+      <button type="button" class="vg-pend" data-pagina="${esc(l.pagina)}"
+        style="display:flex;gap:9px;align-items:flex-start;width:100%;text-align:left;font:inherit;color:inherit;
+          background:none;border:none;border-top:1px solid var(--line2);padding:8px 0;cursor:pointer;">
+        <span style="flex:none;font-size:14px;">${l.icone}</span>
+        <span style="min-width:0;">
+          <span style="display:block;font-size:12.5px;font-weight:600;line-height:1.35;">${esc(l.titulo)}</span>
+          <span style="display:block;font-size:11px;margin-top:1px;
+            color:${l.critico ? 'var(--critico-text)' : 'var(--dim2)'};">${esc(l.nota)}</span>
+        </span>
+      </button>`).join('')}`
+
+  alvo.querySelectorAll('.vg-pend').forEach(b => { b.onclick = () => irPara(b.dataset.pagina) })
+}
+
+// ---------------------------------------------------------------
+// Atalhos. Guardam só a chave da página: se a permissão sair depois, o
+// atalho some sozinho na hora de montar — atalho não é porta paralela
+// ao controle de acesso.
+function vgPaginasDisponiveis () {
+  // 'visao_geral' fica de fora: atalho pra tela em que a pessoa já está
+  const fixas = Object.entries(PAGINAS).filter(([chave, p]) => p.sempre && chave !== 'visao_geral')
+    .map(([chave, p]) => ({ chave, nome: p.nome }))
+  const dosModulos = (PERFIL.modulos || [])
+    .filter(m => PAGINAS[m.chave] && podeVer(m.chave) && !fixas.some(f => f.chave === m.chave))
+    .map(m => ({ chave: m.chave, nome: m.nome }))
+  return [...fixas, ...dosModulos]
+}
+
+async function vgAtalhos (area) {
+  const caixa = document.createElement('div')
+  caixa.className = 'panel'
+  caixa.style.cssText = 'padding:16px 18px;margin-bottom:16px;'
+  area.appendChild(caixa)
+
+  const disponiveis = vgPaginasDisponiveis()
+  const { data: salvos } = await db.from('acesso_rapido')
+    .select('ordem,chave').eq('pessoa_id', PERFIL.pessoaId).order('ordem')
+
+  // a permissão manda: chave salva que a pessoa não pode mais ver é descartada
+  let escolhidas = (salvos || []).map(s => s.chave).filter(c => disponiveis.some(d => d.chave === c))
+  // Padrão de quem nunca escolheu: as telas do trabalho dela primeiro.
+  // Pra Bianca isso é CRM e SDR, não "Solicitações e Compras" — que todo
+  // mundo tem e quase ninguém abre pelo atalho.
+  if (!escolhidas.length) {
+    const genericas = Object.entries(PAGINAS).filter(([, p]) => p.sempre).map(([c]) => c)
+    escolhidas = [...disponiveis.filter(d => !genericas.includes(d.chave)),
+                  ...disponiveis.filter(d => genericas.includes(d.chave))]
+      .slice(0, 4).map(d => d.chave)
+  }
+
+  let editando = false
+
+  const desenhar = () => {
+    caixa.innerHTML = `
+      <div class="cabeca-secao" style="margin-bottom:8px;">
+        <h3 style="font-family:var(--serif);font-size:16px;">⚡ Acesso rápido</h3>
+        <button class="btn-secundario mini" id="vg-at-editar">${editando ? 'concluir' : 'editar'}</button>
+      </div>
+      ${editando ? `
+        <p class="texto-dim2" style="font-size:11.5px;line-height:1.55;margin:0 0 9px;">
+          Marque até 4. Só aparecem as telas que você tem permissão de abrir.</p>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          ${disponiveis.map(d => {
+            const on = escolhidas.includes(d.chave)
+            return `<button type="button" class="btn-secundario mini vg-at-op" data-chave="${esc(d.chave)}"
+              style="${on ? 'border-color:var(--rust);color:var(--rust);' : ''}">
+              ${on ? '✓ ' : ''}${esc(d.nome)}</button>`
+          }).join('')}
+        </div>`
+      : `<div style="display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));">
+          ${escolhidas.map(c => {
+            const d = disponiveis.find(x => x.chave === c)
+            if (!d) return ''
+            return `<button type="button" class="vg-at-ir" data-chave="${esc(c)}"
+              style="background:var(--surface2);border:1px solid var(--line2);border-radius:10px;padding:14px 12px;
+                cursor:pointer;font:inherit;color:inherit;text-align:left;display:flex;flex-direction:column;gap:7px;">
+              <span style="font-size:17px;line-height:1;">${ICONES_MODULO[c] ? '' : '▸'}</span>
+              <span style="font-size:12.5px;font-weight:600;line-height:1.3;">${esc(d.nome)}</span>
+            </button>`
+          }).join('')}
+        </div>
+        ${escolhidas.length === 0 ? `<p class="texto-dim2" style="font-size:12px;margin:0;">
+          Nenhum atalho escolhido — clique em editar.</p>` : ''}`}`
+
+    caixa.querySelector('#vg-at-editar').onclick = async () => {
+      if (editando) await gravar()
+      editando = !editando
+      desenhar()
+    }
+    caixa.querySelectorAll('.vg-at-ir').forEach(b => { b.onclick = () => irPara(b.dataset.chave) })
+    caixa.querySelectorAll('.vg-at-op').forEach(b => {
+      b.onclick = () => {
+        const c = b.dataset.chave
+        if (escolhidas.includes(c)) escolhidas = escolhidas.filter(x => x !== c)
+        else if (escolhidas.length < 4) escolhidas.push(c)
+        else { aviso3s('Só 4 atalhos — tire um antes de pôr outro.'); return }
+        desenhar()
+      }
+    })
+  }
+
+  const gravar = async () => {
+    await db.from('acesso_rapido').delete().eq('pessoa_id', PERFIL.pessoaId)
+    if (escolhidas.length) {
+      const { error } = await db.from('acesso_rapido').insert(
+        escolhidas.map((chave, i) => ({ pessoa_id: PERFIL.pessoaId, ordem: i + 1, chave })))
+      if (error) { alert(error.message); return }
+    }
+    aviso3s('Atalhos salvos.')
+  }
+
+  desenhar()
+}
+
 async function paginaVisaoGeral () {
   $('#subtitulo-pagina').textContent = 'O painel montado para você'
   const area = areaLivre()
@@ -4753,47 +5123,19 @@ async function paginaVisaoGeral () {
     return
   }
 
-  // saudação com a data por extenso — amarra visualmente todos os
-  // blocos que vêm a seguir, meio que um "hoje é assim" antes de entrar
-  // nos detalhes de cada módulo
-  const agora = new Date()
-  const hora = agora.getHours()
-  const saudacao = hora < 12 ? 'Bom dia' : hora < 18 ? 'Boa tarde' : 'Boa noite'
-  const dataExtenso = agora.toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })
-  const primeiroNome = (PERFIL.nome || '').split(' ')[0]
-  const cabecalho = document.createElement('div')
-  cabecalho.style.cssText = 'margin-bottom:18px;'
-  cabecalho.innerHTML = `
-    <h2 style="font-family:var(--serif);font-size:24px;margin:0;">${saudacao}${primeiroNome ? ', ' + esc(primeiroNome) : ''}</h2>
-    <p class="texto-dim2" style="font-size:13px;margin:3px 0 0;text-transform:capitalize;">${esc(dataExtenso)}</p>`
-  area.appendChild(cabecalho)
-
-  // avisos não lidos primeiro
+  // Cabeçalho novo: saudação + clima, os quatro números montados pelo
+  // perfil de cada um, avisos e o que está esperando a pessoa. Tudo o que
+  // vinha depois (agenda, painéis de módulo, painel montado por admin)
+  // continua rodando igual — este bloco só troca o topo da tela.
+  $('#subtitulo-pagina').textContent = ''
   const { data: avisos } = await db.from('aviso')
     .select('id,titulo,texto,criado_em').is('lido_em', null)
     .eq('pessoa_id', PERFIL.pessoaId).order('criado_em', { ascending: false })
 
-  if (avisos?.length) {
-    const bloco = document.createElement('div')
-    bloco.className = 'panel'
-    bloco.style.cssText = 'padding:18px;margin-bottom:16px;'
-    bloco.innerHTML = `
-      <div class="cabeca-secao">
-        <h3 style="font-family:var(--serif);font-size:17px;">
-          ${avisos.length} aviso${avisos.length > 1 ? 's' : ''}</h3>
-        <button class="btn-secundario mini" id="av-limpar">marcar como lidos</button>
-      </div>
-      ${avisos.map(a => `<div class="passo">
-        <span class="quando">${fmtQuando(a.criado_em) ?? '—'}</span>
-        <span><b>${esc(a.titulo)}</b>${a.texto ? '<br>' + esc(a.texto) : ''}</span>
-      </div>`).join('')}`
-    area.appendChild(bloco)
-    bloco.querySelector('#av-limpar').onclick = async () => {
-      await db.from('aviso').update({ lido_em: new Date().toISOString() })
-        .in('id', avisos.map(a => a.id))
-      irPara('visao_geral')
-    }
-  }
+  await vgCabecalho(area)
+  await vgIndicadores(area)
+  await vgAvisosEDestaque(area, avisos)
+  await vgAtalhos(area)
 
   // Visão Geral personalizada — só pro Fabiano; o resto do fluxo padrão
   // (central de atenção, painéis por módulo, painel montado por admin
