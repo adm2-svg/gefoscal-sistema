@@ -23944,6 +23944,162 @@ function previewTelefoneNorm (t) {
   return d
 }
 
+// ---------------------------------------------------------------
+// Termômetro da prospecção.
+//
+// Fica em cima da tela de Listas de propósito: é ali que se mexe no
+// intervalo e no teto diário, e o número que justifica mexer tem que
+// estar do lado do botão, não escondido numa aba de relatório.
+//
+// A regra da casa aqui: percentual com pouca gente é ruído, não é
+// medida. Abaixo de 20 abordados a tela diz isso em vez de mostrar uma
+// taxa que parece informação. É o mesmo erro do "R$ 0" que na verdade
+// era "ninguém preencheu" — número que parece fato e é ausência.
+//
+// E o WhatsApp não avisa quando alguém denuncia. O que dá pra ver é
+// falha de envio e silêncio. São sinais indiretos e estão escritos
+// como sinais indiretos.
+// ---------------------------------------------------------------
+const AMOSTRA_MINIMA_SDR = 20
+let TERM_DIAS = 30
+
+async function termometroSdr (alvo) {
+  if (!alvo) return
+  const { data, error } = await db.rpc('sdr_termometro', { p_dias: TERM_DIAS })
+  if (error) { alvo.innerHTML = ''; return }
+
+  const d = data || {}
+  const abordados = Number(d.abordados || 0)
+  const responderam = Number(d.responderam || 0)
+  const taxa = d.taxa_resposta == null ? null : Number(d.taxa_resposta)
+  const erros = Number(d.erros_envio || 0)
+  const naoEntregues = Number(d.nao_entregues || 0)
+  const semResposta = Number(d.sem_resposta_ha_3_dias || 0)
+  const naFila = Number(d.na_fila || 0)
+  const suficiente = abordados >= AMOSTRA_MINIMA_SDR
+
+  // ---- a leitura, em português ------------------------------------
+  let cor = 'var(--line)'
+  let titulo = ''
+  let texto = ''
+
+  if (abordados === 0) {
+    titulo = 'O robô ainda não abordou ninguém.'
+    texto = naFila
+      ? `Tem ${naFila} contato(s) na fila esperando a vez. Assim que as primeiras mensagens saírem, ` +
+        'os números aparecem aqui e aí dá pra decidir ritmo com base em fato.'
+      : 'Nenhum contato na fila de lista ativa. Enquanto não houver, não há o que medir — ' +
+        'e também não há risco nenhum pro número.'
+  } else if (!suficiente) {
+    cor = 'var(--dim2)'
+    titulo = `Ainda é cedo pra concluir — ${abordados} abordado(s).`
+    texto = `${responderam} respondeu(ram) até agora. Com menos de ${AMOSTRA_MINIMA_SDR} pessoas, ` +
+      'qualquer porcentagem vira ruído: um cliente a mais ou a menos muda tudo. ' +
+      'Os números estão aí embaixo pra acompanhar, mas não servem pra decidir ritmo ainda.'
+  } else if (erros > 0 && erros / abordados >= 0.15) {
+    cor = 'var(--critico-text)'
+    titulo = 'Muita falha de envio — vale parar e olhar.'
+    texto = `${erros} de ${abordados} abordagens falharam no envio. Pode ser número errado na lista, ` +
+      'mas também é o jeito que um bloqueio aparece por aqui. Antes de acelerar, conferir de perto.'
+  } else if (taxa != null && taxa < 10) {
+    cor = 'var(--warn-text)'
+    titulo = `Taxa de resposta baixa: ${taxa}%.`
+    texto = 'Acelerar agora só faz mais gente ignorar mais rápido — e número muito falado e pouco ' +
+      'respondido é o que o WhatsApp lê como spam. O ajuste aqui é a mensagem e a qualidade da lista, ' +
+      'não o intervalo.'
+  } else if (taxa != null && taxa < 20) {
+    cor = 'var(--warn-text)'
+    titulo = `Taxa de resposta de ${taxa}% — mediana.`
+    texto = 'Dá pra aumentar um pouco o teto diário e observar por mais uma semana antes de mexer de novo. ' +
+      'Mexer numa coisa de cada vez é o que deixa saber o que funcionou.'
+  } else {
+    cor = 'var(--good-text)'
+    titulo = `Taxa de resposta de ${taxa}% — está sendo bem recebido.`
+    texto = 'Espaço pra aumentar o teto diário aos poucos, acompanhando as falhas de envio. ' +
+      'Subir de pouco em pouco e esperar alguns dias entre um ajuste e outro.'
+  }
+
+  const cartao = (rot, val, nota, destaque) => `
+    <div style="min-width:120px;">
+      <div style="font-size:22px;font-weight:700;font-family:var(--serif);${destaque || ''}">${esc(String(val))}</div>
+      <div style="font-size:12px;font-weight:600;">${esc(rot)}</div>
+      ${nota ? `<div class="texto-dim2" style="font-size:11px;line-height:1.45;max-width:150px;">${esc(nota)}</div>` : ''}
+    </div>`
+
+  const porAbordagem = d.por_abordagem || []
+  const comLigacao = porAbordagem.find(x => x.ja_tentou_ligacao)
+  const semLigacao = porAbordagem.find(x => !x.ja_tentou_ligacao)
+
+  alvo.innerHTML = `
+    <div class="panel" style="padding:16px 18px;margin-bottom:16px;border-left:3px solid ${cor};">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;">
+        <b style="font-size:14px;">🌡️ Como a prospecção está sendo recebida</b>
+        <select id="term-dias" style="max-width:170px;">
+          ${[[7, 'últimos 7 dias'], [30, 'últimos 30 dias'], [90, 'últimos 90 dias']]
+            .map(([v, r]) => `<option value="${v}" ${v === TERM_DIAS ? 'selected' : ''}>${r}</option>`).join('')}
+        </select>
+      </div>
+
+      <div style="margin-top:8px;font-size:13px;line-height:1.6;">
+        <b style="color:${cor};">${esc(titulo)}</b>
+        <div class="texto-dim" style="margin-top:2px;">${esc(texto)}</div>
+      </div>
+
+      ${abordados ? `
+        <div style="display:flex;gap:26px;flex-wrap:wrap;margin-top:14px;">
+          ${cartao('Abordados', abordados, 'mensagens de abertura que saíram')}
+          ${cartao('Responderam', responderam, 'voltaram a falar depois da abertura')}
+          ${cartao('Taxa de resposta', suficiente && taxa != null ? taxa + '%' : '—',
+            suficiente ? 'é este o número que decide ritmo' : `precisa de ${AMOSTRA_MINIMA_SDR} abordados`)}
+          ${cartao('Tempo até responder', d.horas_ate_responder != null ? Number(d.horas_ate_responder).toFixed(1) + 'h' : '—',
+            'mediana de quem respondeu')}
+          ${cartao('Falhas de envio', erros, 'não saiu — número errado ou bloqueio',
+            erros ? 'color:var(--warn-text);' : '')}
+          ${cartao('Sem resposta há 3+ dias', semResposta, 'já deu tempo de ver e não voltou')}
+        </div>
+
+        ${comLigacao || semLigacao ? `
+          <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line2);font-size:12.5px;line-height:1.6;">
+            <b>Quem já tinha recebido ligação responde mais?</b>
+            <div class="texto-dim" style="margin-top:3px;">
+              ${comLigacao ? `Com ligação antes: <b>${comLigacao.taxa ?? '—'}%</b> (${comLigacao.responderam} de ${comLigacao.abordados}).` : ''}
+              ${semLigacao ? ` Sem ligação: <b>${semLigacao.taxa ?? '—'}%</b> (${semLigacao.responderam} de ${semLigacao.abordados}).` : ''}
+              ${(comLigacao?.abordados ?? 0) < 10 || (semLigacao?.abordados ?? 0) < 10
+                ? ' <span class="texto-dim2">— ainda com pouca gente dos dois lados pra valer como comparação.</span>' : ''}
+            </div>
+          </div>` : ''}
+
+        ${(d.por_lista || []).length > 1 ? `
+          <div class="tabela-scroll" style="margin-top:14px;"><table>
+            <thead><tr><th>Lista</th><th class="num">Abordados</th><th class="num">Responderam</th>
+              <th class="num">Taxa</th><th class="num">Falhas</th></tr></thead>
+            <tbody>${d.por_lista.map(l => `<tr>
+              <td>${esc(l.lista)}</td>
+              <td class="num">${l.abordados}</td>
+              <td class="num">${l.responderam}</td>
+              <td class="num">${l.abordados >= 10 ? (l.taxa ?? '—') + '%' : '—'}</td>
+              <td class="num" style="${Number(l.erros) ? 'color:var(--warn-text);' : ''}">${l.erros}</td>
+            </tr>`).join('')}</tbody></table></div>` : ''}
+      ` : ''}
+
+      ${naoEntregues || Number(d.entrega_desconhecida || 0) ? `
+        <p class="texto-dim2" style="font-size:11px;line-height:1.6;margin:12px 0 0;">
+          ${naoEntregues ? `${naoEntregues} mensagem(ns) o WhatsApp marcou como não entregue. ` : ''}
+          ${Number(d.entrega_desconhecida || 0) ? `${d.entrega_desconhecida} sem confirmação de entrega — ` +
+            'o canal nem sempre devolve esse aviso, então "sem confirmação" não quer dizer "não chegou".' : ''}
+        </p>` : ''}
+
+      <p class="texto-dim2" style="font-size:11px;line-height:1.6;margin:10px 0 0;">
+        O WhatsApp não avisa quando alguém denuncia o número. Falha de envio e silêncio são os sinais
+        indiretos que dá pra ver daqui — servem de alerta, não de prova.
+        ${naFila ? `Hoje tem <b>${naFila}</b> contato(s) esperando na fila de listas ativas.` : ''}
+      </p>
+    </div>`
+
+  const sel = alvo.querySelector('#term-dias')
+  if (sel) sel.onchange = e => { TERM_DIAS = Number(e.target.value); termometroSdr(alvo) }
+}
+
 async function sdrAbaListas (alvo) {
   const [{ data: listas, error }, { data: canais }, { data: pessoas }] = await Promise.all([
     db.from('sdr_lista').select('*, canal:canal_id(nome,tipo), vendedor:vendedor_id(nome)')
@@ -23969,6 +24125,7 @@ async function sdrAbaListas (alvo) {
   }
 
   alvo.innerHTML = `
+    <div id="sdr-termometro"></div>
     <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;margin-bottom:14px;flex-wrap:wrap;">
       <p class="texto-dim2" style="margin:0;max-width:62ch;">
         A IA só fala com quem está numa lista <b>ativa</b>. Quem não estiver na lista tem a mensagem
@@ -24002,6 +24159,8 @@ async function sdrAbaListas (alvo) {
           </div>`
         }).join('')}
       </div>` : `<p class="vazio">Nenhuma lista ainda. Crie uma pra a IA ter com quem falar.</p>`}`
+
+  termometroSdr(alvo.querySelector('#sdr-termometro'))
 
   $('#sl-nova').onclick = () => abrirFormLista(null, canais || [], vendedores, () => sdrAbaListas(alvo))
   alvo.querySelectorAll('[data-abrir-lista]').forEach(el => {
