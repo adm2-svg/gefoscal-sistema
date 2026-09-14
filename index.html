@@ -18637,13 +18637,17 @@ const RESULTADO_LIGACAO = [
 ]
 
 let ORIG_FILTRO = 'todos'
+// Quem a gestão está olhando. '' = todo mundo. Um vendedor comum nunca
+// mexe nisso: ele já só enxerga o que é dele, por RLS.
+let ORIG_PESSOA = ''
 
 async function crmOriginacao (alvo, editavel, gerencia) {
   alvo.innerHTML = `<p class="texto-dim2">carregando fila...</p>`
 
   const vendoArquivados = ORIG_FILTRO === 'arquivados'
   const [{ data, error }, cat] = await Promise.all([
-    db.rpc('crm_fila_originacao', { p_limite: 120, p_arquivados: vendoArquivados }),
+    db.rpc('crm_fila_originacao', { p_limite: 120, p_arquivados: vendoArquivados,
+      p_pessoa_id: (gerencia && ORIG_PESSOA) ? ORIG_PESSOA : null }),
     catalogosNegociacao()
   ])
   if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
@@ -18656,13 +18660,15 @@ async function crmOriginacao (alvo, editavel, gerencia) {
     ? [['todos', 'Voltar pra fila'], ['arquivados', `Fora da fila (${d.arquivados ?? todos.length})`]]
     : [
       ['todos', `Todos (${todos.length})`],
+      ['esperando', `Esperando ligação (${todos.filter(i => i.contato_situacao === 'aguardando_ligacao').length})`],
       ['nunca', `Nunca ligados (${todos.filter(i => !i.ultima_ligacao).length})`],
       ['agendados', `Com retorno marcado (${todos.filter(i => i.proximo_compromisso).length})`],
       ['hoje', `Pra hoje (${todos.filter(i => (i.proximo_compromisso || '').slice(0, 10) === hojeIso).length})`],
       ['arquivados', `Fora da fila (${d.arquivados ?? 0})`]
     ]
   const lista = vendoArquivados ? todos : todos.filter(i =>
-    ORIG_FILTRO === 'nunca' ? !i.ultima_ligacao
+    ORIG_FILTRO === 'esperando' ? i.contato_situacao === 'aguardando_ligacao'
+      : ORIG_FILTRO === 'nunca' ? !i.ultima_ligacao
       : ORIG_FILTRO === 'agendados' ? !!i.proximo_compromisso
         : ORIG_FILTRO === 'hoje' ? (i.proximo_compromisso || '').slice(0, 10) === hojeIso
           : true)
@@ -18694,6 +18700,12 @@ async function crmOriginacao (alvo, editavel, gerencia) {
             ${gerencia && i.vendedor ? ' · ' + esc(i.vendedor) : ''}
             ${i.valor_estimado ? ' · R$ ' + fmtNum(i.valor_estimado) : ''}
           </div>
+          ${i.lista ? `<div class="texto-dim2" style="font-size:11px;margin-top:2px;">
+            veio da lista <b>${esc(i.lista)}</b>${i.lista_tipo === 'ORIGINACAO' ? ' (originação)' : ''}${
+              i.responsavel && gerencia ? ' · trabalha: ' + esc(i.responsavel) : ''}</div>` : ''}
+          ${i.ligou_em ? `<div class="texto-dim2" style="font-size:11px;margin-top:2px;">
+            ${esc(i.ligou_quem || 'alguém')} ligou ${fmtQuando(i.ligou_em) || ''}${
+              i.resultado_ligacao ? ' — ' + esc(ROTULO_RESULTADO_LIGACAO[i.resultado_ligacao] ?? i.resultado_ligacao) : ''}</div>` : ''}
         </div>
         </div>
         <div style="text-align:right;font-size:11.5px;" class="texto-dim">
@@ -18706,6 +18718,28 @@ async function crmOriginacao (alvo, editavel, gerencia) {
 
       ${i.objecoes_abertas ? `<div class="texto-dim" style="font-size:11.5px;margin-top:5px;">
         Objeção em aberto: ${esc(i.objecoes_abertas)}</div>` : ''}
+
+      ${i.contato_situacao === 'aguardando_ligacao' && !i.ligou_em ? `
+        <div style="margin-top:8px;padding:8px 11px;border-left:3px solid var(--rust);
+          background:var(--hover-bg);font-size:12px;line-height:1.55;">
+          <b>Esperando alguém ligar.</b>
+          <span class="texto-dim">O robô do WhatsApp não entra nesse contato enquanto não houver
+          uma ligação registrada. Ligou? Diga aqui o que deu:</span>
+          <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px;">
+            ${editavel ? RESULTADO_LIGACAO.map(([v, r]) =>
+              `<button type="button" class="btn-secundario mini org-lig-res"
+                 data-contato="${esc(i.contato_id)}" data-res="${v}">${esc(r)}</button>`).join('')
+              : '<span class="texto-dim2" style="font-size:11.5px;">só quem trabalha a lista registra.</span>'}
+          </div>
+        </div>` : ''}
+
+      ${i.contato_situacao === 'aguardando_ligacao' && i.ligou_em ? `
+        <div style="margin-top:8px;padding:7px 10px;border-left:3px solid var(--good-text);
+          font-size:12px;line-height:1.55;">
+          <b>Falou com a pessoa.</b>
+          <span class="texto-dim">Como a conversa aconteceu, o robô não vai abordar por WhatsApp —
+          a partir daqui é o acompanhamento normal do CRM. Se quiser mesmo assim, use "Passar pro SDR".</span>
+        </div>` : ''}
 
       ${i.ligacao_aberta_id ? `<div style="margin-top:7px;padding:7px 10px;border-left:3px solid var(--gold);
         background:var(--hover-bg);font-size:12px;line-height:1.5;">
@@ -18740,6 +18774,17 @@ async function crmOriginacao (alvo, editavel, gerencia) {
   alvo.innerHTML = `
     <div id="org-atividade"></div>
 
+    ${gerencia ? `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 10px;">
+      <label style="font-size:12px;font-weight:600;">Vendo a fila de</label>
+      <select id="org-pessoa" style="max-width:260px;">
+        <option value="">todo mundo</option>
+        ${(d.pessoas || []).map(p => `<option value="${esc(p.pessoa_id)}" ${
+          p.pessoa_id === ORIG_PESSOA ? 'selected' : ''}>${esc(p.nome)}</option>`).join('')}
+      </select>
+      ${ORIG_PESSOA ? `<span class="texto-dim2" style="font-size:11.5px;">
+        filtrado — os contadores acima são só dessa pessoa.</span>` : ''}
+    </div>` : ''}
+
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin:0 0 12px;">
       ${filtros.map(([v, r]) => `<button type="button" class="btn-secundario mini org-filtro"
         data-f="${v}" ${v === ORIG_FILTRO ? 'style="border-color:var(--rust);color:var(--rust);"' : ''}>${esc(r)}</button>`).join('')}
@@ -18770,6 +18815,34 @@ async function crmOriginacao (alvo, editavel, gerencia) {
 
   alvo.querySelectorAll('.org-filtro').forEach(b => {
     b.onclick = () => { ORIG_FILTRO = b.dataset.f; recarregar() }
+  })
+
+  const selPessoa = alvo.querySelector('#org-pessoa')
+  if (selPessoa) selPessoa.onchange = () => { ORIG_PESSOA = selPessoa.value; recarregar() }
+
+  // Registrar o resultado da ligação de originação. É o clique que solta
+  // (ou segura) o robô: "não atendeu" libera a abordagem citando quem
+  // ligou; "atendeu" segura, porque já houve conversa de verdade.
+  alvo.querySelectorAll('.org-lig-res').forEach(b => {
+    b.onclick = async () => {
+      const res = b.dataset.res
+      const obs = (res === 'ATENDEU' || res === 'OUTRO' || res === 'REMARCAR')
+        ? prompt('Quer deixar uma observação? (opcional)') : null
+      if (obs === null && (res === 'ATENDEU' || res === 'OUTRO' || res === 'REMARCAR')) return
+      const irmaos = b.parentElement.querySelectorAll('.org-lig-res')
+      irmaos.forEach(x => { x.disabled = true })
+      b.textContent = '...'
+      const { data: r, error: e } = await db.rpc('sdr_contato_registrar_ligacao', {
+        p_contato_id: b.dataset.contato, p_resultado: res,
+        p_observacao: (obs || '').trim() || null })
+      if (e) { alert(e.message); irmaos.forEach(x => { x.disabled = false }); recarregar(); return }
+      aviso3s(r?.vai_pro_robo
+        ? `Registrado. ${r.contato} entrou na fila do robô — a abertura vai citar seu nome.`
+        : r?.situacao === 'cancelado'
+          ? `Registrado. ${r.contato} saiu da fila: número errado.`
+          : `Registrado. Como você falou com ${r?.contato}, o robô não vai abordar.`)
+      recarregar()
+    }
   })
 
   alvo.querySelectorAll('[data-lead]').forEach(card => {
@@ -24212,9 +24285,170 @@ async function termometroSdr (alvo) {
   if (sel) sel.onchange = e => { TERM_DIAS = Number(e.target.value); termometroSdr(alvo) }
 }
 
+// ---------------------------------------------------------------
+// Importar contatos de planilha para uma lista.
+//
+// A planilha de verdade nunca vem no formato que a gente queria: a
+// coluna chama "Fone", "Celular", "WhatsApp" ou "Contato", e o
+// cabeçalho às vezes está na terceira linha porque as duas primeiras
+// são título e data. Então o importador procura o cabeçalho em vez de
+// exigir que ele esteja no lugar certo.
+//
+// E mostra o que entendeu ANTES de gravar. Importação que grava
+// primeiro e explica depois é como a pessoa descobre, uma semana
+// adiante, que metade da lista foi pro lixo.
+// ---------------------------------------------------------------
+let LISTA_PESSOAS = []
+const COLUNAS_LISTA = [
+  { campo: 'telefone',  nomes: ['telefone', 'fone', 'celular', 'whatsapp', 'whats', 'contato', 'tel'] },
+  { campo: 'nome',      nomes: ['nome', 'cliente', 'produtor', 'razao', 'razão', 'proprietario', 'proprietário'] },
+  { campo: 'municipio', nomes: ['municipio', 'município', 'cidade', 'localidade'] },
+  { campo: 'uf',        nomes: ['uf', 'estado'] },
+  { campo: 'cultura',   nomes: ['cultura', 'cultivo', 'atividade', 'lavoura'] },
+  { campo: 'observacao',nomes: ['observacao', 'observação', 'obs', 'area', 'área', 'hectares', 'ha', 'anotacao'] }
+]
+
+const chaveColuna = t => String(t ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '')
+  .toLowerCase().replace(/[^a-z0-9]/g, '')
+
+// Acha a linha que serve de cabeçalho: a primeira que tem pelo menos
+// uma coluna reconhecível de telefone.
+function acharCabecalho (linhas) {
+  for (let i = 0; i < Math.min(linhas.length, 15); i++) {
+    const celulas = (linhas[i] || []).map(chaveColuna)
+    const temTel = celulas.some(c => COLUNAS_LISTA[0].nomes.some(n => c.includes(chaveColuna(n))))
+    if (temTel) return i
+  }
+  return -1
+}
+
+function mapearColunas (cabecalho) {
+  const mapa = {}
+  cabecalho.forEach((titulo, i) => {
+    const c = chaveColuna(titulo)
+    if (!c) return
+    for (const col of COLUNAS_LISTA) {
+      if (mapa[col.campo] != null) continue
+      if (col.nomes.some(n => c === chaveColuna(n) || c.includes(chaveColuna(n)))) { mapa[col.campo] = i; break }
+    }
+  })
+  return mapa
+}
+
+function lerPlanilhaParaLinhas (arquivoBuffer, nomeArquivo) {
+  const ehCsv = /\.csv$/i.test(nomeArquivo || '')
+  const wb = ehCsv
+    ? XLSX.read(new TextDecoder('utf-8').decode(arquivoBuffer), { type: 'string' })
+    : XLSX.read(arquivoBuffer, { type: 'array' })
+  const aba = wb.Sheets[wb.SheetNames[0]]
+  const grade = XLSX.utils.sheet_to_json(aba, { header: 1, blankrows: false, defval: '' })
+
+  const iCab = acharCabecalho(grade)
+  if (iCab < 0) return { erro: 'Não achei nenhuma coluna de telefone nas 15 primeiras linhas.' }
+
+  const mapa = mapearColunas(grade[iCab])
+  if (mapa.telefone == null) return { erro: 'Não achei a coluna de telefone.' }
+
+  const linhas = []
+  for (let i = iCab + 1; i < grade.length; i++) {
+    const l = grade[i] || []
+    const pega = campo => mapa[campo] != null ? String(l[mapa[campo]] ?? '').trim() : ''
+    const tel = pega('telefone')
+    if (!tel) continue
+    linhas.push({
+      telefone: tel, nome: pega('nome') || null, municipio: pega('municipio') || null,
+      uf: pega('uf') || null, cultura: pega('cultura') || null,
+      observacao: pega('observacao') || null
+    })
+  }
+  return { linhas, mapa, cabecalho: grade[iCab], linhaCabecalho: iCab + 1 }
+}
+
+// ---------------------------------------------------------------
+function blocoImportarPlanilha (alvo, lista, aoImportar) {
+  if (!alvo) return
+  alvo.innerHTML = `
+    <div class="secao">
+      <h3 style="font-size:15px;">Trazer de uma planilha</h3>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 8px;line-height:1.6;">
+        Excel (.xlsx) ou CSV. Não precisa arrumar nada antes: eu procuro o cabeçalho e reconheço
+        colunas como <b>Telefone</b>, <b>Fone</b>, <b>Celular</b>, <b>WhatsApp</b>, além de nome,
+        cidade, UF e cultura. Mostro o que entendi antes de gravar.</p>
+      <input type="file" id="li-arquivo" accept=".xlsx,.xls,.csv">
+      <div id="li-previa" style="margin-top:10px;"></div>
+    </div>`
+
+  let lidas = null
+  const previa = alvo.querySelector('#li-previa')
+
+  alvo.querySelector('#li-arquivo').onchange = async e => {
+    const arq = e.target.files?.[0]
+    if (!arq) return
+    previa.innerHTML = `<p class="texto-dim2" style="font-size:12px;">lendo...</p>`
+    try {
+      const buffer = await arq.arrayBuffer()
+      const r = lerPlanilhaParaLinhas(new Uint8Array(buffer), arq.name)
+      if (r.erro) {
+        previa.innerHTML = `<p style="font-size:12.5px;color:var(--warn-text);line-height:1.6;">
+          ${esc(r.erro)} Confere se a planilha tem uma coluna com o telefone e um cabeçalho escrito.</p>`
+        return
+      }
+      lidas = r.linhas
+      const reconhecidas = Object.keys(r.mapa)
+      const ignoradas = (r.cabecalho || []).filter((t, i) =>
+        String(t ?? '').trim() && !Object.values(r.mapa).includes(i))
+
+      previa.innerHTML = `
+        <div class="panel" style="padding:12px 14px;">
+          <div style="font-size:12.5px;line-height:1.7;">
+            <b>${lidas.length}</b> linha(s) com telefone, cabeçalho na linha ${r.linhaCabecalho}.<br>
+            <span class="texto-dim">Reconheci: ${esc(reconhecidas.join(', '))}</span>
+            ${ignoradas.length ? `<br><span class="texto-dim2">Ignorei: ${esc(ignoradas.slice(0, 8).join(', '))}</span>` : ''}
+          </div>
+          ${lidas.length ? `<div class="tabela-scroll" style="margin-top:10px;max-height:200px;"><table>
+            <thead><tr><th>Nome</th><th>Telefone</th><th>Cidade/UF</th><th>Cultura</th></tr></thead>
+            <tbody>${lidas.slice(0, 8).map(l => `<tr>
+              <td>${esc(l.nome || '—')}</td>
+              <td>${esc(l.telefone)}</td>
+              <td class="texto-dim2">${esc([l.municipio, l.uf].filter(Boolean).join('/') || '—')}</td>
+              <td class="texto-dim2">${esc(l.cultura || '—')}</td></tr>`).join('')}</tbody></table></div>
+            ${lidas.length > 8 ? `<p class="texto-dim2" style="font-size:11px;margin:6px 0 0;">
+              ...e mais ${lidas.length - 8}.</p>` : ''}` : ''}
+          <div class="acoes" style="margin-top:10px;">
+            <button class="btn mini" id="li-gravar" ${lidas.length ? '' : 'disabled'}>
+              Trazer ${lidas.length} contato(s) pra lista</button>
+          </div>
+          <div id="li-recado" class="texto-dim2" style="font-size:12px;margin-top:6px;"></div>
+        </div>`
+
+      const btn = previa.querySelector('#li-gravar')
+      if (btn) btn.onclick = async () => {
+        btn.disabled = true; btn.textContent = 'trazendo...'
+        const { data: r2, error } = await db.rpc('sdr_lista_importar',
+          { p_lista_id: lista.id, p_linhas: lidas })
+        btn.disabled = false; btn.textContent = `Trazer ${lidas.length} contato(s) pra lista`
+        const recado = previa.querySelector('#li-recado')
+        if (error) { recado.textContent = error.message; recado.style.color = 'var(--warn-text)'; return }
+        recado.style.color = 'var(--good-text)'
+        recado.textContent =
+          `${r2.criados} entraram` +
+          (r2.repetidos ? ` · ${r2.repetidos} já estavam ou vieram repetidos` : '') +
+          (r2.invalidos ? ` · ${r2.invalidos} com telefone inválido` : '') +
+          (r2.situacao === 'aguardando_ligacao'
+            ? '. Como é lista de originação, ficaram esperando ligação — o robô só entra depois que alguém ligar.'
+            : '. Entraram direto na fila do robô.')
+        if (aoImportar) aoImportar()
+      }
+    } catch (err) {
+      previa.innerHTML = `<p style="font-size:12.5px;color:var(--warn-text);">
+        Não consegui ler esse arquivo: ${esc(String(err.message || err))}</p>`
+    }
+  }
+}
+
 async function sdrAbaListas (alvo) {
   const [{ data: listas, error }, { data: canais }, { data: pessoas }] = await Promise.all([
-    db.from('sdr_lista').select('*, canal:canal_id(nome,tipo), vendedor:vendedor_id(nome)')
+    db.from('sdr_lista').select('*, canal:canal_id(nome,tipo), vendedor:vendedor_id(nome), responsavel:responsavel_id(nome)')
       .order('criado_em', { ascending: false }),
     db.from('sdr_canal').select('id,nome,tipo').eq('ativo', true).order('tipo'),
     db.from('pessoa').select('id,nome,eh_vendedor').eq('status', 'ATIVO').order('nome')
@@ -24223,6 +24457,9 @@ async function sdrAbaListas (alvo) {
 
   const vendedores = (pessoas || []).filter(p => p.eh_vendedor).length
     ? (pessoas || []).filter(p => p.eh_vendedor) : (pessoas || [])
+  // quem trabalha a lista não precisa ser vendedor: muitas vezes é gente
+  // de pré-vendas ligando. Aqui vale qualquer pessoa ativa.
+  LISTA_PESSOAS = pessoas || []
 
   // quantos contatos em cada lista, e quantos já saíram
   const ids = (listas || []).map(l => l.id)
@@ -24326,6 +24563,22 @@ function abrirFormLista (lista, canais, vendedores, aoSalvar) {
         <div class="campo" style="margin-top:10px;"><label>Mensagem de abertura (opcional)</label>
           <textarea id="sl-abertura" style="min-height:70px;"
             placeholder="Deixe em branco pra IA escrever sozinha, com o treino dela.">${esc(l.mensagem_abertura || '')}</textarea></div>
+        <div class="form-grade" style="margin-top:10px;">
+          <div class="campo"><label>Tipo da lista</label>
+            <select id="sl-tipo">
+              <option value="FRIA" ${(l.tipo ?? 'FRIA') === 'FRIA' ? 'selected' : ''}>Fria — o Eduardo aborda direto</option>
+              <option value="ORIGINACAO" ${l.tipo === 'ORIGINACAO' ? 'selected' : ''}>Originação — alguém liga primeiro</option>
+            </select>
+            <span class="texto-dim2" style="font-size:11px;line-height:1.5;">
+              Na de originação o contato fica esperando ligação e o robô só entra depois que
+              a pessoa marcar que ligou e não conseguiu falar.</span></div>
+          <div class="campo"><label>Quem trabalha esta lista</label>
+            <select id="sl-resp"><option value="">— ninguém ainda —</option>
+              ${(LISTA_PESSOAS || []).map(p => `<option value="${p.id}" ${p.id === l.responsavel_id ? 'selected' : ''}>${esc(p.nome)}${p.eh_vendedor ? '' : ' (não é vendedor)'}</option>`).join('')}</select>
+            <span class="texto-dim2" style="font-size:11px;line-height:1.5;">
+              É o nome que o Eduardo vai citar ("a Bianca tentou te ligar") e quem vê essa lista
+              na aba Originação. Não precisa ser vendedor.</span></div>
+        </div>
         <div class="campo" style="margin-top:10px;">
           <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;">
             <input type="checkbox" id="sl-recebe" ${l.recebe_transferencia ? 'checked' : ''}
@@ -24361,7 +24614,9 @@ function abrirFormLista (lista, canais, vendedores, aoSalvar) {
       teto_diario: Number(q('#sl-teto').value) || 10,
       apenas_dias_uteis: q('#sl-uteis').value === 'sim',
       mensagem_abertura: q('#sl-abertura').value.trim() || null,
-      recebe_transferencia: q('#sl-recebe').checked
+      recebe_transferencia: q('#sl-recebe').checked,
+      tipo: q('#sl-tipo').value,
+      responsavel_id: q('#sl-resp').value || null
     }
     if (!corpo.nome) { alert('A lista precisa de um nome.'); return }
     if (!corpo.canal_id) { alert('Escolha por qual WhatsApp essa lista vai falar.'); return }
@@ -24403,7 +24658,9 @@ async function abrirLista (lista, canais, vendedores, aoFechar) {
           ${esc(lista.canal?.nome || '')} ·
           ${esc(String(lista.janela_inicio).slice(0, 5))}–${esc(String(lista.janela_fim).slice(0, 5))} ·
           1 a cada ${lista.intervalo_minutos} min · até ${lista.teto_diario}/dia
-          ${lista.apenas_dias_uteis ? ' · dias úteis' : ''}</p>
+          ${lista.apenas_dias_uteis ? ' · dias úteis' : ''}
+          ${lista.tipo === 'ORIGINACAO' ? ' · <b>originação</b> (liga antes)' : ' · fria'}
+          ${lista.responsavel?.nome ? ' · trabalha: <b>' + esc(lista.responsavel.nome) + '</b>' : ' · <span style="color:var(--warn-text);">sem responsável</span>'}</p>
 
         ${lista.situacao === 'ativa' ? `
           <div class="caixa-texto" style="margin:0 0 14px;border-color:rgba(var(--good-rgb),.5);">
@@ -24437,8 +24694,10 @@ async function abrirLista (lista, canais, vendedores, aoFechar) {
           </tbody></table>
         </div>
 
+        <div id="sl-importar"></div>
+
         <div class="secao">
-          <h3 style="font-size:15px;">Acrescentar contatos</h3>
+          <h3 style="font-size:15px;">Acrescentar contatos à mão</h3>
           <p class="texto-dim2" style="font-size:12px;margin:0 0 8px;">
             Um por linha. Aceita <b>nome; telefone</b> ou só o telefone. O formato não importa —
             o robô normaliza sozinho.</p>
@@ -24466,6 +24725,7 @@ async function abrirLista (lista, canais, vendedores, aoFechar) {
       </div>`
 
     const q = id => fundo.querySelector(id)
+    blocoImportarPlanilha(q('#sl-importar'), lista, recarregar)
     q('#sl-fechar').onclick = fechar
     q('#sl-editar').onclick = () => { fundo.remove(); abrirFormLista(lista, canais, vendedores, aoFechar) }
 
