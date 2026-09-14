@@ -11583,20 +11583,22 @@ async function paginaExpedicao () {
   const area = areaLivre()
   area.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
-  const [{ data: clientes }, { data: vendedores }, { data: produtos }, { data: veiculos }, { data: empresas }, { data: motoristas }, { data: veiculosCliente }] = await Promise.all([
+  const [{ data: clientes }, { data: vendedores }, { data: produtos }, { data: veiculos }, { data: empresas }, { data: motoristas }, { data: veiculosCliente }, { data: transportadoras }] = await Promise.all([
     db.from('cliente').select('id,razao_social').order('razao_social'),
     db.from('pessoa').select('id,nome').eq('eh_vendedor', true).order('nome'),
     db.from('produto').select('id,nome,unidade').order('nome'),
     db.from('veiculo').select('id,placa,descricao').order('placa'),
     db.from('empresa').select('id,nome,regime_tributario').eq('status', 'ATIVO').order('nome'),
     db.from('expedicao_motorista').select('id,nome,telefone').eq('ativo', true).order('nome'),
-    db.from('expedicao_veiculo_cliente').select('id,placa,descricao,cliente_id,motorista_id').eq('ativo', true).order('placa')
+    db.from('expedicao_veiculo_cliente').select('id,placa,descricao,cliente_id,motorista_id,transportadora_id').eq('ativo', true).order('placa'),
+    db.from('transportadora').select('*').eq('ativo', true).order('razao_social')
   ])
   EXPED_CACHE = { clientes: clientes || [], vendedores: vendedores || [], produtos: produtos || [], veiculos: veiculos || [], empresas: empresas || [],
-    motoristas: motoristas || [], veiculosCliente: veiculosCliente || [] }
+    motoristas: motoristas || [], veiculosCliente: veiculosCliente || [], transportadoras: transportadoras || [] }
 
   const abas = [['painel', '📊 Painel'], ['lancamentos', '📋 Lançamentos'], ['conferencia', '🔎 Conferência de Clientes']]
-  if (editavel) abas.push(['lancar', '➕ Lançar'], ['ordem', '🚛 Ordem de Carregamento'], ['motoristas', '🧑‍✈️ Motoristas e Veículos'])
+  if (editavel) abas.push(['lancar', '➕ Lançar'], ['ordem', '🚛 Ordem de Carregamento'],
+    ['motoristas', '🧑‍✈️ Motoristas e Veículos'], ['transportadoras', '🚚 Transportadoras'])
   abas.push(['ia', '💬 Fale com a Especialista Contábil'])
 
   area.innerHTML = `
@@ -11630,6 +11632,7 @@ function abrirExped (sub, editavel) {
   if (sub === 'lancar') expedLancar(alvo)
   if (sub === 'ordem') expedOrdem(alvo)
   if (sub === 'motoristas') expedMotoristasVeiculos(alvo)
+  if (sub === 'transportadoras') expedTransportadoras(alvo, editavel)
   if (sub === 'ia') expedEspecialistaFiscal(alvo)
 }
 
@@ -12108,6 +12111,9 @@ function expedLancar (alvo) {
             ${EXPED_CACHE.motoristas.map(m => `<option value="${esc(m.nome)}">${esc(m.nome)}</option>`).join('')}
             <option value="__outro">— outro (digitar nome) —</option></select>
           <input id="el-motorista-livre" placeholder="nome do motorista" class="oculto" style="margin-top:6px;"></div>
+        <div class="campo"><label>Transportadora</label>
+          <select id="el-transp"><option value="">— não informada —</option>
+            ${(EXPED_CACHE.transportadoras || []).map(t => `<option value="${t.id}">${esc(t.nome_fantasia || t.razao_social)}</option>`).join('')}</select></div>
         <div class="campo"><label>Quantidade *</label><input id="el-qtd" inputmode="decimal" placeholder="ex: 32,5"></div>
         <div class="campo"><label>Preço unitário</label><input id="el-preco" inputmode="decimal" placeholder="R$/t"></div>
         <div class="campo"><label>Número da NF</label><input id="el-nf"></div>
@@ -12143,6 +12149,8 @@ function expedLancar (alvo) {
 
   $('#el-motorista').onchange = () => {
     $('#el-motorista-livre').classList.toggle('oculto', $('#el-motorista').value !== '__outro')
+    const t = EXPED_CACHE.motoristas.find(m => m.nome === $('#el-motorista').value)?.transportadora_id
+    if (t && !$('#el-transp').value) $('#el-transp').value = t
   }
 
   $('#el-salvar').onclick = async () => {
@@ -12183,6 +12191,7 @@ function expedLancar (alvo) {
       veiculo_id: veiculoSel?.origem === 'frota' ? veiculoSel.id : null,
       veiculo_cliente_id: veiculoSel?.origem === 'cliente' ? veiculoSel.id : null,
       motorista: motorista || null,
+      transportadora_id: $('#el-transp').value || null,
       quantidade_t: qtd, preco_unitario: preco || null, valor_nf: preco ? qtd * preco : null,
       numero_nf: numeroNf, uf_destino: $('#el-uf').value.trim().toUpperCase() || null,
       data_carregamento: $('#el-data').value, status: statusSel,
@@ -12230,6 +12239,7 @@ function expedLancar (alvo) {
     el.textContent = 'Lançamento salvo.' + notaVinculo + notaAnexo; el.classList.remove('oculto')
     el.style.borderColor = 'var(--good-text)'; el.style.color = 'var(--good-text)'
     ;['el-motorista-livre', 'el-qtd', 'el-preco', 'el-nf', 'el-uf', 'el-obs'].forEach(id => { $('#' + id).value = '' })
+    $('#el-transp').value = ''
     $('#el-nf-pdf').value = ''
     buscaVeiculo.limpar()
     $('#el-empresa').value = ''; $('#el-cliente').value = ''; $('#el-produto').value = ''; $('#el-motorista').value = ''
@@ -12439,6 +12449,7 @@ function abrirAcoesOrdem (c, aoConcluir) {
     <div class="acoes" style="margin-top:16px;flex-direction:column;gap:8px;">
       <button class="btn" id="ao-faturar" style="width:100%;">${jaFaturada ? '✏️ Corrigir NF / valor' : '📄 Faturar — vincular a um lançamento com NF'}</button>
       ${!jaFaturada ? `<button class="btn-secundario" id="ao-adiar" style="width:100%;">📅 Adiar (mudar a data)</button>` : ''}
+      <button class="btn-secundario" id="ao-folha" style="width:100%;">🖨 Folha de transporte pro cliente</button>
       <button class="btn-secundario" id="ao-hist" style="width:100%;">🕓 Ver histórico</button>
       <button class="btn-secundario" id="ao-excluir" style="width:100%;color:var(--warn-text);border-color:var(--warn-text);">🗑️ Cancelar esta ordem</button>
       <button class="btn-secundario" id="ao-fechar" style="width:100%;">Fechar</button>
@@ -12451,6 +12462,7 @@ function abrirAcoesOrdem (c, aoConcluir) {
   fundo.querySelector('#ao-faturar').onclick = () => { fechar(); faturarOrdemExistente(c, aoConcluir) }
   if (!jaFaturada) fundo.querySelector('#ao-adiar').onclick = () => { fechar(); adiarCarregamento(c, aoConcluir) }
   fundo.querySelector('#ao-excluir').onclick = () => { fechar(); excluirCarregamento(c, aoConcluir) }
+  fundo.querySelector('#ao-folha').onclick = () => { fechar(); folhaDeTransporte(c.id) }
   fundo.querySelector('#ao-hist').onclick = () => { fechar(); abrirHistoricoCarregamento(c) }
 }
 
@@ -12737,6 +12749,10 @@ function formOrdemCarregamento (pedido) {
           ${EXPED_CACHE.motoristas.map(m => `<option value="${esc(m.nome)}">${esc(m.nome)}</option>`).join('')}
           <option value="__outro">— outro (digitar nome) —</option></select>
         <input id="oc-motorista-livre" placeholder="nome do motorista" class="oculto" style="margin-top:6px;"></div>
+      <div class="campo"><label>Transportadora</label>
+        <select id="oc-transp"><option value="">— não informada —</option>
+          ${(EXPED_CACHE.transportadoras || []).map(t => `<option value="${t.id}">${esc(t.nome_fantasia || t.razao_social)}</option>`).join('')}</select>
+        <span class="texto-dim2" style="font-size:11px;">vai na folha que você manda pro cliente, com CNPJ e RNTRC</span></div>
       <div class="campo"><label>Quantidade *</label>
         <input id="oc-qtd" inputmode="decimal" value="${String(pedido.quantidade_t ?? '').replace('.', ',')}"></div>
       <div class="campo"><label>Data programada *</label><input type="datetime-local" id="oc-data"></div>
@@ -12755,11 +12771,25 @@ function formOrdemCarregamento (pedido) {
   const fechar = () => fundo.remove()
   fundo.querySelector('#oc-cancelar').onclick = fechar
   fundo.onclick = e => { if (e.target === fundo) fechar() }
+  // a transportadora só é preenchida sozinha quando ainda está vazia:
+  // quem escolheu na mão manda mais que o cadastro
+  const sugerirTransportadora = id => {
+    const sel = fundo.querySelector('#oc-transp')
+    if (id && sel && !sel.value) sel.value = id
+  }
   fundo.querySelector('#oc-motorista').onchange = () => {
-    fundo.querySelector('#oc-motorista-livre').classList.toggle('oculto', fundo.querySelector('#oc-motorista').value !== '__outro')
+    const val = fundo.querySelector('#oc-motorista').value
+    fundo.querySelector('#oc-motorista-livre').classList.toggle('oculto', val !== '__outro')
+    sugerirTransportadora(EXPED_CACHE.motoristas.find(m => m.nome === val)?.transportadora_id)
   }
   const buscaVeiculo = montarBuscaVeiculo(fundo.querySelector('#oc-busca-veiculo'), v => {
-    if (v.motoristaId) fundo.querySelector('#oc-motorista').value = EXPED_CACHE.motoristas.find(m => m.id === v.motoristaId)?.nome ?? ''
+    if (v.motoristaId) {
+      const m = EXPED_CACHE.motoristas.find(x => x.id === v.motoristaId)
+      fundo.querySelector('#oc-motorista').value = m?.nome ?? ''
+      sugerirTransportadora(m?.transportadora_id)
+    }
+    const vc = (EXPED_CACHE.veiculosCliente || []).find(x => x.id === v.id)
+    sugerirTransportadora(vc?.transportadora_id)
   })
 
   fundo.querySelector('#oc-salvar').onclick = async () => {
@@ -12785,6 +12815,7 @@ function formOrdemCarregamento (pedido) {
       veiculo_id: veiculoSel.origem === 'frota' ? veiculoSel.id : null,
       veiculo_cliente_id: veiculoSel.origem === 'cliente' ? veiculoSel.id : null,
       motorista, quantidade_t: qtd,
+      transportadora_id: fundo.querySelector('#oc-transp').value || null,
       preco_unitario: pedido.preco_unitario || null,
       valor_nf: pedido.preco_unitario ? qtd * pedido.preco_unitario : null,
       data_programada: new Date(dataProg).toISOString(), data_carregamento: dataProg.slice(0, 10),
@@ -12806,26 +12837,437 @@ function formOrdemCarregamento (pedido) {
     abrirPdfOrdemCarregamento({
       numeroPedido: pedido.numero, empresa: empresa?.nome, cliente: pedido.cliente?.razao_social, produto: pedido.produto?.nome,
       quantidade: qtd, unidade: pedido.produto?.unidade ?? 't', placa: veiculoSel.placa, motorista,
+      transportadora: (EXPED_CACHE.transportadoras || []).find(t => t.id === fundo.querySelector('#oc-transp').value) || null,
       dataProgramada: dataProg, local: fundo.querySelector('#oc-local').value.trim(),
       observacao: fundo.querySelector('#oc-obs').value.trim(), carregamentoId: novo?.id
     })
   }
 }
 
+// ---------------------------------------------------------------
+// Transportadoras — cadastro e uso na expedição.
+//
+// Até aqui o transporte era um nome de motorista e uma placa soltos no
+// carregamento. Quando o cliente liga perguntando quem vai levar a
+// carga, ninguém tem numa tela só o CNPJ, o RNTRC e o telefone de quem
+// está com o produto na estrada.
+//
+// O cadastro é separado do de clientes de propósito: a mesma empresa
+// pode ser as duas coisas, e juntar faz um estragar o outro.
+// ---------------------------------------------------------------
+const TIPOS_TRANSPORTADORA = [
+  ['TRANSPORTADORA', 'Transportadora'],
+  ['AUTONOMO', 'Autônomo (carreteiro)'],
+  ['FROTA_PROPRIA', 'Frota própria Gefoscal'],
+  ['DO_CLIENTE', 'Veículo do próprio cliente']
+]
+const ROTULO_TIPO_TRANSP = Object.fromEntries(TIPOS_TRANSPORTADORA)
+
+// CNPJ só com os dígitos, pra comparar e pra gravar sem depender de
+// como cada um digitou
+const soDigitosDoc = v => String(v ?? '').replace(/\D/g, '')
+
+function formatarCnpjCpf (v) {
+  const d = soDigitosDoc(v)
+  if (d.length === 14) return `${d.slice(0,2)}.${d.slice(2,5)}.${d.slice(5,8)}/${d.slice(8,12)}-${d.slice(12)}`
+  if (d.length === 11) return `${d.slice(0,3)}.${d.slice(3,6)}.${d.slice(6,9)}-${d.slice(9)}`
+  return String(v ?? '')
+}
+
+function enderecoDaTransportadora (t) {
+  if (!t) return ''
+  const rua = [t.logradouro, t.numero].filter(Boolean).join(', ')
+  return [rua, t.complemento, t.bairro,
+    [t.municipio, t.uf].filter(Boolean).join('/'),
+    t.cep ? 'CEP ' + t.cep : null].filter(Boolean).join(' · ')
+}
+
+let TRANSP_BUSCA = ''
+let TRANSP_SO_ATIVAS = true
+
+async function expedTransportadoras (alvo, editavel) {
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  const { data, error } = await db.from('transportadora').select('*').order('razao_social')
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  const todas = data || []
+  // mantém os dropdowns de Ordem de Carregamento em dia sem precisar
+  // sair e voltar na aba
+  EXPED_CACHE.transportadoras = todas.filter(t => t.ativo)
+
+  const recarregar = () => expedTransportadoras(alvo, editavel)
+
+  const termo = TRANSP_BUSCA.trim().toLowerCase()
+  const lista = todas
+    .filter(t => TRANSP_SO_ATIVAS ? t.ativo : true)
+    .filter(t => !termo || [t.razao_social, t.nome_fantasia, t.cnpj, t.municipio, t.telefone,
+      t.contato_nome, t.rntrc].some(c => String(c ?? '').toLowerCase().includes(termo)))
+
+  alvo.innerHTML = `
+    <div class="resumo-topo" style="margin-bottom:18px;">
+      <div class="bloco"><div class="rot">🚚 Cadastradas</div><div class="val">${todas.length}</div></div>
+      <div class="bloco"><div class="rot">✅ Ativas</div><div class="val">${todas.filter(t => t.ativo).length}</div></div>
+      <div class="bloco"><div class="rot">📄 Com CNPJ</div><div class="val">${todas.filter(t => soDigitosDoc(t.cnpj).length >= 11).length}</div></div>
+      <div class="bloco"><div class="rot">🛣️ Com RNTRC</div><div class="val">${todas.filter(t => t.rntrc).length}</div></div>
+    </div>
+
+    <div class="cabeca-secao" style="margin-bottom:12px;">
+      <h3 style="font-family:var(--serif);font-size:16px;margin:0;">🚚 Transportadoras</h3>
+      ${editavel ? `<button class="btn" id="tr-nova">+ nova transportadora</button>` : ''}
+    </div>
+
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px;">
+      <input id="tr-busca" placeholder="🔎 razão social, CNPJ, cidade, contato..." value="${esc(TRANSP_BUSCA)}"
+        style="flex:1;min-width:220px;">
+      <label style="display:flex;gap:6px;align-items:center;font-size:12.5px;cursor:pointer;" class="texto-dim">
+        <input type="checkbox" id="tr-ativas" ${TRANSP_SO_ATIVAS ? 'checked' : ''}
+          style="width:15px;height:15px;"> só ativas</label>
+    </div>
+
+    ${lista.length ? `<div class="panel" style="padding:0;"><div class="tabela-scroll"><table>
+      <thead><tr>
+        <th>Transportadora</th><th>CNPJ</th><th>Cidade</th><th>Contato</th>
+        <th>RNTRC</th><th>Tipo</th><th></th>
+      </tr></thead>
+      <tbody>${lista.map(t => `<tr data-tr="${t.id}" style="cursor:pointer;${t.ativo ? '' : 'opacity:.55;'}">
+        <td><b>${esc(t.razao_social)}</b>
+          ${t.nome_fantasia ? `<div class="texto-dim2" style="font-size:11px;">${esc(t.nome_fantasia)}</div>` : ''}
+          ${t.ativo ? '' : '<span class="chip" style="font-size:10px;">inativa</span>'}</td>
+        <td class="texto-dim2">${esc(t.cnpj ? formatarCnpjCpf(t.cnpj) : '—')}</td>
+        <td class="texto-dim2">${esc([t.municipio, t.uf].filter(Boolean).join('/') || '—')}</td>
+        <td class="texto-dim2">${esc(t.contato_nome || '—')}
+          ${t.contato_telefone || t.telefone ? `<div style="font-size:11px;">${esc(t.contato_telefone || t.telefone)}</div>` : ''}</td>
+        <td class="texto-dim2">${esc(t.rntrc || '—')}</td>
+        <td class="texto-dim2" style="font-size:11.5px;">${esc(ROTULO_TIPO_TRANSP[t.tipo] || t.tipo)}</td>
+        <td style="white-space:nowrap;">
+          <button type="button" class="btn-secundario mini tr-imprimir" data-id="${t.id}"
+            title="Imprimir a ficha pra mandar pro cliente">🖨</button>
+          ${editavel ? `<button type="button" class="btn-secundario mini tr-editar" data-id="${t.id}" title="Editar">✏️</button>` : ''}
+          ${editavel ? `<button type="button" class="btn-secundario mini tr-excluir" data-id="${t.id}" title="Excluir"
+            style="color:var(--critico-text);border-color:var(--critico-text);">🗑</button>` : ''}
+        </td>
+      </tr>`).join('')}</tbody></table></div></div>`
+      : `<p class="vazio" style="padding:26px 0;">${todas.length
+          ? 'Nenhuma transportadora nesse filtro.'
+          : 'Nenhuma transportadora cadastrada ainda.'}</p>`}
+
+    <p class="texto-dim2" style="font-size:11px;line-height:1.6;margin-top:12px;">
+      A transportadora entra na Ordem de Carregamento e vai junto na folha que você manda pro cliente,
+      com CNPJ, RNTRC, motorista e placa.
+    </p>`
+
+  let esperar
+  alvo.querySelector('#tr-busca').oninput = e => {
+    clearTimeout(esperar)
+    const v = e.target.value
+    esperar = setTimeout(() => {
+      TRANSP_BUSCA = v
+      recarregar().then(() => {
+        const campo = alvo.querySelector('#tr-busca')
+        if (campo) { campo.focus(); campo.setSelectionRange(campo.value.length, campo.value.length) }
+      })
+    }, 250)
+  }
+  alvo.querySelector('#tr-ativas').onchange = e => { TRANSP_SO_ATIVAS = e.target.checked; recarregar() }
+
+  const btnNova = alvo.querySelector('#tr-nova')
+  if (btnNova) btnNova.onclick = () => formTransportadora(null, recarregar)
+
+  alvo.querySelectorAll('.tr-editar').forEach(b => {
+    b.onclick = e => { e.stopPropagation(); formTransportadora(todas.find(t => t.id === b.dataset.id), recarregar) }
+  })
+  alvo.querySelectorAll('.tr-imprimir').forEach(b => {
+    b.onclick = e => { e.stopPropagation(); imprimirFichaTransportadora(todas.find(t => t.id === b.dataset.id)) }
+  })
+  alvo.querySelectorAll('.tr-excluir').forEach(b => {
+    b.onclick = e => { e.stopPropagation(); excluirTransportadora(todas.find(t => t.id === b.dataset.id), recarregar) }
+  })
+  alvo.querySelectorAll('[data-tr]').forEach(tr => {
+    tr.onclick = () => editavel
+      ? formTransportadora(todas.find(t => t.id === tr.dataset.tr), recarregar)
+      : imprimirFichaTransportadora(todas.find(t => t.id === tr.dataset.tr))
+  })
+}
+
+// ---------------------------------------------------------------
+function formTransportadora (t, aoSalvar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal modal-largo">
+    <h3>${t ? 'Editar' : 'Nova'} transportadora</h3>
+    <div class="form-grade">
+      <div class="campo" style="grid-column:1/-1;"><label>Razão social *</label>
+        <input id="tf-razao" value="${esc(t?.razao_social ?? '')}"></div>
+      <div class="campo"><label>Nome fantasia</label>
+        <input id="tf-fantasia" value="${esc(t?.nome_fantasia ?? '')}"></div>
+      <div class="campo"><label>Tipo</label>
+        <select id="tf-tipo">${TIPOS_TRANSPORTADORA.map(([v, r]) =>
+          `<option value="${v}" ${v === (t?.tipo ?? 'TRANSPORTADORA') ? 'selected' : ''}>${r}</option>`).join('')}</select></div>
+      <div class="campo"><label>CNPJ / CPF</label>
+        <input id="tf-cnpj" inputmode="numeric" value="${esc(t?.cnpj ? formatarCnpjCpf(t.cnpj) : '')}"
+          placeholder="só números já serve"></div>
+      <div class="campo"><label>Inscrição estadual</label>
+        <input id="tf-ie" value="${esc(t?.inscricao_estadual ?? '')}"></div>
+      <div class="campo"><label>RNTRC (ANTT)</label>
+        <input id="tf-rntrc" value="${esc(t?.rntrc ?? '')}" placeholder="registro na ANTT"></div>
+      <div class="campo"><label>Telefone da empresa</label>
+        <input id="tf-tel" value="${esc(t?.telefone ?? '')}"></div>
+      <div class="campo"><label>E-mail</label>
+        <input id="tf-email" value="${esc(t?.email ?? '')}"></div>
+      <div class="campo"><label>Pessoa de contato</label>
+        <input id="tf-contato" value="${esc(t?.contato_nome ?? '')}" placeholder="quem atende quando a gente liga"></div>
+      <div class="campo"><label>Telefone do contato</label>
+        <input id="tf-contato-tel" value="${esc(t?.contato_telefone ?? '')}"></div>
+    </div>
+
+    <div class="cabeca-secao" style="margin-top:14px;margin-bottom:4px;">
+      <h3 style="font-family:var(--serif);font-size:14px;">Endereço</h3></div>
+    <div class="form-grade">
+      <div class="campo"><label>CEP</label><input id="tf-cep" inputmode="numeric" value="${esc(t?.cep ?? '')}"></div>
+      <div class="campo" style="grid-column:span 2;"><label>Logradouro</label>
+        <input id="tf-log" value="${esc(t?.logradouro ?? '')}"></div>
+      <div class="campo"><label>Número</label><input id="tf-num" value="${esc(t?.numero ?? '')}"></div>
+      <div class="campo"><label>Complemento</label><input id="tf-compl" value="${esc(t?.complemento ?? '')}"></div>
+      <div class="campo"><label>Bairro</label><input id="tf-bairro" value="${esc(t?.bairro ?? '')}"></div>
+      <div class="campo"><label>UF</label>
+        <select id="tf-uf"><option value="">—</option>
+          ${UFS_BRASIL.map(uf => `<option value="${uf}" ${uf === (t?.uf ?? '') ? 'selected' : ''}>${uf}</option>`).join('')}</select></div>
+      <div class="campo"><label>Município</label>
+        <select id="tf-mun"><option value="${esc(t?.municipio ?? '')}" selected>${
+          esc(t?.municipio || (t?.uf ? 'carregando...' : 'selecione o UF primeiro'))}</option></select></div>
+    </div>
+
+    <div class="campo" style="margin-top:10px;"><label>Observações</label>
+      <textarea id="tf-obs" style="min-height:70px;"
+        placeholder="tipo de carreta, região que atende, combinados de frete...">${esc(t?.observacoes ?? '')}</textarea></div>
+
+    ${t ? `<label class="linha-modulo" style="margin-top:10px;">
+      <input type="checkbox" id="tf-ativo" ${t.ativo ? 'checked' : ''}><span class="nome">Ativa</span></label>` : ''}
+
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="tf-salvar">Salvar</button>
+      ${t ? `<button class="btn-secundario" id="tf-imprimir">🖨 Imprimir ficha</button>` : ''}
+      <button class="btn-secundario" id="tf-fechar">Fechar</button>
+      ${t ? `<button class="btn-secundario" id="tf-excluir" style="margin-left:auto;color:var(--critico-text);border-color:var(--critico-text);">Excluir</button>` : ''}
+    </div>
+    <div class="recado oculto" id="tf-recado"></div>
+  </div>`
+
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#tf-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const selUf = fundo.querySelector('#tf-uf')
+  const selMun = fundo.querySelector('#tf-mun')
+  popularMunicipios(selMun, t?.uf ?? '', t?.municipio ?? '')
+  selUf.addEventListener('change', () => popularMunicipios(selMun, selUf.value, ''))
+
+  const campoCnpj = fundo.querySelector('#tf-cnpj')
+  campoCnpj.onblur = () => { campoCnpj.value = formatarCnpjCpf(campoCnpj.value) }
+
+  const btnImp = fundo.querySelector('#tf-imprimir')
+  if (btnImp) btnImp.onclick = () => imprimirFichaTransportadora(t)
+
+  const btnEx = fundo.querySelector('#tf-excluir')
+  if (btnEx) btnEx.onclick = () => excluirTransportadora(t, () => { fechar(); aoSalvar() })
+
+  fundo.querySelector('#tf-salvar').onclick = async () => {
+    const el = fundo.querySelector('#tf-recado')
+    const aviso = txt => { el.textContent = txt; el.classList.remove('oculto')
+      el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const q = id => fundo.querySelector(id).value.trim()
+
+    const razao = q('#tf-razao')
+    if (!razao) { aviso('A razão social é obrigatória.'); return }
+
+    const digitos = soDigitosDoc(q('#tf-cnpj'))
+    if (digitos && digitos.length !== 11 && digitos.length !== 14) {
+      aviso('CNPJ tem 14 dígitos e CPF tem 11. Confere o número, ou deixa em branco.'); return
+    }
+
+    const corpo = {
+      razao_social: razao,
+      nome_fantasia: q('#tf-fantasia') || null,
+      tipo: fundo.querySelector('#tf-tipo').value,
+      cnpj: digitos || null,
+      inscricao_estadual: q('#tf-ie') || null,
+      rntrc: q('#tf-rntrc') || null,
+      telefone: q('#tf-tel') || null,
+      email: q('#tf-email') || null,
+      contato_nome: q('#tf-contato') || null,
+      contato_telefone: q('#tf-contato-tel') || null,
+      cep: q('#tf-cep') || null,
+      logradouro: q('#tf-log') || null,
+      numero: q('#tf-num') || null,
+      complemento: q('#tf-compl') || null,
+      bairro: q('#tf-bairro') || null,
+      uf: selUf.value || null,
+      municipio: selMun.value || null,
+      observacoes: q('#tf-obs') || null
+    }
+    if (t) corpo.ativo = fundo.querySelector('#tf-ativo').checked
+    else corpo.criado_por = PERFIL.pessoaId
+
+    const btn = fundo.querySelector('#tf-salvar')
+    btn.disabled = true; btn.textContent = 'salvando...'
+    const { error } = t
+      ? await db.from('transportadora').update(corpo).eq('id', t.id)
+      : await db.from('transportadora').insert(corpo)
+    btn.disabled = false; btn.textContent = 'Salvar'
+
+    if (error) {
+      aviso(String(error.message).includes('ux_transportadora_cnpj')
+        ? 'Já existe uma transportadora cadastrada com esse CNPJ.'
+        : error.message)
+      return
+    }
+    fechar(); aoSalvar()
+  }
+}
+
+// Excluir só depois de mostrar o que está pendurado. Transportadora com
+// ordem no histórico é rastro de quem levou a carga — apagar cega o
+// registro antigo em vez de limpar cadastro.
+async function excluirTransportadora (t, aoConcluir) {
+  if (!t) return
+  const { data: uso } = await db.rpc('transportadora_em_uso', { p_id: t.id })
+  const u = uso || {}
+  const presa = Number(u.motoristas || 0) + Number(u.veiculos || 0) + Number(u.ordens || 0)
+
+  if (Number(u.ordens || 0) > 0) {
+    alert(`"${t.razao_social}" já aparece em ${u.ordens} ordem(ns) de carregamento` +
+      (u.ultima_ordem ? ` (a última em ${fmtData(u.ultima_ordem)})` : '') + '.\n\n' +
+      'Não dá pra excluir sem apagar de quem era o transporte naquelas cargas.\n' +
+      'Se ela não trabalha mais com a gente, desmarque "Ativa" — ela some das listas ' +
+      'e o histórico continua de pé.')
+    return
+  }
+
+  const aviso = presa
+    ? `Excluir "${t.razao_social}"?\n\n${u.motoristas} motorista(s) e ${u.veiculos} veículo(s) ` +
+      'ficam sem transportadora (não são apagados).'
+    : `Excluir "${t.razao_social}"?`
+
+  if (!confirm(aviso)) return
+  const { error } = await db.from('transportadora').delete().eq('id', t.id)
+  if (error) { alert(error.message); return }
+  aoConcluir()
+}
+
+// ---------------------------------------------------------------
+// Ficha da transportadora, pronta pra imprimir ou mandar pro cliente.
+function imprimirFichaTransportadora (t) {
+  if (!t) return
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = documentoPDF({
+    titulo: 'Transportadora',
+    subtitulo: t.razao_social,
+    corpo: `
+      ${docBloco('Identificação',
+        docLinha('Razão social', t.razao_social) +
+        docLinha('Nome fantasia', t.nome_fantasia) +
+        docLinha('Tipo', ROTULO_TIPO_TRANSP[t.tipo] || t.tipo) +
+        docLinha('CNPJ / CPF', t.cnpj ? formatarCnpjCpf(t.cnpj) : '') +
+        docLinha('Inscrição estadual', t.inscricao_estadual) +
+        docLinha('RNTRC (ANTT)', t.rntrc))}
+      ${docBloco('Contato',
+        docLinha('Telefone', t.telefone) +
+        docLinha('E-mail', t.email) +
+        docLinha('Pessoa de contato', t.contato_nome) +
+        docLinha('Telefone do contato', t.contato_telefone))}
+      ${docBloco('Endereço', docLinha('Endereço', enderecoDaTransportadora(t)) || '<div class="texto-dim">não informado</div>')}
+      ${t.observacoes ? docTexto('Observações', t.observacoes) : ''}`,
+    acoes: `<button class="btn" id="tp-imprimir">Baixar / imprimir PDF</button>
+            <button class="btn-secundario" id="tp-fechar">Fechar</button>`
+  })
+  document.body.appendChild(fundo)
+  fundo.querySelector('#tp-fechar').onclick = () => fundo.remove()
+  fundo.querySelector('#tp-imprimir').onclick = () => window.print()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+}
+
+// ---------------------------------------------------------------
+// Folha de transporte — é o que a gente manda pro cliente quando ele
+// pergunta "quem vem trazer e quando". Vai tudo que ele precisa pra
+// receber a carga e nada que seja assunto interno (preço, margem,
+// vendedor): o documento sai da empresa, então o que está nele é o que
+// o cliente vai ler.
+async function folhaDeTransporte (carregamentoId) {
+  const { data: c, error } = await db.from('carregamento')
+    .select(`id, quantidade_t, data_carregamento, data_programada, numero_nf, status, observacoes, uf_destino,
+      motorista, transportadora_id,
+      cliente:cliente_id ( razao_social, cnpj_cpf, municipio, uf ),
+      produto:produto_id ( nome, unidade ),
+      empresa:empresa_id ( nome ),
+      veiculo:veiculo_id ( placa, descricao ),
+      veiculo_cliente:veiculo_cliente_id ( placa, descricao ),
+      transportadora:transportadora_id ( * )`)
+    .eq('id', carregamentoId).single()
+
+  if (error || !c) { alert('Não consegui carregar essa ordem: ' + (error?.message || '')); return }
+
+  const t = c.transportadora
+  const placa = c.veiculo?.placa || c.veiculo_cliente?.placa || null
+  const descricaoVeiculo = c.veiculo?.descricao || c.veiculo_cliente?.descricao || null
+  const unidade = c.produto?.unidade ?? 't'
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = documentoPDF({
+    titulo: 'Dados do transporte',
+    subtitulo: [c.empresa?.nome, c.numero_nf ? 'NF ' + c.numero_nf : null].filter(Boolean).join(' · '),
+    corpo: `
+      ${docBloco('Carga',
+        docLinha('Cliente', c.cliente?.razao_social) +
+        docLinha('Destino', [c.cliente?.municipio, c.uf_destino || c.cliente?.uf].filter(Boolean).join('/')) +
+        docLinha('Produto', c.produto?.nome) +
+        docLinha('Quantidade', `${fmtNum(c.quantidade_t, casasPara(unidade))} ${unidade}`) +
+        docLinha('Nota fiscal', c.numero_nf) +
+        docLinha('Data do carregamento', fmtData(c.data_carregamento)) +
+        docLinha('Previsão de saída', c.data_programada ? fmtQuando(c.data_programada) : ''))}
+
+      ${docBloco('Quem está levando',
+        (t
+          ? docLinha('Transportadora', t.nome_fantasia || t.razao_social) +
+            docLinha('Razão social', t.razao_social) +
+            docLinha('CNPJ / CPF', t.cnpj ? formatarCnpjCpf(t.cnpj) : '') +
+            docLinha('RNTRC (ANTT)', t.rntrc) +
+            docLinha('Telefone', t.contato_telefone || t.telefone) +
+            docLinha('Falar com', t.contato_nome)
+          : '<div class="texto-dim">Transportadora não informada nesta ordem.</div>') +
+        docLinha('Motorista', c.motorista) +
+        docLinha('Veículo', [placa, descricaoVeiculo].filter(Boolean).join(' · ')))}
+
+      ${c.observacoes ? docTexto('Observação', c.observacoes) : ''}
+
+      <p style="font-size:11px;color:#8a9990;margin-top:14px;line-height:1.6;">
+        Documento informativo de acompanhamento da carga. Não substitui a nota fiscal,
+        o CT-e nem o manifesto de transporte.</p>`,
+    acoes: `<button class="btn" id="ft-imprimir">Baixar / imprimir PDF</button>
+            <button class="btn-secundario" id="ft-fechar">Fechar</button>`
+  })
+  document.body.appendChild(fundo)
+  fundo.querySelector('#ft-fechar').onclick = () => fundo.remove()
+  fundo.querySelector('#ft-imprimir').onclick = () => window.print()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+}
+
 // ----- Motoristas e Veículos de cliente — cadastro próprio, pra
 // escolher em vez de digitar toda vez na Ordem de Carregamento -----
 async function expedMotoristasVeiculos (alvo) {
   const [{ data: motoristas }, { data: veiculosCliente }] = await Promise.all([
-    db.from('expedicao_motorista').select('*').order('nome'),
-    db.from('expedicao_veiculo_cliente').select('*, cliente:cliente_id(razao_social), motorista:motorista_id(nome)').order('placa')
+    db.from('expedicao_motorista').select('*, transportadora:transportadora_id(razao_social,nome_fantasia)').order('nome'),
+    db.from('expedicao_veiculo_cliente').select('*, cliente:cliente_id(razao_social), motorista:motorista_id(nome), transportadora:transportadora_id(razao_social,nome_fantasia)').order('placa')
   ])
   const listaMot = motoristas || []
   const listaVei = veiculosCliente || []
   // mantém o cache usado em Lançar / Ordem de Carregamento sempre
   // atualizado — sem isso, um motorista recém-cadastrado só aparecia
   // nos dropdowns depois de sair e voltar na aba de Faturamento
-  EXPED_CACHE.motoristas = listaMot.filter(m => m.ativo).map(m => ({ id: m.id, nome: m.nome, telefone: m.telefone }))
-  EXPED_CACHE.veiculosCliente = listaVei.filter(v => v.ativo).map(v => ({ id: v.id, placa: v.placa, descricao: v.descricao, motorista_id: v.motorista_id }))
+  EXPED_CACHE.motoristas = listaMot.filter(m => m.ativo).map(m => ({ id: m.id, nome: m.nome, telefone: m.telefone, transportadora_id: m.transportadora_id }))
+  EXPED_CACHE.veiculosCliente = listaVei.filter(v => v.ativo).map(v => ({ id: v.id, placa: v.placa, descricao: v.descricao, motorista_id: v.motorista_id, transportadora_id: v.transportadora_id }))
   let buscaVei = ''
 
   const iniciais = n => (n || '').trim().split(/\s+/).slice(0, 2).map(p => p[0]).join('').toUpperCase()
@@ -12851,6 +13293,7 @@ async function expedMotoristasVeiculos (alvo) {
               <div style="flex:1;min-width:0;">
                 <div style="font-weight:600;font-size:13.5px;">${esc(m.nome)}</div>
                 <div class="texto-dim2" style="font-size:11px;">${esc(m.telefone || 'sem telefone')}${m.cpf ? ' · ' + esc(m.cpf) : ''}</div>
+                ${m.transportadora ? `<div class="texto-dim2" style="font-size:10.5px;">🚚 ${esc(m.transportadora.nome_fantasia || m.transportadora.razao_social)}</div>` : ''}
               </div>
               ${!m.ativo ? '<span class="chip" style="font-size:10px;">inativo</span>' : ''}
             </div>`).join('') || '<p class="vazio">Nenhum motorista cadastrado.</p>'}
@@ -12872,6 +13315,7 @@ async function expedMotoristasVeiculos (alvo) {
               </div>
               <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">
                 ${v.cliente?.razao_social ? `<span class="texto-dim2" style="font-size:11px;">🏢 ${esc(v.cliente.razao_social)}</span>` : ''}
+                ${v.transportadora ? `<span class="texto-dim2" style="font-size:11px;">🚚 ${esc(v.transportadora.nome_fantasia || v.transportadora.razao_social)}</span>` : ''}
               </div>
               ${v.motorista?.nome ? `<div class="chip" style="font-size:10.5px;margin-top:6px;display:inline-block;">🧑‍✈️ ${esc(v.motorista.nome)}</div>` : `<div class="texto-dim2" style="font-size:10.5px;margin-top:6px;">sem motorista vinculado</div>`}
             </div>`).join('') || `<p class="vazio">${buscaVei ? 'Nenhuma placa encontrada.' : 'Nenhum veículo de cliente cadastrado.'}</p>`}
@@ -12905,6 +13349,9 @@ function formMotoristaExped (registro, aoSalvar) {
       <div class="campo" style="grid-column:1/-1;"><label>Nome *</label><input id="fm-nome" value="${esc(registro?.nome ?? '')}"></div>
       <div class="campo"><label>CPF</label><input id="fm-cpf" value="${esc(registro?.cpf ?? '')}"></div>
       <div class="campo"><label>Telefone</label><input id="fm-tel" value="${esc(registro?.telefone ?? '')}"></div>
+      <div class="campo" style="grid-column:1/-1;"><label>Transportadora</label>
+        <select id="fm-transp"><option value="">— autônomo / não informado —</option>
+          ${(EXPED_CACHE.transportadoras || []).map(t => `<option value="${t.id}" ${t.id === registro?.transportadora_id ? 'selected' : ''}>${esc(t.nome_fantasia || t.razao_social)}</option>`).join('')}</select></div>
     </div>
     ${registro ? `<label class="linha-modulo" style="margin-top:10px;"><input type="checkbox" id="fm-ativo" ${registro.ativo ? 'checked' : ''}><span class="nome">Ativo</span></label>` : ''}
     <div class="acoes" style="margin-top:14px;"><button class="btn" id="fm-salvar">Salvar</button>
@@ -12926,7 +13373,9 @@ function formMotoristaExped (registro, aoSalvar) {
     const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
     const nome = fundo.querySelector('#fm-nome').value.trim()
     if (!nome) { aviso('Escreve o nome.'); return }
-    const corpo = { nome, cpf: fundo.querySelector('#fm-cpf').value.trim() || null, telefone: fundo.querySelector('#fm-tel').value.trim() || null }
+    const corpo = { nome, cpf: fundo.querySelector('#fm-cpf').value.trim() || null,
+      telefone: fundo.querySelector('#fm-tel').value.trim() || null,
+      transportadora_id: fundo.querySelector('#fm-transp').value || null }
     if (registro) corpo.ativo = fundo.querySelector('#fm-ativo').checked
     let error
     if (registro) { ({ error } = await db.from('expedicao_motorista').update(corpo).eq('id', registro.id)) }
@@ -12946,6 +13395,9 @@ function formVeiculoClienteExped (registro, aoSalvar) {
       <div class="campo"><label>Descrição</label><input id="fv-desc" value="${esc(registro?.descricao ?? '')}" placeholder="ex: Carreta, Truck..."></div>
       <div class="campo" style="grid-column:1/-1;"><label>Cliente dono</label>
         <select id="fv-cliente"><option value="">—</option>${EXPED_CACHE.clientes.map(c => `<option value="${c.id}" ${c.id === registro?.cliente_id ? 'selected' : ''}>${esc(c.razao_social)}</option>`).join('')}</select></div>
+      <div class="campo" style="grid-column:1/-1;"><label>Transportadora</label>
+        <select id="fv-transp"><option value="">— do cliente / não informado —</option>
+          ${(EXPED_CACHE.transportadoras || []).map(t => `<option value="${t.id}" ${t.id === registro?.transportadora_id ? 'selected' : ''}>${esc(t.nome_fantasia || t.razao_social)}</option>`).join('')}</select></div>
       <div class="campo" style="grid-column:1/-1;"><label>Motorista de costume</label>
         <select id="fv-motorista"><option value="">— nenhum vinculado —</option>
           ${EXPED_CACHE.motoristas.map(m => `<option value="${m.id}" ${m.id === registro?.motorista_id ? 'selected' : ''}>${esc(m.nome)}</option>`).join('')}</select>
@@ -12972,7 +13424,9 @@ function formVeiculoClienteExped (registro, aoSalvar) {
     const placa = fundo.querySelector('#fv-placa').value.trim()
     if (!placa) { aviso('Escreve a placa.'); return }
     const corpo = { placa: placa.toUpperCase(), descricao: fundo.querySelector('#fv-desc').value.trim() || null,
-      cliente_id: fundo.querySelector('#fv-cliente').value || null, motorista_id: fundo.querySelector('#fv-motorista').value || null }
+      cliente_id: fundo.querySelector('#fv-cliente').value || null,
+      motorista_id: fundo.querySelector('#fv-motorista').value || null,
+      transportadora_id: fundo.querySelector('#fv-transp').value || null }
     if (registro) corpo.ativo = fundo.querySelector('#fv-ativo').checked
     let error
     if (registro) { ({ error } = await db.from('expedicao_veiculo_cliente').update(corpo).eq('id', registro.id)) }
@@ -12992,6 +13446,11 @@ function abrirPdfOrdemCarregamento (o) {
       ${docBloco('Cliente e produto', docLinha('Empresa emitente', o.empresa) + docLinha('Cliente', o.cliente) + docLinha('Produto', o.produto) +
         docLinha('Quantidade', `${fmtNum(o.quantidade, casasPara(o.unidade))} ${o.unidade}`))}
       ${docBloco('Transporte', docLinha('Veículo', o.placa) + docLinha('Motorista', o.motorista) +
+        (o.transportadora
+          ? docLinha('Transportadora', o.transportadora.nome_fantasia || o.transportadora.razao_social) +
+            docLinha('CNPJ da transportadora', o.transportadora.cnpj ? formatarCnpjCpf(o.transportadora.cnpj) : '') +
+            docLinha('RNTRC', o.transportadora.rntrc)
+          : '') +
         docLinha('Data programada', fmtQuando(o.dataProgramada)) + docLinha('Local de entrega', o.local || '—'))}
       ${o.observacao ? docTexto('Observação', o.observacao) : ''}`,
     acoes: `<button class="btn" id="oc-pdf-imprimir">Baixar / imprimir PDF</button>
@@ -18222,9 +18681,16 @@ async function crmOriginacao (alvo, editavel, gerencia) {
       const { data: r, error: e } = await db.rpc('crm_transferir_para_sdr',
         { p_lead_id: id, p_instrucoes: instr.trim() || null })
       if (e) { alert(e.message); btnSdr.disabled = false; btnSdr.textContent = '→ Passar pro SDR'; return }
-      alert(r?.ja_existia
-        ? 'Esse número já estava no SDR — liguei os dois cadastros.'
-        : 'Pronto, o lead está na fila do SDR do WhatsApp.')
+      alert([
+        r?.ja_estava_na_lista
+          ? `Esse número já estava na lista "${r?.lista}" — atualizei o contexto dele.`
+          : `Pronto: entrou na lista "${r?.lista}" do SDR.`,
+        'O robô aborda respeitando a janela de horário e o intervalo da lista,',
+        'e a partir de agora ele também responde se o cliente escrever.',
+        r?.ja_tentou_ligacao
+          ? '\nComo já houve tentativa de ligação, a abertura vai reconhecer isso.'
+          : ''
+      ].filter(Boolean).join('\n'))
       recarregar()
     }
 
@@ -23589,6 +24055,16 @@ function abrirFormLista (lista, canais, vendedores, aoSalvar) {
         <div class="campo" style="margin-top:10px;"><label>Mensagem de abertura (opcional)</label>
           <textarea id="sl-abertura" style="min-height:70px;"
             placeholder="Deixe em branco pra IA escrever sozinha, com o treino dela.">${esc(l.mensagem_abertura || '')}</textarea></div>
+        <div class="campo" style="margin-top:10px;">
+          <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;">
+            <input type="checkbox" id="sl-recebe" ${l.recebe_transferencia ? 'checked' : ''}
+              style="width:16px;height:16px;margin-top:2px;flex:none;">
+            <span>Esta lista recebe os leads que o consultor passa do CRM
+              <span class="texto-dim2" style="display:block;font-weight:400;font-size:11.5px;line-height:1.55;margin-top:2px;">
+                O botão "Passar pro SDR", na aba Originação, joga o contato aqui dentro.
+                Só uma lista por WhatsApp pode receber — e ela precisa estar <b>ativa</b>,
+                senão o robô não fala com ninguém.</span></span>
+          </label></div>
       </div>
 
       <div class="acoes">
@@ -23613,7 +24089,8 @@ function abrirFormLista (lista, canais, vendedores, aoSalvar) {
       variacao_minutos: Number(q('#sl-var').value) || 0,
       teto_diario: Number(q('#sl-teto').value) || 10,
       apenas_dias_uteis: q('#sl-uteis').value === 'sim',
-      mensagem_abertura: q('#sl-abertura').value.trim() || null
+      mensagem_abertura: q('#sl-abertura').value.trim() || null,
+      recebe_transferencia: q('#sl-recebe').checked
     }
     if (!corpo.nome) { alert('A lista precisa de um nome.'); return }
     if (!corpo.canal_id) { alert('Escolha por qual WhatsApp essa lista vai falar.'); return }
