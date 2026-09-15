@@ -11366,6 +11366,7 @@ async function blocoAprovacaoWhatsApp (alvo) {
 
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
         <button type="button" class="btn-secundario mini" id="aw-mandar">Mandar o resumo agora</button>
+        <button type="button" class="btn-secundario mini" id="aw-fotos">Gerar fotos que faltam</button>
       </div>
       <div id="aw-recado" class="texto-dim2" style="font-size:11.5px;margin-top:8px;"></div>
 
@@ -11421,6 +11422,62 @@ async function blocoAprovacaoWhatsApp (alvo) {
     recado.textContent = 'Pedi o envio agora. Confere no WhatsApp de quem está ativo — se não chegar em 1 minuto, me avise.'
     recado.style.color = 'var(--good-text)'
   }
+
+  const btnFotos = alvo.querySelector('#aw-fotos')
+  if (btnFotos) btnFotos.onclick = async () => {
+    btnFotos.disabled = true; btnFotos.textContent = 'gerando...'
+    recado.style.color = ''
+    try {
+      const { total, geradas, falhas } = await gerarFotosPendentesSemImagem(txt => {
+        recado.textContent = txt
+      })
+      recado.textContent = total === 0
+        ? 'Nenhuma pendência sem foto — está tudo em dia.'
+        : `Prontas ${geradas} de ${total} foto(s).${falhas ? ` ${falhas} falharam — tenta de novo.` : ''}`
+      recado.style.color = falhas ? 'var(--warn-text)' : 'var(--good-text)'
+    } catch (e) {
+      recado.textContent = 'Não consegui: ' + e.message
+      recado.style.color = 'var(--warn-text)'
+    }
+    btnFotos.disabled = false; btnFotos.textContent = 'Gerar fotos que faltam'
+  }
+}
+
+// Varre as solicitações aguardando aprovação que ainda não têm foto
+// gerada (pedidos de antes dessa função existir, ou algum caso que
+// escapou do fluxo normal de "enviar pra aprovação") e gera uma pra
+// cada, uma de cada vez -- gerar várias ao mesmo tempo só deixaria a
+// tela pesada sem ganhar velocidade real, já que quem limita aqui é o
+// upload, não o desenho do canvas.
+async function gerarFotosPendentesSemImagem (avisar) {
+  const { data: pendentes, error } = await db.from('solicitacao_compra')
+    .select(`id, numero, produto_servico, quantidade, unidade, valor_estimado, valor_aprovado,
+      justificativa, finalidade, parecer_cotacao, onde_mais_barato,
+      fornecedor:fornecedor_id(nome), solicitante:solicitante_id(nome), solicitante_nome,
+      setor:setor_id(nome)`)
+    .eq('status', 'AGUARDANDO_APROVACAO').is('imagem_pedido_url', null)
+  if (error) throw new Error(error.message)
+
+  const lista = pendentes || []
+  let geradas = 0, falhas = 0
+  for (let i = 0; i < lista.length; i++) {
+    const s = lista[i]
+    if (avisar) avisar(`Gerando ${i + 1} de ${lista.length}...`)
+    const url = await subirImagemPedidoAprovacao({
+      numero: s.numero, produto: s.produto_servico,
+      quantidade: s.quantidade ? `${s.quantidade} ${s.unidade ?? ''}`.trim() : null,
+      valor: s.valor_aprovado ?? s.valor_estimado,
+      fornecedor: s.fornecedor?.nome || s.onde_mais_barato,
+      solicitante: s.solicitante?.nome || s.solicitante_nome,
+      setor: s.setor?.nome, justificativa: s.justificativa,
+      finalidade: s.finalidade, parecer: s.parecer_cotacao
+    })
+    if (!url) { falhas++; continue }
+    const { error: e2 } = await db.from('solicitacao_compra')
+      .update({ imagem_pedido_url: url }).eq('id', s.id)
+    if (e2) falhas++; else geradas++
+  }
+  return { total: lista.length, geradas, falhas }
 }
 
 // ----- Compras › Coordenação e Aprovação -----
