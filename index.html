@@ -17135,7 +17135,8 @@ async function crmFunilIndividual (alvo, editavel, gerencia) {
     (!gerenciaEfetiva && !lista.length ? `<p class="vazio">Nenhum lead atribuído a você ainda. Assim que a gerência mandar um cliente pra você, ele aparece aqui.</p>` : '') +
     `<div id="crm-funil-individual"></div>`
 
-  renderFunilGestao($('#crm-funil-individual'), lista, editavel, () => crmFunilIndividual(alvo, editavel, gerencia), gerenciaEfetiva)
+  renderFunilGestao($('#crm-funil-individual'), lista, editavel,
+    () => crmFunilIndividual(alvo, editavel, gerencia), gerenciaEfetiva, gerencia)
   if (podeNovo) $('#crm-novo').onclick = () => formLead(null, editavel, gerenciaEfetiva, () => crmFunilIndividual(alvo, editavel, gerencia))
   if (gerencia) $('#crm-toggle-visao').onclick = () => { CRM_FUNIL_SO_MEU = !CRM_FUNIL_SO_MEU; crmFunilIndividual(alvo, editavel, gerencia) }
 }
@@ -19577,6 +19578,13 @@ function estilosQuadroUmaVez () {
     .qo-card:active { cursor:grabbing; }
     .qo-card h6 { margin:0 0 3px; font-size:12.5px; font-weight:600; }
     .qo-card.arrastando { opacity:.4; }
+    .qo-editor { margin-top:8px; padding-top:8px; border-top:1px dashed var(--line2); }
+    .qo-rot { display:block; font-size:9.5px; text-transform:uppercase; letter-spacing:.04em;
+      color:var(--dim2); margin-bottom:3px; }
+    .qo-editor select { width:100%; font-size:12px; padding:5px 7px; }
+    .qo-botoes { display:flex; gap:5px; flex-wrap:wrap; margin-top:6px; }
+    .qo-botoes button { font-size:10.5px; padding:4px 8px; }
+    .qo-card.aberto { border-color:var(--rust); cursor:default; }
     @media (max-width:700px) { .qo-col { flex-basis:78vw; } }`
   document.head.appendChild(s)
 }
@@ -19609,32 +19617,94 @@ function quadroOriginacaoHtml (itens) {
               ${i.objecoes_abertas ? `<div style="font-size:10px;margin-top:3px;color:var(--warn-text);">
                 ⚠ ${esc(i.objecoes_abertas)}</div>` : ''}
               ${i.vendedor ? `<div class="texto-dim2" style="font-size:10px;margin-top:3px;">→ ${esc(i.vendedor)}</div>` : ''}
+
+              <div class="qo-editor" hidden>
+                <label class="qo-rot">Mover para</label>
+                <select class="qo-mudar" data-sem-busca>
+                  ${COLUNAS_ORIGINACAO.filter(c => c.chave !== 'no_eduardo').map(c =>
+                    `<option value="${c.chave}" ${((i.situacao_originacao || 'a_contatar') === c.chave) ? 'selected' : ''}>${esc(c.nome)}</option>`).join('')}
+                </select>
+                <div class="qo-botoes">
+                  ${i.no_sdr ? `<span class="texto-dim2" style="font-size:10px;">já está com o Eduardo</span>`
+                    : `<button type="button" class="btn mini qo-eduardo">→ Passar pro Eduardo</button>`}
+                  <button type="button" class="btn-secundario mini qo-ficha">Abrir ficha</button>
+                </div>
+              </div>
             </div>`).join('') || `<p class="texto-dim2" style="font-size:11px;margin:4px 2px;">vazio</p>`}
         </div>`
       }).join('')}
     </div>
     <p class="texto-dim2" style="font-size:11px;line-height:1.5;margin:8px 2px 0;">
-      Arraste o card pra mudar de coluna. <b>Com o Eduardo</b> não se arrasta:
-      use o botão "Passar pro Eduardo" na fila ou na seleção, porque é ele que
-      escolhe a abordagem e coloca o contato na lista do bot.
+      <b>Clique no card</b> pra abrir a lista e mudar de coluna, ou arraste, o que for
+      mais rápido. <b>Com o Eduardo</b> não está na lista de propósito: é o botão
+      "Passar pro Eduardo", porque ali você escolhe a abordagem e o contato entra
+      de verdade na fila do bot — mudar só o rótulo deixaria o Eduardo sem saber.
     </p>`
 }
 
 // Arrastar e soltar. "Com o Eduardo" é a única coluna que não aceita
 // solta: entrar nela exige a transferência de verdade, com escolha de
 // abordagem — arrastar só mudaria o rótulo e o bot nunca saberia.
-function ligarQuadroOriginacao (editavel, recarregar) {
+function ligarQuadroOriginacao (editavel, recarregar, aoAbrirFicha) {
   if (!editavel) return
   let arrastado = null
+  let acabouDeArrastar = false
+
+  const mover = async (id, destino) => {
+    const { error } = await db.from('lead')
+      .update({ situacao_originacao: destino, atualizado_em: new Date().toISOString() })
+      .eq('id', id)
+    if (error) { alert('Não consegui mover: ' + error.message); return false }
+    return true
+  }
 
   document.querySelectorAll('.qo-card').forEach(c => {
+    const id = c.dataset.qo
+    const editor = c.querySelector('.qo-editor')
+
     c.ondragstart = e => {
-      arrastado = c.dataset.qo
+      arrastado = id
       c.classList.add('arrastando')
       e.dataTransfer.effectAllowed = 'move'
       try { e.dataTransfer.setData('text/plain', arrastado) } catch { /* Safari antigo */ }
     }
-    c.ondragend = () => { c.classList.remove('arrastando'); arrastado = null }
+    c.ondragend = () => {
+      c.classList.remove('arrastando')
+      arrastado = null
+      // soltar dispara um clique logo depois; sem isso a gaveta abria
+      // sozinha toda vez que alguém arrastasse um card
+      acabouDeArrastar = true
+      setTimeout(() => { acabouDeArrastar = false }, 250)
+    }
+
+    // clicar no card abre a gaveta. Clique DENTRO da gaveta não fecha —
+    // senão escolher no select fecharia antes de salvar.
+    c.onclick = e => {
+      if (acabouDeArrastar) return
+      if (editor && editor.contains(e.target)) return
+      const abrindo = editor.hidden
+      document.querySelectorAll('.qo-editor').forEach(x => { x.hidden = true })
+      document.querySelectorAll('.qo-card').forEach(x => x.classList.remove('aberto'))
+      editor.hidden = !abrindo
+      c.classList.toggle('aberto', abrindo)
+      // enquanto a gaveta está aberta o card não arrasta, pra não sair
+      // voando quando a pessoa vai clicar no select
+      c.draggable = !abrindo
+    }
+
+    const sel = c.querySelector('.qo-mudar')
+    if (sel) sel.onchange = async () => {
+      if (await mover(id, sel.value)) recarregar()
+    }
+
+    const btnEdu = c.querySelector('.qo-eduardo')
+    if (btnEdu) btnEdu.onclick = () => {
+      const nome = c.querySelector('h6')?.textContent || ''
+      abrirPassarProEduardo([id], [nome], recarregar)
+    }
+
+    const btnFicha = c.querySelector('.qo-ficha')
+    if (btnFicha && aoAbrirFicha) btnFicha.onclick = () => aoAbrirFicha(id)
   })
 
   document.querySelectorAll('.qo-col').forEach(col => {
@@ -19648,12 +19718,7 @@ function ligarQuadroOriginacao (editavel, recarregar) {
       e.preventDefault(); col.classList.remove('alvo')
       const id = arrastado || (() => { try { return e.dataTransfer.getData('text/plain') } catch { return null } })()
       if (!id || destino === 'no_eduardo') return
-
-      const { error } = await db.from('lead')
-        .update({ situacao_originacao: destino, atualizado_em: new Date().toISOString() })
-        .eq('id', id)
-      if (error) { alert('Não consegui mover: ' + error.message); return }
-      recarregar()
+      if (await mover(id, destino)) recarregar()
     }
   })
 }
@@ -20152,7 +20217,10 @@ async function crmOriginacao (alvo, editavel, gerencia) {
   })
   if (ORIG_VISTA === 'quadro') {
     estilosQuadroUmaVez()
-    ligarQuadroOriginacao(editavel, recarregar)
+    ligarQuadroOriginacao(editavel, recarregar, async id => {
+      const { data: l } = await db.from('lead').select(selLead).eq('id', id).single()
+      if (l) formLead(l, editavel, gerencia, recarregar)
+    })
   }
 
   function atualizarBarra () {
@@ -20196,38 +20264,16 @@ async function crmOriginacao (alvo, editavel, gerencia) {
   // Excluir apaga junto tudo que estava pendurado no lead. Quem vai
   // apagar precisa ver o que vai junto ANTES, não descobrir depois.
   async function excluir (ids, itens, botao) {
-    if (!ids.length) return
-    const nomes = itens.slice(0, 6).map(i => '· ' + i.nome).join('\n')
-    const resto = itens.length > 6 ? `\n· ...e mais ${itens.length - 6}` : ''
-    const comHistorico = itens.filter(i => Number(i.tentativas) > 0 || i.objecoes_abertas)
-    const noSdr = itens.filter(i => i.no_sdr)
-
-    const texto =
-      `Excluir ${ids.length === 1 ? 'este lead' : `estes ${ids.length} leads`} de vez?\n\n${nomes}${resto}\n\n` +
-      'Vai junto TUDO que está preso a eles: objeções, histórico de preço, ligações, ' +
-      'compromissos, propostas e o registro de perda. Não dá pra desfazer.\n\n' +
-      (comHistorico.length
-        ? `⚠ ${comHistorico.length} ${comHistorico.length === 1 ? 'tem' : 'têm'} ligação ou objeção registrada — ` +
-          'isso some do painel de objeções.\n'
-        : '') +
-      (noSdr.length ? `⚠ ${noSdr.length} está(ão) no SDR do WhatsApp; a conversa lá continua, só perde o vínculo.\n` : '') +
-      '\nSe for só pra tirar da frente, use "Tirar da fila" — some da lista e continua no sistema.'
-
-    if (!confirm(texto)) return
-    const motivo = prompt('Por que está excluindo? (fica no log de exclusões)', 'lead sem qualidade / teste')
-    if (motivo === null) return
-
-    const antes = botao.textContent
-    botao.disabled = true; botao.textContent = '...'
-    const { data: r, error } = await db.rpc('crm_excluir_leads',
-      { p_ids: ids, p_motivo: motivo.trim() || null })
-    if (error) { alert(error.message); botao.disabled = false; botao.textContent = antes; return }
-
-    if (Number(r?.apagados) < ids.length) {
-      alert(`Excluí ${r.apagados} de ${ids.length}. Os outros são de vendedor que você não gerencia.`)
-    }
-    selecionados.clear()
-    recarregar()
+    // os avisos que só a fila sabe dar
+    const comAvisos = itens.map(i => ({
+      id: i.id, nome: i.nome,
+      avisos: [
+        Number(i.tentativas) > 0 || i.objecoes_abertas
+          ? 'Tem ligação ou objeção registrada — isso some do painel de objeções.' : null,
+        i.no_sdr ? 'Está no SDR do WhatsApp; a conversa lá continua, só perde o vínculo.' : null
+      ].filter(Boolean)
+    }))
+    await excluirLeadsComMotivo(comAvisos, botao, () => { selecionados.clear(); recarregar() })
   }
 }
 
@@ -20989,12 +21035,11 @@ function formLead (l, editavel, gerencia, aoFechar) {
     }
 
     const btnExcluir = fundo.querySelector('#ld-excluir')
-    if (btnExcluir) btnExcluir.onclick = async () => {
-      if (!confirm('Excluir este lead?')) return
-      const { error } = await db.from('lead').delete().eq('id', l.id)
-      if (error) { aviso(error.message); return }
-      fechar(); aoFechar()
-    }
+    if (btnExcluir) btnExcluir.onclick = () =>
+      excluirLeadsComMotivo(
+        [{ id: l.id, nome: l.nome, avisos: avisosDoLeadNoFunil(l) }],
+        btnExcluir,
+        () => { fechar(); aoFechar() })
   }
 }
 
@@ -21021,8 +21066,91 @@ async function atualizarEtapaLead (lead, novaEtapa, aoTerminar) {
   aoTerminar()
 }
 
-function renderFunilGestao (alvo, lista, editavel, aoMudar, gerencia = true) {
+// ---------------------------------------------------------------
+// Excluir lead, com motivo — um caminho só.
+//
+// Existiam dois jeitos diferentes de apagar um lead, e só um estava
+// certo. A Originação chamava a RPC crm_excluir_leads, que confere
+// permissão, desliga o vínculo com o SDR antes (a FK leads.lead_crm_id
+// não tem cascata, então sem isso o banco recusa) e completa a linha
+// do exclusao_log com o motivo. A ficha do lead fazia um delete cru:
+// sem motivo no log, e quebrando com erro de chave estrangeira em
+// qualquer lead que já tinha ido pro Eduardo.
+//
+// Agora os três lugares — Originação, ficha e funil — passam por aqui.
+//
+// "itens" é [{ id, nome, avisos: ['...'] }]. Cada tela sabe avisos
+// diferentes (a Originação sabe de ligações e objeções; o funil sabe
+// de proposta e cliente), e por isso quem chama monta os seus.
+async function excluirLeadsComMotivo (itens, botao, aoTerminar) {
+  const ids = itens.map(i => i.id).filter(Boolean)
+  if (!ids.length) return false
+
+  const nomes = itens.slice(0, 6).map(i => '· ' + (i.nome || 'sem nome')).join('\n')
+  const resto = itens.length > 6 ? `\n· ...e mais ${itens.length - 6}` : ''
+  const avisos = [...new Set(itens.flatMap(i => i.avisos || []))]
+
+  const texto =
+    `Excluir ${ids.length === 1 ? 'este lead' : `estes ${ids.length} leads`} de vez?\n\n${nomes}${resto}\n\n` +
+    'Vai junto TUDO que está preso a eles: objeções, histórico de preço, ligações, ' +
+    'compromissos, propostas e o registro de perda. Não dá pra desfazer.\n\n' +
+    (avisos.length ? avisos.map(a => '⚠ ' + a).join('\n') + '\n' : '') +
+    '\nSe for só pra tirar da frente, use "Tirar da fila" — some da lista e continua no sistema.'
+
+  if (!confirm(texto)) return false
+
+  // o motivo é obrigatório de verdade: sem ele o log fica com uma
+  // exclusão sem explicação, que é o mesmo que não ter log
+  let motivo = null
+  while (true) {
+    motivo = prompt('Por que está excluindo? (fica registrado no log de exclusões)',
+                    motivo ?? '')
+    if (motivo === null) return false
+    motivo = motivo.trim()
+    if (motivo.length >= 3) break
+    alert('Escreve o motivo — nem que seja "duplicado" ou "teste". É ele que explica a exclusão depois.')
+  }
+
+  const antes = botao ? botao.textContent : null
+  if (botao) { botao.disabled = true; botao.textContent = '...' }
+
+  const { data: r, error } = await db.rpc('crm_excluir_leads', { p_ids: ids, p_motivo: motivo })
+
+  if (error) {
+    if (botao) { botao.disabled = false; botao.textContent = antes }
+    alert('Não consegui excluir: ' + error.message)
+    return false
+  }
+  if (Number(r?.apagados) < ids.length) {
+    alert(`Excluí ${r.apagados} de ${ids.length}. Os outros são de vendedor que você não gerencia.`)
+  }
+  if (Number(r?.desligados_do_sdr) > 0) {
+    console.info(`${r.desligados_do_sdr} conversa(s) no SDR perderam o vínculo, mas continuam lá.`)
+  }
+  if (aoTerminar) aoTerminar()
+  return true
+}
+
+// Os avisos que o funil consegue dar, olhando o que o card já carrega.
+function avisosDoLeadNoFunil (l) {
+  const a = []
+  if (l.cliente_id) a.push('Já foi convertido em cliente — o cadastro do cliente fica, só perde o vínculo com o lead.')
+  if (l.etapa === 'PROPOSTA' || l.etapa === 'NEGOCIACAO') a.push(`Está em "${ROTULO_ETAPA_LEAD[l.etapa]}" — some do funil e da conversão.`)
+  if (l.etapa === 'GANHO') a.push('Está marcado como GANHO — sai dos números de fechamento.')
+  if (l.valor_estimado) a.push(`Tem valor estimado de R$ ${fmtNum(l.valor_estimado)} — sai do previsto.`)
+  return a
+}
+
+// "gerencia" diz como a tela MOSTRA (nome do vendedor no card).
+// "podeGerir" diz o que a pessoa PODE. Eram o mesmo parâmetro, e por
+// isso clicar em "Ver só a minha carteira" — que é só um filtro de
+// visualização — apagava o botão de excluir da ficha. Quem gerencia
+// continua gerenciando, esteja olhando a equipe ou a própria carteira.
+function renderFunilGestao (alvo, lista, editavel, aoMudar, gerencia = true, podeGerir = gerencia) {
   let arrastando = null // id do lead sendo arrastado
+  // mesma régua da Originação e da ficha. O banco confere de novo na
+  // RPC — isto aqui só evita oferecer o que vai ser recusado.
+  const podeExcluirFunil = editavel && podeGerir
 
   const cartao = l => {
     const parado = diasDesde(l.atualizado_em)
@@ -21045,6 +21173,9 @@ function renderFunilGestao (alvo, lista, editavel, aoMudar, gerencia = true) {
       <div class="rodape">
         <span class="data">${fmtData((l.criado_em || '').slice(0, 10))}</span>
         ${l.bloqueio_lgpd ? '' : `<button type="button" class="btn-agendar" data-agendar="${l.id}" onclick="event.stopPropagation()">📅 Agendar</button>`}
+        ${podeExcluirFunil ? `<button type="button" class="btn-agendar" data-excluir-lead="${l.id}"
+          onclick="event.stopPropagation()" title="Excluir de vez" aria-label="Excluir de vez"
+          style="color:var(--critico-text);border-color:var(--critico-text);">🗑</button>` : ''}
       </div>
       </div>`
   }
@@ -21059,7 +21190,18 @@ function renderFunilGestao (alvo, lista, editavel, aoMudar, gerencia = true) {
 
   // clique no card (fora do seletor/botão) abre o lead completo
   alvo.querySelectorAll('[data-lead]').forEach(el => {
-    el.onclick = () => formLead(lista.find(l => l.id === el.dataset.lead), editavel, gerencia, aoMudar)
+    el.onclick = () => formLead(lista.find(l => l.id === el.dataset.lead), editavel, podeGerir, aoMudar)
+  })
+
+  // excluir direto do card, sem precisar abrir a ficha — era só de lá
+  // que dava, e só na visão de gestor, então na prática ninguém achava
+  alvo.querySelectorAll('[data-excluir-lead]').forEach(btn => {
+    btn.onclick = e => {
+      e.stopPropagation()
+      const l = lista.find(x => x.id === btn.dataset.excluirLead)
+      if (!l) return
+      excluirLeadsComMotivo([{ id: l.id, nome: l.nome, avisos: avisosDoLeadNoFunil(l) }], btn, aoMudar)
+    }
   })
 
   // agendar rápido, direto do card, sem abrir o lead inteiro
