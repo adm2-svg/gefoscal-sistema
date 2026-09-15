@@ -39610,7 +39610,8 @@ async function paginaDesempenho () {
   DESEMP_CACHE = { pessoas: pessoas || [], setores: setores || [] }
 
   const abas = [
-    ['painel', '📊', 'Painel'], ['especialista', '🎯', 'Especialista RH'], ['disc', '🧭', 'Perfis DISC'],
+    ['painel', '📊', 'Painel'], ['especialista', '🎯', 'Especialista RH'],
+    ['disc', '🧭', 'Perfis DISC'], ['motivadores', '💡', 'Motivadores'],
     ['termos', '📜', 'Termo de uso'],
     ['agilidade', '⚡', 'Agilidade e prazos'],
     ['individual', '👤', 'Acompanhamento Individual'], ['prestadores', '🏢', 'Prestadores Atrelados'], ['recrutamento', '🗂️', 'Recrutamento e Seleção'],
@@ -39655,6 +39656,7 @@ function abrirDesempenho (sub, editavel) {
   if (sub === 'trilhas') desempTrilhas(alvo, editavel)
   if (sub === 'especialista') desempEspecialistaRH(alvo)
   if (sub === 'disc') desempPerfisDisc(alvo)
+  if (sub === 'motivadores') desempPerfisMotivador(alvo)
   if (sub === 'termos') desempTermos(alvo)
   if (sub === 'meu') desempMeu(alvo)
 }
@@ -40003,78 +40005,258 @@ function renderGradeDisc () {
   })
 }
 
-async function abrirPerfilDisc (resumo) {
-  if (!resumo) return
-  const { data: p } = await db.from('rh_perfil_disc')
-    .select('*, pessoa:pessoa_id(nome)').eq('id', resumo.id).maybeSingle()
-  if (!p) return
-
-  const dupla = (p.primario || '') + (p.secundario || '')
-  const tensao = tensaoDisc(p.disc_natural, p.disc_adaptado)
-
+// ---------------------------------------------------------------
+// Perfil da pessoa no RH: comportamento e motivadores no mesmo lugar.
+//
+// Eram duas fichas separadas e isso escondia justamente o que
+// interessa — o COMO e o PORQUÊ só dizem alguma coisa juntos. Quem
+// abre pelo cartão do DISC cai na aba de comportamento; quem abre
+// pelo cartão de motivadores cai na outra. É a mesma ficha.
+//
+// Laudo sem cadastro ligado não tem como puxar o par: fica só com a
+// aba de onde veio, e com o aviso de ligar o cadastro.
+// ---------------------------------------------------------------
+async function abrirPerfilPessoaRH (opts = {}) {
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
-  fundo.innerHTML = `<div class="modal" style="max-width:640px;">
-    <div class="cabeca-secao" style="margin-bottom:4px;">
-      <h3 style="margin:0;">${esc(p.nome)}</h3>
-      <span class="chip" style="font-size:12px;font-weight:700;background:rgba(var(--rust-rgb),.14);color:var(--rust);border:none;">${esc(dupla || '—')}</span>
-    </div>
-    <p class="texto-dim2" style="font-size:12px;margin:0 0 14px;">
-      ${esc([p.cargo_no_laudo, p.empresa_no_laudo].filter(Boolean).join(' · ') || 'sem cargo no laudo')}
-      ${p.pessoa?.nome ? ` · cadastrado como <b>${esc(p.pessoa.nome)}</b>` : ' · <span style="color:var(--warn-text);">sem cadastro ligado</span>'}
-    </p>
-
-    ${DISC_DUPLA[dupla] ? `<div class="caixa-texto" style="margin-bottom:14px;">
-      <div class="rot">Em uma frase</div>
-      <p style="font-size:13.5px;line-height:1.55;margin:6px 0 0;">${esc(DISC_DUPLA[dupla])}</p>
-    </div>` : ''}
-
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
-      <div class="caixa-texto">
-        <div class="rot">Natural — como é</div>
-        <div style="margin-top:8px;">${barraDisc(p.disc_natural)}</div>
-      </div>
-      <div class="caixa-texto">
-        <div class="rot">Adaptado — como acha que precisa ser</div>
-        <div style="margin-top:8px;">${barraDisc(p.disc_adaptado)}</div>
-      </div>
-    </div>
-
-    ${tensao ? `<div style="padding:11px 13px;border-left:3px solid var(--warn-text);background:var(--surface2);
-      border-radius:0 8px 8px 0;margin-bottom:14px;">
-      <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">A distância entre os dois</div>
-      <p style="font-size:12.5px;line-height:1.5;margin:0;">${tensao}</p>
-    </div>` : ''}
-
-    ${p.caracteristicas ? `<div class="caixa-texto" style="margin-bottom:14px;">
-      <div class="rot">Como o laudo descreve</div>
-      <p style="font-size:12.8px;line-height:1.6;margin:6px 0 0;">${esc(p.caracteristicas)}</p>
-    </div>` : ''}
-
-    ${(p.pontos_fortes || []).length ? `<div class="caixa-texto" style="margin-bottom:14px;">
-      <div class="rot">O que ele(a) traz pra equipe</div>
-      <ul style="margin:8px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:4px;">
-        ${p.pontos_fortes.map(x => `<li style="font-size:12.5px;line-height:1.45;">${esc(x)}</li>`).join('')}
-      </ul></div>` : ''}
-
-    ${p.observacoes ? `<div class="caixa-texto" style="margin-bottom:14px;">
-      <div class="rot">Anotações do RH</div>
-      <p style="font-size:12.5px;line-height:1.5;margin:6px 0 0;">${esc(p.observacoes)}</p></div>` : ''}
-
-    <div class="acoes" style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap;">
-      ${!p.pessoa_id ? '<button class="btn-secundario" id="disc-ligar">Ligar a um cadastro</button>' : ''}
-      <button class="btn-secundario" id="disc-editar">Editar</button>
-      <button class="btn-secundario" id="disc-fechar">Fechar</button>
-    </div>
-  </div>`
+  fundo.innerHTML = `<div class="modal" style="max-width:660px;">
+    <p class="texto-dim2" style="padding:26px;text-align:center;margin:0;">carregando...</p></div>`
   document.body.appendChild(fundo)
+  const caixa = fundo.querySelector('.modal')
   const fechar = () => fundo.remove()
-  fundo.querySelector('#disc-fechar').onclick = fechar
   fundo.onclick = e => { if (e.target === fundo) fechar() }
-  fundo.querySelector('#disc-editar').onclick = () => { fechar(); formPerfilDisc(p, () => abrirAbaDisc()) }
-  const btnLigar = fundo.querySelector('#disc-ligar')
-  if (btnLigar) btnLigar.onclick = () => { fechar(); ligarPerfilDiscAPessoa(p) }
+
+  const pid = opts.pessoaId || null
+  const [rDisc, rMot] = await Promise.all([
+    pid ? db.from('rh_perfil_disc').select('*, pessoa:pessoa_id(nome)')
+            .eq('pessoa_id', pid).order('criado_em', { ascending: false })
+        : (opts.discId ? db.from('rh_perfil_disc').select('*, pessoa:pessoa_id(nome)').eq('id', opts.discId)
+                       : Promise.resolve({ data: [] })),
+    pid ? db.from('rh_perfil_motivador').select('*, pessoa:pessoa_id(nome)')
+            .eq('pessoa_id', pid).order('criado_em', { ascending: false })
+        : (opts.motivadorId ? db.from('rh_perfil_motivador').select('*, pessoa:pessoa_id(nome)').eq('id', opts.motivadorId)
+                            : Promise.resolve({ data: [] }))
+  ])
+
+  const discs = rDisc.data || []
+  const mots = rMot.data || []
+  // quando veio de um cartão específico, é aquele laudo que abre — mesmo
+  // que a pessoa tenha outro mais recente
+  const disc = discs.find(x => x.id === opts.discId) || discs[0] || null
+  const mot = mots.find(x => x.id === opts.motivadorId) || mots[0] || null
+
+  if (!disc && !mot) { fechar(); return }
+
+  const nome = disc?.nome || mot?.nome || opts.nome || 'Sem nome'
+  const pessoaNome = disc?.pessoa?.nome || mot?.pessoa?.nome || null
+  const cargo = disc?.cargo_no_laudo || mot?.cargo_no_laudo || null
+  const empresa = disc?.empresa_no_laudo || mot?.empresa_no_laudo || null
+  const editavel = podeEditar('desempenho')
+  let aba = opts.aba === 'motivadores' && mot ? 'motivadores' : (disc ? 'comportamento' : 'motivadores')
+
+  const abaComportamento = () => {
+    if (!disc) return `<p class="texto-dim2" style="font-size:12.5px;">
+      Essa pessoa ainda não tem perfil de comportamento.</p>`
+    const dupla = (disc.primario || '') + (disc.secundario || '')
+    const tensao = tensaoDisc(disc.disc_natural, disc.disc_adaptado)
+    return `
+      ${DISC_DUPLA[dupla] ? `<div class="caixa-texto" style="margin-bottom:14px;">
+        <div class="rot">Em uma frase</div>
+        <p style="font-size:13.5px;line-height:1.55;margin:6px 0 0;">${esc(DISC_DUPLA[dupla])}</p>
+      </div>` : ''}
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
+        <div class="caixa-texto"><div class="rot">Natural — como é</div>
+          <div style="margin-top:8px;">${barraDisc(disc.disc_natural)}</div></div>
+        <div class="caixa-texto"><div class="rot">Adaptado — como acha que precisa ser</div>
+          <div style="margin-top:8px;">${barraDisc(disc.disc_adaptado)}</div></div>
+      </div>
+
+      ${tensao ? `<div style="padding:11px 13px;border-left:3px solid var(--warn-text);background:var(--surface2);
+        border-radius:0 8px 8px 0;margin-bottom:14px;">
+        <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">A distância entre os dois</div>
+        <p style="font-size:12.5px;line-height:1.5;margin:0;">${tensao}</p>
+      </div>` : ''}
+
+      ${disc.caracteristicas ? `<div class="caixa-texto" style="margin-bottom:14px;">
+        <div class="rot">Como o laudo descreve</div>
+        <p style="font-size:12.8px;line-height:1.6;margin:6px 0 0;">${esc(disc.caracteristicas)}</p></div>` : ''}
+
+      ${(disc.pontos_fortes || []).length ? `<div class="caixa-texto" style="margin-bottom:14px;">
+        <div class="rot">O que ele(a) traz pra equipe</div>
+        <ul style="margin:8px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:4px;">
+          ${disc.pontos_fortes.map(x => `<li style="font-size:12.5px;line-height:1.45;">${esc(x)}</li>`).join('')}
+        </ul></div>` : ''}
+
+      ${disc.observacoes ? `<div class="caixa-texto" style="margin-bottom:14px;">
+        <div class="rot">Anotações do RH</div>
+        <p style="font-size:12.5px;line-height:1.5;margin:6px 0 0;">${esc(disc.observacoes)}</p></div>` : ''}
+
+      <p class="texto-dim2" style="font-size:10.5px;margin:0;">
+        ${disc.origem === 'questionario_likert' ? '📝 respondido no sistema (escala de cores)'
+          : disc.origem === 'questionario_interno' ? '📝 respondido no sistema (formato antigo)'
+          : disc.origem === 'manual' ? '✍️ lançado à mão' : '📄 relatório da consultoria'}
+        · ${esc(fmtQuando(disc.criado_em) || '')}</p>
+
+      <div class="acoes" style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        ${!disc.pessoa_id ? '<button class="btn-secundario" id="pf-disc-ligar">Ligar a um cadastro</button>' : ''}
+        ${editavel ? '<button class="btn-secundario" id="pf-disc-editar">Editar</button>' : ''}
+        <button class="btn-secundario" id="pf-fechar">Fechar</button>
+        ${editavel ? `<button class="btn-secundario" id="pf-disc-excluir"
+          style="margin-left:auto;color:var(--warn-text);border-color:var(--warn-text);">Excluir</button>` : ''}
+      </div>`
+  }
+
+  const abaMotivadores = () => {
+    if (!mot) return `
+      <p class="texto-dim2" style="font-size:12.5px;line-height:1.55;">
+        Essa pessoa ainda não respondeu os motivadores.
+        ${pid ? 'Ela vê o convite em <b>Meu RH</b> assim que entrar no sistema.' : ''}</p>
+      <div class="acoes" style="margin-top:14px;">
+        ${editavel ? '<button class="btn-secundario" id="pf-mot-novo">Lançar à mão</button>' : ''}
+        <button class="btn-secundario" id="pf-fechar">Fechar</button>
+      </div>`
+    return `
+      ${laudoMotivadorHtml(mot.scores)}
+
+      ${mot.caracteristicas ? `<div class="caixa-texto" style="margin-top:14px;">
+        <div class="rot">Como o laudo descreve</div>
+        <p style="font-size:12.8px;line-height:1.6;margin:6px 0 0;">${esc(mot.caracteristicas)}</p></div>` : ''}
+
+      ${mot.observacoes ? `<div class="caixa-texto" style="margin-top:14px;">
+        <div class="rot">Anotações do RH</div>
+        <p style="font-size:12.5px;line-height:1.5;margin:6px 0 0;">${esc(mot.observacoes)}</p></div>` : ''}
+
+      <p class="texto-dim2" style="font-size:10.5px;margin:12px 0 0;">
+        ${mot.origem === 'questionario_interno' ? '📝 respondido no sistema'
+          : mot.origem === 'manual' ? '✍️ lançado à mão' : '📄 relatório da consultoria'}
+        · ${esc(fmtQuando(mot.criado_em) || '')}</p>
+
+      <div class="acoes" style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        ${!mot.pessoa_id ? '<button class="btn-secundario" id="pf-mot-ligar">Ligar a um cadastro</button>' : ''}
+        ${editavel ? '<button class="btn-secundario" id="pf-mot-editar">Editar</button>' : ''}
+        <button class="btn-secundario" id="pf-fechar">Fechar</button>
+        ${editavel ? `<button class="btn-secundario" id="pf-mot-excluir"
+          style="margin-left:auto;color:var(--warn-text);border-color:var(--warn-text);">Excluir</button>` : ''}
+      </div>`
+  }
+
+  const desenhar = () => {
+    const dupla = disc ? (disc.primario || '') + (disc.secundario || '') : ''
+    caixa.innerHTML = `
+      <div class="cabeca-secao" style="margin-bottom:4px;">
+        <h3 style="margin:0;">${esc(nome)}</h3>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          ${dupla ? `<span class="chip" style="font-size:12px;font-weight:700;background:rgba(var(--rust-rgb),.14);color:var(--rust);border:none;">${esc(dupla)}</span>` : ''}
+          ${mot?.dominante ? `<span class="chip" style="font-size:11px;font-weight:700;background:rgba(var(--rust-rgb),.10);color:var(--rust);border:none;">${esc(MOTIV_FATOR[mot.dominante]?.nome || '')}</span>` : ''}
+        </div>
+      </div>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 12px;">
+        ${esc([cargo, empresa].filter(Boolean).join(' · ') || 'sem cargo no laudo')}
+        ${pessoaNome ? ` · cadastrado como <b>${esc(pessoaNome)}</b>`
+                     : ' · <span style="color:var(--warn-text);">sem cadastro ligado</span>'}
+      </p>
+
+      <div style="display:flex;gap:6px;margin-bottom:14px;border-bottom:1px solid var(--line);">
+        <button class="chip-filtro ${aba === 'comportamento' ? 'ativo' : ''}" data-aba="comportamento"
+          style="border-radius:8px 8px 0 0;">🧭 Comportamento</button>
+        <button class="chip-filtro ${aba === 'motivadores' ? 'ativo' : ''}" data-aba="motivadores"
+          style="border-radius:8px 8px 0 0;">💡 Motivadores</button>
+      </div>
+
+      <div id="pf-conteudo">${aba === 'comportamento' ? abaComportamento() : abaMotivadores()}</div>`
+
+    caixa.querySelectorAll('[data-aba]').forEach(b => {
+      b.onclick = () => { aba = b.dataset.aba; desenhar() }
+    })
+
+    const liga = (id, fn) => { const el = caixa.querySelector(id); if (el) el.onclick = fn }
+
+    liga('#pf-fechar', fechar)
+
+    liga('#pf-disc-editar', () => { fechar(); formPerfilDisc(disc, () => abrirAbaDisc()) })
+    liga('#pf-disc-ligar', () => { fechar(); ligarPerfilDiscAPessoa(disc) })
+    liga('#pf-disc-excluir', async () => {
+      // As respostas cruas ficam guardadas (a FK é ON DELETE SET NULL):
+      // o que sai é o laudo montado, não o que a pessoa respondeu. Sem
+      // laudo, ela volta pra lista de pendentes e o convite reaparece no
+      // Meu RH dela — é assim que se libera alguém pra refazer.
+      if (!confirm(`Excluir o perfil de comportamento de ${nome}?\n\nO que a pessoa respondeu fica guardado, mas o laudo sai da lista e ela volta a poder responder de novo. Não dá pra desfazer.`)) return
+      const { error } = await db.from('rh_perfil_disc').delete().eq('id', disc.id)
+      if (error) { alert('Não consegui excluir: ' + error.message); return }
+      fechar(); abrirAbaDisc()
+    })
+
+    liga('#pf-mot-editar', () => { fechar(); formPerfilMotivador(mot, () => abrirAbaMotivadores()) })
+    liga('#pf-mot-ligar', () => { fechar(); ligarPerfilMotivadorAPessoa(mot, () => abrirAbaMotivadores()) })
+    liga('#pf-mot-novo', () => {
+      fechar()
+      formPerfilMotivador({ nome, cargo_no_laudo: cargo, empresa_no_laudo: empresa, pessoa_id: pid },
+        () => abrirAbaMotivadores())
+    })
+    liga('#pf-mot-excluir', async () => {
+      if (!confirm(`Excluir os motivadores de ${nome}?\n\nO que a pessoa respondeu fica guardado, mas o laudo sai da lista e ela volta a poder responder de novo. Não dá pra desfazer.`)) return
+      const { error } = await db.from('rh_perfil_motivador').delete().eq('id', mot.id)
+      if (error) { alert('Não consegui excluir: ' + error.message); return }
+      fechar(); abrirAbaMotivadores()
+    })
+  }
+
+  desenhar()
 }
+
+// mantém o nome antigo funcionando: quem já chamava abrirPerfilDisc
+// continua chamando, e cai na ficha nova na aba de comportamento
+function abrirPerfilDisc (resumo) {
+  if (!resumo) return
+  abrirPerfilPessoaRH({ discId: resumo.id, pessoaId: resumo.pessoa_id, nome: resumo.nome, aba: 'comportamento' })
+}
+
+function abrirAbaMotivadores () {
+  const b = document.querySelector('.subabas-rh button[data-sub="motivadores"]')
+  if (b) b.click()
+}
+
+// ----- Cartão dos motivadores dentro do Meu RH -----
+async function blocoMeuMotivador (alvo) {
+  if (!PERFIL.pessoaId) return
+  const { data: meu } = await db.from('rh_perfil_motivador')
+    .select('id,scores,dominante,dominante_2,menor,origem,criado_em')
+    .eq('pessoa_id', PERFIL.pessoaId).order('criado_em', { ascending: false }).limit(1).maybeSingle()
+
+  const bloco = document.createElement('div')
+  bloco.className = 'panel'
+  bloco.style.cssText = 'padding:18px;margin-bottom:16px;'
+
+  if (!meu) {
+    bloco.innerHTML = `
+      <div class="cabeca-secao" style="margin-bottom:6px;">
+        <h3 style="font-family:var(--serif);font-size:16px;">O que te move</h3>
+      </div>
+      <p class="texto-dim" style="font-size:13px;line-height:1.6;margin:0 0 12px;">
+        O perfil de comportamento diz <i>como</i> você trabalha. Este diz <i>por quê</i> —
+        o que te dá energia e o que te drena. São 30 blocos de frases, uns 10 minutos,
+        e dá pra parar no meio.
+      </p>
+      <button class="btn" id="meu-mot-responder">Responder agora</button>`
+    alvo.prepend(bloco)
+    bloco.querySelector('#meu-mot-responder').onclick =
+      () => abrirQuestionarioMotivador(() => desempMeu(alvo))
+    return
+  }
+
+  bloco.innerHTML = `
+    <div class="cabeca-secao" style="margin-bottom:8px;">
+      <h3 style="font-family:var(--serif);font-size:16px;">O que te move</h3>
+      <span class="chip" style="font-size:12px;font-weight:700;background:rgba(var(--rust-rgb),.14);color:var(--rust);border:none;">${esc(MOTIV_FATOR[meu.dominante]?.nome || '—')}</span>
+    </div>
+    ${laudoMotivadorHtml(meu.scores, { titulo: false })}
+    <p class="texto-dim2" style="font-size:11px;margin:10px 0 0;">
+      ${meu.origem === 'laudo_tti' ? 'Do relatório da consultoria' : 'Respondido por você aqui no sistema'}
+      · ${esc(fmtQuando(meu.criado_em) || '')}</p>`
+  alvo.prepend(bloco)
+}
+
 
 function ligarPerfilDiscAPessoa (p) {
   const fundo = document.createElement('div')
@@ -40188,200 +40370,950 @@ function abrirAbaDisc () {
 }
 
 // ---------------------------------------------------------------
-// Questionário DISC interno
+// Instrumento novo (setembro/2026) — DISC e Motivadores
 //
-// Vinte e quatro grupos de quatro palavras. Em cada um a pessoa escolhe
-// a que MAIS e a que MENOS a descreve. Cada palavra pertence a um dos
-// quatro fatores, e cada grupo tem exatamente um de cada — senão o
-// resultado penderia pro fator que aparece mais vezes.
+// O formato antigo era escolha forçada: "qual palavra MAIS e qual
+// MENOS te descreve". Pegava a preferência, mas não a intensidade —
+// duas pessoas com o mesmo D dominante ficavam idênticas no papel,
+// mesmo quando uma se reconhecia muito mais naquilo que a outra.
 //
-// Uma coisa que precisa ficar dita, e está dita na tela: isto NÃO é o
-// relatório da consultoria. É um instrumento nosso, inspirado no mesmo
-// método. Serve pra conversar, não pra comparar número com número de
-// quem fez o laudo pago.
+// O formato novo é escala trancada: em cada bloco a pessoa distribui
+// as notas 4/3/2/1/0 entre as quatro opções, sem repetir. Como são
+// CINCO notas para QUATRO opções, uma nota sempre sobra — e sobrar é
+// parte da regra, não erro de quem respondeu.
+//
+// A pessoa não vê número nenhum. Vê uma régua de cor, sempre na mesma
+// ordem, do verde da marca ao dourado da marca. O número existe só do
+// lado de cá.
 // ---------------------------------------------------------------
-const DISC_GRUPOS = [
-  [['Decidido','D'],['Animado','I'],['Paciente','S'],['Cuidadoso','C']],
-  [['Sociável','I'],['Metódico','C'],['Firme','D'],['Calmo','S']],
-  [['Constante','S'],['Exigente','D'],['Detalhista','C'],['Falante','I']],
-  [['Analítico','C'],['Otimista','I'],['Leal','S'],['Competitivo','D']],
-  [['Acolhedor','I'],['Direto','D'],['Organizado','C'],['Tranquilo','S']],
-  [['Prudente','C'],['Companheiro','S'],['Ousado','D'],['Entusiasmado','I']],
-  [['Objetivo','D'],['Preciso','C'],['Expressivo','I'],['Prestativo','S']],
-  [['Discreto','S'],['Convincente','I'],['Rigoroso','C'],['Determinado','D']],
-  [['Comunicativo','I'],['Ponderado','S'],['Incisivo','D'],['Criterioso','C']],
-  [['Disciplinado','C'],['Corajoso','D'],['Gentil','S'],['Espontâneo','I']],
-  [['Conciliador','S'],['Franco','D'],['Alegre','I'],['Minucioso','C']],
-  [['Persuasivo','I'],['Sistemático','C'],['Sereno','S'],['Assertivo','D']],
-  [['Cauteloso','C'],['Extrovertido','I'],['Resoluto','D'],['Estável','S']],
-  [['Bom ouvinte','S'],['Exato','C'],['Inspirador','I'],['Impaciente','D']],
-  [['Arrojado','D'],['Caloroso','I'],['Previsível','S'],['Formal','C']],
-  [['Meticuloso','C'],['Dedicado','S'],['Envolvente','I'],['Dono do rumo','D']],
-  [['Popular','I'],['Perfeccionista','C'],['Cooperativo','S'],['Intenso','D']],
-  [['Apoiador','S'],['Questionador','D'],['Lógico','C'],['Brincalhão','I']],
-  [['Planejador','C'],['Simpático','I'],['Firme no ritmo','S'],['Acelerado','D']],
-  [['Contagiante','I'],['Resiliente','S'],['Correto','C'],['Combativo','D']],
-  [['Reservado','C'],['Fiel','S'],['Empolgado','I'],['Dominante','D']],
-  [['Harmonioso','S'],['Conferidor','C'],['Aberto','I'],['Focado em resultado','D']],
-  [['Persistente','D'],['Acessível','S'],['Conversador','I'],['Atento a detalhe','C']],
-  [['Cordial','I'],['Sem pressa','S'],['Exigente com qualidade','C'],['Rápido nas decisões','D']]
+
+// Verde e dourado são as cores da Gefoscal. Aqui elas são FIXAS de
+// propósito, sem var(--tema): a cor É o instrumento de medida. Se o
+// verde mudasse de skin pra skin, o mesmo clique valeria coisas
+// diferentes pra duas pessoas, e o laudo iria junto.
+const ESCALA_LIKERT = [
+  { nota: 4, cor: '#005229', texto: '#ffffff', rotulo: 'Identifica fortemente' },
+  { nota: 3, cor: '#6BA583', texto: '#083722', rotulo: 'Identifica bem' },
+  { nota: 2, cor: '#ffffff', texto: '#4a4a4a', rotulo: 'Neutro' },
+  { nota: 1, cor: '#E8CD8E', texto: '#5a4413', rotulo: 'Identifica pouco' },
+  { nota: 0, cor: '#D19C1D', texto: '#ffffff', rotulo: 'Não identifica' }
 ]
 
-let DISC_Q = { passo: 0, respostas: [] }
+// 25 blocos, 100 palavras, 25 por fator.
+//
+// O equilíbrio posicional aqui é exato, e não por acaso: as 24
+// permutações possíveis de D-I-S-C põem cada fator exatamente 6 vezes
+// em cada posição. O 25º bloco dá a sétima aparição de cada um numa
+// posição diferente (D na 1ª, I na 2ª, S na 3ª, C na 4ª). Resultado:
+// nenhum fator ganha ponto por estar sempre no alto da lista.
+//
+// As palavras também foram revistas. No formato antigo, palavra feia
+// ("Impaciente", "Dominante") era proposital — a pessoa era obrigada a
+// escolher alguma. Numa escala de autoavaliação isso vira problema:
+// ninguém se dá nota 4 em "Impaciente", e o fator inteiro afunda pra
+// todo mundo. Três das quatro estavam no D.
+const DISC_BLOCOS = [
+  [['Cuidadoso','C'],['Decidido','D'],['Paciente','S'],['Animado','I']],
+  [['Firme','D'],['Metódico','C'],['Sociável','I'],['Calmo','S']],
+  [['Exigente','D'],['Detalhista','C'],['Constante','S'],['Falante','I']],
+  [['Leal','S'],['Competitivo','D'],['Analítico','C'],['Otimista','I']],
+  [['Organizado','C'],['Tranquilo','S'],['Direto','D'],['Acolhedor','I']],
+  [['Prudente','C'],['Companheiro','S'],['Entusiasmado','I'],['Ousado','D']],
+  [['Prestativo','S'],['Preciso','C'],['Objetivo','D'],['Expressivo','I']],
+  [['Determinado','D'],['Convincente','I'],['Rigoroso','C'],['Discreto','S']],
+  [['Ponderado','S'],['Comunicativo','I'],['Criterioso','C'],['Incisivo','D']],
+  [['Gentil','S'],['Disciplinado','C'],['Espontâneo','I'],['Corajoso','D']],
+  [['Conciliador','S'],['Alegre','I'],['Franco','D'],['Minucioso','C']],
+  [['Persuasivo','I'],['Sistemático','C'],['Sereno','S'],['Assertivo','D']],
+  [['Extrovertido','I'],['Resoluto','D'],['Cauteloso','C'],['Estável','S']],
+  [['Inspirador','I'],['Bom ouvinte','S'],['Enérgico','D'],['Exato','C']],
+  [['Arrojado','D'],['Previsível','S'],['Caloroso','I'],['Formal','C']],
+  [['Envolvente','I'],['Dedicado','S'],['Meticuloso','C'],['Dono do rumo','D']],
+  [['Cooperativo','S'],['Intenso','D'],['Popular','I'],['Perfeccionista','C']],
+  [['Questionador','D'],['Descontraído','I'],['Apoiador','S'],['Lógico','C']],
+  [['Simpático','I'],['Planejador','C'],['Acelerado','D'],['Firme no ritmo','S']],
+  [['Correto','C'],['Contagiante','I'],['Resiliente','S'],['Destemido','D']],
+  [['Empolgado','I'],['Assume o comando','D'],['Fiel','S'],['Reservado','C']],
+  [['Focado em resultado','D'],['Harmonioso','S'],['Conferidor','C'],['Aberto','I']],
+  [['Atento a detalhe','C'],['Persistente','D'],['Conversador','I'],['Acessível','S']],
+  [['Exigente com qualidade','C'],['Cordial','I'],['Rápido nas decisões','D'],['Calmo sob pressão','S']],
+  [['Desafiador','D'],['Carismático','I'],['Atencioso','S'],['Caprichoso','C']]
+]
 
-function abrirQuestionarioDisc (aoTerminar) {
-  estilosSdrUmaVez()
-  DISC_Q = { passo: 0, respostas: DISC_GRUPOS.map(() => ({ mais: null, menos: null })) }
+// ---------------------------------------------------------------
+// Motivadores — o "por que" que o DISC não alcança.
+//
+// O DISC diz COMO a pessoa age. Os Motivadores dizem O QUE a move:
+// o que dá energia, o que drena, e o que ainda vai estar de pé daqui
+// a seis meses. São seis dimensões, cada uma com dois polos opostos,
+// dando doze fatores.
+//
+// A nomenclatura antiga (Spranger) ainda aparece em laudo de
+// consultoria: Teórico, Utilitário, Estético, Social, Individualista,
+// Tradicional. Cada dimensão carrega o nome antigo em "antigo", e ele
+// vale só na hora de LER: rotula o formulário de lançamento à mão e
+// entra na busca, pra quem procura por "Estético" achar "Entorno".
+// O dado gravado é sempre o nome novo, e nunca é reescrito.
+// ---------------------------------------------------------------
+const MOTIV_DIM = [
+  { chave: 'conhecimento', nome: 'Conhecimento', antigo: 'Teórico',
+    pergunta: 'como chega ao que sabe',
+    a: { chave: 'intelectual',  nome: 'Intelectual',
+         resumo: 'Aprende por gosto de saber. Estuda antes de decidir e quer entender o porquê.' },
+    b: { chave: 'instintivo',   nome: 'Instintivo',
+         resumo: 'Decide pelo que a prática já ensinou. Aprende fazendo e confia no faro.' } },
+  { chave: 'utilidade', nome: 'Utilidade', antigo: 'Utilitário',
+    pergunta: 'o que espera de volta',
+    a: { chave: 'utilitario',   nome: 'Utilitário',
+         resumo: 'Quer ver retorno no esforço. Não gosta de desperdício e mede pelo que rende.' },
+    b: { chave: 'altruista',    nome: 'Altruísta',
+         resumo: 'Dá sem contar o retorno. Faz o certo mesmo quando sai no prejuízo.' } },
+  { chave: 'entorno', nome: 'Entorno', antigo: 'Estético',
+    pergunta: 'o quanto o ambiente pesa',
+    a: { chave: 'harmonioso',   nome: 'Harmonioso',
+         resumo: 'Precisa de ambiente cuidado e de equilíbrio. Bagunça em volta atrapalha de verdade.' },
+    b: { chave: 'objetivo',     nome: 'Objetivo',
+         resumo: 'Rende igual em qualquer condição. Forma e acabamento são detalhe perto da entrega.' } },
+  { chave: 'outros', nome: 'Outros', antigo: 'Social',
+    pergunta: 'como ajuda quem está do lado',
+    a: { chave: 'social',       nome: 'Altruísta Social',
+         resumo: 'Se realiza vendo gente crescer. Ensina, escuta e cuida de quem trabalha junto.' },
+    b: { chave: 'intencionado', nome: 'Intencionado',
+         resumo: 'Ajuda com critério e propósito. Investe onde a ajuda vai render.' } },
+  { chave: 'poder', nome: 'Poder', antigo: 'Individualista',
+    pergunta: 'onde quer ficar na hora da decisão',
+    a: { chave: 'colaborativo', nome: 'Colaborativo',
+         resumo: 'Contribui sem precisar aparecer. Prefere o mérito do time ao próprio nome.' },
+    b: { chave: 'determinante', nome: 'Determinante',
+         resumo: 'Quer o comando e a palavra final. Busca autonomia e posição.' } },
+  { chave: 'metodologias', nome: 'Metodologias', antigo: 'Tradicional',
+    pergunta: 'quanto precisa de método',
+    a: { chave: 'estruturado',  nome: 'Estruturado',
+         resumo: 'Trabalha melhor com regra clara e método definido. Padrão vale mais que improviso.' },
+    b: { chave: 'receptivo',    nome: 'Receptivo',
+         resumo: 'Troca o jeito quando aparece um melhor. Se adapta e improvisa sem sofrer.' } }
+]
+
+// Atalhos montados uma vez: fator -> { nome, dimensão, polo, resumo }.
+const MOTIV_FATOR = {}
+MOTIV_DIM.forEach(d => {
+  ;['a', 'b'].forEach(lado => {
+    MOTIV_FATOR[d[lado].chave] = {
+      nome: d[lado].nome, resumo: d[lado].resumo, lado,
+      dim: d.chave, dimNome: d.nome, pergunta: d.pergunta,
+      antigo: d.antigo
+    }
+  })
+})
+const MOTIV_LISTA = Object.keys(MOTIV_FATOR)
+
+// 30 blocos, 120 frases, 10 aparições por fator.
+//
+// Duas travas na montagem, as duas fechando exatas: nenhum bloco tem
+// dois polos da MESMA dimensão (pedir pra escolher entre Intelectual e
+// Instintivo no mesmo bloco é forçar uma comparação que distorce a
+// resposta), e cada fator aparece 3-3-2-2 entre as quatro posições,
+// com as posições "de três" variando de fator pra fator — o que deixa
+// cada posição com exatamente 30 aparições.
+const MOTIV_BLOCOS = [
+  [['Me realiza ter autonomia real pra decidir','determinante'],['Troco o método quando aparece um melhor','receptivo'],['Me energiza entender uma coisa além da superfície','intelectual'],['Me move ver retorno concreto no que faço','utilitario']],
+  [['Trabalho melhor com regra clara','estruturado'],['Me incomoda desperdiçar tempo ou recurso','utilitario'],['Ajudo, mas gosto que a pessoa faça a parte dela','intencionado'],['Confio no que a prática já me ensinou','instintivo']],
+  [['Escolho com cuidado em quem invisto meu tempo','intencionado'],['Contribuo sem calcular o que vou ganhar','altruista'],['Aprendo fazendo, não lendo sobre','instintivo'],['Gosto de estar no comando','determinante']],
+  [['Que funcione — bonito é detalhe','objetivo'],['Me realiza ver alguém evoluir por causa da minha ajuda','social'],['Prefiro seguir um método já definido','estruturado'],['Construo junto, dividindo decisão e responsabilidade','colaborativo']],
+  [['Faço o certo mesmo saindo no prejuízo','altruista'],['Existe um jeito certo de fazer, e eu sigo','estruturado'],['Fico bem quando o mérito é do time','colaborativo'],['Rendo mais num ambiente organizado e cuidado','harmonioso']],
+  [['Respeito o que já provou funcionar','estruturado'],['Quero ter a palavra final','determinante'],['Não meço meu esforço por retorno','altruista'],['Gosto de ensinar quem está começando','social']],
+  [['Não me prendo a uma única forma de fazer','receptivo'],['Bagunça em volta atrapalha meu trabalho de verdade','harmonioso'],['Prefiro apoiar quem vai levar aquilo adiante','intencionado'],['Me atrai estudar um assunto a fundo, mesmo sem uso imediato','intelectual']],
+  [['Não faço questão do holofote','colaborativo'],['Padrão vale mais que improviso','estruturado'],['Me envolvo quando vejo onde a ajuda vai render','intencionado'],['Minha experiência me orienta mais que manual','instintivo']],
+  [['Me importo com o que acontece na vida de quem trabalha comigo','social'],['Prefiro fazer acontecer nos bastidores','colaborativo'],['Gosto de entender o porquê antes de aceitar o como','intelectual'],['Trabalho bem em qualquer condição de ambiente','objetivo']],
+  [['Preciso de equilíbrio entre trabalho e vida','harmonioso'],['Estou aberto ao que é diferente do costume','receptivo'],['Fico satisfeito quando o time termina melhor do que começou','social'],['Me sinto útil apoiando quem está à frente','colaborativo']],
+  [['Rendo igual mesmo com bagunça em volta','objetivo'],['Abro mão do meu ganho quando o grupo precisa','altruista'],['Busco posição de liderança','determinante'],['Gosto de saber exatamente o que se espera de mim','estruturado']],
+  [['Sinto na hora o caminho que vai dar certo','instintivo'],['Vou direto ao ponto, sem rodeio','objetivo'],['Dou meu tempo por uma causa em que acredito','altruista'],['Me move sentir que minha decisão tem peso','determinante']],
+  [['Reparo no capricho das coisas ao meu redor','harmonioso'],['Me realiza entregar, independente do que volta','altruista'],['Decido sem precisar de estudo antes','instintivo'],['Tenho critério pra estender a mão','intencionado']],
+  [['Vou pela prática, não pela teoria','instintivo'],['Improviso quando o roteiro não serve','receptivo'],['Gosto de decidir o rumo das coisas','determinante'],['Me importa que o lugar de trabalho seja bem cuidado','harmonioso']],
+  [['Sinto o clima do ambiente e ele me afeta','harmonioso'],['Doso o quanto me envolvo, conforme o caso','intencionado'],['Prefiro consenso a uma pessoa decidindo sozinha','colaborativo'],['Trabalho por algo maior que o meu bolso','altruista']],
+  [['Gosto de testar caminho novo','receptivo'],['Meço meu esforço pelo resultado que ele dá','utilitario'],['Forma e acabamento vêm depois da entrega','objetivo'],['Uso o que já vi acontecer antes','instintivo']],
+  [['Prefiro tentar e ajustar no caminho','instintivo'],['Me energiza escutar o problema do colega e ajudar a resolver','social'],['Gosto quando o serviço fica bonito de ver','harmonioso'],['Regra demais me atrapalha','receptivo']],
+  [['Fico tranquilo sendo o segundo','colaborativo'],['Resolvo com o que estiver disponível','objetivo'],['Me adapto ao que a situação pede','receptivo'],['Estudo por conta própria quando um tema me pega','intelectual']],
+  [['Prefiro opinar depois de ter lido sobre o assunto','intelectual'],['Busco o caminho de melhor custo-benefício','utilitario'],['Processo escrito é pra ser seguido','estruturado'],['Busco um dia de trabalho sem sobressalto','harmonioso']],
+  [['Gosto de fazer render o que já existe','utilitario'],['Resolvo na hora, com o que tenho na mão','instintivo'],['Me move puxar alguém pra cima junto comigo','social'],['Tenho princípio que não negocio','estruturado']],
+  [['Me move descobrir como uma coisa funciona por dentro','intelectual'],['Cresço pra ter mais autonomia','determinante'],['Me incomoda o que está malfeito, mesmo que funcione','harmonioso'],['Ajudo com um objetivo claro na cabeça','intencionado']],
+  [['Comemoro a vitória do outro como se fosse minha','social'],['Gosto de discutir uma ideia até o fim dela','intelectual'],['Me motiva crescer junto com o resultado da empresa','utilitario'],['Não gasto tempo com aparência','objetivo']],
+  [['Prefiro a rotina que já deu certo','estruturado'],['Faço curso mesmo quando ninguém me pediu','intelectual'],['Aproveito a oportunidade quando ela aparece','utilitario'],['Somo no plano do outro sem precisar do meu','colaborativo']],
+  [['Quero ser o nome por trás do resultado','determinante'],['Invisto meu tempo em gente, não só em tarefa','social'],['Estrutura clara me deixa mais focado','estruturado'],['Escolho sempre o caminho mais eficiente','utilitario']],
+  [['Não me realizo só executando o que outros definiram','determinante'],['Priorizo quem tem potencial de crescer','intencionado'],['Enxergo o ganho antes de começar','utilitario'],['Guardo conhecimento que ainda não sei onde vou usar','intelectual']],
+  [['Não faço conta antes de ajudar','altruista'],['Ambiente agradável muda minha energia no dia','harmonioso'],['Aceito ideia que contraria o jeito de sempre','receptivo'],['Gosto de acompanhar alguém pegando o jeito da coisa','social']],
+  [['Meço pelo que entrega, não pelo que parece','objetivo'],['Me interessa saber mais do que o cargo exige','intelectual'],['Contribuo sem precisar que apareça meu nome','colaborativo'],['Me move a entrega em si, não a compensação','altruista']],
+  [['Olho se a ajuda que dei valeu a pena','intencionado'],['O espaço só precisa me deixar produzir','objetivo'],['Trabalho bem sem rotina fixa','receptivo'],['Sirvo sem cobrar nada de volta','altruista']],
+  [['Cuido de quem trabalha do meu lado','social'],['Confio mais no calo do que no manual','instintivo'],['Me move ter poder de mudar as coisas','determinante'],['Vejo várias formas de chegar no mesmo lugar','receptivo']],
+  [['Me realiza entregar resultado que dá pra medir','utilitario'],['Empurro o grupo em vez de me empurrar','colaborativo'],['Prefiro o prático ao elaborado','objetivo'],['Não saio ajudando todo mundo em tudo','intencionado']]
+]
+
+// ---------------------------------------------------------------
+// A régua de cor, e a trava.
+//
+// Cinco cores, sempre na mesma ordem, do verde da marca ao dourado.
+// A pessoa lê o gradiente como uma régua contínua e nunca vê número.
+// Dentro do bloco, nota usada é nota queimada: clicar de novo nela
+// avisa e não troca nada — é isso que força a pessoa a ordenar as
+// quatro opções em vez de dar 4 pra todas.
+// ---------------------------------------------------------------
+function estilosLikertUmaVez () {
+  if ($('#likert-estilos')) return
+  const s = document.createElement('style')
+  s.id = 'likert-estilos'
+  s.textContent = `
+    .lk-bloco { display:flex; flex-direction:column; gap:2px; }
+    .lk-linha { display:flex; align-items:center; gap:12px; padding:9px 10px; border-radius:10px;
+      transition:background .15s ease; }
+    .lk-linha:hover { background:var(--surface2); }
+    .lk-linha.pronta { background:var(--surface2); }
+    .lk-texto { flex:1; min-width:0; font-size:13.5px; line-height:1.4; }
+    .lk-escala { display:flex; gap:5px; flex:none; }
+    .lk-chip { width:30px; height:30px; border-radius:8px; cursor:pointer; padding:0;
+      border:1px solid rgba(0,0,0,.22); display:flex; align-items:center; justify-content:center;
+      font-size:15px; font-weight:700; line-height:1; transition:transform .12s ease, box-shadow .12s ease;
+      -webkit-tap-highlight-color:transparent; }
+    .lk-chip:hover { transform:translateY(-2px); }
+    .lk-chip:focus-visible { outline:2px solid var(--rust); outline-offset:2px; }
+    .lk-chip.escolhida { box-shadow:0 0 0 2px var(--panel), 0 0 0 4px var(--rust); transform:translateY(-2px); }
+    .lk-chip.queimada { opacity:.26; cursor:not-allowed; }
+    .lk-chip.queimada:hover { transform:none; }
+    .lk-legenda { display:flex; justify-content:space-between; font-size:10px; letter-spacing:.03em;
+      text-transform:uppercase; color:var(--dim2); margin:2px 10px 12px; }
+    @media (max-width:560px) {
+      .lk-linha { flex-direction:column; align-items:stretch; gap:7px; padding:10px; }
+      .lk-escala { justify-content:space-between; }
+      .lk-chip { width:17%; height:34px; }
+    }`
+  document.head.appendChild(s)
+}
+
+// Desenha as 5 cores de uma opção. "usadas" são as notas já gastas em
+// outras opções do mesmo bloco.
+function escalaLikertHtml (idOpcao, notaAtual, usadas) {
+  return `<div class="lk-escala" role="group">
+    ${ESCALA_LIKERT.map(e => {
+      const escolhida = notaAtual === e.nota
+      const queimada = !escolhida && usadas.includes(e.nota)
+      return `<button type="button" class="lk-chip${escolhida ? ' escolhida' : ''}${queimada ? ' queimada' : ''}"
+        data-opcao="${idOpcao}" data-nota="${e.nota}"
+        style="background:${e.cor};color:${e.texto};"
+        title="${esc(e.rotulo)}" aria-label="${esc(e.rotulo)}"
+        aria-pressed="${escolhida ? 'true' : 'false'}">${escolhida ? '✓' : ''}</button>`
+    }).join('')}
+  </div>`
+}
+
+// ---------------------------------------------------------------
+// Motor dos dois questionários.
+//
+// Recebe as rodadas prontas e cuida de tudo que é igual nos dois:
+// intro, navegação, trava, barra de progresso, rascunho salvo e envio.
+// Quem chama só diz o que são os blocos e o que fazer com o resultado.
+//
+// O rascunho é o que torna 55 blocos suportável: cai a internet, fecha
+// o navegador sem querer, chega visita — ao voltar, continua de onde
+// parou. Fica no navegador da pessoa (localStorage), some ao terminar.
+// ---------------------------------------------------------------
+function abrirQuestionarioLikert (cfg) {
+  estilosLikertUmaVez()
+
+  const chaveRascunho = `gefoscal:likert:${cfg.chave}:${PERFIL.pessoaId || 'anon'}`
+  const vazio = () => cfg.rodadas.map(r => r.blocos.map(() => ({})))
+
+  let respostas = vazio()
+  let rodada = 0
+  let passo = 0
+  let retomado = false
+
+  try {
+    const bruto = localStorage.getItem(chaveRascunho)
+    if (bruto) {
+      const d = JSON.parse(bruto)
+      if (d && Array.isArray(d.respostas) && d.respostas.length === cfg.rodadas.length
+          && d.respostas.every((r, i) => Array.isArray(r) && r.length === cfg.rodadas[i].blocos.length)) {
+        respostas = d.respostas
+        rodada = Math.min(d.rodada || 0, cfg.rodadas.length - 1)
+        passo = Math.min(d.passo || 0, cfg.rodadas[rodada].blocos.length - 1)
+        retomado = (rodada > 0 || passo > 0)
+      }
+    }
+  } catch { /* navegador sem storage, ou rascunho de uma versão antiga: começa do zero */ }
+
+  const salvar = () => {
+    try { localStorage.setItem(chaveRascunho, JSON.stringify({ respostas, rodada, passo })) } catch { /* sem storage: só não guarda */ }
+  }
+  const limpar = () => { try { localStorage.removeItem(chaveRascunho) } catch { /* idem */ } }
 
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
-  fundo.innerHTML = `<div class="modal" style="max-width:520px;"><div id="dq-corpo"></div></div>`
+  fundo.innerHTML = `<div class="modal" style="max-width:660px;"><div id="lk-corpo"></div></div>`
   document.body.appendChild(fundo)
-
-  const corpo = fundo.querySelector('#dq-corpo')
+  const corpo = fundo.querySelector('#lk-corpo')
   const fechar = () => fundo.remove()
 
+  const totalBlocos = cfg.rodadas.reduce((s, r) => s + r.blocos.length, 0)
+  const feitosAte = () => cfg.rodadas.slice(0, rodada).reduce((s, r) => s + r.blocos.length, 0) + passo
+
+  // ----- tela de abertura -----
   const desenharIntro = () => {
+    const minutos = Math.max(5, Math.round(totalBlocos * 0.35))
     corpo.innerHTML = `
-      <div class="cabeca-secao"><h3 style="margin:0;">Seu perfil de comportamento</h3></div>
-      <p style="font-size:13px;line-height:1.65;margin:0 0 12px;">
-        São <b>24 grupos de quatro palavras</b>. Em cada um, escolha a palavra que
-        <b>mais</b> te descreve e a que <b>menos</b> te descreve. Leva uns 5 minutos.
-      </p>
+      <div class="cabeca-secao"><h3 style="margin:0;">${esc(cfg.titulo)}</h3></div>
+      <p style="font-size:13px;line-height:1.65;margin:0 0 12px;">${cfg.subtitulo}</p>
+
+      <div class="caixa-texto" style="margin-bottom:12px;">
+        <div class="rot">Como responder</div>
+        <p style="font-size:12.5px;line-height:1.55;margin:8px 0 10px;">
+          Em cada bloco você vai ver <b>quatro opções</b> e uma régua de cinco cores.
+          Dê a cor mais escura de verde pra que <b>mais</b> tem a ver com você, e a mais
+          escura de dourado pra que <b>menos</b> tem. Cada cor só pode ser usada uma vez
+          por bloco — como são cinco cores e quatro opções, <b>uma cor sempre vai sobrar</b>.
+          Isso é esperado.
+        </p>
+        <div class="lk-escala" style="justify-content:flex-start;margin-left:2px;">
+          ${ESCALA_LIKERT.map(e => `<div class="lk-chip" style="background:${e.cor};cursor:default;"
+             title="${esc(e.rotulo)}"></div>`).join('')}
+        </div>
+        <div class="lk-legenda" style="margin:6px 2px 0;max-width:210px;">
+          <span>tem tudo a ver</span><span>nada a ver</span>
+        </div>
+      </div>
+
       <div class="caixa-texto" style="margin-bottom:14px;">
         <div class="rot">Antes de começar</div>
         <ul style="margin:8px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:6px;font-size:12.5px;line-height:1.5;">
-          <li>Não existe resposta certa nem errada, e nenhum perfil é melhor que outro.</li>
-          <li>Responda pensando em <b>como você é</b>, não em como acha que deveria ser.</li>
-          <li>Vá pela primeira impressão. Pensar demais atrapalha mais do que ajuda.</li>
-          <li>Isso <b>não</b> decide promoção, salário ou avaliação. Serve pra te conhecerem melhor.</li>
-          <li>Quem vê: o RH, a diretoria e você.</li>
+          ${cfg.avisos.map(a => `<li>${a}</li>`).join('')}
         </ul>
       </div>
-      <div class="acoes" style="margin-top:14px;">
-        <button class="btn" id="dq-comecar">Começar</button>
-        <button class="btn-secundario" id="dq-sair">Agora não</button>
+
+      ${retomado ? `<div style="padding:10px 12px;border-left:3px solid var(--rust);background:var(--surface2);
+        border-radius:0 8px 8px 0;margin-bottom:12px;font-size:12.5px;line-height:1.5;">
+        Você já tinha começado e parou no <b>bloco ${feitosAte() + 1} de ${totalBlocos}</b>.
+        Dá pra continuar de onde parou.</div>` : ''}
+
+      <div class="acoes" style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn" id="lk-comecar">${retomado ? 'Continuar de onde parei' : 'Começar'}</button>
+        ${retomado ? '<button class="btn-secundario" id="lk-zerar">Começar do zero</button>' : ''}
+        <button class="btn-secundario" id="lk-sair">Agora não</button>
       </div>`
-    corpo.querySelector('#dq-sair').onclick = fechar
-    corpo.querySelector('#dq-comecar').onclick = () => { DISC_Q.passo = 0; desenharGrupo() }
+
+    corpo.querySelector('#lk-sair').onclick = fechar
+    corpo.querySelector('#lk-comecar').onclick = () => desenharBloco()
+    const zerar = corpo.querySelector('#lk-zerar')
+    if (zerar) zerar.onclick = () => {
+      if (!confirm('Apagar o que você já respondeu e recomeçar?')) return
+      respostas = vazio(); rodada = 0; passo = 0; retomado = false; limpar(); desenharIntro()
+    }
   }
 
-  const desenharGrupo = () => {
-    const i = DISC_Q.passo
-    const grupo = DISC_GRUPOS[i]
-    const r = DISC_Q.respostas[i]
-    const pct = Math.round((i / DISC_GRUPOS.length) * 100)
+  // ----- aviso de virada entre a 1ª e a 2ª rodada -----
+  const desenharViradaRodada = () => {
+    const r = cfg.rodadas[rodada]
+    corpo.innerHTML = `
+      <div class="cabeca-secao"><h3 style="margin:0;">${esc(r.titulo)}</h3></div>
+      <p style="font-size:13.5px;line-height:1.65;margin:0 0 6px;">${r.aviso}</p>
+      <p class="texto-dim2" style="font-size:12px;line-height:1.5;margin:0 0 14px;">
+        São as mesmas ${r.blocos.length} listas de antes. Não tem problema nenhum responder
+        diferente da primeira vez — na verdade, é a diferença entre as duas que interessa.</p>
+      <div class="acoes" style="margin-top:14px;"><button class="btn" id="lk-seguir">Seguir</button></div>`
+    corpo.querySelector('#lk-seguir').onclick = () => desenharBloco()
+  }
+
+  // ----- um bloco -----
+  const desenharBloco = () => {
+    const r = cfg.rodadas[rodada]
+    const bloco = r.blocos[passo]
+    const atual = respostas[rodada][passo]
+    const pct = Math.round((feitosAte() / totalBlocos) * 100)
 
     corpo.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
-        <b style="font-size:13px;">Grupo ${i + 1} de ${DISC_GRUPOS.length}</b>
-        <span class="texto-dim2" style="font-size:11.5px;">${pct}%</span>
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;gap:10px;">
+        <b style="font-size:13px;">${esc(r.rotuloCurto)} — bloco ${passo + 1} de ${r.blocos.length}</b>
+        <span class="texto-dim2" style="font-size:11.5px;flex:none;">${pct}%</span>
       </div>
-      <div style="height:5px;background:var(--line2);border-radius:999px;overflow:hidden;margin-bottom:16px;">
+      <div style="height:5px;background:var(--line2);border-radius:999px;overflow:hidden;margin-bottom:14px;">
         <div style="height:100%;width:${pct}%;background:var(--rust);transition:width .2s ease;"></div>
       </div>
 
-      <p class="texto-dim2" style="font-size:12px;margin:0 0 10px;">
-        Marque a que <b style="color:var(--good-text);">MAIS</b> e a que
-        <b style="color:var(--warn-text);">MENOS</b> te descrevem.</p>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 10px;line-height:1.5;">${r.pergunta}</p>
 
-      <table style="width:100%;font-size:13.5px;">
-        <thead><tr>
-          <th style="text-align:left;"></th>
-          <th style="width:64px;color:var(--good-text);font-size:11px;">MAIS</th>
-          <th style="width:64px;color:var(--warn-text);font-size:11px;">MENOS</th>
-        </tr></thead>
-        <tbody>
-          ${grupo.map(([palavra, fator]) => `
-            <tr>
-              <td style="padding:9px 0;">${esc(palavra)}</td>
-              <td style="text-align:center;">
-                <input type="radio" name="dq-mais" value="${fator}" ${r.mais === fator ? 'checked' : ''}
-                  style="width:19px;height:19px;cursor:pointer;"></td>
-              <td style="text-align:center;">
-                <input type="radio" name="dq-menos" value="${fator}" ${r.menos === fator ? 'checked' : ''}
-                  style="width:19px;height:19px;cursor:pointer;"></td>
-            </tr>`).join('')}
-        </tbody>
-      </table>
+      <div class="lk-bloco" id="lk-linhas"></div>
+      <div class="lk-legenda"><span>tem tudo a ver</span><span>nada a ver</span></div>
 
-      <div class="recado oculto" id="dq-recado" style="margin-top:10px;"></div>
-      <div class="acoes" style="margin-top:16px;display:flex;gap:8px;">
-        ${i > 0 ? '<button class="btn-secundario" id="dq-voltar">← Voltar</button>' : ''}
+      <div class="recado oculto" id="lk-recado"></div>
+      <div class="acoes" style="margin-top:14px;display:flex;gap:8px;align-items:center;">
+        ${(rodada > 0 || passo > 0) ? '<button class="btn-secundario" id="lk-voltar">← Voltar</button>' : ''}
         <span style="flex:1;"></span>
-        <button class="btn" id="dq-proximo">${i === DISC_GRUPOS.length - 1 ? 'Ver meu resultado' : 'Próximo →'}</button>
+        <button class="btn" id="lk-proximo">${
+          (rodada === cfg.rodadas.length - 1 && passo === r.blocos.length - 1)
+            ? 'Ver meu resultado' : 'Próximo →'}</button>
       </div>`
 
-    const recado = corpo.querySelector('#dq-recado')
-    const guardar = () => {
-      const mais = corpo.querySelector('input[name="dq-mais"]:checked')?.value || null
-      const menos = corpo.querySelector('input[name="dq-menos"]:checked')?.value || null
-      DISC_Q.respostas[i] = { mais, menos }
-      return { mais, menos }
+    const recado = corpo.querySelector('#lk-recado')
+    const linhas = corpo.querySelector('#lk-linhas')
+
+    const pintar = () => {
+      linhas.innerHTML = bloco.map(([texto, fator]) => {
+        const nota = atual[fator]
+        // as notas gastas pelas OUTRAS opções deste bloco: são as que
+        // aparecem apagadas e não aceitam clique
+        const outras = Object.entries(atual).filter(([k]) => k !== fator).map(([, v]) => v)
+        return `<div class="lk-linha${nota != null ? ' pronta' : ''}">
+          <div class="lk-texto">${esc(texto)}</div>
+          ${escalaLikertHtml(fator, nota == null ? null : nota, outras)}
+        </div>`
+      }).join('')
+
+      linhas.querySelectorAll('.lk-chip').forEach(b => {
+        b.onclick = () => {
+          const fator = b.dataset.opcao
+          const nota = Number(b.dataset.nota)
+          if (atual[fator] === nota) { delete atual[fator]; recado.classList.add('oculto'); salvar(); pintar(); return }
+          const dono = Object.keys(atual).find(k => k !== fator && atual[k] === nota)
+          if (dono) {
+            recado.classList.remove('oculto')
+            recado.textContent = 'Essa cor já foi usada neste bloco. Cada uma vale uma vez só.'
+            return
+          }
+          atual[fator] = nota
+          recado.classList.add('oculto')
+          salvar()
+          pintar()
+        }
+      })
     }
-    corpo.querySelectorAll('input').forEach(el => { el.onchange = () => { guardar(); recado.classList.add('oculto') } })
+    pintar()
 
-    const btnVoltar = corpo.querySelector('#dq-voltar')
-    if (btnVoltar) btnVoltar.onclick = () => { guardar(); DISC_Q.passo--; desenharGrupo() }
+    const btnVoltar = corpo.querySelector('#lk-voltar')
+    if (btnVoltar) btnVoltar.onclick = () => {
+      if (passo > 0) passo--
+      else { rodada--; passo = cfg.rodadas[rodada].blocos.length - 1 }
+      salvar(); desenharBloco()
+    }
 
-    corpo.querySelector('#dq-proximo').onclick = () => {
-      const { mais, menos } = guardar()
-      if (!mais || !menos) {
+    corpo.querySelector('#lk-proximo').onclick = () => {
+      if (Object.keys(atual).length < 4) {
         recado.classList.remove('oculto')
-        recado.textContent = 'Escolha uma palavra em cada coluna.'
+        recado.textContent = 'Falta dar uma cor pra cada uma das quatro opções.'
         return
       }
-      if (mais === menos) {
-        recado.classList.remove('oculto')
-        recado.textContent = 'A mesma palavra não pode ser a que mais e a que menos te descreve.'
-        return
-      }
-      if (i === DISC_GRUPOS.length - 1) enviar()
-      else { DISC_Q.passo++; desenharGrupo() }
+      if (passo < r.blocos.length - 1) { passo++; salvar(); desenharBloco(); return }
+      if (rodada < cfg.rodadas.length - 1) { rodada++; passo = 0; salvar(); desenharViradaRodada(); return }
+      enviar()
     }
   }
 
+  // ----- envio -----
   const enviar = async () => {
     corpo.innerHTML = `<p class="texto-dim2" style="padding:30px;text-align:center;">apurando...</p>`
-    const respostas = DISC_Q.respostas.map((r, g) => ({ g, mais: r.mais, menos: r.menos }))
-    const { data, error } = await db.rpc('rh_disc_apurar', { p_respostas: respostas })
-    if (error || !data?.ok) {
-      corpo.innerHTML = `<p class="vazio" style="padding:20px;">${esc(error?.message || data?.erro || 'não deu certo')}</p>
-        <div class="acoes"><button class="btn-secundario" id="dq-fechar2">Fechar</button></div>`
-      corpo.querySelector('#dq-fechar2').onclick = fechar
+    const porRodada = {}
+    cfg.rodadas.forEach((r, i) => { porRodada[r.chave] = respostas[i] })
+
+    let res
+    try { res = await cfg.aoEnviar(porRodada) } catch (e) { res = { ok: false, erro: e.message } }
+
+    if (!res || !res.ok) {
+      // não limpa o rascunho: o que ela respondeu continua lá pra tentar de novo
+      corpo.innerHTML = `<p class="vazio" style="padding:20px;">${esc(res?.erro || 'não deu certo')}</p>
+        <p class="texto-dim2" style="font-size:12px;line-height:1.5;padding:0 20px;">
+          Suas respostas ficaram guardadas neste navegador — é só abrir de novo e mandar outra vez.</p>
+        <div class="acoes" style="margin-top:12px;"><button class="btn-secundario" id="lk-fechar-erro">Fechar</button></div>`
+      corpo.querySelector('#lk-fechar-erro').onclick = fechar
       return
     }
-    const dupla = (data.primario || '') + (data.secundario || '')
-    corpo.innerHTML = `
-      <div class="cabeca-secao" style="margin-bottom:4px;">
-        <h3 style="margin:0;">Pronto 🎉</h3>
-        <span class="chip" style="font-size:12px;font-weight:700;background:rgba(var(--rust-rgb),.14);color:var(--rust);border:none;">${esc(dupla)}</span>
-      </div>
-      <p class="texto-dim2" style="font-size:12px;margin:0 0 14px;">Este é o seu perfil de comportamento.</p>
 
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
-        <div class="caixa-texto"><div class="rot">Como você é</div>
-          <div style="margin-top:8px;">${barraDisc(data.natural)}</div></div>
-        <div class="caixa-texto"><div class="rot">Como você se apresenta</div>
-          <div style="margin-top:8px;">${barraDisc(data.adaptado)}</div></div>
-      </div>
-
-      ${DISC_DUPLA[dupla] ? `<div class="caixa-texto" style="margin-bottom:14px;">
-        <div class="rot">Em uma frase</div>
-        <p style="font-size:13.5px;line-height:1.55;margin:6px 0 0;">${esc(DISC_DUPLA[dupla])}</p></div>` : ''}
-
-      <p class="texto-dim2" style="font-size:11.5px;line-height:1.5;margin:0;">
-        Lembrando: isso descreve um jeito de agir, não o seu valor nem o seu limite.
-        Se alguma coisa aqui não te parece verdade, fale com o RH — a conversa vale
-        mais que o gráfico.</p>
-
-      <div class="acoes" style="margin-top:16px;"><button class="btn" id="dq-fechar3">Fechar</button></div>`
-    corpo.querySelector('#dq-fechar3').onclick = () => { fechar(); if (aoTerminar) aoTerminar() }
+    limpar()
+    corpo.innerHTML = cfg.resultado(res)
+    const ok = corpo.querySelector('#lk-fim')
+    if (ok) ok.onclick = () => { fechar(); if (cfg.aoTerminar) cfg.aoTerminar(res) }
   }
 
+  // sair clicando fora só antes de começar; no meio do questionário seria
+  // perder o passo sem querer (o rascunho salva, mas o susto não compensa)
+  fundo.onclick = e => { if (e.target === fundo && !corpo.querySelector('#lk-linhas')) fechar() }
   desenharIntro()
-  fundo.onclick = e => { if (e.target === fundo && DISC_Q.passo === 0) fechar() }
 }
+
+// ----- DISC: duas rodadas de 25 blocos -----
+//
+// A primeira rodada pergunta como a pessoa É; a segunda, como ela acha
+// que PRECISA ser no trabalho de hoje. A distância entre as duas é o
+// indicador de adaptação — e é o dado mais útil dos dois, porque é ele
+// que mostra alguém se forçando a ser o que não é.
+function abrirQuestionarioDisc (aoTerminar) {
+  abrirQuestionarioLikert({
+    chave: 'disc',
+    titulo: 'Seu perfil de comportamento',
+    subtitulo: `São <b>25 blocos de quatro palavras</b>, respondidos <b>duas vezes</b>:
+      uma pensando em como você é, outra em como você age no trabalho. Leva uns 15 minutos,
+      e dá pra parar no meio e continuar depois.`,
+    avisos: [
+      'Não existe resposta certa nem errada, e nenhum perfil é melhor que outro.',
+      'Vá pela primeira impressão. Pensar demais atrapalha mais do que ajuda.',
+      'Isso <b>não</b> decide promoção, salário ou avaliação. Serve pra te conhecerem melhor.',
+      'Quem vê: o RH, a diretoria e você.'
+    ],
+    rodadas: [
+      { chave: 'natural', rotuloCurto: 'Como você é', titulo: '',
+        pergunta: 'Pensando em <b>como você é</b>, fora do trabalho inclusive: o quanto cada palavra tem a ver com você?',
+        aviso: '', blocos: DISC_BLOCOS },
+      { chave: 'adaptado', rotuloCurto: 'No trabalho', titulo: 'Agora, a segunda parte',
+        pergunta: 'Agora pensando em <b>como você age no trabalho hoje</b>: o quanto cada palavra tem a ver com você aí?',
+        aviso: `A primeira parte perguntou como você é. Esta pergunta outra coisa:
+          <b>como você age no trabalho hoje</b> — o jeito que o dia a dia daqui pede de você.`,
+        blocos: DISC_BLOCOS }
+    ],
+    aoEnviar: async porRodada => {
+      const { data, error } = await db.rpc('rh_disc_apurar_likert', {
+        p_natural: porRodada.natural, p_adaptado: porRodada.adaptado
+      })
+      if (error) return { ok: false, erro: error.message }
+      return data
+    },
+    resultado: res => {
+      const dupla = (res.primario || '') + (res.secundario || '')
+      const t = tensaoDisc(res.natural, res.adaptado)
+      return `
+        <div class="cabeca-secao" style="margin-bottom:4px;">
+          <h3 style="margin:0;">Pronto 🎉</h3>
+          <span class="chip" style="font-size:12px;font-weight:700;background:rgba(var(--rust-rgb),.14);color:var(--rust);border:none;">${esc(dupla)}</span>
+        </div>
+        <p class="texto-dim2" style="font-size:12px;margin:0 0 14px;">Este é o seu perfil de comportamento.</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
+          <div class="caixa-texto"><div class="rot">Como você é</div>
+            <div style="margin-top:8px;">${barraDisc(res.natural)}</div></div>
+          <div class="caixa-texto"><div class="rot">Como você age no trabalho</div>
+            <div style="margin-top:8px;">${barraDisc(res.adaptado)}</div></div>
+        </div>
+        ${DISC_DUPLA[dupla] ? `<div class="caixa-texto" style="margin-bottom:14px;">
+          <div class="rot">Em uma frase</div>
+          <p style="font-size:13.5px;line-height:1.55;margin:6px 0 0;">${esc(DISC_DUPLA[dupla])}</p></div>` : ''}
+        ${t ? `<div style="padding:11px 13px;border-left:3px solid var(--warn-text);background:var(--surface2);
+          border-radius:0 8px 8px 0;margin-bottom:14px;">
+          <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">A distância entre os dois</div>
+          <p style="font-size:12.5px;line-height:1.5;margin:0;">${t}</p></div>` : ''}
+        <p class="texto-dim2" style="font-size:11.5px;line-height:1.5;margin:0;">
+          Lembrando: isso descreve um jeito de agir, não o seu valor nem o seu limite.
+          Se alguma coisa aqui não te parece verdade, fale com o RH — a conversa vale
+          mais que o gráfico.</p>
+        <div class="acoes" style="margin-top:16px;"><button class="btn" id="lk-fim">Fechar</button></div>`
+    },
+    aoTerminar
+  })
+}
+
+// ----- Motivadores: uma rodada de 30 blocos -----
+//
+// Aqui não existe natural e adaptado. A pergunta é sempre a mesma —
+// o que te move — e ela não muda de contexto.
+function abrirQuestionarioMotivador (aoTerminar) {
+  abrirQuestionarioLikert({
+    chave: 'motivador',
+    titulo: 'O que te move',
+    subtitulo: `São <b>30 blocos de quatro frases</b>, uma rodada só. Leva uns 10 minutos,
+      e dá pra parar no meio e continuar depois.`,
+    avisos: [
+      'Aqui não é sobre o que você faz bem — é sobre o que te dá energia.',
+      'Responda pensando na sua vida inteira, não só no trabalho daqui.',
+      'Não existe motivador melhor nem pior. O que existe é encaixe com o que o cargo pede.',
+      'Isso <b>não</b> decide promoção, salário ou avaliação.',
+      'Quem vê: o RH, a diretoria e você.'
+    ],
+    rodadas: [
+      { chave: 'unica', rotuloCurto: 'O que te move', titulo: '', aviso: '',
+        pergunta: 'O quanto cada uma dessas coisas <b>te move</b>?', blocos: MOTIV_BLOCOS }
+    ],
+    aoEnviar: async porRodada => {
+      const { data, error } = await db.rpc('rh_motivador_apurar', { p_respostas: porRodada.unica })
+      if (error) return { ok: false, erro: error.message }
+      return data
+    },
+    resultado: res => `
+      <div class="cabeca-secao" style="margin-bottom:4px;">
+        <h3 style="margin:0;">Pronto 🎉</h3>
+        <span class="chip" style="font-size:12px;font-weight:700;background:rgba(var(--rust-rgb),.14);color:var(--rust);border:none;">${esc(MOTIV_FATOR[res.dominante]?.nome || '')}</span>
+      </div>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 14px;">Isto é o que te move.</p>
+      ${laudoMotivadorHtml(res.scores, { titulo: false })}
+      <p class="texto-dim2" style="font-size:11.5px;line-height:1.5;margin:14px 0 0;">
+        Se alguma coisa aqui não te parece verdade, fale com o RH. O gráfico é um começo
+        de conversa, não um veredito.</p>
+      <div class="acoes" style="margin-top:16px;"><button class="btn" id="lk-fim">Fechar</button></div>`,
+    aoTerminar
+  })
+}
+
+// ---------------------------------------------------------------
+// O laudo de Motivadores, num pedaço de HTML só.
+//
+// Usado em três lugares — no fim do questionário, no Meu RH e no
+// painel do RH — pra que ninguém veja três leituras diferentes do
+// mesmo número.
+//
+// Mostra as seis dimensões como uma gangorra: os dois polos dividem
+// uma barra, e quem tem mais ocupa mais espaço. É a leitura que faz
+// sentido pra um par de opostos — duas barrinhas soltas lado a lado
+// esconderiam justamente a relação entre elas.
+// ---------------------------------------------------------------
+const MOTIV_MAX = 120
+const motivPct = n => Math.round((Number(n || 0) / MOTIV_MAX) * 100)
+
+function laudoMotivadorHtml (scores, opts = {}) {
+  if (!scores) return `<p class="texto-dim2" style="font-size:12.5px;">Sem avaliação de motivadores.</p>`
+  const nota = f => Number(scores[f] ?? 0)
+  const ordem = MOTIV_LISTA.slice().sort((a, b) => nota(b) - nota(a))
+  const topo = ordem.slice(0, 3)
+  const fundo = ordem[ordem.length - 1]
+
+  const gangorra = d => {
+    const na = nota(d.a.chave), nb = nota(d.b.chave)
+    const soma = na + nb
+    const larguraA = soma ? Math.round((na / soma) * 100) : 50
+    const ganha = na === nb ? null : (na > nb ? d.a : d.b)
+    return `
+      <div style="margin-bottom:13px;">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:4px;">
+          <b style="font-size:12px;">${esc(d.nome)}</b>
+          <span class="texto-dim2" style="font-size:10.5px;">${esc(d.pergunta)}</span>
+        </div>
+        <div style="display:flex;height:22px;border-radius:6px;overflow:hidden;border:1px solid var(--line2);">
+          <div style="width:${larguraA}%;background:#005229;display:flex;align-items:center;
+            padding:0 7px;min-width:0;" title="${esc(d.a.nome)}: ${na} de ${MOTIV_MAX}">
+            <span style="color:#fff;font-size:10.5px;font-weight:600;white-space:nowrap;overflow:hidden;
+              text-overflow:ellipsis;">${esc(d.a.nome)}</span></div>
+          <div style="width:${100 - larguraA}%;background:#D19C1D;display:flex;align-items:center;
+            justify-content:flex-end;padding:0 7px;min-width:0;" title="${esc(d.b.nome)}: ${nb} de ${MOTIV_MAX}">
+            <span style="color:#fff;font-size:10.5px;font-weight:600;white-space:nowrap;overflow:hidden;
+              text-overflow:ellipsis;">${esc(d.b.nome)}</span></div>
+        </div>
+        <div class="texto-dim2" style="display:flex;justify-content:space-between;font-size:10px;margin-top:3px;">
+          <span>${na} de ${MOTIV_MAX} · ${motivPct(na)}%</span>
+          <span>${motivPct(nb)}% · ${nb} de ${MOTIV_MAX}</span>
+        </div>
+        <p class="texto-dim2" style="font-size:11.5px;line-height:1.45;margin:4px 0 0;">
+          ${ganha ? esc(ganha.resumo) : 'Os dois pesam igual — depende do dia e da situação.'}</p>
+      </div>`
+  }
+
+  return `
+    ${opts.titulo === false ? '' : '<div class="rot" style="margin-bottom:8px;">O que move essa pessoa</div>'}
+
+    <div class="caixa-texto" style="margin-bottom:14px;">
+      <div class="rot">Os três que mais pesam</div>
+      <ol style="margin:8px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:7px;">
+        ${topo.map(f => `<li style="font-size:12.5px;line-height:1.45;">
+          <b>${esc(MOTIV_FATOR[f].nome)}</b>
+          <span class="texto-dim2">· ${nota(f)} de ${MOTIV_MAX} (${motivPct(nota(f))}%)</span><br>
+          <span class="texto-dim2" style="font-size:11.5px;">${esc(MOTIV_FATOR[f].resumo)}</span></li>`).join('')}
+      </ol>
+    </div>
+
+    <div style="padding:11px 13px;border-left:3px solid var(--warn-text);background:var(--surface2);
+      border-radius:0 8px 8px 0;margin-bottom:14px;">
+      <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">O que tende a evitar</div>
+      <p style="font-size:12.5px;line-height:1.5;margin:0;">
+        <b>${esc(MOTIV_FATOR[fundo].nome)}</b> é o que menos move
+        <span class="texto-dim2">(${nota(fundo)} de ${MOTIV_MAX})</span>.
+        Tarefa que vive disso tende a cansar mais do que deveria — não por falta de
+        capacidade, por falta de combustível.</p>
+    </div>
+
+    <div class="caixa-texto">
+      <div class="rot" style="margin-bottom:10px;">As seis dimensões</div>
+      ${MOTIV_DIM.map(gangorra).join('')}
+    </div>`
+}
+
+// ---------------------------------------------------------------
+// Aba Motivadores, no RH. Mesma linguagem visual da aba DISC — quem
+// já sabe usar uma sabe usar a outra.
+// ---------------------------------------------------------------
+let MOTIV_CACHE = { perfis: [], filtro: '', fator: '', pessoas: [] }
+
+async function desempPerfisMotivador (alvo) {
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  const [{ data, error }, { data: pessoas }, { data: pendentes }] = await Promise.all([
+    db.from('rh_perfil_motivador')
+      .select('id,nome,cargo_no_laudo,empresa_no_laudo,scores,dominante,dominante_2,menor,origem,pessoa_id,criado_em,pessoa:pessoa_id(nome)')
+      .order('nome'),
+    db.from('pessoa').select('id,nome').order('nome'),
+    db.rpc('rh_motivador_pendentes')
+  ])
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  MOTIV_CACHE.perfis = data || []
+  MOTIV_CACHE.pessoas = pessoas || []
+
+  const faltando = pendentes || []
+  const podemResponder = faltando.filter(p => p.tem_login).length
+  const semCadastro = MOTIV_CACHE.perfis.filter(p => !p.pessoa_id).length
+
+  alvo.innerHTML = `
+    <div class="panel" style="padding:16px 18px;margin-bottom:14px;border-left:3px solid var(--rust);">
+      <p class="texto-dim" style="margin:0;font-size:12.5px;line-height:1.6;">
+        <b>O DISC diz como; isto diz por quê.</b> Duas pessoas com o mesmo perfil de
+        comportamento podem estar ali por motivos opostos — uma pelo resultado, outra
+        pela turma. É esse motivo que decide se alguém ainda vai estar inteiro no cargo
+        daqui a seis meses. Serve pra desenhar função, montar dupla e conversar sobre
+        carreira. <b>Não</b> serve pra decidir promoção, salário ou desligamento.
+        Só o RH e a diretoria enxergam isso; cada pessoa enxerga o próprio.
+      </p>
+    </div>
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
+      <input id="mot-busca" placeholder="🔍 buscar por nome ou cargo..."
+        style="flex:1;min-width:220px;max-width:340px;font-size:13px;padding:8px 12px;
+        border:1px solid var(--line);border-radius:999px;background:var(--panel);color:var(--txt);">
+      <select id="mot-filtro-fator" data-sem-busca
+        style="font-size:12.5px;padding:7px 10px;border-radius:999px;max-width:230px;">
+        <option value="">Todos os motivadores</option>
+        ${MOTIV_DIM.map(d => `<optgroup label="${esc(d.nome)}">
+          <option value="${d.a.chave}">${esc(d.a.nome)}</option>
+          <option value="${d.b.chave}">${esc(d.b.nome)}</option></optgroup>`).join('')}
+      </select>
+      <span style="flex:1;"></span>
+      <button class="btn-secundario mini" id="mot-novo">+ Perfil manual</button>
+    </div>
+
+    ${semCadastro ? `<p class="texto-dim2" style="font-size:11.5px;margin:0 0 12px;">
+      ${semCadastro} perfil(is) ainda não estão ligados a um cadastro de pessoa —
+      abra o perfil e use <b>"Ligar a um cadastro"</b>. Sem isso, a pessoa não vê o próprio laudo.</p>` : ''}
+
+    <div id="mot-grade" class="sdr-cartoes"></div>
+
+    ${faltando.length ? `
+    <details class="panel" style="padding:0;margin-top:18px;">
+      <summary style="padding:14px 18px;cursor:pointer;font-weight:600;font-size:13.5px;list-style:none;">
+        ⏳ Ainda não responderam
+        <span class="chip" style="margin-left:6px;font-size:11px;">${faltando.length}</span>
+        <span class="texto-dim2" style="font-weight:400;font-size:11.5px;margin-left:6px;">
+          — ${podemResponder} conseguem responder pelo sistema</span>
+      </summary>
+      <div style="padding:0 18px 16px;">
+        <p class="texto-dim2" style="font-size:11.5px;line-height:1.55;margin:0 0 12px;">
+          Quem tem login vê o convite em <b>Meu RH</b>: 30 blocos de frases, uns 10 minutos.
+          Quem não tem login precisa do perfil lançado à mão em "+ Perfil manual".
+        </p>
+        <div class="tabela-scroll"><table>
+          <thead><tr><th>Pessoa</th><th>Cargo</th><th>Consegue responder</th></tr></thead>
+          <tbody>${faltando.map(p => `<tr>
+            <td>${esc(p.nome)}</td>
+            <td class="texto-dim">${esc(p.cargo || '—')}</td>
+            <td>${p.tem_login
+              ? '<span class="badge-bom" style="font-size:10.5px;">sim, tem login</span>'
+              : '<span class="badge-alerta" style="font-size:10.5px;">sem login</span>'}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+      </div>
+    </details>` : ''}`
+
+  estilosSdrUmaVez()
+  renderGradeMotiv()
+  $('#mot-busca').oninput = e => { MOTIV_CACHE.filtro = e.target.value.trim(); renderGradeMotiv() }
+  $('#mot-filtro-fator').onchange = e => { MOTIV_CACHE.fator = e.target.value; renderGradeMotiv() }
+  $('#mot-novo').onclick = () => formPerfilMotivador(null, () => desempPerfisMotivador(alvo))
+}
+
+// O que entra na busca de um perfil: nome, cargo, e o vocabulário dos
+// motivadores — inclusive o nome ANTIGO (Teórico, Estético,
+// Individualista...), porque é assim que o laudo da consultoria fala e
+// é assim que o RH às vezes procura. Segue o padrão do sistema: acha em
+// qualquer posição do texto e aceita vários termos em qualquer ordem.
+function textoBuscavelMotiv (p) {
+  const f = MOTIV_FATOR[p.dominante], g = MOTIV_FATOR[p.dominante_2]
+  return [p.nome, p.cargo_no_laudo, p.empresa_no_laudo,
+    f?.nome, f?.dimNome, f?.antigo, g?.nome, g?.dimNome, g?.antigo]
+    .filter(Boolean).join(' ')
+}
+
+function renderGradeMotiv () {
+  const alvo = $('#mot-grade')
+  if (!alvo) return
+  const termos = semAcento(MOTIV_CACHE.filtro).split(/\s+/).filter(Boolean)
+  const lista = MOTIV_CACHE.perfis.filter(p => {
+    if (MOTIV_CACHE.fator && p.dominante !== MOTIV_CACHE.fator) return false
+    if (!termos.length) return true
+    const alvoTexto = semAcento(textoBuscavelMotiv(p))
+    return termos.every(t => alvoTexto.includes(t))
+  })
+
+  if (!lista.length) { alvo.innerHTML = `<p class="texto-dim2" style="font-size:12.5px;">Nada encontrado.</p>`; return }
+
+  alvo.innerHTML = lista.map(p => {
+    const dom = MOTIV_FATOR[p.dominante]
+    const dois = MOTIV_FATOR[p.dominante_2]
+    const menor = MOTIV_FATOR[p.menor]
+    return `
+    <div class="sdr-cartao" data-mot="${p.id}" style="cursor:pointer;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
+        <div style="min-width:0;">
+          <h5 style="margin:0;">${esc(p.nome)}</h5>
+          <div class="texto-dim2" style="font-size:11.5px;margin-top:2px;">
+            ${esc(p.cargo_no_laudo || p.pessoa?.nome || 'sem cargo no laudo')}</div>
+        </div>
+        <span class="chip" style="flex:none;font-size:10.5px;font-weight:700;
+          background:rgba(var(--rust-rgb),.14);color:var(--rust);border:none;">
+          ${esc(dom?.nome || '?')}</span>
+      </div>
+      ${p.scores ? `<div style="margin-top:12px;">${barraMotivMini(p.scores)}</div>` : ''}
+      <div class="texto-dim2" style="font-size:10.5px;margin-top:8px;line-height:1.45;">
+        ${dois ? `Depois: <b>${esc(dois.nome)}</b>.` : ''}
+        ${menor ? ` Evita: ${esc(menor.nome)}.` : ''}
+      </div>
+      <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+        <span class="texto-dim2" style="font-size:10px;">${
+          p.origem === 'questionario_interno' ? '📝 respondido no sistema'
+          : p.origem === 'manual' ? '✍️ lançado à mão'
+          : '📄 relatório da consultoria'}${p.criado_em ? ' · ' + esc(fmtQuando(p.criado_em) || '') : ''}</span>
+        ${!p.pessoa_id ? '<span class="badge-atencao" style="font-size:10px;">sem cadastro ligado</span>' : ''}
+      </div>
+    </div>`
+  }).join('')
+
+  alvo.querySelectorAll('[data-mot]').forEach(el => {
+    el.onclick = () => {
+      const p = MOTIV_CACHE.perfis.find(x => x.id === el.dataset.mot)
+      abrirPerfilPessoaRH({ pessoaId: p?.pessoa_id, motivadorId: p?.id, nome: p?.nome, aba: 'motivadores' })
+    }
+  })
+}
+
+// Seis barrinhas, uma por dimensão, mostrando de que lado a pessoa
+// pende. Verde = polo A, dourado = polo B — a mesma leitura do laudo
+// grande, só que do tamanho de um cartão.
+function barraMotivMini (scores) {
+  return `<div style="display:flex;flex-direction:column;gap:3px;">
+    ${MOTIV_DIM.map(d => {
+      const na = Number(scores[d.a.chave] ?? 0), nb = Number(scores[d.b.chave] ?? 0)
+      const soma = na + nb
+      const larg = soma ? Math.round((na / soma) * 100) : 50
+      return `<div style="display:flex;align-items:center;gap:6px;">
+        <span class="texto-dim2" style="font-size:8.5px;width:52px;flex:none;text-align:right;
+          white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(d.nome)}</span>
+        <div style="flex:1;display:flex;height:7px;border-radius:999px;overflow:hidden;"
+          title="${esc(d.a.nome)} ${na} · ${esc(d.b.nome)} ${nb}">
+          <div style="width:${larg}%;background:#005229;"></div>
+          <div style="width:${100 - larg}%;background:#D19C1D;"></div>
+        </div>
+      </div>`
+    }).join('')}
+  </div>`
+}
+
+// ----- lançar/editar um laudo de motivadores à mão -----
+//
+// Aceita o vocabulário antigo do laudo de consultoria (Teórico,
+// Estético, Individualista...) como rótulo de apoio, mas grava sempre
+// no nome novo — é o de/para da spec, aplicado só na leitura.
+function formPerfilMotivador (p, aoSalvar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:620px;">
+    <div class="cabeca-secao"><h3 style="margin:0;">${p ? 'Editar motivadores' : 'Novo perfil de motivadores'}</h3></div>
+    <div class="campo"><label>Nome *</label><input id="pm-nome" value="${esc(p?.nome || '')}"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      <div class="campo"><label>Cargo no laudo</label><input id="pm-cargo" value="${esc(p?.cargo_no_laudo || '')}"></div>
+      <div class="campo"><label>Empresa no laudo</label><input id="pm-empresa" value="${esc(p?.empresa_no_laudo || '')}"></div>
+    </div>
+    <p class="texto-dim2" style="font-size:11.5px;line-height:1.5;margin:2px 0 10px;">
+      Cada fator vai de <b>0 a ${MOTIV_MAX}</b>. Se o laudo antigo trouxer percentual,
+      multiplique por ${(MOTIV_MAX / 100).toFixed(1)} — ou deixe em branco o que não souber.</p>
+    ${MOTIV_DIM.map(d => `
+      <div class="rot" style="margin-top:8px;">${esc(d.nome)}
+        <span class="texto-dim2" style="font-weight:400;text-transform:none;letter-spacing:0;">
+          · no laudo antigo: ${esc(d.antigo)}</span></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:4px;">
+        ${['a', 'b'].map(lado => `<div class="campo" style="margin:0;">
+          <label style="font-size:11px;">${esc(d[lado].nome)}</label>
+          <input type="number" min="0" max="${MOTIV_MAX}" id="pm-${d[lado].chave}"
+            value="${(p?.scores || {})[d[lado].chave] ?? ''}"></div>`).join('')}
+      </div>`).join('')}
+    <div class="campo" style="margin-top:10px;"><label>Como o laudo descreve</label>
+      <textarea id="pm-carac" rows="3">${esc(p?.caracteristicas || '')}</textarea></div>
+    <div class="campo"><label>Anotações do RH</label>
+      <textarea id="pm-obs" rows="2" placeholder="O que vocês observam na prática, além do laudo">${esc(p?.observacoes || '')}</textarea></div>
+    <div class="recado oculto" id="pm-recado"></div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="pm-salvar">Salvar</button>
+      <button class="btn-secundario" id="pm-cancelar">Cancelar</button>
+    </div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.querySelector('#pm-cancelar').onclick = () => fundo.remove()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+
+  fundo.querySelector('#pm-salvar').onclick = async () => {
+    const recado = fundo.querySelector('#pm-recado')
+    const nome = fundo.querySelector('#pm-nome').value.trim()
+    if (!nome) { recado.classList.remove('oculto'); recado.textContent = 'O nome é obrigatório.'; return }
+
+    const scores = {}
+    let algum = false
+    for (const f of MOTIV_LISTA) {
+      const bruto = fundo.querySelector('#pm-' + f).value.trim()
+      if (bruto === '') continue
+      const n = Number(bruto)
+      if (!Number.isFinite(n) || n < 0 || n > MOTIV_MAX) {
+        recado.classList.remove('oculto')
+        recado.textContent = `As notas vão de 0 a ${MOTIV_MAX}.`
+        return
+      }
+      scores[f] = n; algum = true
+    }
+    const ordenado = algum ? Object.entries(scores).sort((a, b) => b[1] - a[1]) : []
+
+    const dados = {
+      nome,
+      cargo_no_laudo: fundo.querySelector('#pm-cargo').value.trim() || null,
+      empresa_no_laudo: fundo.querySelector('#pm-empresa').value.trim() || null,
+      scores: algum ? scores : null,
+      dominante: ordenado[0]?.[0] || null,
+      dominante_2: ordenado[1]?.[0] || null,
+      menor: ordenado.length ? ordenado[ordenado.length - 1][0] : null,
+      caracteristicas: fundo.querySelector('#pm-carac').value.trim() || null,
+      observacoes: fundo.querySelector('#pm-obs').value.trim() || null,
+      atualizado_em: new Date().toISOString()
+    }
+    const { error } = p
+      ? await db.from('rh_perfil_motivador').update(dados).eq('id', p.id)
+      : await db.from('rh_perfil_motivador').insert({ ...dados, origem: 'manual', criado_por: PERFIL.pessoaId })
+    if (error) { recado.classList.remove('oculto'); recado.textContent = error.message; return }
+    fundo.remove()
+    if (aoSalvar) aoSalvar()
+  }
+}
+
+function ligarPerfilMotivadorAPessoa (p, aoSalvar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:420px;">
+    <div class="cabeca-secao"><h3 style="margin:0;">Ligar o laudo a um cadastro</h3></div>
+    <p class="texto-dim2" style="font-size:12px;margin:-4px 0 12px;line-height:1.5;">
+      O laudo é de <b>${esc(p.nome)}</b>. Escolha quem é essa pessoa no cadastro —
+      é isso que permite que ela veja o próprio perfil.</p>
+    <div class="campo"><label>Pessoa</label>
+      <select id="mlp-pessoa">
+        <option value="">— não ligar por enquanto —</option>
+        ${(MOTIV_CACHE.pessoas || []).map(x => `<option value="${x.id}">${esc(x.nome)}</option>`).join('')}
+      </select></div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="mlp-salvar">Ligar</button>
+      <button class="btn-secundario" id="mlp-cancelar">Cancelar</button>
+    </div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.querySelector('#mlp-cancelar').onclick = () => fundo.remove()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+  fundo.querySelector('#mlp-salvar').onclick = async () => {
+    const id = fundo.querySelector('#mlp-pessoa').value || null
+    const { error } = await db.from('rh_perfil_motivador')
+      .update({ pessoa_id: id, atualizado_em: new Date().toISOString() }).eq('id', p.id)
+    if (error) { alert('Não consegui ligar: ' + error.message); return }
+    fundo.remove()
+    if (aoSalvar) aoSalvar()
+  }
+}
+
 
 // ----- Cartão do próprio perfil, dentro de Meu RH -----
 async function blocoMeuDisc (alvo) {
@@ -42947,6 +43879,7 @@ async function desempMeu (alvo) {
 
   // o cartão do próprio perfil de comportamento entra no topo,
   // depois que o resto da página já desenhou
+  await blocoMeuMotivador(alvo)
   await blocoMeuDisc(alvo)
   await blocoMeuTermo(alvo)   // o termo fica acima de tudo em Meu RH
 }
