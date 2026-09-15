@@ -10895,6 +10895,144 @@ async function abrirFicha (s, editavel) {
   if (bEditar) bEditar.onclick = () => { fechar(); formSolicitacao(s) }
 }
 
+// ---------------------------------------------------------------
+// Imagem do pedido, pra mandar no WhatsApp quando o aprovador pede mais
+// informação. É uma FOTO (canvas -> JPEG), nunca um PDF que ele precise
+// abrir -- ele já vê tudo direto na conversa. Usa as cores do tema atual
+// (lidas do CSS em tempo real), então muda sozinha se o tema mudar.
+function corDoTemaParaImagem (nomeVar, alternativa) {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(nomeVar).trim()
+  return v || alternativa
+}
+
+function quebrarLinhasCanvas (ctx, texto, largura) {
+  const palavras = String(texto ?? '').split(/\s+/).filter(Boolean)
+  const linhas = []
+  let atual = ''
+  for (const p of palavras) {
+    const tentativa = atual ? atual + ' ' + p : p
+    if (ctx.measureText(tentativa).width > largura && atual) { linhas.push(atual); atual = p }
+    else atual = tentativa
+  }
+  if (atual) linhas.push(atual)
+  return linhas
+}
+
+// `d` = { numero, produto, quantidade, valor, fornecedor, solicitante,
+//         setor, justificativa, finalidade, parecer }
+async function gerarImagemPedidoAprovacao (d) {
+  const ESCALA = 2, LARGURA = 900, MARGEM = 46
+  const LARGURA_TEXTO = LARGURA - MARGEM * 2
+  const FONTE = 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif'
+
+  const corAccent = corDoTemaParaImagem('--rust', '#8a3b2b')
+  const corFundo = corDoTemaParaImagem('--panel', '#ffffff')
+  const corTexto = corDoTemaParaImagem('--txt', '#20211f')
+  const corDim = corDoTemaParaImagem('--dim', '#6b6b64')
+  const corLinha = corDoTemaParaImagem('--line', '#e2ddd4')
+
+  const medir = document.createElement('canvas').getContext('2d')
+  const secoes = []
+  const addCampo = (rotulo, valor, destaque) => {
+    if (valor === null || valor === undefined || valor === '') return
+    secoes.push({ tipo: 'campo', rotulo, valor: String(valor), destaque: !!destaque })
+  }
+  const addTexto = (rotulo, valor) => {
+    if (!valor) return
+    secoes.push({ tipo: 'texto', rotulo, valor: String(valor) })
+  }
+
+  addCampo('Produto / serviço', d.produto)
+  addCampo('Quantidade', d.quantidade)
+  addCampo('Valor', d.valor != null ? `R$ ${fmtNum(d.valor)}` : null, true)
+  addCampo('Fornecedor', d.fornecedor)
+  addCampo('Solicitante', [d.solicitante, d.setor].filter(Boolean).join(' · '))
+  secoes.push({ tipo: 'sep' })
+  addTexto('Justificativa', d.justificativa || d.finalidade)
+  if (d.parecer) addTexto('Análise do compras', d.parecer)
+
+  let y = 0
+  const ALTURA_TOPO = 108, ALTURA_RODAPE = 54
+  y += ALTURA_TOPO + 26
+  medir.font = `600 20px ${FONTE}`
+  const alturas = secoes.map(sec => {
+    if (sec.tipo === 'sep') return 22
+    if (sec.tipo === 'campo') return sec.destaque ? 46 : 34
+    medir.font = `400 18px ${FONTE}`
+    const linhas = quebrarLinhasCanvas(medir, sec.valor, LARGURA_TEXTO)
+    medir.font = `600 20px ${FONTE}`
+    return 26 + linhas.length * 24 + 14
+  })
+  const alturaTotal = Math.round(y + alturas.reduce((a, b) => a + b, 0) + ALTURA_RODAPE)
+
+  const cv = document.createElement('canvas')
+  cv.width = LARGURA * ESCALA
+  cv.height = alturaTotal * ESCALA
+  const ctx = cv.getContext('2d')
+  ctx.scale(ESCALA, ESCALA)
+
+  ctx.fillStyle = corFundo
+  ctx.fillRect(0, 0, LARGURA, alturaTotal)
+  ctx.fillStyle = corAccent
+  ctx.fillRect(0, 0, LARGURA, ALTURA_TOPO)
+  ctx.fillStyle = '#fff'
+  ctx.font = `700 26px ${FONTE}`
+  ctx.textBaseline = 'alphabetic'
+  ctx.fillText('PEDIDO DE COMPRA', MARGEM, 52)
+  ctx.font = `400 15px ${FONTE}`
+  ctx.globalAlpha = 0.9
+  ctx.fillText(d.numero ? `Nº ${d.numero}` : 'sem número', MARGEM, 78)
+  ctx.globalAlpha = 1
+
+  y = ALTURA_TOPO + 26
+  secoes.forEach((sec, i) => {
+    if (sec.tipo === 'sep') {
+      ctx.strokeStyle = corLinha
+      ctx.beginPath(); ctx.moveTo(MARGEM, y + 10); ctx.lineTo(LARGURA - MARGEM, y + 10); ctx.stroke()
+      y += alturas[i]; return
+    }
+    if (sec.tipo === 'campo') {
+      ctx.font = `400 13px ${FONTE}`; ctx.fillStyle = corDim
+      ctx.fillText(sec.rotulo.toUpperCase(), MARGEM, y + 14)
+      ctx.font = sec.destaque ? `700 26px ${FONTE}` : `600 18px ${FONTE}`
+      ctx.fillStyle = sec.destaque ? corAccent : corTexto
+      ctx.fillText(sec.valor, MARGEM, y + (sec.destaque ? 40 : 33))
+      y += alturas[i]; return
+    }
+    ctx.font = `600 13px ${FONTE}`; ctx.fillStyle = corDim
+    ctx.fillText(sec.rotulo.toUpperCase(), MARGEM, y + 12)
+    ctx.font = `400 18px ${FONTE}`; ctx.fillStyle = corTexto
+    quebrarLinhasCanvas(ctx, sec.valor, LARGURA_TEXTO).forEach((l, li) => ctx.fillText(l, MARGEM, y + 34 + li * 24))
+    y += alturas[i]
+  })
+
+  ctx.strokeStyle = corLinha
+  ctx.beginPath(); ctx.moveTo(MARGEM, alturaTotal - ALTURA_RODAPE); ctx.lineTo(LARGURA - MARGEM, alturaTotal - ALTURA_RODAPE); ctx.stroke()
+  ctx.font = `400 13px ${FONTE}`; ctx.fillStyle = corDim
+  const agora = new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
+  ctx.fillText(`Gerado automaticamente pelo sistema Gefoscal · ${agora}`, MARGEM, alturaTotal - 22)
+
+  return new Promise(resolve => cv.toBlob(b => resolve(b), 'image/jpeg', 0.92))
+}
+
+// Gera a imagem e sobe pro storage, devolvendo uma URL assinada de longa
+// validade (mesmo esquema da capa de perfil) -- se der qualquer erro,
+// devolve null e quem chamou segue sem travar o envio pra aprovação.
+async function subirImagemPedidoAprovacao (d) {
+  try {
+    const blob = await gerarImagemPedidoAprovacao(d)
+    if (!blob) return null
+    const arquivo = new File([blob], `pedido-${(d.numero || 'sn').replace(/[^\w-]/g, '')}.jpg`, { type: 'image/jpeg' })
+    const enviado = await enviarArquivo(arquivo, 'pedidos-aprovacao')
+    const { data: assinada } = await db.storage.from('documentos')
+      .createSignedUrl(enviado.caminho, 60 * 60 * 24 * 365 * 5)
+    return assinada?.signedUrl || null
+  } catch (e) {
+    console.error('não gerei a imagem do pedido:', e)
+    return null
+  }
+}
+
 // Cria um lembrete futuro na agenda pessoal (tabela `tarefa`, a mesma que
 // já alimenta o calendário e "Próximos compromissos" da Visão Geral) --
 // pra coisas tipo "daqui a 1 ano precisa fazer manutenção de novo".
@@ -11803,6 +11941,15 @@ async function telaCotacao (s) {
       const parecer = q('#p-parecer').value.trim()
       if (!parecer) { aviso('Escreva por que escolheu este orçamento.'); return }
 
+      const nomeFornEscolhido = escolhido.fornecedor?.nome || escolhido.fornecedor_avulso || null
+      const imagemPedidoUrl = await subirImagemPedidoAprovacao({
+        numero: s.numero, produto: s.produto_servico,
+        quantidade: s.quantidade ? `${s.quantidade} ${s.unidade ?? ''}`.trim() : null,
+        valor: escolhido.valor, fornecedor: nomeFornEscolhido,
+        solicitante: s.solicitante?.nome, setor: s.setor?.nome,
+        justificativa: s.justificativa, finalidade: s.finalidade, parecer
+      })
+
       const { error } = await db.from('solicitacao_compra').update({
         status: 'AGUARDANDO_APROVACAO',
         analista_id: PERFIL.pessoaId,
@@ -11818,7 +11965,8 @@ async function telaCotacao (s) {
         dados_pagamento: q('#p-dados').value.trim() || null,
         fornecedor_id: escolhido.fornecedor?.nome
           ? COMPRAS_CACHE.fornecedores.find(f => f.nome === escolhido.fornecedor.nome)?.id ?? null
-          : null
+          : null,
+        imagem_pedido_url: imagemPedidoUrl
       }).eq('id', s.id)
 
       if (error) { aviso(error.message); return }
