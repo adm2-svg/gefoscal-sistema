@@ -39874,21 +39874,20 @@ async function desempPerfisDisc (alvo) {
   // saber quem tem login exige ler usuario_perfil, que o RH não enxerga. Se eu
   // calculasse no navegador, o RH veria "ninguém tem login" — que é falta de
   // permissão, não fato.
-  const [{ data, error }, { data: pessoas }, { data: pendentes }] = await Promise.all([
+  const [{ data, error }, { data: pessoas }, { data: painel, error: erroPainel }] = await Promise.all([
     db.from('rh_perfil_disc')
       .select('id,nome,cargo_no_laudo,empresa_no_laudo,disc_natural,disc_adaptado,primario,secundario,origem,pessoa_id,pessoa:pessoa_id(nome)')
       .order('nome'),
     db.from('pessoa').select('id,nome').order('nome'),
-    db.rpc('rh_disc_pendentes')
+    db.rpc('rh_avaliacao_painel')
   ])
   if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
   DISC_CACHE.perfis = data || []
   DISC_CACHE.pessoas = pessoas || []
+  CONV_CACHE.linhas = painel || []
+  if (erroPainel) console.warn('painel de acompanhamento não carregou:', erroPainel.message)
 
   const semCadastro = DISC_CACHE.perfis.filter(p => !p.pessoa_id).length
-
-  const faltando = pendentes || []
-  const podemResponder = faltando.filter(p => p.tem_login).length
 
   alvo.innerHTML = `
     <div class="panel" style="padding:16px 18px;margin-bottom:14px;border-left:3px solid var(--rust);">
@@ -39916,37 +39915,12 @@ async function desempPerfisDisc (alvo) {
 
     <div id="disc-grade" class="sdr-cartoes"></div>
 
-    ${faltando.length ? `
-    <details class="panel" style="padding:0;margin-top:18px;">
-      <summary style="padding:14px 18px;cursor:pointer;font-weight:600;font-size:13.5px;list-style:none;">
-        ⏳ Ainda não responderam
-        <span class="chip" style="margin-left:6px;font-size:11px;">${faltando.length}</span>
-        <span class="texto-dim2" style="font-weight:400;font-size:11.5px;margin-left:6px;">
-          — ${podemResponder} conseguem responder pelo sistema</span>
-      </summary>
-      <div style="padding:0 18px 16px;">
-        <p class="texto-dim2" style="font-size:11.5px;line-height:1.55;margin:0 0 12px;">
-          Quem tem login vê um convite em <b>Meu RH</b> assim que entrar: 24 grupos de palavras,
-          uns 5 minutos. <b>Quem não tem login não consegue responder por aqui</b> — hoje são
-          ${faltando.length - podemResponder} pessoas nessa situação. Para elas, ou se cria o acesso,
-          ou o perfil entra à mão em "+ Perfil manual".
-        </p>
-        <div class="tabela-scroll"><table>
-          <thead><tr><th>Pessoa</th><th>Cargo</th><th>Consegue responder</th></tr></thead>
-          <tbody>${faltando.map(p => `<tr>
-            <td>${esc(p.nome)}</td>
-            <td class="texto-dim">${esc(p.cargo || '—')}</td>
-            <td>${p.tem_login
-              ? '<span class="badge-bom" style="font-size:10.5px;">sim, tem login</span>'
-              : '<span class="badge-alerta" style="font-size:10.5px;">sem login</span>'}</td>
-          </tr>`).join('')}</tbody>
-        </table></div>
-      </div>
-    </details>` : ''}`
+    ${painelConvocacaoHtml(CONV_CACHE.linhas)}`
 
   estilosSdrUmaVez()   // os cartões usam a mesma linguagem visual do SDR
   renderChipsDisc()
   renderGradeDisc()
+  ligarPainelConvocacao()
   $('#disc-busca').oninput = e => { DISC_CACHE.filtro = e.target.value.trim().toLowerCase(); renderGradeDisc() }
   $('#disc-novo').onclick = () => formPerfilDisc(null, () => desempPerfisDisc(alvo))
 }
@@ -40220,25 +40194,30 @@ function abrirAbaMotivadores () {
 // ----- Cartão dos motivadores dentro do Meu RH -----
 async function blocoMeuMotivador (alvo) {
   if (!PERFIL.pessoaId) return
-  const { data: meu } = await db.from('rh_perfil_motivador')
-    .select('id,scores,dominante,dominante_2,menor,origem,criado_em')
-    .eq('pessoa_id', PERFIL.pessoaId).order('criado_em', { ascending: false }).limit(1).maybeSingle()
+  const [{ data: meu }, conv] = await Promise.all([
+    db.from('rh_perfil_motivador')
+      .select('id,scores,dominante,dominante_2,menor,origem,criado_em')
+      .eq('pessoa_id', PERFIL.pessoaId).order('criado_em', { ascending: false }).limit(1).maybeSingle(),
+    minhaConvocacao('motivadores')
+  ])
+  const convite = convitePendente(conv, meu?.criado_em)
 
   const bloco = document.createElement('div')
   bloco.className = 'panel'
   bloco.style.cssText = 'padding:18px;margin-bottom:16px;'
 
-  if (!meu) {
+  if (!meu || convite) {
     bloco.innerHTML = `
       <div class="cabeca-secao" style="margin-bottom:6px;">
         <h3 style="font-family:var(--serif);font-size:16px;">O que te move</h3>
       </div>
+      ${convite ? faixaConvocacaoHtml(convite, !!meu) : ''}
       <p class="texto-dim" style="font-size:13px;line-height:1.6;margin:0 0 12px;">
         O perfil de comportamento diz <i>como</i> você trabalha. Este diz <i>por quê</i> —
         o que te dá energia e o que te drena. São 30 blocos de frases, uns 10 minutos,
-        e dá pra parar no meio.
+        e dá pra parar no meio e continuar depois, até de outro aparelho.
       </p>
-      <button class="btn" id="meu-mot-responder">Responder agora</button>`
+      <button class="btn" id="meu-mot-responder">${meu ? 'Responder de novo' : 'Responder agora'}</button>`
     alvo.prepend(bloco)
     bloco.querySelector('#meu-mot-responder').onclick =
       () => abrirQuestionarioMotivador(() => desempMeu(alvo))
@@ -40615,7 +40594,39 @@ function escalaLikertHtml (idOpcao, notaAtual, usadas) {
 // o navegador sem querer, chega visita — ao voltar, continua de onde
 // parou. Fica no navegador da pessoa (localStorage), some ao terminar.
 // ---------------------------------------------------------------
-function abrirQuestionarioLikert (cfg) {
+// ----- Rascunho no banco -----
+//
+// Antes o progresso ficava só no localStorage. Resolvia o "fechei sem
+// querer", mas deixava dois buracos: o RH não enxergava quem parou no
+// meio, e quem começava no computador não continuava no celular.
+//
+// Agora o banco é a fonte e o navegador virou reserva: se a rede cair
+// no meio dos 55 blocos, o localStorage segura, e na volta vale o que
+// estiver mais adiantado dos dois.
+async function lerRascunhoBanco (instrumento) {
+  if (!PERFIL.pessoaId) return null
+  const { data } = await db.from('rh_avaliacao_rascunho')
+    .select('estado,bloco_atual,total_blocos')
+    .eq('pessoa_id', PERFIL.pessoaId).eq('instrumento', instrumento).maybeSingle()
+  return data?.estado || null
+}
+
+async function gravarRascunhoBanco (instrumento, estado, bloco, total) {
+  if (!PERFIL.pessoaId) return
+  const { error } = await db.from('rh_avaliacao_rascunho').upsert({
+    pessoa_id: PERFIL.pessoaId, instrumento, estado,
+    bloco_atual: bloco, total_blocos: total, atualizado_em: new Date().toISOString()
+  }, { onConflict: 'pessoa_id,instrumento' })
+  if (error) console.warn('rascunho não subiu (segue no navegador):', error.message)
+}
+
+async function apagarRascunhoBanco (instrumento) {
+  if (!PERFIL.pessoaId) return
+  await db.from('rh_avaliacao_rascunho')
+    .delete().eq('pessoa_id', PERFIL.pessoaId).eq('instrumento', instrumento)
+}
+
+async function abrirQuestionarioLikert (cfg) {
   estilosLikertUmaVez()
 
   const chaveRascunho = `gefoscal:likert:${cfg.chave}:${PERFIL.pessoaId || 'anon'}`
@@ -40626,24 +40637,46 @@ function abrirQuestionarioLikert (cfg) {
   let passo = 0
   let retomado = false
 
+  // um rascunho só serve se tiver o formato desta versão do questionário:
+  // se os blocos mudaram de número, o que está guardado não encaixa mais
+  const serve = d => d && Array.isArray(d.respostas)
+    && d.respostas.length === cfg.rodadas.length
+    && d.respostas.every((r, i) => Array.isArray(r) && r.length === cfg.rodadas[i].blocos.length)
+
+  const quanto = d => !serve(d) ? -1
+    : cfg.rodadas.slice(0, d.rodada || 0).reduce((s, r) => s + r.blocos.length, 0) + (d.passo || 0)
+
+  let doNavegador = null
   try {
     const bruto = localStorage.getItem(chaveRascunho)
-    if (bruto) {
-      const d = JSON.parse(bruto)
-      if (d && Array.isArray(d.respostas) && d.respostas.length === cfg.rodadas.length
-          && d.respostas.every((r, i) => Array.isArray(r) && r.length === cfg.rodadas[i].blocos.length)) {
-        respostas = d.respostas
-        rodada = Math.min(d.rodada || 0, cfg.rodadas.length - 1)
-        passo = Math.min(d.passo || 0, cfg.rodadas[rodada].blocos.length - 1)
-        retomado = (rodada > 0 || passo > 0)
-      }
-    }
-  } catch { /* navegador sem storage, ou rascunho de uma versão antiga: começa do zero */ }
+    if (bruto) doNavegador = JSON.parse(bruto)
+  } catch { /* navegador sem storage: segue só com o banco */ }
 
-  const salvar = () => {
-    try { localStorage.setItem(chaveRascunho, JSON.stringify({ respostas, rodada, passo })) } catch { /* sem storage: só não guarda */ }
+  let doBanco = null
+  try { doBanco = await lerRascunhoBanco(cfg.instrumento) } catch { /* offline: segue só com o navegador */ }
+
+  const melhor = [doBanco, doNavegador].filter(serve).sort((a, b) => quanto(b) - quanto(a))[0]
+  if (melhor) {
+    respostas = melhor.respostas
+    rodada = Math.min(melhor.rodada || 0, cfg.rodadas.length - 1)
+    passo = Math.min(melhor.passo || 0, cfg.rodadas[rodada].blocos.length - 1)
+    retomado = (rodada > 0 || passo > 0)
   }
-  const limpar = () => { try { localStorage.removeItem(chaveRascunho) } catch { /* idem */ } }
+
+  const salvar = (subirTambem = false) => {
+    const estado = { respostas, rodada, passo }
+    try { localStorage.setItem(chaveRascunho, JSON.stringify(estado)) } catch { /* sem storage: só não guarda aqui */ }
+    // o banco leva uma escrita por bloco virado, não por clique: 55
+    // toques viram 55 gravações, não 220
+    if (subirTambem) {
+      gravarRascunhoBanco(cfg.instrumento, estado, feitosAte(), totalBlocos)
+        .catch(() => { /* sem rede: o navegador já guardou */ })
+    }
+  }
+  const limpar = () => {
+    try { localStorage.removeItem(chaveRascunho) } catch { /* idem */ }
+    apagarRascunhoBanco(cfg.instrumento).catch(() => {})
+  }
 
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
@@ -40789,7 +40822,7 @@ function abrirQuestionarioLikert (cfg) {
     if (btnVoltar) btnVoltar.onclick = () => {
       if (passo > 0) passo--
       else { rodada--; passo = cfg.rodadas[rodada].blocos.length - 1 }
-      salvar(); desenharBloco()
+      salvar(true); desenharBloco()
     }
 
     corpo.querySelector('#lk-proximo').onclick = () => {
@@ -40798,8 +40831,8 @@ function abrirQuestionarioLikert (cfg) {
         recado.textContent = 'Falta dar uma cor pra cada uma das quatro opções.'
         return
       }
-      if (passo < r.blocos.length - 1) { passo++; salvar(); desenharBloco(); return }
-      if (rodada < cfg.rodadas.length - 1) { rodada++; passo = 0; salvar(); desenharViradaRodada(); return }
+      if (passo < r.blocos.length - 1) { passo++; salvar(true); desenharBloco(); return }
+      if (rodada < cfg.rodadas.length - 1) { rodada++; passo = 0; salvar(true); desenharViradaRodada(); return }
       enviar()
     }
   }
@@ -40844,6 +40877,7 @@ function abrirQuestionarioLikert (cfg) {
 function abrirQuestionarioDisc (aoTerminar) {
   abrirQuestionarioLikert({
     chave: 'disc',
+    instrumento: 'disc',
     titulo: 'Seu perfil de comportamento',
     subtitulo: `São <b>25 blocos de quatro palavras</b>, respondidos <b>duas vezes</b>:
       uma pensando em como você é, outra em como você age no trabalho. Leva uns 15 minutos,
@@ -40910,6 +40944,7 @@ function abrirQuestionarioDisc (aoTerminar) {
 function abrirQuestionarioMotivador (aoTerminar) {
   abrirQuestionarioLikert({
     chave: 'motivador',
+    instrumento: 'motivadores',
     titulo: 'O que te move',
     subtitulo: `São <b>30 blocos de quatro frases</b>, uma rodada só. Leva uns 10 minutos,
       e dá pra parar no meio e continuar depois.`,
@@ -41026,6 +41061,376 @@ function laudoMotivadorHtml (scores, opts = {}) {
 }
 
 // ---------------------------------------------------------------
+// Acompanhamento e convocação das avaliações.
+//
+// Antes a aba só respondia "quem já respondeu". Faltava o resto do
+// trabalho do RH: escolher quem responde, dar prazo, cobrar, e
+// liberar alguém pra refazer.
+//
+// Um painel só pros DOIS instrumentos, porque na prática a pergunta
+// do RH é sobre a pessoa ("o Fulano está em dia?"), não sobre o
+// questionário.
+// ---------------------------------------------------------------
+let CONV_CACHE = { linhas: [], filtro: '', situacao: '' }
+
+const INSTRUMENTOS = {
+  disc:        { pre: 'disc', nome: 'Comportamento (DISC)', curto: 'DISC', blocos: 50 },
+  motivadores: { pre: 'mot',  nome: 'Motivadores',          curto: 'Motivadores', blocos: 30 }
+}
+
+// A situação de UMA pessoa em UM instrumento. Fica numa função só
+// porque o painel do RH e o convite do Meu RH precisam concordar —
+// se cada tela calculasse do seu jeito, uma diria "em dia" e a outra
+// "atrasado" sobre a mesma pessoa.
+function situacaoAvaliacao (r, inst) {
+  const pre = INSTRUMENTOS[inst].pre
+  const laudoEm = r[pre + '_laudo_em']
+  const convEm = r[pre + '_convocado_em']
+  const prazo = r[pre + '_prazo']
+  const bloco = r[pre + '_bloco'] || 0
+  const total = r[pre + '_total'] || 0
+
+  // convocação mais nova que o laudo = pediram pra refazer
+  const valendo = convEm && (!laudoEm || new Date(convEm) > new Date(laudoEm))
+  const atrasado = valendo && prazo && prazo < hojeISO()
+
+  if (valendo && bloco > 0) {
+    return { chave: atrasado ? 'atrasado' : 'andamento',
+             rotulo: `parou no bloco ${bloco} de ${total || '?'}`,
+             cor: atrasado ? 'var(--warn-text)' : 'var(--rust)', prazo, refazendo: !!laudoEm }
+  }
+  if (valendo) {
+    return { chave: atrasado ? 'atrasado' : 'convocado',
+             rotulo: laudoEm ? 'reaberto pra refazer' : 'convocado',
+             cor: atrasado ? 'var(--warn-text)' : 'var(--rust)', prazo, refazendo: !!laudoEm }
+  }
+  if (laudoEm) {
+    return { chave: 'respondido', rotulo: 'respondido ' + (fmtQuando(laudoEm) || ''),
+             cor: 'var(--good-text)', prazo: null, refazendo: false }
+  }
+  if (bloco > 0) {
+    return { chave: 'andamento', rotulo: `começou sozinho — bloco ${bloco} de ${total || '?'}`,
+             cor: 'var(--rust)', prazo: null, refazendo: false }
+  }
+  return { chave: 'livre', rotulo: 'não convocado', cor: 'var(--dim2)', prazo: null, refazendo: false }
+}
+
+async function carregarPainelConvocacao () {
+  const { data, error } = await db.rpc('rh_avaliacao_painel')
+  if (error) throw new Error(error.message)
+  CONV_CACHE.linhas = data || []
+  return CONV_CACHE.linhas
+}
+
+// Os contadores que ficam em cima da aba, pro RH bater o olho e saber
+// se tem coisa parada sem precisar abrir a tabela.
+function resumoConvocacaoHtml (linhas) {
+  const conta = (inst, chaves) =>
+    linhas.filter(r => chaves.includes(situacaoAvaliacao(r, inst).chave)).length
+  const semLogin = linhas.filter(r => !r.tem_login).length
+
+  const caixa = (rotulo, valor, cor, dica) => `
+    <div class="panel" style="padding:12px 14px;flex:1;min-width:120px;" title="${esc(dica)}">
+      <div style="font-size:21px;font-weight:700;color:${cor};line-height:1.1;">${valor}</div>
+      <div class="texto-dim2" style="font-size:10.5px;margin-top:3px;line-height:1.3;">${rotulo}</div>
+    </div>`
+
+  return `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+    ${caixa('respondidos<br>DISC', conta('disc', ['respondido']), 'var(--good-text)', 'Já têm laudo de comportamento e não foram reabertos')}
+    ${caixa('respondidos<br>Motivadores', conta('motivadores', ['respondido']), 'var(--good-text)', 'Já têm laudo de motivadores')}
+    ${caixa('em andamento', conta('disc', ['andamento']) + conta('motivadores', ['andamento']), 'var(--rust)', 'Começaram e pararam no meio')}
+    ${caixa('esperando<br>resposta', conta('disc', ['convocado']) + conta('motivadores', ['convocado']), 'var(--txt)', 'Convocados que ainda não abriram')}
+    ${caixa('fora do prazo', conta('disc', ['atrasado']) + conta('motivadores', ['atrasado']), 'var(--warn-text)', 'Convocados com prazo já vencido')}
+    ${semLogin ? caixa('sem login', semLogin, 'var(--warn-text)', 'Não conseguem responder por aqui — precisam de acesso ou de perfil lançado à mão') : ''}
+  </div>`
+}
+
+function painelConvocacaoHtml (linhas) {
+  return `
+    <details class="panel" style="padding:0;margin-top:18px;" id="conv-painel">
+      <summary style="padding:14px 18px;cursor:pointer;font-weight:600;font-size:13.5px;list-style:none;">
+        📋 Quem responde, e quando
+        <span class="chip" style="margin-left:6px;font-size:11px;">${linhas.length} pessoas</span>
+        <span class="texto-dim2" style="font-weight:400;font-size:11.5px;margin-left:6px;">
+          — convocar, dar prazo, cobrar e reabrir</span>
+      </summary>
+      <div style="padding:0 18px 16px;">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:4px 0 12px;">
+          <input id="conv-busca" placeholder="🔍 nome, cargo ou setor..."
+            style="flex:1;min-width:190px;max-width:300px;font-size:12.5px;padding:7px 11px;
+            border:1px solid var(--line);border-radius:999px;background:var(--panel);color:var(--txt);">
+          <select id="conv-situacao" data-sem-busca style="font-size:12.5px;padding:6px 10px;border-radius:999px;max-width:210px;">
+            <option value="">Todas as situações</option>
+            <option value="falta">Falta alguma das duas</option>
+            <option value="atrasado">Fora do prazo</option>
+            <option value="andamento">Parou no meio</option>
+            <option value="convocado">Esperando resposta</option>
+            <option value="completo">Respondeu as duas</option>
+            <option value="sem_login">Sem login</option>
+          </select>
+          <span style="flex:1;"></span>
+          <button class="btn-secundario mini" id="conv-marcar-tudo">Marcar visíveis</button>
+          <button class="btn mini" id="conv-convocar">Convocar marcados</button>
+        </div>
+        <div id="conv-tabela" class="tabela-scroll"></div>
+      </div>
+    </details>`
+}
+
+function renderTabelaConvocacao () {
+  const alvo = $('#conv-tabela')
+  if (!alvo) return
+  const termos = semAcento(CONV_CACHE.filtro).split(/\s+/).filter(Boolean)
+  const f = CONV_CACHE.situacao
+
+  const lista = CONV_CACHE.linhas.filter(r => {
+    if (termos.length) {
+      const txt = semAcento([r.nome, r.cargo, r.setor].filter(Boolean).join(' '))
+      if (!termos.every(t => txt.includes(t))) return false
+    }
+    if (!f) return true
+    const d = situacaoAvaliacao(r, 'disc').chave
+    const m = situacaoAvaliacao(r, 'motivadores').chave
+    if (f === 'sem_login') return !r.tem_login
+    if (f === 'completo') return d === 'respondido' && m === 'respondido'
+    if (f === 'falta') return d !== 'respondido' || m !== 'respondido'
+    return d === f || m === f
+  })
+
+  if (!lista.length) { alvo.innerHTML = `<p class="texto-dim2" style="font-size:12.5px;">Ninguém nessa situação.</p>`; return }
+
+  const selo = si => `<span style="font-size:11px;color:${si.cor};white-space:nowrap;">
+    ${si.chave === 'respondido' ? '✅' : si.chave === 'atrasado' ? '⚠️' : si.chave === 'andamento' ? '⏳'
+      : si.chave === 'convocado' ? '📨' : '·'} ${esc(si.rotulo)}
+    ${si.prazo ? `<br><span class="texto-dim2" style="font-size:10px;">prazo ${esc(fmtData(si.prazo) || si.prazo)}</span>` : ''}
+  </span>`
+
+  alvo.innerHTML = `<table style="font-size:12.5px;">
+    <thead><tr>
+      <th style="width:28px;"></th>
+      <th>Pessoa</th>
+      <th>Comportamento</th>
+      <th>Motivadores</th>
+      <th style="width:60px;"></th>
+    </tr></thead>
+    <tbody>
+      ${lista.map(r => {
+        const sd = situacaoAvaliacao(r, 'disc')
+        const sm = situacaoAvaliacao(r, 'motivadores')
+        return `<tr data-linha="${r.pessoa_id}">
+          <td><input type="checkbox" class="conv-check" value="${r.pessoa_id}"
+              ${r.tem_login ? '' : 'disabled title="sem login — não consegue responder"'}></td>
+          <td>
+            <b>${esc(r.nome)}</b>
+            <div class="texto-dim2" style="font-size:10.5px;">
+              ${esc([r.cargo, r.setor].filter(Boolean).join(' · ') || '—')}
+              ${r.tem_login ? '' : ' · <span style="color:var(--warn-text);">sem login</span>'}
+            </div>
+          </td>
+          <td>${selo(sd)}</td>
+          <td>${selo(sm)}</td>
+          <td style="text-align:right;">
+            ${(sd.chave !== 'livre' || sm.chave !== 'livre')
+              ? `<button class="btn-secundario mini" data-conv-gerir="${r.pessoa_id}"
+                   style="font-size:10.5px;padding:3px 8px;">gerir</button>` : ''}
+          </td>
+        </tr>`
+      }).join('')}
+    </tbody></table>`
+
+  alvo.querySelectorAll('[data-conv-gerir]').forEach(b => {
+    b.onclick = () => gerirConvocacaoPessoa(CONV_CACHE.linhas.find(x => x.pessoa_id === b.dataset.convGerir))
+  })
+}
+
+// ----- convocar em lote -----
+function abrirConvocacao (pessoaIds, aoFechar) {
+  const nomes = CONV_CACHE.linhas.filter(r => pessoaIds.includes(r.pessoa_id))
+  const semLogin = nomes.filter(r => !r.tem_login)
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:520px;">
+    <div class="cabeca-secao"><h3 style="margin:0;">Convocar ${nomes.length} pessoa(s)</h3></div>
+    <p class="texto-dim2" style="font-size:12px;margin:-4px 0 12px;line-height:1.5;">
+      Elas recebem o aviso no sino e o convite em destaque no Meu RH.
+      Quem já respondeu e for convocado de novo volta a poder responder —
+      o laudo antigo só sai quando a resposta nova chegar.</p>
+
+    <div class="campo"><label>Qual avaliação</label>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:4px;">
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+          <input type="checkbox" id="cv-disc" checked> Comportamento (DISC)</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+          <input type="checkbox" id="cv-mot" checked> Motivadores</label>
+      </div></div>
+
+    <div class="campo"><label>Prazo (opcional)</label>
+      <input type="date" id="cv-prazo" min="${hojeISO()}"></div>
+
+    <div class="campo"><label>Recado (opcional)</label>
+      <textarea id="cv-recado" rows="2" placeholder="Aparece junto do convite. Ex: responder até sexta, leva uns 15 min."></textarea></div>
+
+    ${semLogin.length ? `<div style="padding:10px 12px;border-left:3px solid var(--warn-text);
+      background:var(--surface2);border-radius:0 8px 8px 0;font-size:12px;line-height:1.5;margin-bottom:10px;">
+      <b>${semLogin.length} sem login</b> — ${esc(semLogin.slice(0, 3).map(p => p.nome).join(', '))}${semLogin.length > 3 ? ' e outras' : ''}.
+      Elas não conseguem responder pelo sistema. Ou se cria o acesso, ou o perfil entra à mão.</div>` : ''}
+
+    <details style="margin-bottom:10px;">
+      <summary class="texto-dim2" style="font-size:11.5px;cursor:pointer;">ver quem vai ser convocado</summary>
+      <p class="texto-dim2" style="font-size:11.5px;line-height:1.5;margin:6px 0 0;">
+        ${esc(nomes.map(p => p.nome).join(', '))}</p>
+    </details>
+
+    <div class="recado oculto" id="cv-erro"></div>
+    <div class="acoes" style="margin-top:12px;">
+      <button class="btn" id="cv-enviar">Convocar</button>
+      <button class="btn-secundario" id="cv-cancelar">Cancelar</button>
+    </div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.querySelector('#cv-cancelar').onclick = () => fundo.remove()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+
+  fundo.querySelector('#cv-enviar').onclick = async () => {
+    const erro = fundo.querySelector('#cv-erro')
+    const quais = []
+    if (fundo.querySelector('#cv-disc').checked) quais.push('disc')
+    if (fundo.querySelector('#cv-mot').checked) quais.push('motivadores')
+    if (!quais.length) { erro.classList.remove('oculto'); erro.textContent = 'Escolhe pelo menos uma avaliação.'; return }
+
+    const btn = fundo.querySelector('#cv-enviar')
+    btn.disabled = true; btn.textContent = 'convocando...'
+
+    const prazo = fundo.querySelector('#cv-prazo').value || null
+    const recado = fundo.querySelector('#cv-recado').value.trim() || null
+    const agora = new Date().toISOString()
+
+    // a convocação é uma por pessoa e instrumento: convocar de novo
+    // atualiza a data, e é a data nova que reabre quem já respondeu
+    const linhas = []
+    for (const pid of pessoaIds) {
+      for (const inst of quais) {
+        linhas.push({ pessoa_id: pid, instrumento: inst, prazo, recado,
+                      convocado_por: PERFIL.pessoaId, criado_em: agora })
+      }
+    }
+    const { error } = await db.from('rh_avaliacao_convocacao')
+      .upsert(linhas, { onConflict: 'pessoa_id,instrumento' })
+    if (error) {
+      btn.disabled = false; btn.textContent = 'Convocar'
+      erro.classList.remove('oculto'); erro.textContent = error.message; return
+    }
+
+    // o sino. Uma notificação por pessoa, mesmo convocando as duas
+    // avaliações — duas linhas seguidas sobre a mesma coisa viram ruído
+    const comLogin = nomes.filter(p => p.tem_login)
+    const oQue = quais.length === 2 ? 'duas avaliações rápidas'
+      : quais[0] === 'disc' ? 'a avaliação de comportamento' : 'a avaliação de motivadores'
+    const avisos = comLogin.map(p => ({
+      destinatario_id: p.pessoa_id,
+      titulo: 'Tem avaliação esperando você',
+      mensagem: `${PERFIL.nome} pediu que você responda ${oQue} em Meu RH.`
+        + (prazo ? ` Prazo: ${fmtData(prazo) || prazo}.` : '')
+        + (recado ? ` — ${recado}` : ''),
+      entidade: 'rh_avaliacao', entidade_id: null
+    }))
+    if (avisos.length) {
+      const { error: eN } = await db.from('notificacao_pessoal').insert(avisos)
+      if (eN) console.warn('convocação salva, mas o sino falhou:', eN.message)
+    }
+
+    fundo.remove()
+    if (aoFechar) aoFechar()
+  }
+}
+
+// ----- gerir uma pessoa: cancelar convocação, limpar tentativa parada -----
+function gerirConvocacaoPessoa (r) {
+  if (!r) return
+  const sd = situacaoAvaliacao(r, 'disc')
+  const sm = situacaoAvaliacao(r, 'motivadores')
+
+  const linha = (inst, si) => {
+    const pre = INSTRUMENTOS[inst].pre
+    const temConv = !!r[pre + '_convocado_em']
+    const temRasc = (r[pre + '_bloco'] || 0) > 0
+    return `<div class="caixa-texto" style="margin-bottom:10px;">
+      <div class="rot">${esc(INSTRUMENTOS[inst].nome)}</div>
+      <p style="font-size:12.5px;margin:6px 0 0;color:${si.cor};">${esc(si.rotulo)}
+        ${si.prazo ? `<span class="texto-dim2"> · prazo ${esc(fmtData(si.prazo) || si.prazo)}</span>` : ''}</p>
+      ${r[pre + '_recado'] ? `<p class="texto-dim2" style="font-size:11.5px;margin:4px 0 0;">
+        recado: ${esc(r[pre + '_recado'])}</p>` : ''}
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">
+        ${temConv ? `<button class="btn-secundario mini" data-cancelar="${inst}"
+          style="font-size:10.5px;">Cancelar convocação</button>` : ''}
+        ${temRasc ? `<button class="btn-secundario mini" data-limpar="${inst}"
+          style="font-size:10.5px;color:var(--warn-text);border-color:var(--warn-text);">Descartar o que começou</button>` : ''}
+      </div>
+    </div>`
+  }
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:460px;">
+    <div class="cabeca-secao"><h3 style="margin:0;">${esc(r.nome)}</h3></div>
+    <p class="texto-dim2" style="font-size:12px;margin:-4px 0 12px;">
+      ${esc([r.cargo, r.setor].filter(Boolean).join(' · ') || '—')}</p>
+    ${linha('disc', sd)}
+    ${linha('motivadores', sm)}
+    <div class="acoes" style="margin-top:12px;">
+      <button class="btn-secundario" id="gc-fechar">Fechar</button>
+    </div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#gc-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  fundo.querySelectorAll('[data-cancelar]').forEach(b => {
+    b.onclick = async () => {
+      const inst = b.dataset.cancelar
+      if (!confirm(`Cancelar a convocação de ${INSTRUMENTOS[inst].curto} para ${r.nome}?`)) return
+      const { error } = await db.from('rh_avaliacao_convocacao')
+        .delete().eq('pessoa_id', r.pessoa_id).eq('instrumento', inst)
+      if (error) { alert('Não consegui cancelar: ' + error.message); return }
+      fechar(); abrirAbaDisc()
+    }
+  })
+
+  fundo.querySelectorAll('[data-limpar]').forEach(b => {
+    b.onclick = async () => {
+      const inst = b.dataset.limpar
+      // só apaga a tentativa em andamento; laudo já concluído não é tocado aqui
+      if (!confirm(`Descartar o que ${r.nome} já respondeu de ${INSTRUMENTOS[inst].curto} sem terminar?\n\nEla começa do bloco 1 na próxima vez. Não mexe em laudo já concluído.`)) return
+      const { error } = await db.from('rh_avaliacao_rascunho')
+        .delete().eq('pessoa_id', r.pessoa_id).eq('instrumento', inst)
+      if (error) { alert('Não consegui descartar: ' + error.message); return }
+      fechar(); abrirAbaDisc()
+    }
+  })
+}
+
+// liga os controles do painel depois que ele entra na tela
+function ligarPainelConvocacao () {
+  const busca = $('#conv-busca')
+  if (!busca) return
+  busca.oninput = e => { CONV_CACHE.filtro = e.target.value.trim(); renderTabelaConvocacao() }
+  $('#conv-situacao').onchange = e => { CONV_CACHE.situacao = e.target.value; renderTabelaConvocacao() }
+  $('#conv-marcar-tudo').onclick = () => {
+    const cx = [...document.querySelectorAll('.conv-check:not(:disabled)')]
+    const marcarTodos = cx.some(c => !c.checked)
+    cx.forEach(c => { c.checked = marcarTodos })
+  }
+  $('#conv-convocar').onclick = () => {
+    const ids = [...document.querySelectorAll('.conv-check:checked')].map(c => c.value)
+    if (!ids.length) { alert('Marca pelo menos uma pessoa na tabela.'); return }
+    abrirConvocacao(ids, () => abrirAbaDisc())
+  }
+  renderTabelaConvocacao()
+}
+
+// ---------------------------------------------------------------
 // Aba Motivadores, no RH. Mesma linguagem visual da aba DISC — quem
 // já sabe usar uma sabe usar a outra.
 // ---------------------------------------------------------------
@@ -41033,19 +41438,19 @@ let MOTIV_CACHE = { perfis: [], filtro: '', fator: '', pessoas: [] }
 
 async function desempPerfisMotivador (alvo) {
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
-  const [{ data, error }, { data: pessoas }, { data: pendentes }] = await Promise.all([
+  const [{ data, error }, { data: pessoas }, { data: painel, error: erroPainel }] = await Promise.all([
     db.from('rh_perfil_motivador')
       .select('id,nome,cargo_no_laudo,empresa_no_laudo,scores,dominante,dominante_2,menor,origem,pessoa_id,criado_em,pessoa:pessoa_id(nome)')
       .order('nome'),
     db.from('pessoa').select('id,nome').order('nome'),
-    db.rpc('rh_motivador_pendentes')
+    db.rpc('rh_avaliacao_painel')
   ])
   if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
   MOTIV_CACHE.perfis = data || []
   MOTIV_CACHE.pessoas = pessoas || []
+  CONV_CACHE.linhas = painel || []
+  if (erroPainel) console.warn('painel de acompanhamento não carregou:', erroPainel.message)
 
-  const faltando = pendentes || []
-  const podemResponder = faltando.filter(p => p.tem_login).length
   const semCadastro = MOTIV_CACHE.perfis.filter(p => !p.pessoa_id).length
 
   alvo.innerHTML = `
@@ -41081,34 +41486,11 @@ async function desempPerfisMotivador (alvo) {
 
     <div id="mot-grade" class="sdr-cartoes"></div>
 
-    ${faltando.length ? `
-    <details class="panel" style="padding:0;margin-top:18px;">
-      <summary style="padding:14px 18px;cursor:pointer;font-weight:600;font-size:13.5px;list-style:none;">
-        ⏳ Ainda não responderam
-        <span class="chip" style="margin-left:6px;font-size:11px;">${faltando.length}</span>
-        <span class="texto-dim2" style="font-weight:400;font-size:11.5px;margin-left:6px;">
-          — ${podemResponder} conseguem responder pelo sistema</span>
-      </summary>
-      <div style="padding:0 18px 16px;">
-        <p class="texto-dim2" style="font-size:11.5px;line-height:1.55;margin:0 0 12px;">
-          Quem tem login vê o convite em <b>Meu RH</b>: 30 blocos de frases, uns 10 minutos.
-          Quem não tem login precisa do perfil lançado à mão em "+ Perfil manual".
-        </p>
-        <div class="tabela-scroll"><table>
-          <thead><tr><th>Pessoa</th><th>Cargo</th><th>Consegue responder</th></tr></thead>
-          <tbody>${faltando.map(p => `<tr>
-            <td>${esc(p.nome)}</td>
-            <td class="texto-dim">${esc(p.cargo || '—')}</td>
-            <td>${p.tem_login
-              ? '<span class="badge-bom" style="font-size:10.5px;">sim, tem login</span>'
-              : '<span class="badge-alerta" style="font-size:10.5px;">sem login</span>'}</td>
-          </tr>`).join('')}</tbody>
-        </table></div>
-      </div>
-    </details>` : ''}`
+    ${painelConvocacaoHtml(CONV_CACHE.linhas)}`
 
   estilosSdrUmaVez()
   renderGradeMotiv()
+  ligarPainelConvocacao()
   $('#mot-busca').oninput = e => { MOTIV_CACHE.filtro = e.target.value.trim(); renderGradeMotiv() }
   $('#mot-filtro-fator').onchange = e => { MOTIV_CACHE.fator = e.target.value; renderGradeMotiv() }
   $('#mot-novo').onclick = () => formPerfilMotivador(null, () => desempPerfisMotivador(alvo))
@@ -41315,27 +41697,65 @@ function ligarPerfilMotivadorAPessoa (p, aoSalvar) {
 }
 
 
+// ----- O convite, do lado de quem responde -----
+//
+// A pessoa vê o convite em dois casos: nunca respondeu, ou o RH
+// reabriu pra ela refazer. "Reaberto" é simplesmente uma convocação
+// mais nova que o laudo — não precisa de flag nem de apagar nada, e
+// o laudo antigo continua valendo até a resposta nova chegar.
+async function minhaConvocacao (instrumento) {
+  if (!PERFIL.pessoaId) return null
+  const { data } = await db.from('rh_avaliacao_convocacao')
+    .select('prazo,recado,criado_em')
+    .eq('pessoa_id', PERFIL.pessoaId).eq('instrumento', instrumento).maybeSingle()
+  return data || null
+}
+
+function convitePendente (conv, laudoEm) {
+  if (!conv) return null
+  if (laudoEm && new Date(conv.criado_em) <= new Date(laudoEm)) return null
+  return conv
+}
+
+function faixaConvocacaoHtml (conv, jaTemLaudo) {
+  const atrasado = conv.prazo && conv.prazo < hojeISO()
+  return `<div style="padding:10px 12px;border-left:3px solid ${atrasado ? 'var(--warn-text)' : 'var(--rust)'};
+    background:var(--surface2);border-radius:0 8px 8px 0;margin:0 0 12px;font-size:12.5px;line-height:1.55;">
+    <b>O RH pediu que você responda${jaTemLaudo ? ' de novo' : ''}.</b>
+    ${conv.prazo ? ` Prazo: <b>${esc(fmtData(conv.prazo) || conv.prazo)}</b>${atrasado ? ' — já passou' : ''}.` : ''}
+    ${conv.recado ? `<br><span class="texto-dim2">${esc(conv.recado)}</span>` : ''}
+    ${jaTemLaudo ? '<br><span class="texto-dim2">Seu resultado atual continua valendo até você terminar o novo.</span>' : ''}
+  </div>`
+}
+
 // ----- Cartão do próprio perfil, dentro de Meu RH -----
 async function blocoMeuDisc (alvo) {
   if (!PERFIL.pessoaId) return
-  const { data: meu } = await db.from('rh_perfil_disc')
-    .select('id,primario,secundario,disc_natural,disc_adaptado,origem,criado_em')
-    .eq('pessoa_id', PERFIL.pessoaId).order('criado_em', { ascending: false }).limit(1).maybeSingle()
+  const [{ data: meu }, conv] = await Promise.all([
+    db.from('rh_perfil_disc')
+      .select('id,primario,secundario,disc_natural,disc_adaptado,origem,criado_em')
+      .eq('pessoa_id', PERFIL.pessoaId).order('criado_em', { ascending: false }).limit(1).maybeSingle(),
+    minhaConvocacao('disc')
+  ])
+  const convite = convitePendente(conv, meu?.criado_em)
 
   const bloco = document.createElement('div')
   bloco.className = 'panel'
   bloco.style.cssText = 'padding:18px;margin-bottom:16px;'
 
-  if (!meu) {
+  if (!meu || convite) {
     bloco.innerHTML = `
       <div class="cabeca-secao" style="margin-bottom:6px;">
         <h3 style="font-family:var(--serif);font-size:16px;">Seu perfil de comportamento</h3>
       </div>
+      ${convite ? faixaConvocacaoHtml(convite, !!meu) : ''}
       <p class="texto-dim" style="font-size:13px;line-height:1.6;margin:0 0 12px;">
-        Você ainda não respondeu. São 24 grupos de palavras, uns 5 minutos.
+        São 25 blocos de quatro palavras, respondidos duas vezes — uma pensando em como
+        você é, outra em como você age no trabalho. Uns 15 minutos, e dá pra parar no
+        meio e continuar depois, até de outro aparelho.
         Serve pra equipe entender seu jeito de trabalhar — não é prova e não vale nota.
       </p>
-      <button class="btn" id="meu-disc-responder">Responder agora</button>`
+      <button class="btn" id="meu-disc-responder">${meu ? 'Responder de novo' : 'Responder agora'}</button>`
     alvo.prepend(bloco)
     bloco.querySelector('#meu-disc-responder').onclick =
       () => abrirQuestionarioDisc(() => desempMeu(alvo))
