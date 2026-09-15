@@ -18951,6 +18951,20 @@ async function abrirMicrofone () {
   }
 }
 
+// Abre um dos painéis na gaveta do cartão. Clicar de novo no mesmo
+// fecha; clicar no outro troca. E se havia gravação rolando, o
+// microfone é desligado antes — senão a luzinha do navegador fica
+// acesa com ninguém escutando.
+function abrirGavetaDoCartao (card, qual, render) {
+  const cx = card.querySelector('.org-form')
+  if (!cx) return
+  if (cx._micAtivo) { try { cx._micAtivo.cancelar() } catch { /* já parado */ } cx._micAtivo = null }
+  if (cx.dataset.painel === qual) { cx.innerHTML = ''; cx.dataset.painel = ''; return }
+  cx.innerHTML = ''
+  cx.dataset.painel = qual
+  render(cx)
+}
+
 function painelRelato (caixa, lead, aoTerminar) {
   if (!navegadorGrava()) {
     caixa.innerHTML = `<p class="texto-dim2" style="font-size:12px;margin:8px 0 0;line-height:1.55;">
@@ -18988,6 +19002,7 @@ function painelRelato (caixa, lead, aoTerminar) {
       const blob = await mic.parar()
       const mime = mic.mime
       mic = null
+      caixa._micAtivo = null
       relogio.textContent = ''
 
       if (blob.size < 2000) {
@@ -19012,7 +19027,7 @@ function painelRelato (caixa, lead, aoTerminar) {
       return
     }
 
-    try { mic = await abrirMicrofone() } catch (e) {
+    try { mic = await abrirMicrofone(); caixa._micAtivo = mic } catch (e) {
       saida.innerHTML = `<p class="texto-dim2" style="font-size:12px;line-height:1.55;">
         O navegador não liberou o microfone. No celular, confere a permissão do site nas configurações.</p>`
       return
@@ -19519,6 +19534,219 @@ function abrirFormPerda (alvo, l, cat, mov, recarregar) {
 // navegador — o corte é no banco.
 // ---------------------------------------------------------------
 // ---------------------------------------------------------------
+// O quadro da originação.
+//
+// A fila responde "quem eu ligo agora". O quadro responde "onde está
+// cada um". São as duas perguntas de quem origina, e antes só existia
+// a primeira — por isso o trabalho já feito sumia num "Novo" genérico.
+//
+// Duas saídas, as duas terminais: conseguiu falar e entregou pro
+// consultor, ou não conseguiu e passou pro Eduardo. Do Eduardo em
+// diante o lead não volta pra cá; ele segue até a reunião do consultor.
+// ---------------------------------------------------------------
+const COLUNAS_ORIGINACAO = [
+  { chave: 'a_contatar',      nome: 'A contatar',      dica: 'ninguém falou ainda' },
+  { chave: 'tentando',        nome: 'Tentando',        dica: 'ligou e não falou' },
+  { chave: 'em_conversa',     nome: 'Em conversa',     dica: 'atendeu, está conversando' },
+  { chave: 'qualificando',    nome: 'Qualificando',    dica: 'levantando cultura, área, momento' },
+  { chave: 'reuniao_marcada', nome: 'Reunião marcada', dica: 'tem compromisso agendado' },
+  { chave: 'entregue',        nome: 'Entregue',        dica: 'foi pro consultor', saida: true },
+  { chave: 'no_eduardo',      nome: 'Com o Eduardo',   dica: 'o bot assumiu o primeiro contato', saida: true },
+  { chave: 'descartado',      nome: 'Descartado',      dica: 'não vale seguir', saida: true }
+]
+const ROTULO_ORIGINACAO = Object.fromEntries(COLUNAS_ORIGINACAO.map(c => [c.chave, c.nome]))
+
+// 'fila' | 'quadro'
+let ORIG_VISTA = 'fila'
+
+function estilosQuadroUmaVez () {
+  if ($('#quadro-orig-estilos')) return
+  const s = document.createElement('style')
+  s.id = 'quadro-orig-estilos'
+  s.textContent = `
+    .qo-faixa { display:flex; gap:10px; overflow-x:auto; padding-bottom:10px; align-items:flex-start; }
+    .qo-col { flex:0 0 240px; background:var(--surface2); border:1px solid var(--line2);
+      border-radius:12px; padding:10px; min-height:90px; transition:border-color .15s ease; }
+    .qo-col.saida { background:var(--panel); border-style:dashed; }
+    .qo-col.alvo { border-color:var(--rust); }
+    .qo-topo { display:flex; justify-content:space-between; align-items:baseline; gap:6px; margin-bottom:8px; }
+    .qo-topo b { font-size:12.5px; }
+    .qo-dica { font-size:9.5px; color:var(--dim2); line-height:1.3; display:block; margin-top:1px; }
+    .qo-card { background:var(--panel); border:1px solid var(--line2); border-radius:9px;
+      padding:9px 10px; margin-bottom:7px; cursor:grab; font-size:12px; }
+    .qo-card:active { cursor:grabbing; }
+    .qo-card h6 { margin:0 0 3px; font-size:12.5px; font-weight:600; }
+    .qo-card.arrastando { opacity:.4; }
+    @media (max-width:700px) { .qo-col { flex-basis:78vw; } }`
+  document.head.appendChild(s)
+}
+
+function quadroOriginacaoHtml (itens) {
+  const porColuna = c => itens.filter(i => (i.situacao_originacao || 'a_contatar') === c)
+  return `
+    <div class="qo-faixa">
+      ${COLUNAS_ORIGINACAO.map(col => {
+        const lista = porColuna(col.chave)
+        return `<div class="qo-col${col.saida ? ' saida' : ''}" data-col="${col.chave}">
+          <div class="qo-topo">
+            <div style="min-width:0;">
+              <b>${esc(col.nome)}</b>
+              <span class="qo-dica">${esc(col.dica)}</span>
+            </div>
+            <span class="chip" style="flex:none;font-size:10.5px;">${lista.length}</span>
+          </div>
+          ${lista.map(i => `
+            <div class="qo-card" draggable="true" data-qo="${i.id}">
+              <h6>${esc(i.nome || 'sem nome')}</h6>
+              <div class="texto-dim2" style="font-size:10.5px;line-height:1.4;">
+                ${esc([i.municipio, i.uf].filter(Boolean).join('/') || '—')}
+                ${i.cultura ? ' · ' + esc(i.cultura) : ''}
+              </div>
+              ${Number(i.tentativas) ? `<div class="texto-dim2" style="font-size:10px;margin-top:3px;">
+                ${i.tentativas} ligação(ões)${Number(i.atendidas) ? ` · ${i.atendidas} atendida(s)` : ''}</div>` : ''}
+              ${i.proximo_compromisso ? `<div style="font-size:10px;margin-top:3px;color:var(--good-text);">
+                📅 ${esc(fmtReuniao(i.proximo_compromisso) || fmtQuando(i.proximo_compromisso) || '')}</div>` : ''}
+              ${i.objecoes_abertas ? `<div style="font-size:10px;margin-top:3px;color:var(--warn-text);">
+                ⚠ ${esc(i.objecoes_abertas)}</div>` : ''}
+              ${i.vendedor ? `<div class="texto-dim2" style="font-size:10px;margin-top:3px;">→ ${esc(i.vendedor)}</div>` : ''}
+            </div>`).join('') || `<p class="texto-dim2" style="font-size:11px;margin:4px 2px;">vazio</p>`}
+        </div>`
+      }).join('')}
+    </div>
+    <p class="texto-dim2" style="font-size:11px;line-height:1.5;margin:8px 2px 0;">
+      Arraste o card pra mudar de coluna. <b>Com o Eduardo</b> não se arrasta:
+      use o botão "Passar pro Eduardo" na fila ou na seleção, porque é ele que
+      escolhe a abordagem e coloca o contato na lista do bot.
+    </p>`
+}
+
+// Arrastar e soltar. "Com o Eduardo" é a única coluna que não aceita
+// solta: entrar nela exige a transferência de verdade, com escolha de
+// abordagem — arrastar só mudaria o rótulo e o bot nunca saberia.
+function ligarQuadroOriginacao (editavel, recarregar) {
+  if (!editavel) return
+  let arrastado = null
+
+  document.querySelectorAll('.qo-card').forEach(c => {
+    c.ondragstart = e => {
+      arrastado = c.dataset.qo
+      c.classList.add('arrastando')
+      e.dataTransfer.effectAllowed = 'move'
+      try { e.dataTransfer.setData('text/plain', arrastado) } catch { /* Safari antigo */ }
+    }
+    c.ondragend = () => { c.classList.remove('arrastando'); arrastado = null }
+  })
+
+  document.querySelectorAll('.qo-col').forEach(col => {
+    const destino = col.dataset.col
+    col.ondragover = e => {
+      if (destino === 'no_eduardo') return
+      e.preventDefault(); col.classList.add('alvo')
+    }
+    col.ondragleave = () => col.classList.remove('alvo')
+    col.ondrop = async e => {
+      e.preventDefault(); col.classList.remove('alvo')
+      const id = arrastado || (() => { try { return e.dataTransfer.getData('text/plain') } catch { return null } })()
+      if (!id || destino === 'no_eduardo') return
+
+      const { error } = await db.from('lead')
+        .update({ situacao_originacao: destino, atualizado_em: new Date().toISOString() })
+        .eq('id', id)
+      if (error) { alert('Não consegui mover: ' + error.message); return }
+      recarregar()
+    }
+  })
+}
+
+// ---------------------------------------------------------------
+// Passar pro Eduardo — um ou vários, com a abordagem escolhida.
+//
+// A abordagem é a escolha dela, não uma dedução do histórico: ela pode
+// ter ligado do celular sem registrar, ou registrado uma discagem que
+// nem chamou. Quem sabe é quem ligou.
+// ---------------------------------------------------------------
+function abrirPassarProEduardo (ids, nomes, aoTerminar) {
+  const varios = ids.length > 1
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:520px;">
+    <div class="cabeca-secao"><h3 style="margin:0;">
+      ${varios ? `Passar ${ids.length} leads pro Eduardo` : 'Passar pro Eduardo'}</h3></div>
+    <p class="texto-dim2" style="font-size:12px;margin:-4px 0 12px;line-height:1.55;">
+      ${varios ? 'Eles entram' : 'Ele entra'} na lista do bot e ${varios ? 'saem' : 'sai'} da sua fila.
+      O Eduardo faz o primeiro contato por WhatsApp e segue até marcar a reunião pro consultor —
+      não volta pra originação.</p>
+
+    <div class="campo"><label>Como o Eduardo deve abrir a conversa</label>
+      <label style="display:flex;gap:8px;align-items:flex-start;font-size:12.5px;font-weight:400;
+        padding:8px 10px;border:1px solid var(--line);border-radius:9px;margin-bottom:6px;cursor:pointer;">
+        <input type="radio" name="pe-abordagem" value="ligou" checked style="margin-top:2px;">
+        <span><b>Já tentei ligar e não consegui falar</b><br>
+        <span class="texto-dim2">Ele abre reconhecendo isso e citando seu nome, sem cobrar:
+        "a Fulana tentou falar com você por telefone e não deu certo, então vim por aqui".</span></span>
+      </label>
+      <label style="display:flex;gap:8px;align-items:flex-start;font-size:12.5px;font-weight:400;
+        padding:8px 10px;border:1px solid var(--line);border-radius:9px;cursor:pointer;">
+        <input type="radio" name="pe-abordagem" value="frio" style="margin-top:2px;">
+        <span><b>Ainda não falei com essa pessoa</b><br>
+        <span class="texto-dim2">Abertura de primeiro contato, sem citar ligação nenhuma.</span></span>
+      </label>
+    </div>
+
+    <div class="campo"><label>O que o Eduardo precisa saber (opcional)</label>
+      <textarea id="pe-instrucao" rows="2"
+        placeholder="Ex: falei com a esposa, ele volta do campo depois das 18h."></textarea>
+      ${varios ? '<span class="texto-dim2" style="font-size:11px;">Vale para todos os selecionados.</span>' : ''}</div>
+
+    ${varios ? `<details style="margin-bottom:10px;">
+      <summary class="texto-dim2" style="font-size:11.5px;cursor:pointer;">ver os ${ids.length}</summary>
+      <p class="texto-dim2" style="font-size:11.5px;line-height:1.5;margin:6px 0 0;">${esc(nomes.join(', '))}</p>
+    </details>` : ''}
+
+    <div class="recado oculto" id="pe-erro"></div>
+    <div id="pe-andamento" class="texto-dim2" style="font-size:12px;"></div>
+    <div class="acoes" style="margin-top:12px;">
+      <button class="btn" id="pe-ok">Passar pro Eduardo</button>
+      <button class="btn-secundario" id="pe-cancelar">Cancelar</button>
+    </div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.querySelector('#pe-cancelar').onclick = () => fundo.remove()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+
+  fundo.querySelector('#pe-ok').onclick = async () => {
+    const btn = fundo.querySelector('#pe-ok')
+    const erro = fundo.querySelector('#pe-erro')
+    const andamento = fundo.querySelector('#pe-andamento')
+    const jaLigou = fundo.querySelector('input[name="pe-abordagem"]:checked').value === 'ligou'
+    const instr = fundo.querySelector('#pe-instrucao').value.trim() || null
+
+    btn.disabled = true; btn.textContent = 'passando...'
+    erro.classList.add('oculto')
+
+    // um por vez: se um falhar (sem telefone, bloqueio de LGPD), os
+    // outros seguem e o relatório no fim diz quais não foram
+    const falhas = []
+    let feitos = 0
+    for (const id of ids) {
+      andamento.textContent = `${feitos + falhas.length + 1} de ${ids.length}...`
+      const { data, error } = await db.rpc('crm_transferir_para_sdr',
+        { p_lead_id: id, p_instrucoes: instr, p_ja_ligou: jaLigou })
+      if (error || !data?.ok) {
+        const nome = nomes[ids.indexOf(id)] || id
+        falhas.push(`${nome}: ${error?.message || 'não deu certo'}`)
+      } else feitos++
+    }
+
+    fundo.remove()
+    if (falhas.length) {
+      alert([`Passaram ${feitos} de ${ids.length}.`, '', 'Não foram:', ...falhas].join('\n'))
+    }
+    if (aoTerminar) aoTerminar()
+  }
+}
+
+// ---------------------------------------------------------------
 // Originação — a fila de quem ligar hoje.
 //
 // A ligação sai do celular: o botão "Ligar" é um link tel:, que no
@@ -19666,8 +19894,12 @@ async function crmOriginacao (alvo, editavel, gerencia) {
           font-size:12px;line-height:1.55;">
           <b>Falou com a pessoa.</b>
           <span class="texto-dim">Como a conversa aconteceu, o robô não vai abordar por WhatsApp —
-          a partir daqui é o acompanhamento normal do CRM. Se quiser mesmo assim, use "Passar pro SDR".</span>
+          a partir daqui é o acompanhamento normal do CRM. Se quiser mesmo assim, use "Passar pro Eduardo".</span>
         </div>` : ''}
+
+      <div style="margin-top:6px;">
+        <span class="chip" style="font-size:10px;">${esc(ROTULO_ORIGINACAO[i.situacao_originacao] || 'A contatar')}</span>
+      </div>
 
       ${i.ligacao_aberta_id ? `<div style="margin-top:7px;padding:7px 10px;border-left:3px solid var(--gold);
         background:var(--hover-bg);font-size:12px;line-height:1.5;">
@@ -19686,7 +19918,7 @@ async function crmOriginacao (alvo, editavel, gerencia) {
         ${editavel ? `<button type="button" class="btn-secundario mini org-relato">🎙️ Contar como foi</button>` : ''}
         <button type="button" class="btn-secundario mini org-ficha">Abrir ficha</button>
         ${editavel && !i.no_sdr && !semTelefone && !i.bloqueio_lgpd
-          ? `<button type="button" class="btn-secundario mini org-sdr">→ Passar pro SDR</button>` : ''}
+          ? `<button type="button" class="btn-secundario mini org-sdr">→ Passar pro Eduardo</button>` : ''}
         ${editavel ? (i.arquivado
           ? `<button type="button" class="btn-secundario mini org-desarquivar" style="margin-left:auto;">↩ Devolver pra fila</button>`
           : `<button type="button" class="btn-secundario mini org-arquivar" style="margin-left:auto;"
@@ -19743,11 +19975,21 @@ async function crmOriginacao (alvo, editavel, gerencia) {
     ${vendoArquivados ? `<p class="texto-dim2" style="font-size:11.5px;line-height:1.6;margin:-4px 0 12px;">
       Estes leads saíram da fila mas continuam no sistema, com todo o histórico. Devolver é um clique.</p>` : ''}
 
+    ${vendoArquivados ? '' : `<div style="display:flex;gap:6px;margin-bottom:12px;align-items:center;">
+      <button type="button" class="chip-filtro ${ORIG_VISTA === 'fila' ? 'ativo' : ''}" data-vista="fila">
+        📞 Fila de hoje</button>
+      <button type="button" class="chip-filtro ${ORIG_VISTA === 'quadro' ? 'ativo' : ''}" data-vista="quadro">
+        📋 Quadro</button>
+      <span class="texto-dim2" style="font-size:11px;margin-left:4px;">
+        ${ORIG_VISTA === 'fila' ? 'quem ligar agora' : 'onde está cada um'}</span>
+    </div>`}
+
     ${editavel ? `<div id="org-barra" class="panel" style="display:none;padding:10px 14px;margin-bottom:10px;
       position:sticky;top:0;z-index:5;align-items:center;gap:10px;flex-wrap:wrap;">
       <b id="org-barra-conta" style="font-size:13px;"></b>
       <button type="button" class="btn-secundario mini" id="org-limpar">limpar seleção</button>
       <span style="flex:1;"></span>
+      <button type="button" class="btn mini" id="org-lote-eduardo">→ Passar pro Eduardo</button>
       ${vendoArquivados
         ? `<button type="button" class="btn-secundario mini" id="org-lote-desarquivar">↩ Devolver pra fila</button>`
         : `<button type="button" class="btn-secundario mini" id="org-lote-arquivar">Tirar da fila</button>`}
@@ -19755,8 +19997,10 @@ async function crmOriginacao (alvo, editavel, gerencia) {
         style="color:var(--critico-text);border-color:var(--critico-text);">🗑 Excluir de vez</button>` : ''}
     </div>` : ''}
 
-    ${lista.length ? lista.map(cartao).join('')
-      : `<p class="vazio" style="padding:26px 0;">Nada nesse filtro.</p>`}
+    ${ORIG_VISTA === 'quadro'
+      ? quadroOriginacaoHtml(todos.filter(i => !i.arquivado))
+      : (lista.length ? lista.map(cartao).join('')
+        : `<p class="vazio" style="padding:26px 0;">Nada nesse filtro.</p>`)}
 
     ${todos.length >= 120 ? `<p class="texto-dim2" style="font-size:11px;">
       Mostrando 120 de ${d.total}${ORIG_BUSCA ? ' que deram com a busca' : ' na fila'}.
@@ -19847,27 +20091,12 @@ async function crmOriginacao (alvo, editavel, gerencia) {
       if (l) formLead(l, editavel, gerencia, recarregar)
     }
 
+    // O prompt() de antes não deixava escolher a abordagem — deduzia do
+    // histórico. Agora quem passa decide, porque ela sabe coisas que o
+    // histórico não registra (ligou do celular pessoal, por exemplo).
     const btnSdr = card.querySelector('.org-sdr')
-    if (btnSdr) btnSdr.onclick = async () => {
-      const instr = prompt('O que o SDR precisa saber pra continuar essa conversa?\n' +
-                           '(some pro bot como instrução — pode deixar em branco)')
-      if (instr === null) return
-      btnSdr.disabled = true; btnSdr.textContent = 'passando...'
-      const { data: r, error: e } = await db.rpc('crm_transferir_para_sdr',
-        { p_lead_id: id, p_instrucoes: instr.trim() || null })
-      if (e) { alert(e.message); btnSdr.disabled = false; btnSdr.textContent = '→ Passar pro SDR'; return }
-      alert([
-        r?.ja_estava_na_lista
-          ? `Esse número já estava na lista "${r?.lista}" — atualizei o contexto dele.`
-          : `Pronto: entrou na lista "${r?.lista}" do SDR.`,
-        'O robô aborda respeitando a janela de horário e o intervalo da lista,',
-        'e a partir de agora ele também responde se o cliente escrever.',
-        r?.ja_tentou_ligacao
-          ? '\nComo já houve tentativa de ligação, a abertura vai reconhecer isso.'
-          : ''
-      ].filter(Boolean).join('\n'))
-      recarregar()
-    }
+    if (btnSdr) btnSdr.onclick = () =>
+      abrirPassarProEduardo([id], [item?.nome || ''], recarregar)
 
     const btnLigar = card.querySelector('.org-ligar')
     if (btnLigar) btnLigar.onclick = () => {
@@ -19887,15 +20116,18 @@ async function crmOriginacao (alvo, editavel, gerencia) {
       }
     }
 
+    // "Registrar resultado" e "Contar como foi" dividem a mesma gaveta
+    // do cartão. Cada um alternava sozinho, então clicar no segundo com
+    // o primeiro aberto só FECHAVA o primeiro e saía — o gravador nunca
+    // abria, e parecia botão quebrado. Agora quem manda é um porteiro
+    // só: mesmo painel fecha, painel diferente troca.
     const btnRes = card.querySelector('.org-resultado')
-    if (btnRes) btnRes.onclick = () => formResultadoLigacao(card, item, cat, recarregar)
+    if (btnRes) btnRes.onclick = () =>
+      abrirGavetaDoCartao(card, 'resultado', () => formResultadoLigacao(card, item, cat, recarregar))
 
     const btnRel = card.querySelector('.org-relato')
-    if (btnRel) btnRel.onclick = () => {
-      const cx = card.querySelector('.org-form')
-      if (cx.innerHTML) { cx.innerHTML = ''; return }
-      painelRelato(cx, item, recarregar)
-    }
+    if (btnRel) btnRel.onclick = () =>
+      abrirGavetaDoCartao(card, 'relato', cx => painelRelato(cx, item, recarregar))
 
     const marca = card.querySelector('.org-marca')
     if (marca) marca.onchange = () => {
@@ -19915,6 +20147,14 @@ async function crmOriginacao (alvo, editavel, gerencia) {
 
   // ---- seleção em lote ---------------------------------------------
   const barra = alvo.querySelector('#org-barra')
+  alvo.querySelectorAll('[data-vista]').forEach(b => {
+    b.onclick = () => { ORIG_VISTA = b.dataset.vista; recarregar() }
+  })
+  if (ORIG_VISTA === 'quadro') {
+    estilosQuadroUmaVez()
+    ligarQuadroOriginacao(editavel, recarregar)
+  }
+
   function atualizarBarra () {
     if (!barra) return
     const n = selecionados.size
@@ -19930,6 +20170,13 @@ async function crmOriginacao (alvo, editavel, gerencia) {
     if (loteArq) loteArq.onclick = () => arquivar([...selecionados], true, loteArq)
     const loteDes = barra.querySelector('#org-lote-desarquivar')
     if (loteDes) loteDes.onclick = () => arquivar([...selecionados], false, loteDes)
+    const loteEdu = barra.querySelector('#org-lote-eduardo')
+    if (loteEdu) loteEdu.onclick = () => {
+      const ids = [...selecionados]
+      const nomes = ids.map(x => (todos.find(t => t.id === x) || {}).nome || x)
+      abrirPassarProEduardo(ids, nomes, () => { selecionados.clear(); recarregar() })
+    }
+
     const loteEx = barra.querySelector('#org-lote-excluir')
     if (loteEx) loteEx.onclick = () => excluir([...selecionados],
       [...selecionados].map(x => lista.find(i => i.id === x)).filter(Boolean), loteEx)
@@ -19988,7 +20235,6 @@ async function crmOriginacao (alvo, editavel, gerencia) {
 // etapa, quando voltar. A objeção entra por botão, não por digitação.
 function formResultadoLigacao (card, item, cat, recarregar) {
   const cx = card.querySelector('.org-form')
-  if (cx.innerHTML) { cx.innerHTML = ''; return }
 
   const familias = {}
   for (const o of cat.objecoes) (familias[o.familia] ||= []).push(o)
@@ -25748,7 +25994,7 @@ function abrirFormLista (lista, canais, vendedores, aoSalvar) {
               style="width:16px;height:16px;margin-top:2px;flex:none;">
             <span>Esta lista recebe os leads que o consultor passa do CRM
               <span class="texto-dim2" style="display:block;font-weight:400;font-size:11.5px;line-height:1.55;margin-top:2px;">
-                O botão "Passar pro SDR", na aba Originação, joga o contato aqui dentro.
+                O botão "Passar pro Eduardo", na aba Originação, joga o contato aqui dentro.
                 Só uma lista por WhatsApp pode receber — e ela precisa estar <b>ativa</b>,
                 senão o robô não fala com ninguém.</span></span>
           </label></div>
