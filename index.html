@@ -118,9 +118,14 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
        padding:8px 9px; margin:6px 0 1px; cursor:pointer; user-select:none; border-radius:6px; }
 .nav .grupo-cabecalho:hover { background: var(--hover-bg); }
 .nav .grupo-cabecalho:first-child { margin-top: 0; }
-.nav .grupo-titulo { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--dim);
-       font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.nav .grupo-cabecalho svg.seta-expandir { width:12px; height:12px; flex:none; opacity:.45; transition:transform .15s ease; }
+.nav .grupo-titulo { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--dim2);
+       font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.nav .grupo-cabecalho svg.seta-expandir { width:11px; height:11px; flex:none; opacity:.3; transition:transform .15s ease; }
+.nav .grupo-cabecalho:hover .grupo-titulo { color: var(--dim); }
+.nav .grupo-cabecalho:hover svg.seta-expandir { opacity:.55; }
+/* a linha entre os itens soltos do topo e os grupos já existia; só
+   faltava ar dos dois lados pra ela ler como divisão, e não como risco */
+.nav .grupo-divisor { margin: 16px 8px 14px !important; }
 .nav .grupo-cabecalho.expandido svg.seta-expandir { transform:rotate(90deg); }
 .nav .grupo-corpo { overflow:hidden; max-height:0; transition:max-height .22s ease; }
 .nav .grupo-corpo.expandido { max-height:900px; }
@@ -131,7 +136,8 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 .nav a svg { width:18px; height:18px; flex:none; opacity:.85; }
 .nav a .rotulo { overflow:hidden; text-overflow:ellipsis; min-width:0; }
 .nav a:hover { background: var(--hover-bg); color: var(--txt); }
-.nav a.ativo { background: var(--hover-bg); color: var(--txt); box-shadow: inset 3px 0 0 var(--rust); }
+.nav a.ativo { background: rgba(var(--rust-rgb),.12); color: var(--txt); font-weight:600;
+  box-shadow: inset 0 0 0 1px rgba(var(--rust-rgb),.22); }
 .nav a.ativo svg { opacity:1; }
 .nav a.bloqueado { opacity:.35; cursor:not-allowed; }
 .nav .item-pai { display:flex; align-items:center; gap:11px; padding:9px 12px; border-radius:8px;
@@ -162,6 +168,10 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 .app.nav-colapsada .logo-nav { height:26px; }
 .app.nav-colapsada #btn-sair { padding:9px; }
 .barra-utilitaria { display:flex; align-items:center; gap:12px; margin-bottom:16px; }
+/* com a lateral aberta, quem recolhe é o botão do cabeçalho dela;
+   o da barra de cima só aparece quando a lateral está recolhida e o
+   de dentro sumiu junto — senão ficam dois botões iguais na tela */
+.app:not(.nav-colapsada) .barra-utilitaria > #btn-colapsar { display:none; }
 .botao-colapsar { background:var(--surface2); border:1px solid var(--line2); color:var(--dim);
                    width:32px; height:32px; border-radius:7px; display:flex; align-items:center;
                    justify-content:center; cursor:pointer; flex:none; transition:border-color .15s ease, color .15s ease; }
@@ -237,7 +247,46 @@ tbody tr:hover { background: var(--hover-bg); }
 
 /* ---- Marca ---- */
 .logo-login { display:block; height:64px; width:auto; margin:0 auto 14px; }
-.logo-nav { display:block; height:64px; width:auto; margin:0 auto 22px; }
+/* ---- cabeçalho da barra lateral -------------------------------------
+   A logo estava sozinha num espaço grande desde que o cartão de perfil
+   subiu pro topo — e figura sozinha num vazio parece sobra, não marca.
+   Aqui ela vira cabeçalho: menor, pareada com o botão de recolher e
+   separada do menu por uma linha, do jeito que está no modelo. */
+.nav-cabeca { display:flex; align-items:center; justify-content:space-between; gap:10px;
+  padding:0 3px 14px; margin-bottom:12px; border-bottom:1px solid var(--line); }
+.logo-nav { display:block; height:42px; width:auto; margin:0; flex:none; }
+.nav-recolher { flex:none; }
+
+/* ---- atalhos em grade 2×2, como no modelo ------------------------- */
+.vg-atalhos-grade { display:grid; gap:10px; grid-template-columns:repeat(2, 1fr); }
+@media (min-width: 1100px) { .vg-atalhos-grade { grid-template-columns:repeat(4, 1fr); } }
+.vg-atalhos-grade .vg-at-ir {
+  display:flex; flex-direction:column; align-items:flex-start; gap:9px;
+  background:var(--surface2); border:1px solid var(--line2); border-radius:12px;
+  padding:15px 13px; cursor:pointer; font:inherit; color:inherit; text-align:left;
+  transition:border-color .15s, transform .12s; }
+.vg-atalhos-grade .vg-at-ir:hover { border-color:var(--rust); transform:translateY(-1px); }
+.vg-atalhos-grade .vg-at-icone {
+  display:flex; align-items:center; justify-content:center; width:34px; height:34px;
+  border-radius:9px; background:rgba(var(--gold-rgb),.15); flex:none; }
+.vg-atalhos-grade .vg-at-icone svg { width:17px; height:17px; }
+.vg-atalhos-grade .vg-at-nome { font-size:12.5px; font-weight:600; line-height:1.3; }
+
+/* ---- rodapé da página ---------------------------------------------- */
+.rodape-app { display:flex; justify-content:space-between; align-items:center; gap:14px;
+  flex-wrap:wrap; margin-top:28px; padding-top:14px; border-top:1px solid var(--line);
+  font-size:11.5px; color:var(--dim2); }
+.rodape-app .rodape-links { display:flex; gap:14px; flex-wrap:wrap; align-items:center; }
+.rodape-app .rodape-links button { background:none; border:none; padding:0; cursor:pointer;
+  font:inherit; color:inherit; }
+.rodape-app .rodape-links button:hover { color:var(--rust); text-decoration:underline; }
+.app.nav-colapsada .nav-cabeca { justify-content:center; padding-bottom:12px; }
+.app.nav-colapsada .nav-recolher { display:none; }
+/* na barra recolhida só a montanha cabe: corta o texto da marca pela
+   esquerda em vez de espremer a imagem inteira num traço ilegível */
+.app.nav-colapsada .logo-nav { height:30px; object-fit:cover; object-position:left center; width:34px; }
+/* no celular a barra é gaveta: o botão de recolher não faz sentido lá */
+@media (max-width: 980px) { .nav-recolher { display:none; } }
 .perfil-nav { display:flex; align-items:center; gap:9px; margin-bottom:16px;
               padding:10px; padding-right:60px; border-radius:12px; background:var(--surface2);
               border:1px solid var(--line2); position:relative; }
@@ -1172,7 +1221,12 @@ button.mini.btn-so-icone svg { width:15px; height:15px; display:block; }
 <!-- ================= APP ================= -->
 <div id="tela-app" class="app oculto">
   <nav class="nav">
-    <img class="logo-nav" id="logo-nav" alt="Grupo Gefoscal">
+    <div class="nav-cabeca">
+      <img class="logo-nav" id="logo-nav" alt="Grupo Gefoscal">
+      <button class="botao-colapsar nav-recolher" id="btn-colapsar-lateral" title="Recolher menu">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
+      </button>
+    </div>
     <div class="perfil-nav" id="quem-sou">
       <div class="inicial" id="quem-sou-avatar"></div>
       <div class="perfil-nav-dados">
@@ -1239,6 +1293,15 @@ button.mini.btn-so-icone svg { width:15px; height:15px; display:block; }
     </div>
 
     <div class="texto-dim2" id="rodape" style="font-size:12px;margin-top:10px;"></div>
+
+    <footer class="rodape-app">
+      <span>© <span id="rod-ano"></span> Gefoscal · Gestão que produz resultados</span>
+      <span class="rodape-links">
+        <button type="button" id="rod-suporte">Suporte</button>
+        <button type="button" id="rod-termo">Termo de uso</button>
+        <span id="rod-versao"></span>
+      </span>
+    </footer>
   </main>
 </div>
 
@@ -2228,6 +2291,10 @@ const PAPEIS_TOTAIS = ['ADMIN', 'DIRETORIA']   // enxergam tudo, por tem_modulo(
 // pessoa.id do Fabiano Comin — Visão Geral personalizada (painel executivo,
 // calendário+planner, secretária, resumo de solicitações/projetos) só pra
 // ele; todo mundo continua vendo a Visão Geral padrão de sempre.
+// Aparece no rodapé. Subir este número a cada entrega é o que permite
+// alguém dizer por telefone qual versão está vendo.
+const VERSAO_APP = '1.1.0'
+
 const PESSOA_PAINEL_DIRETOR = 'b22d848d-8b11-4cb7-b6c8-4dc8f2ca8c62'
 const PESSOA_PAINEL_MIKAEL = '69f85bf3-f405-4340-ab9f-8dd7133828a7' // responde por Jurídico + Frota de Escritório/Comercial/Sócios (ver pessoa_frota_setor)
 
@@ -2812,7 +2879,7 @@ const GRUPOS_MENU = [
   ['Operações', ['estoque', 'combustivel', 'manutencao_pai', 'frota', 'laboratorio']],
   ['Gestão', ['financeiro', 'desempenho', 'dp', 'onfly', 'juridico', 'ferramentas', 'banco', 'gestao_ti', 'ia_treinamento', 'dashboard_diretor']],
   ['Relatórios', ['relatorios']],
-  ['Administração Sistema', ['ti']]
+  ['Administração', ['ti']]
 ]
 
 const SVG_SETA_EXPANDIR = '<svg class="seta-expandir" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>'
@@ -5145,15 +5212,16 @@ async function vgAtalhos (area) {
               ${on ? '✓ ' : ''}${esc(d.nome)}</button>`
           }).join('')}
         </div>`
-      : `<div style="display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));">
+      : `<div class="vg-atalhos-grade">
           ${escolhidas.map(c => {
             const d = disponiveis.find(x => x.chave === c)
             if (!d) return ''
-            return `<button type="button" class="vg-at-ir" data-chave="${esc(c)}"
-              style="background:var(--surface2);border:1px solid var(--line2);border-radius:10px;padding:14px 12px;
-                cursor:pointer;font:inherit;color:inherit;text-align:left;display:flex;flex-direction:column;gap:7px;">
-              <span style="font-size:17px;line-height:1;">${ICONES_MODULO[c] ? '' : '▸'}</span>
-              <span style="font-size:12.5px;font-weight:600;line-height:1.3;">${esc(d.nome)}</span>
+            // o ícone é o mesmo do menu: quem já sabe achar a tela pela
+            // lateral reconhece o atalho sem ler o nome
+            const icone = ICONES_MODULO[c] || ICONES_MODULO._padrao || ''
+            return `<button type="button" class="vg-at-ir" data-chave="${esc(c)}">
+              <span class="vg-at-icone">${icone}</span>
+              <span class="vg-at-nome">${esc(d.nome)}</span>
             </button>`
           }).join('')}
         </div>
@@ -42799,10 +42867,30 @@ if (btnLargura) btnLargura.onclick = () => {
 }
 
 if (localStorage.getItem('gefoscal-nav-colapsada') === '1') $('#tela-app').classList.add('nav-colapsada')
-$('#btn-colapsar').onclick = () => {
+// Dois gatilhos, um comportamento: o do cabeçalho da lateral (que é onde
+// o modelo põe) e o antigo da barra de cima, que fica pra quando a lateral
+// está recolhida e o de dentro dela some.
+const alternarLateral = () => {
   const colapsada = $('#tela-app').classList.toggle('nav-colapsada')
   localStorage.setItem('gefoscal-nav-colapsada', colapsada ? '1' : '0')
 }
+// Rodapé: o ano sai do relógio, não fica escrito na mão — senão em
+// janeiro o sistema passa o ano inteiro dizendo que é 2026.
+$('#rod-ano').textContent = String(new Date().getFullYear())
+$('#rod-versao').textContent = 'Versão ' + VERSAO_APP
+$('#rod-suporte').onclick = () => irPara('solicitacoes')
+// abrirTermoDeUso precisa do termo carregado; sem isso ela quebra.
+// Busca o ativo e só abre se existir — botão que não tem o que mostrar
+// avisa, em vez de abrir uma janela vazia.
+$('#rod-termo').onclick = async () => {
+  const { data: t } = await db.from('termo_uso').select('*')
+    .eq('ativo', true).order('versao', { ascending: false }).limit(1).maybeSingle()
+  if (!t) { aviso3s('Ainda não há termo de uso publicado.'); return }
+  abrirTermoDeUso({ ...t, ja_aceitei: true })
+}
+
+$('#btn-colapsar').onclick = alternarLateral
+if ($('#btn-colapsar-lateral')) $('#btn-colapsar-lateral').onclick = alternarLateral
 
 // ---------------------------------------------------------------
 // Menu no celular: abre como painel deslizante (antes só sumia sem
