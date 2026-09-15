@@ -282,9 +282,12 @@ tbody tr:hover { background: var(--hover-bg); }
 .rodape-app .rodape-links button:hover { color:var(--rust); text-decoration:underline; }
 .app.nav-colapsada .nav-cabeca { justify-content:center; padding-bottom:12px; }
 .app.nav-colapsada .nav-recolher { display:none; }
-/* na barra recolhida só a montanha cabe: corta o texto da marca pela
-   esquerda em vez de espremer a imagem inteira num traço ilegível */
-.app.nav-colapsada .logo-nav { height:30px; object-fit:cover; object-position:left center; width:34px; }
+/* Recolhida, a barra troca a LOGO pela MARCA (a montanha com "GRUPO"),
+   que já existe pronta no arquivo. A tentativa anterior recortava a logo
+   inteira e deixava escrito "GEFOSC" — marca cortada no meio não é
+   versão compacta, é defeito. */
+.app.nav-colapsada .nav { padding-left:9px; padding-right:9px; }
+.app.nav-colapsada .logo-nav { width:46px; height:auto; }
 /* no celular a barra é gaveta: o botão de recolher não faz sentido lá */
 @media (max-width: 980px) { .nav-recolher { display:none; } }
 .perfil-nav { display:flex; align-items:center; gap:9px; margin-bottom:16px;
@@ -2235,7 +2238,18 @@ $('#skin-toggle-login').onclick = alternarSkin
 $('#skin-toggle-app').onclick = alternarSkin
 
 $('#logo-login').src = LOGO_COMPLETO
-$('#logo-nav').src = LOGO_COMPLETO
+
+// A barra aberta mostra a logo inteira; recolhida, só a marca. A troca
+// é de arquivo, não de recorte — é a diferença entre uma versão
+// compacta da marca e uma marca quebrada.
+function ajustarLogoLateral () {
+  const img = $('#logo-nav')
+  if (!img) return
+  const recolhida = $('#tela-app').classList.contains('nav-colapsada')
+  img.src = recolhida ? LOGO_MARCA : LOGO_COMPLETO
+  img.alt = recolhida ? 'Gefoscal' : 'Grupo Gefoscal'
+}
+ajustarLogoLateral()
 
 // ---------------------------------------------------------------
 // Login
@@ -42866,13 +42880,17 @@ if (btnLargura) btnLargura.onclick = () => {
   aplicarLargura(LARGURAS[(LARGURAS.indexOf(atual) + 1) % LARGURAS.length])
 }
 
-if (localStorage.getItem('gefoscal-nav-colapsada') === '1') $('#tela-app').classList.add('nav-colapsada')
+if (localStorage.getItem('gefoscal-nav-colapsada') === '1') {
+  $('#tela-app').classList.add('nav-colapsada')
+  ajustarLogoLateral()
+}
 // Dois gatilhos, um comportamento: o do cabeçalho da lateral (que é onde
 // o modelo põe) e o antigo da barra de cima, que fica pra quando a lateral
 // está recolhida e o de dentro dela some.
 const alternarLateral = () => {
   const colapsada = $('#tela-app').classList.toggle('nav-colapsada')
   localStorage.setItem('gefoscal-nav-colapsada', colapsada ? '1' : '0')
+  ajustarLogoLateral()
 }
 // Rodapé: o ano sai do relógio, não fica escrito na mão — senão em
 // janeiro o sistema passa o ano inteiro dizendo que é 2026.
