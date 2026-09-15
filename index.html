@@ -2777,7 +2777,45 @@ const MODULOS_SO_GESTOR_COMERCIAL = ['crm']
 // checkbox "Gestor comercial" em Administração. A tela só olhava o primeiro,
 // então o checkbox não ligava nada — quem era marcado por ele via a RLS
 // liberar os dados mas a aba Gestão nunca aparecia.
-const ehGestorComercial = () => PERFIL.souGestorComercial || PERFIL.papeis.includes('GESTOR_COMERCIAL')
+// ---------------------------------------------------------------
+// Níveis de acesso ao CRM.
+//
+// Espelha nivel_crm() do banco — e o banco é quem manda de verdade.
+// Aqui serve pra tela não oferecer botão que a RLS vai recusar calada.
+//
+// Um nível só, para os TRÊS CRMs (Comercial, SDR WhatsApp e Técnico),
+// porque na prática ninguém precisa de leitura num e escrita noutro —
+// e porque o controle espalhado em dois lugares foi justamente o que
+// tornava isso difícil de configurar.
+//
+// GESTOR_COMERCIAL continua valendo como Total: quem já tinha, não
+// perde nada e não precisa ser remarcado.
+// ---------------------------------------------------------------
+const NIVEIS_CRM = [
+  { chave: 'leitor',      papel: 'CRM_LEITOR',      nivel: 1,
+    nome: 'Leitor — vê os três CRMs inteiros, não mexe em nada' },
+  { chave: 'operacional', papel: 'CRM_OPERACIONAL', nivel: 2,
+    nome: 'Operacional — vê tudo, cria e edita, não exclui' },
+  { chave: 'total',       papel: 'CRM_TOTAL',       nivel: 3,
+    nome: 'Total (Master) — o de cima, mais excluir e configurar o SDR' },
+  { chave: 'diretor',     papel: 'CRM_DIRETOR',     nivel: 4,
+    nome: 'Diretor — o de cima, mais preço, motivo de perda e objeções' }
+]
+const PAPEIS_NIVEL_CRM = NIVEIS_CRM.map(n => n.papel)
+const MODULOS_CRM = ['crm', 'sdr_whatsapp', 'crm_tecnico']
+
+const nivelCrm = () => {
+  if (PERFIL.papeis.some(p => PAPEIS_TOTAIS.includes(p))) return 4
+  if (PERFIL.papeis.includes('CRM_DIRETOR')) return 4
+  if (PERFIL.papeis.includes('CRM_TOTAL')) return 3
+  if (PERFIL.papeis.includes('GESTOR_COMERCIAL')) return 3
+  if (PERFIL.papeis.includes('CRM_OPERACIONAL')) return 2
+  if (PERFIL.papeis.includes('CRM_LEITOR')) return 1
+  return 0
+}
+
+// do Total pra cima a pessoa enxerga a aba Gestão do CRM
+const ehGestorComercial = () => PERFIL.souGestorComercial || PERFIL.papeis.includes('GESTOR_COMERCIAL') || nivelCrm() >= 3
 
 // Pre-vendas: nivel de acesso que trabalha o "pool" de leads sem vendedor —
 // liga, qualifica e marca quem nao atendeu pro SDR retomar. Enxerga o modulo
@@ -2788,6 +2826,9 @@ const souPreVendas = () => PERFIL.papeis.includes('PRE_VENDAS')
 
 function podeVer (chave) {
   if (ehTotal()) return true
+  // o nível de CRM abre os três módulos de uma vez: quem é Leitor não
+  // precisa mais que alguém lembre de marcar três checkboxes
+  if (MODULOS_CRM.includes(chave) && nivelCrm() >= 1) return true
   const papeisExtra = MODULOS_POR_PAPEL[chave]
   if (papeisExtra && PERFIL.papeis.some(p => papeisExtra.includes(p))) return true
   if (MODULOS_SO_GESTOR_COMERCIAL.includes(chave) && ehGestorComercial()) return true
@@ -2798,6 +2839,14 @@ function podeVer (chave) {
 // espelha tem_modulo(chave, true) do banco — o RLS é quem manda de verdade
 function podeEditar (chave) {
   if (ehTotal()) return true
+  if (MODULOS_CRM.includes(chave)) {
+    const n = nivelCrm()
+    // Leitor é leitor, e o nível ganha de um checkbox de editar que
+    // tenha sobrado de antes: sem isso a tela ofereceria botões que o
+    // banco recusa sem dizer nada.
+    if (n === 1) return false
+    if (n >= 2) return true
+  }
   const papeisExtra = MODULOS_POR_PAPEL[chave]
   if (papeisExtra && PERFIL.papeis.some(p => papeisExtra.includes(p))) return true
   if (MODULOS_SO_GESTOR_COMERCIAL.includes(chave) && ehGestorComercial()) return true
@@ -7109,16 +7158,16 @@ async function subUsuarios (alvo, editavel) {
             <option value="pre_vendas">Pré-vendas (CRM) — módulo CRM inteiro, pool de leads</option>
             <option value="administrador">Administrador — consulta e altera</option>
           </select></div>
-        <div class="campo"><label>&nbsp;</label>
-          <label style="display:flex;align-items:center;gap:7px;font-size:13px;font-weight:400;padding-top:7px;">
-            <input type="checkbox" id="u-gestor-comercial" ${editavel ? '' : 'disabled'}>
-            Gestor comercial — CRM inteiro, de todos os vendedores
-          </label>
+        <div class="campo"><label>Nível no CRM</label>
+          <select id="u-nivel-crm" ${editavel ? '' : 'disabled'}>
+            <option value="">Sem acesso ao CRM</option>
+            ${NIVEIS_CRM.map(n => `<option value="${n.chave}">${esc(n.nome)}</option>`).join('')}
+          </select>
           <p class="texto-dim2" style="font-size:11px;line-height:1.45;margin:4px 0 0;">
-            Abre a carteira de <b>todos</b> os vendedores no CRM Comercial e no CRM Técnico,
-            com direito a editar e excluir, mais a aba Gestão. Sem isso a pessoa vê a tela
-            do CRM vazia, mesmo com o módulo marcado abaixo — o módulo mostra o menu, este
-            checkbox libera o dado. O SDR WhatsApp é a exceção: lá o módulo já libera tudo.
+            Vale de uma vez para os três: CRM Comercial, SDR WhatsApp e CRM Técnico,
+            com a carteira de <b>todos</b> os vendedores. Escolhido um nível aqui,
+            não precisa marcar esses três módulos na lista abaixo — e do Total pra
+            cima a pessoa também ganha a aba Gestão.
           </p></div>
         <div class="campo"><label>&nbsp;</label>
           <label style="display:flex;align-items:center;gap:7px;font-size:13px;font-weight:400;padding-top:7px;">
@@ -7245,7 +7294,13 @@ async function subUsuarios (alvo, editavel) {
       $('#u-setor').value = p.setor_id || ''
       $('#u-nivel').value = (pc?.papeis || []).includes('ADMIN') ? 'administrador'
         : (pc?.papeis || []).includes('PRE_VENDAS') ? 'pre_vendas' : 'usuario'
-      $('#u-gestor-comercial').checked = (pc?.papeis || []).includes('GESTOR_COMERCIAL')
+      // GESTOR_COMERCIAL é o nome antigo do nível Total: quem tinha o
+      // checkbox marcado aparece como Total, sem precisar ser remarcado
+      const papeisPc = pc?.papeis || []
+      $('#u-nivel-crm').value = papeisPc.includes('CRM_DIRETOR') ? 'diretor'
+        : papeisPc.includes('CRM_TOTAL') || papeisPc.includes('GESTOR_COMERCIAL') ? 'total'
+        : papeisPc.includes('CRM_OPERACIONAL') ? 'operacional'
+        : papeisPc.includes('CRM_LEITOR') ? 'leitor' : ''
       $('#u-pode-vender').checked = !!p.eh_vendedor
       $('#u-perfil-vendedor').checked = (pc?.papeis || []).includes('VENDEDOR')
       const meus = (perms || []).filter(x => x.pessoa_id === p.id)
@@ -7357,7 +7412,7 @@ async function subUsuarios (alvo, editavel) {
       const el = $('#' + i); if (el) el.value = ''
     })
     $('#u-nivel').value = 'usuario'
-    $('#u-gestor-comercial').checked = false
+    $('#u-nivel-crm').value = ''
     $('#u-pode-vender').checked = false
     $('#u-perfil-vendedor').checked = false
     $('#u-modulos').querySelectorAll('input').forEach(c => c.checked = false)
@@ -7385,7 +7440,8 @@ async function subUsuarios (alvo, editavel) {
     const papeis = nivel === 'administrador' ? ['ADMIN', 'DIRETORIA']
       : nivel === 'pre_vendas' ? ['LEITOR', 'PRE_VENDAS']
       : ['LEITOR']
-    if ($('#u-gestor-comercial').checked) papeis.push('GESTOR_COMERCIAL')
+    const nivelCrmEscolhido = NIVEIS_CRM.find(n => n.chave === $('#u-nivel-crm').value)
+    if (nivelCrmEscolhido) papeis.push(nivelCrmEscolhido.papel)
     if ($('#u-perfil-vendedor').checked) papeis.push('VENDEDOR')
     const { error: e2 } = await db.from('usuario_precadastro').upsert({
       email, papeis, pessoa_id: pessoa.id, setor_id: pessoa.setor_id
@@ -7408,9 +7464,14 @@ async function subUsuarios (alvo, editavel) {
         await db.from('usuario_papel').insert(papeisNivel.map(papel => ({ user_id: perfilAtivo.user_id, papel })))
       }
 
-      await db.from('usuario_papel').delete().eq('user_id', perfilAtivo.user_id).eq('papel', 'GESTOR_COMERCIAL')
-      if ($('#u-gestor-comercial').checked) {
-        await db.from('usuario_papel').insert({ user_id: perfilAtivo.user_id, papel: 'GESTOR_COMERCIAL' })
+      // Nível no CRM: tira todos os papéis de nível (inclusive o
+      // GESTOR_COMERCIAL antigo) e grava só o escolhido. Sem tirar o
+      // antigo, rebaixar alguém de Total pra Leitor não surtiria efeito.
+      await db.from('usuario_papel').delete().eq('user_id', perfilAtivo.user_id)
+        .in('papel', [...PAPEIS_NIVEL_CRM, 'GESTOR_COMERCIAL'])
+      if (nivelCrmEscolhido) {
+        await db.from('usuario_papel')
+          .insert({ user_id: perfilAtivo.user_id, papel: nivelCrmEscolhido.papel })
       }
       // perfil de vendedor: vale na hora pra quem já está logado
       await db.from('usuario_papel').delete().eq('user_id', perfilAtivo.user_id).eq('papel', 'VENDEDOR')
@@ -22054,10 +22115,29 @@ async function tecGerarCodigo(pre) {
 }
 
 // ----- Página / navegação -----
+// Aviso de modo leitura.
+//
+// O CRM Comercial checa podeEditar() em 134 pontos e some com os botões
+// sozinho. O SDR e o CRM Técnico foram escritos antes de existir Leitor
+// e quase não checam — lá o botão continua na tela e quem barra é a RLS,
+// que recusa sem explicar. Até esses dois passarem pelo mesmo tratamento,
+// a faixa avisa antes da pessoa tentar e achar que quebrou.
+function faixaSomenteLeituraHtml (oQue) {
+  return `<div class="panel" style="padding:11px 14px;margin-bottom:14px;
+    border-left:3px solid var(--rust);display:flex;gap:9px;align-items:flex-start;">
+    <span style="font-size:15px;line-height:1.2;">👁️</span>
+    <p class="texto-dim" style="margin:0;font-size:12.5px;line-height:1.5;">
+      <b>Modo leitura.</b> Seu nível no CRM deixa você acompanhar ${esc(oQue)} por inteiro,
+      mas não alterar. Os botões de salvar e excluir desta tela não vão funcionar —
+      se precisar mexer, fale com quem cuida dos acessos.
+    </p></div>`
+}
+
 async function paginaCrmTecnico () {
   if (!podeVer('crm_tecnico')) { areaLivre().innerHTML =
     `<div class="panel" style="padding:22px;"><p class="texto-dim">Você não tem acesso ao CRM Técnico.</p></div>`; return }
   $('#subtitulo-pagina').textContent = 'Acompanhamento agronômico de campo — ciclo do cliente na safra'
+  const soLeituraTec = !podeEditar('crm_tecnico')
   const area = areaLivre()
   area.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
@@ -22086,6 +22166,7 @@ async function paginaCrmTecnico () {
 
   const abas = [['painel', 'Painel'], ['clientes', 'Clientes'], ['acompanhamento', 'Acompanhamento'], ['agenda', 'Agenda']]
   area.innerHTML = `
+    ${soLeituraTec ? faixaSomenteLeituraHtml('o CRM Técnico') : ''}
     <div class="subabas">
       ${abas.map(a => `<button data-sub="${a[0]}" class="${a[0] === TEC_VISTA ? 'ativo' : ''}">${a[1]}</button>`).join('')}
     </div>
@@ -23276,6 +23357,7 @@ async function paginaSdrWhatsapp () {
     `<div class="panel" style="padding:22px;"><p class="texto-dim">Você não tem acesso ao SDR WhatsApp.</p></div>`; return }
 
   $('#subtitulo-pagina').textContent = 'Leads do bot de WhatsApp — acompanhe, mova no funil e envie pro consultor'
+  const soLeituraSdr = !podeEditar('sdr_whatsapp')
   const area = areaLivre()
   area.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
@@ -23283,6 +23365,7 @@ async function paginaSdrWhatsapp () {
     ['regioes', 'Regiões'], ['treinar', 'Treinar IA'],
     ['documentos', 'Documentos'], ['links', 'Links'], ['analytics', 'Analytics']]
   area.innerHTML = `
+    ${soLeituraSdr ? faixaSomenteLeituraHtml('o SDR WhatsApp') : ''}
     <div id="sdr-controle-global"></div>
     <div class="subabas">
       ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
