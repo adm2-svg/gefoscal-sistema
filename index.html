@@ -692,6 +692,41 @@ tbody tr:hover { background: var(--hover-bg); }
 .mk-aniv-linha:hover { background:var(--hover-bg); }
 .mes-cal-mkt:hover { transform:translateY(-2px); box-shadow:0 8px 20px rgba(0,0,0,.25); border-color:var(--rust) !important; }
 .chip-filtro.ativo { background:var(--rust); border-color:var(--rust); color:#fff; }
+/* ---- Croqui de avarias da Frota ----------------------------------
+   Cada peça do veículo é uma área clicável com nome. Marcar por peça,
+   e não só por ponto, é o que deixa a avaria contável depois. */
+/* teto de largura por prancha: sem ele, um croqui de vista única ocupa
+   a linha inteira e o desenho fica gigante */
+.cr-pranchas { display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,260px));
+  gap:10px; justify-content:start; }
+.cr-prancha { border:1px solid var(--line2); border-radius:8px; background:var(--surface2); padding:8px; }
+.cr-rot { font-size:7px; fill:var(--dim); text-anchor:middle; dominant-baseline:central;
+  pointer-events:none; letter-spacing:.02em; }
+.cr-prancha > span { display:block; font-size:10px; text-transform:uppercase; letter-spacing:.06em;
+  color:var(--dim2); margin-bottom:4px; }
+.cr-prancha svg { display:block; width:100%; height:auto; touch-action:manipulation; }
+.cr-zona { fill:var(--panel); stroke:var(--dim); stroke-width:1.4; cursor:crosshair; transition:fill .12s ease; }
+.cr-zona:hover { fill:var(--hover-bg); }
+.cr-roda { fill:var(--line2); stroke:var(--dim); stroke-width:1.4; cursor:crosshair; }
+.cr-pino { cursor:pointer; }
+.cr-pino circle { stroke:var(--panel); stroke-width:2; }
+.cr-pino text { font-size:9px; font-weight:700; fill:#fff; text-anchor:middle;
+  dominant-baseline:central; pointer-events:none; }
+.cr-pino.antiga circle { fill:none !important; stroke-dasharray:3 2; stroke-width:1.6; }
+.cr-pino.antiga text { fill:var(--dim); }
+.cr-pino.alvo circle { stroke:var(--txt); stroke-width:2.5; }
+.cr-num { width:22px; height:22px; border-radius:50%; display:grid; place-items:center;
+  font-size:11px; font-weight:700; color:#fff; flex:none; }
+.cr-num.antiga { background:none !important; color:var(--dim); border:1.5px dashed var(--dim); }
+.cr-grav { display:inline-block; font-size:10px; font-weight:700; text-transform:uppercase;
+  letter-spacing:.05em; padding:1px 7px; border-radius:3px; color:#fff; }
+.cr-jaexistia { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--dim);
+  border:1px dashed var(--dim); border-radius:3px; padding:0 6px; }
+.cr-linha { display:flex; gap:9px; align-items:flex-start; padding:9px 0;
+  border-top:1px solid var(--line2); cursor:pointer; }
+.cr-linha:hover { background:var(--hover-bg); }
+.cr-linha.alvo { background:var(--hover-bg); box-shadow:inset 3px 0 0 0 var(--rust); padding-left:7px; }
+
 /* Selo de tag da Frota. A cor vem da própria tag, por --tag, pra
    identificar de relance sem precisar ler. */
 .tag-frota { display:inline-flex; align-items:center; gap:4px; font-size:10.5px; font-weight:600;
@@ -38701,8 +38736,10 @@ async function frotaItens (alvo, editavel) {
       valor_entrada,data_entrada,status_frota,valor_venda,data_venda,comprador,processo_id,observacoes,responsavel_id,
       ipva_vencimento, setor_id, condutor_principal_id, oculto,
       negociacao_status, negociacao_status_em, local_produto, local_produto_em,
+      croqui_tipo, posse_pessoa_id, posse_desde,
       responsavel:responsavel_id ( nome ),
-      setor:setor_id ( nome ), condutor:condutor_principal_id ( nome )`).order('data_entrada', { ascending: false, nullsFirst: false }),
+      setor:setor_id ( nome ), condutor:condutor_principal_id ( nome ),
+      posse:posse_pessoa_id ( nome )`).order('data_entrada', { ascending: false, nullsFirst: false }),
     db.from('veiculo_custo').select('veiculo_id,valor'),
     db.from('ordem_servico').select('veiculo_id,valor_total').not('veiculo_id', 'is', null),
     custosCombustivelPorVeiculo(),
@@ -38738,6 +38775,42 @@ async function frotaItens (alvo, editavel) {
     : { data: [] }
   const ipvaPorVeiculo = {}
   ;(ipvasRaw || []).forEach(d => { if (!ipvaPorVeiculo[d.veiculo_id]) ipvaPorVeiculo[d.veiculo_id] = d })
+
+  // Estado de avaria = o da ÚLTIMA vistoria encerrada. Vistoria em
+  // aberto é rascunho: contar ela na lista faria o número dançar
+  // enquanto alguém ainda está marcando no pátio.
+  const { data: vistoriasRaw } = ids.length
+    ? await db.from('veiculo_vistoria').select('id,veiculo_id,encerrada_em,momento')
+        .in('veiculo_id', ids).not('encerrada_em', 'is', null)
+        .order('encerrada_em', { ascending: false })
+    : { data: [] }
+  const ultimaVistoria = {}
+  ;(vistoriasRaw || []).forEach(v => { if (!ultimaVistoria[v.veiculo_id]) ultimaVistoria[v.veiculo_id] = v })
+  const idsVist = Object.values(ultimaVistoria).map(v => v.id)
+  const { data: avariasRaw } = idsVist.length
+    ? await db.from('veiculo_avaria').select('vistoria_id,gravidade').in('vistoria_id', idsVist)
+    : { data: [] }
+  const avariaPorVistoria = {}
+  ;(avariasRaw || []).forEach(a => {
+    const c = (avariaPorVistoria[a.vistoria_id] ||= { total: 0, graves: 0 })
+    c.total++
+    if (a.gravidade === 'grave') c.graves++
+  })
+  const avariasDoVeiculo = id => {
+    const v = ultimaVistoria[id]
+    return v ? { ...(avariaPorVistoria[v.id] || { total: 0, graves: 0 }), em: v.encerrada_em } : null
+  }
+  // com quem está: a posse vem da vistoria; condutor principal é só o
+  // cadastro, então entra como "de praxe" quando ninguém assinou nada
+  const comQuemEsta = i => i.posse?.nome
+    ? { nome: i.posse.nome, desde: i.posse_desde, firme: true }
+    : (i.condutor?.nome ? { nome: i.condutor.nome, desde: null, firme: false } : null)
+  const resumoAvarias = i => {
+    const a = avariasDoVeiculo(i.id)
+    if (!a) return { texto: 'sem vistoria', alerta: false }
+    if (!a.total) return { texto: 'vistoriado, sem avaria', alerta: false }
+    return { texto: `${a.total} avaria(s)${a.graves ? ` · ${a.graves} grave(s)` : ''}`, alerta: a.graves > 0 }
+  }
 
   let modo = 'vitrine'
   let mostrarOcultos = false
@@ -38910,6 +38983,17 @@ async function frotaItens (alvo, editavel) {
               ${andamento ? `<div style="margin-top:7px;padding:6px 9px;border-radius:8px;
                 background:var(--hover-bg);border-left:3px solid ${(tagNeg || tagLoc).cor};
                 font-size:11.5px;line-height:1.5;">${esc(andamento)}</div>` : ''}
+              ${(() => {
+                const posse = comQuemEsta(i)
+                const av = resumoAvarias(i)
+                return `<div style="margin-top:7px;font-size:11.5px;line-height:1.5;" class="texto-dim">
+                  <span>👤 ${posse
+                    ? `com <b>${esc(posse.nome)}</b>${posse.desde
+                        ? ` desde ${fmtData(String(posse.desde).slice(0, 10)) || ''}` : ' (condutor de praxe)'}`
+                    : 'na empresa'}</span><br>
+                  <span style="${av.alerta ? 'color:var(--critico-text);' : ''}">🔧 ${esc(av.texto)}</span>
+                </div>`
+              })()}
               <div style="margin-top:10px;">
                 <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;">${rotuloPreco}</div>
                 <div style="font-family:var(--serif);font-size:19px;color:var(--rust);">${preco != null ? 'R$ ' + fmtNum(preco) : '—'}</div>
@@ -38950,7 +39034,7 @@ async function frotaItens (alvo, editavel) {
       <table><thead><tr>
         <th>Item</th><th>Tipo</th><th>Tags</th><th>Origem / contraparte</th>
         <th class="num">Valor recebido</th><th>Status</th><th class="num">Valor final</th><th>Resultado</th>
-        <th>Vínculo jurídico</th><th>Responsável</th><th>Setor</th><th>Condutor principal</th>${editavel ? '<th></th>' : ''}
+        <th>Vínculo jurídico</th><th>Responsável</th><th>Setor</th><th>Com quem está / avarias</th>${editavel ? '<th></th>' : ''}
       </tr></thead><tbody>
       ${listaFiltrada().map(i => {
         const proc = FROTA_CACHE.processos.find(p => p.id === i.processo_id)
@@ -38978,7 +39062,16 @@ async function frotaItens (alvo, editavel) {
         <td class="texto-dim" style="font-size:12px;">${proc ? esc(nomeProcessoFrota(proc)) : '<span class="texto-dim2">—</span>'}</td>
         <td class="texto-dim">${esc(i.responsavel?.nome || '—')}</td>
         <td class="texto-dim">${esc(i.setor?.nome || '—')}</td>
-        <td class="texto-dim">${esc(i.condutor?.nome || '—')}</td>
+        <td class="texto-dim" style="font-size:12px;">${(() => {
+          const posse = comQuemEsta(i)
+          const av = resumoAvarias(i)
+          return `${posse
+            ? `${esc(posse.nome)}${posse.firme
+                ? (posse.desde ? `<br><span class="texto-dim2" style="font-size:11px;">desde ${fmtData(String(posse.desde).slice(0, 10)) || ''}</span>` : '')
+                : `<br><span class="texto-dim2" style="font-size:11px;">condutor de praxe</span>`}`
+            : '<span class="texto-dim2">na empresa</span>'}
+            <div style="font-size:11px;margin-top:2px;${av.alerta ? 'color:var(--critico-text);' : ''}">🔧 ${esc(av.texto)}</div>`
+        })()}</td>
         ${editavel ? `<td style="text-align:right;white-space:nowrap;">
           <button class="btn-secundario mini" data-custos="${i.id}">custos</button>
           <button class="btn-secundario mini" data-editar="${i.id}">editar</button>
@@ -39001,6 +39094,910 @@ async function frotaItens (alvo, editavel) {
   }
 
   desenhar()
+}
+
+// ---------------------------------------------------------------
+// Vistoria de avarias.
+//
+// Vale pra todo item da Frota: o que está chegando, o que está em uso
+// com um funcionário e o que está em negociação. A pergunta é sempre a
+// mesma — "chegou assim ou quebrou aqui, e com quem estava?" — e ela só
+// tem resposta se existir o estado do veículo registrado em cada troca
+// de mão.
+//
+// Cada peça do croqui tem nome. Marcar por peça, e não só por ponto na
+// imagem, é o que permite perguntar depois "quantas avarias deram no
+// para-choque dianteiro este ano".
+//
+// Formato compacto das zonas, pra caber sem virar um mural de SVG:
+//   ['r',x,y,largura,altura,raio,'Nome'] | ['p','d do path','Nome'] | ['c',cx,cy,r,'Nome']
+// ---------------------------------------------------------------
+const CROQUIS_AVARIA = {
+  caminhonete: { nome: 'Caminhonete / carro', vistas: [
+    { id: 'lat-e', nome: 'Lateral esquerda', vb: '0 0 300 124', z: [
+      ['r', 8, 72, 20, 26, 3, 'Para-choque dianteiro'],
+      ['p', 'M28,70 L46,60 L92,56 L92,98 L28,98 Z', 'Capô / paralama diant. E'],
+      ['p', 'M92,56 L114,28 L126,28 L126,98 L92,98 Z', 'Para-brisa'],
+      ['r', 126, 28, 34, 70, 2, 'Porta dianteira E'],
+      ['r', 160, 28, 28, 70, 2, 'Porta traseira E'],
+      ['r', 188, 56, 88, 42, 2, 'Caçamba — lateral E'],
+      ['r', 276, 70, 16, 28, 3, 'Para-choque traseiro'],
+      ['c', 62, 98, 17, 'Roda dianteira E'], ['c', 230, 98, 17, 'Roda traseira E']] },
+    { id: 'lat-d', nome: 'Lateral direita', vb: '0 0 300 124', espelho: true, z: [
+      ['r', 8, 72, 20, 26, 3, 'Para-choque dianteiro'],
+      ['p', 'M28,70 L46,60 L92,56 L92,98 L28,98 Z', 'Capô / paralama diant. D'],
+      ['p', 'M92,56 L114,28 L126,28 L126,98 L92,98 Z', 'Para-brisa'],
+      ['r', 126, 28, 34, 70, 2, 'Porta dianteira D'],
+      ['r', 160, 28, 28, 70, 2, 'Porta traseira D'],
+      ['r', 188, 56, 88, 42, 2, 'Caçamba — lateral D'],
+      ['r', 276, 70, 16, 28, 3, 'Para-choque traseiro'],
+      ['c', 62, 98, 17, 'Roda dianteira D'], ['c', 230, 98, 17, 'Roda traseira D']] },
+    { id: 'frente', nome: 'Frente', vb: '0 0 170 124', z: [
+      ['r', 44, 12, 82, 10, 3, 'Teto'],
+      ['p', 'M34,50 L46,22 L124,22 L136,50 Z', 'Para-brisa'],
+      ['r', 22, 50, 126, 12, 3, 'Capô'],
+      ['r', 24, 62, 122, 30, 3, 'Grade / frente'],
+      ['r', 30, 66, 26, 13, 2, 'Farol esquerdo'], ['r', 114, 66, 26, 13, 2, 'Farol direito'],
+      ['r', 14, 92, 142, 18, 4, 'Para-choque dianteiro'],
+      ['r', 20, 30, 14, 10, 2, 'Retrovisor E'], ['r', 136, 30, 14, 10, 2, 'Retrovisor D']] },
+    { id: 'traseira', nome: 'Traseira', vb: '0 0 170 124', z: [
+      ['p', 'M42,18 L128,18 L122,46 L48,46 Z', 'Vidro traseiro'],
+      ['r', 26, 52, 118, 40, 3, 'Tampa da caçamba'],
+      ['r', 30, 56, 22, 16, 2, 'Lanterna esquerda'], ['r', 118, 56, 22, 16, 2, 'Lanterna direita'],
+      ['r', 18, 94, 134, 17, 4, 'Para-choque traseiro']] },
+    { id: 'teto', nome: 'Vista de cima', vb: '0 0 300 150', z: [
+      ['r', 10, 48, 16, 54, 4, 'Para-choque dianteiro'],
+      ['r', 28, 42, 62, 66, 6, 'Capô'], ['r', 92, 36, 88, 78, 6, 'Teto'],
+      ['r', 182, 42, 92, 66, 6, 'Caçamba — assoalho'],
+      ['r', 276, 48, 16, 54, 4, 'Para-choque traseiro']] }
+  ] },
+  cavalo: { nome: 'Cavalo mecânico', vistas: [
+    { id: 'lat-e', nome: 'Lateral esquerda', vb: '0 0 300 124', z: [
+      ['r', 8, 64, 16, 34, 3, 'Para-choque dianteiro'],
+      ['p', 'M24,58 L34,22 L92,22 L92,98 L24,98 Z', 'Frente da cabine'],
+      ['r', 92, 26, 46, 72, 2, 'Porta esquerda'],
+      ['r', 138, 26, 26, 62, 2, 'Traseira da cabine'],
+      ['r', 164, 78, 116, 14, 2, 'Chassi / longarina E'],
+      ['r', 170, 58, 44, 20, 3, 'Tanque de combustível E'],
+      ['r', 222, 62, 52, 16, 3, 'Quinta roda'],
+      ['c', 60, 98, 18, 'Roda dianteira E'],
+      ['c', 216, 98, 17, 'Roda traseira 1 E'], ['c', 256, 98, 17, 'Roda traseira 2 E']] },
+    { id: 'lat-d', nome: 'Lateral direita', vb: '0 0 300 124', espelho: true, z: [
+      ['r', 8, 64, 16, 34, 3, 'Para-choque dianteiro'],
+      ['p', 'M24,58 L34,22 L92,22 L92,98 L24,98 Z', 'Frente da cabine'],
+      ['r', 92, 26, 46, 72, 2, 'Porta direita'],
+      ['r', 138, 26, 26, 62, 2, 'Traseira da cabine'],
+      ['r', 164, 78, 116, 14, 2, 'Chassi / longarina D'],
+      ['r', 170, 58, 44, 20, 3, 'Tanque de combustível D'],
+      ['r', 222, 62, 52, 16, 3, 'Quinta roda'],
+      ['c', 60, 98, 18, 'Roda dianteira D'],
+      ['c', 216, 98, 17, 'Roda traseira 1 D'], ['c', 256, 98, 17, 'Roda traseira 2 D']] },
+    { id: 'frente', nome: 'Frente', vb: '0 0 170 124', z: [
+      ['r', 34, 8, 102, 12, 3, 'Defletor de teto'],
+      ['p', 'M28,54 L36,22 L134,22 L142,54 Z', 'Para-brisa'],
+      ['r', 22, 54, 126, 30, 3, 'Grade / frente'],
+      ['r', 28, 58, 26, 14, 2, 'Farol esquerdo'], ['r', 116, 58, 26, 14, 2, 'Farol direito'],
+      ['r', 14, 86, 142, 20, 4, 'Para-choque dianteiro'],
+      ['r', 10, 28, 12, 12, 2, 'Retrovisor E'], ['r', 148, 28, 12, 12, 2, 'Retrovisor D']] }
+  ] },
+  carreta: { nome: 'Carreta / prancha', vistas: [
+    { id: 'lat-e', nome: 'Lateral esquerda', vb: '0 0 320 110', z: [
+      ['r', 12, 40, 42, 14, 2, 'Pescoço / king pin'],
+      ['r', 54, 44, 232, 12, 2, 'Plataforma — lateral E'],
+      ['r', 60, 56, 226, 11, 1, 'Longarina E'],
+      ['r', 66, 67, 10, 26, 1, 'Pé de apoio E'],
+      ['r', 200, 60, 84, 14, 2, 'Suspensão / eixos E'],
+      ['r', 286, 54, 16, 30, 3, 'Para-choque traseiro'],
+      ['c', 232, 86, 16, 'Roda 1 E'], ['c', 268, 86, 16, 'Roda 2 E']] },
+    { id: 'lat-d', nome: 'Lateral direita', vb: '0 0 320 110', espelho: true, z: [
+      ['r', 12, 40, 42, 14, 2, 'Pescoço / king pin'],
+      ['r', 54, 44, 232, 12, 2, 'Plataforma — lateral D'],
+      ['r', 60, 56, 226, 11, 1, 'Longarina D'],
+      ['r', 66, 67, 10, 26, 1, 'Pé de apoio D'],
+      ['r', 200, 60, 84, 14, 2, 'Suspensão / eixos D'],
+      ['r', 286, 54, 16, 30, 3, 'Para-choque traseiro'],
+      ['c', 232, 86, 16, 'Roda 1 D'], ['c', 268, 86, 16, 'Roda 2 D']] },
+    { id: 'plat', nome: 'Plataforma (de cima)', vb: '0 0 320 130', z: [
+      ['r', 14, 44, 44, 42, 3, 'Pescoço / king pin'],
+      ['r', 60, 30, 84, 70, 3, 'Assoalho — terço dianteiro'],
+      ['r', 146, 30, 80, 70, 3, 'Assoalho — terço central'],
+      ['r', 228, 30, 72, 70, 3, 'Assoalho — terço traseiro'],
+      ['r', 60, 18, 240, 10, 2, 'Borda / cantoneira esquerda'],
+      ['r', 60, 102, 240, 10, 2, 'Borda / cantoneira direita']] }
+  ] },
+  // Trator, pá, colhedeira: formato varia demais pra ter silhueta. O
+  // que não varia é ONDE dói — estrutura, rodado, comandos, motor.
+  equipamento: { nome: 'Equipamento / máquina', rotulos: true, vistas: [
+    { id: 'geral', nome: 'Vista geral', vb: '0 0 300 170', z: [
+      ['r', 20, 22, 120, 52, 4, 'Estrutura dianteira'],
+      ['r', 144, 22, 136, 52, 4, 'Estrutura traseira'],
+      ['r', 20, 78, 120, 44, 4, 'Lateral esquerda'],
+      ['r', 144, 78, 136, 44, 4, 'Lateral direita'],
+      ['r', 20, 126, 78, 30, 4, 'Rodado / esteira'],
+      ['r', 102, 126, 84, 30, 4, 'Comandos / cabine'],
+      ['r', 190, 126, 90, 30, 4, 'Motor / hidráulico']] }
+  ] }
+}
+
+const TIPOS_AVARIA = ['Risco / arranhão', 'Amassado', 'Trinca / rachadura', 'Quebrado',
+  'Faltante', 'Ferrugem / corrosão', 'Vazamento', 'Repintura / mancha']
+const GRAVIDADES_AVARIA = [
+  { chave: 'leve', rotulo: 'Leve', cor: 'var(--gold)' },
+  { chave: 'media', rotulo: 'Média', cor: 'var(--warn-text)' },
+  { chave: 'grave', rotulo: 'Grave', cor: 'var(--critico-text)' }
+]
+const GRAV_AVARIA = Object.fromEntries(GRAVIDADES_AVARIA.map(g => [g.chave, g]))
+const MOMENTOS_VISTORIA = [
+  ['RECEBIMENTO', 'Recebimento — o item chegou'],
+  ['ENTREGA_CONDUTOR', 'Entrega — passou pra alguém'],
+  ['DEVOLUCAO_CONDUTOR', 'Devolução — voltou pra empresa'],
+  ['PERIODICA', 'Vistoria periódica'],
+  ['SAIDA_VENDA', 'Saída — entregue ao comprador']
+]
+const ROTULO_MOMENTO_VISTORIA = Object.fromEntries(MOMENTOS_VISTORIA)
+
+// chute do croqui pelo que já está cadastrado; a pessoa troca se errar
+function croquiSugerido (v) {
+  if (v?.croqui_tipo) return v.croqui_tipo
+  const t = `${v?.descricao || ''} ${v?.modelo || ''} ${v?.marca || ''}`.toUpperCase()
+  if (/CARRETA|PRANCHA|REBOQUE|SEMI|BASCULANTE|GRANELE/.test(t)) return 'carreta'
+  if (/CAVALO|SCANIA|VOLVO|IVECO|MERCEDES|CAMINH|TRUCK|AXOR|ACTROS|FH|R440/.test(t)) return 'cavalo'
+  if (/TRATOR|PA |PÁ |ESCAVAD|COLHEI|MAQUIN|EMPILHAD|MOTONIVEL/.test(t)) return 'equipamento'
+  return 'caminhonete'
+}
+
+// ---------------------------------------------------------------
+// O croqui em si. Recebe um <div>, a chave do croqui e a lista de
+// avarias, e devolve os controles — quem chama decide o que fazer com
+// o clique. Assim a mesma função serve pra marcar (vistoria aberta) e
+// pra só olhar (vistoria encerrada).
+// ---------------------------------------------------------------
+function desenharCroquiAvarias (caixa, chaveCroqui, avarias, { alvoId = null, aoClicarZona = null, aoClicarPino = null } = {}) {
+  const croqui = CROQUIS_AVARIA[chaveCroqui] || CROQUIS_AVARIA.caminhonete
+
+  const zonaSvg = z => {
+    const nome = z[z.length - 1]
+    const classe = /^Roda|^Rodado/i.test(nome) ? 'cr-roda' : 'cr-zona'
+    const comum = `class="${classe}" data-parte="${esc(nome)}"`
+    const titulo = `<title>${esc(nome)}</title>`
+    if (z[0] === 'r') {
+      const caixa = `<rect ${comum} x="${z[1]}" y="${z[2]}" width="${z[3]}" height="${z[4]}" rx="${z[5]}">${titulo}</rect>`
+      // croqui sem silhueta reconhecível (máquina) precisa do nome escrito
+      // dentro da área, senão são só retângulos
+      if (!croqui.rotulos) return caixa
+      const palavras = nome.split(' / ')
+      return caixa + `<text class="cr-rot" x="${z[1] + z[3] / 2}" y="${z[2] + z[4] / 2}">` +
+        palavras.map((p, k) => `<tspan x="${z[1] + z[3] / 2}" dy="${k ? 9 : -(palavras.length - 1) * 4.5}">${esc(p)}</tspan>`).join('') +
+        `</text>`
+    }
+    if (z[0] === 'c') return `<circle ${comum} cx="${z[1]}" cy="${z[2]}" r="${z[3]}">${titulo}</circle>`
+    return `<path ${comum} d="${z[1]}">${titulo}</path>`
+  }
+
+  const pinosSvg = vista => avarias
+    .map((a, i) => ({ a, n: i + 1 }))
+    .filter(({ a }) => a.vista === vista.id)
+    .map(({ a, n }) => {
+      const g = GRAV_AVARIA[a.gravidade] || GRAV_AVARIA.leve
+      const classes = ['cr-pino', a.ja_existia ? 'antiga' : '', alvoId && a.id === alvoId ? 'alvo' : '']
+        .filter(Boolean).join(' ')
+      return `<g class="${classes}" data-pino="${esc(a.id)}" transform="translate(${a.x},${a.y})">
+        <circle r="9" fill="${a.ja_existia ? 'none' : g.cor}" stroke="${a.ja_existia ? g.cor : 'var(--panel)'}"></circle>
+        <text>${n}</text><title>${esc(a.parte)} — ${esc(a.tipo)}</title></g>`
+    }).join('')
+
+  caixa.innerHTML = `<div class="cr-pranchas">${croqui.vistas.map(v => `
+    <div class="cr-prancha">
+      <span>${esc(v.nome)}</span>
+      <svg viewBox="${v.vb}" data-vista="${v.id}" role="img" aria-label="Croqui — ${esc(v.nome)}">
+        <g ${v.espelho ? `transform="translate(${v.vb.split(' ')[2]},0) scale(-1,1)"` : ''}>
+          ${v.z.map(zonaSvg).join('')}
+        </g>
+        <g>${pinosSvg(v)}</g>
+      </svg>
+    </div>`).join('')}</div>`
+
+  caixa.querySelectorAll('svg').forEach(svg => {
+    svg.onclick = ev => {
+      const pino = ev.target.closest('[data-pino]')
+      if (pino) { if (aoClicarPino) aoClicarPino(pino.dataset.pino); return }
+      if (!aoClicarZona) return
+      const zona = ev.target.closest('[data-parte]')
+      if (!zona) return
+      // coordenada no sistema do desenho, não da tela — assim o pino
+      // cai no mesmo lugar em qualquer tamanho de janela
+      const p = svg.createSVGPoint()
+      p.x = ev.clientX; p.y = ev.clientY
+      const local = p.matrixTransform(svg.getScreenCTM().inverse())
+      aoClicarZona(svg.dataset.vista, zona.dataset.parte, Math.round(local.x), Math.round(local.y))
+    }
+  })
+}
+
+// ---------------------------------------------------------------
+// A tela da vistoria: croqui de um lado, lista e editor do outro.
+// Vistoria encerrada abre só pra leitura — é documento, não rascunho.
+// ---------------------------------------------------------------
+async function abrirVistoriaAvarias (veiculo, vistoriaId, aoFechar = () => {}) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal modal-largo"><p class="texto-dim2">carregando vistoria...</p></div>`
+  document.body.appendChild(fundo)
+  const fechar = () => { fundo.remove(); aoFechar() }
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const [{ data: vistoria, error }, { data: avariasRaw }] = await Promise.all([
+    db.from('veiculo_vistoria')
+      .select('*, vistoriador:vistoriador_id(nome), posse:pessoa_posse_id(nome)')
+      .eq('id', vistoriaId).single(),
+    db.from('veiculo_avaria').select('*').eq('vistoria_id', vistoriaId).order('criado_em')
+  ])
+  if (error || !vistoria) {
+    fundo.querySelector('.modal').innerHTML = `<p class="vazio">${esc(error?.message || 'vistoria não encontrada')}</p>`
+    return
+  }
+
+  let avarias = avariasRaw || []
+  let alvo = null
+  const aberta = !vistoria.encerrada_em && podeEditar('frota')
+
+  const modal = fundo.querySelector('.modal')
+  modal.innerHTML = `
+    <h3 style="margin-bottom:2px;">Vistoria de avarias</h3>
+    <p class="texto-dim2" style="font-size:12px;margin:0 0 14px;line-height:1.5;">
+      ${esc(veiculo.descricao || 'item')}${veiculo.placa ? ' · ' + esc(veiculo.placa) : ''} ·
+      ${esc(ROTULO_MOMENTO_VISTORIA[vistoria.momento] || vistoria.momento)} ·
+      ${fmtQuando(vistoria.criado_em) || ''}
+      ${vistoria.vistoriador?.nome ? ' · por ' + esc(vistoria.vistoriador.nome) : ''}
+      ${vistoria.km ? ' · ' + fmtNum(vistoria.km) + ' km' : ''}
+      ${vistoria.encerrada_em
+        ? `<br><b style="color:var(--good-text);">Encerrada em ${fmtQuando(vistoria.encerrada_em) || ''}.</b>
+           <span class="texto-dim2">Vistoria encerrada não se mexe — é o documento do estado do item naquele dia.</span>`
+        : (aberta ? '' : '<br><span class="texto-dim2">Você não tem permissão pra editar a Frota, então está só vendo.</span>')}
+    </p>
+
+    <div style="display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:14px;align-items:start;">
+      <div>
+        <div id="vi-croqui"></div>
+        ${aberta ? `<p class="texto-dim2" style="font-size:11.5px;line-height:1.55;margin:10px 0 0;
+          border-left:2px solid var(--rust);padding-left:9px;">
+          Clique na peça onde está o dano. Para corrigir, clique no número.
+          Pino <b>tracejado</b> veio da vistoria anterior — já existia antes de o item chegar na sua mão.</p>` : ''}
+      </div>
+      <div>
+        <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:4px;">
+          <b style="font-size:13px;">Avarias</b>
+          <span class="texto-dim2" style="font-size:11px;" id="vi-conta"></span>
+        </div>
+        <div id="vi-lista"></div>
+        <div id="vi-editor"></div>
+      </div>
+    </div>
+
+    <div class="campo" style="margin-top:14px;"><label>Observações da vistoria</label>
+      <textarea id="vi-obs" style="min-height:56px;" ${aberta ? '' : 'disabled'}
+        placeholder="o que não cabe num pino: cheiro de queimado, barulho, documento faltando...">${esc(vistoria.observacoes || '')}</textarea></div>
+
+    <div class="acoes" style="margin-top:12px;">
+      ${aberta ? `<button class="btn" id="vi-encerrar">Encerrar vistoria</button>` : ''}
+      ${aberta ? `<button class="btn-secundario" id="vi-salvar">Salvar e continuar depois</button>` : ''}
+      <button class="btn-secundario" id="vi-fechar" style="margin-left:auto;">Fechar</button>
+    </div>
+    <div class="recado oculto" id="vi-recado"></div>`
+
+  const q = s => modal.querySelector(s)
+  q('#vi-fechar').onclick = fechar
+  const aviso = t => { const el = q('#vi-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+
+  const redesenhar = () => {
+    desenharCroquiAvarias(q('#vi-croqui'), vistoria.croqui, avarias, {
+      alvoId: alvo,
+      aoClicarZona: aberta ? criarAvaria : null,
+      aoClicarPino: id => { alvo = id; redesenhar() }
+    })
+    desenharLista()
+    desenharEditor()
+  }
+
+  const desenharLista = () => {
+    const novas = avarias.filter(a => !a.ja_existia).length
+    q('#vi-conta').textContent = avarias.length
+      ? `${avarias.length} no total · ${novas} nova(s) nesta vistoria` : ''
+    q('#vi-lista').innerHTML = avarias.length
+      ? avarias.map((a, i) => {
+        const g = GRAV_AVARIA[a.gravidade] || GRAV_AVARIA.leve
+        return `<div class="cr-linha ${alvo === a.id ? 'alvo' : ''}" data-av="${esc(a.id)}">
+          <span class="cr-num ${a.ja_existia ? 'antiga' : ''}" style="background:${g.cor};">${i + 1}</span>
+          <span style="min-width:0;">
+            <b style="font-size:12.5px;">${esc(a.parte)}</b>
+            <div style="font-size:11.5px;margin-top:2px;" class="texto-dim">
+              ${esc(a.tipo)} <span class="cr-grav" style="background:${g.cor};">${g.rotulo}</span>
+              ${a.ja_existia ? '<span class="cr-jaexistia">já existia</span>' : ''}
+            </div>
+            ${a.observacao ? `<div class="texto-dim2" style="font-size:11.5px;margin-top:2px;">${esc(a.observacao)}</div>` : ''}
+          </span>
+        </div>`
+      }).join('')
+      : `<p class="texto-dim2" style="font-size:12px;padding:14px 0;">
+           ${aberta ? 'Nenhuma avaria marcada. Clique no croqui ao lado.' : 'Nenhuma avaria registrada.'}</p>`
+    q('#vi-lista').querySelectorAll('[data-av]').forEach(el => {
+      el.onclick = () => { alvo = el.dataset.av; redesenhar() }
+    })
+  }
+
+  const desenharEditor = () => {
+    const cx = q('#vi-editor')
+    const a = avarias.find(x => String(x.id) === String(alvo))
+    if (!a) { cx.innerHTML = ''; return }
+    const i = avarias.indexOf(a)
+    cx.innerHTML = `
+      <div style="margin-top:10px;padding:10px 12px;border:1px solid var(--line2);border-radius:10px;background:var(--surface2);">
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim2);margin-bottom:8px;">
+          Avaria ${i + 1} · ${esc(a.parte)}</div>
+        <div class="form-grade" style="grid-template-columns:repeat(2,1fr);">
+          <div class="campo"><label>Tipo</label>
+            <select id="av-tipo" ${aberta ? '' : 'disabled'}>${TIPOS_AVARIA.map(t =>
+              `<option ${t === a.tipo ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></div>
+          <div class="campo"><label>Gravidade</label>
+            <select id="av-grav" ${aberta ? '' : 'disabled'}>${GRAVIDADES_AVARIA.map(g =>
+              `<option value="${g.chave}" ${g.chave === a.gravidade ? 'selected' : ''}>${g.rotulo}</option>`).join('')}</select></div>
+        </div>
+        <div class="campo" style="margin-top:8px;"><label>Observação</label>
+          <input id="av-obs" value="${esc(a.observacao || '')}" ${aberta ? '' : 'disabled'}
+            placeholder="onde exatamente, tamanho, se chegou no metal"></div>
+        ${a.ja_existia ? `<p class="texto-dim2" style="font-size:11px;line-height:1.5;margin:8px 0 0;">
+          Veio da vistoria anterior. Se foi consertada, exclua — some desta vistoria em diante,
+          e as antigas continuam guardadas como estão.</p>` : ''}
+        ${aberta ? `<div class="acoes" style="margin-top:10px;">
+          <button class="btn-secundario mini" id="av-excluir"
+            style="color:var(--critico-text);border-color:var(--critico-text);">Excluir avaria</button>
+          <button class="btn-secundario mini" id="av-fechar" style="margin-left:auto;">Fechar</button>
+        </div>` : ''}
+      </div>`
+
+    if (!aberta) return
+    const salvarCampo = async (campo, valor) => {
+      a[campo] = valor
+      const { error: e } = await db.from('veiculo_avaria').update({ [campo]: valor }).eq('id', a.id)
+      if (e) { aviso(e.message); return }
+      desenharLista()
+      if (campo === 'gravidade') redesenhar()
+    }
+    cx.querySelector('#av-tipo').onchange = e => salvarCampo('tipo', e.target.value)
+    cx.querySelector('#av-grav').onchange = e => salvarCampo('gravidade', e.target.value)
+    cx.querySelector('#av-obs').onchange = e => salvarCampo('observacao', e.target.value.trim() || null)
+    cx.querySelector('#av-fechar').onclick = () => { alvo = null; redesenhar() }
+    cx.querySelector('#av-excluir').onclick = async () => {
+      const { error: e } = await db.from('veiculo_avaria').delete().eq('id', a.id)
+      if (e) { aviso(e.message); return }
+      avarias = avarias.filter(x => x.id !== a.id)
+      alvo = null; redesenhar()
+    }
+  }
+
+  async function criarAvaria (vista, parte, x, y) {
+    const { data: nova, error: e } = await db.from('veiculo_avaria').insert({
+      vistoria_id: vistoria.id, vista, x, y, parte,
+      tipo: TIPOS_AVARIA[0], gravidade: 'leve', ja_existia: false
+    }).select().single()
+    if (e) { aviso(e.message); return }
+    avarias.push(nova)
+    alvo = nova.id
+    redesenhar()
+  }
+
+  if (aberta) {
+    q('#vi-salvar').onclick = async () => {
+      const b = q('#vi-salvar'); b.disabled = true; b.textContent = 'salvando...'
+      const { error: e } = await db.from('veiculo_vistoria')
+        .update({ observacoes: q('#vi-obs').value.trim() || null }).eq('id', vistoria.id)
+      b.disabled = false; b.textContent = 'Salvar e continuar depois'
+      if (e) { aviso(e.message); return }
+      fechar()
+    }
+    q('#vi-encerrar').onclick = async () => {
+      const novas = avarias.filter(a => !a.ja_existia).length
+      const graves = avarias.filter(a => !a.ja_existia && a.gravidade === 'grave').length
+      const quem = vistoria.posse?.nome
+      const recado = [
+        `Encerrar esta vistoria?`,
+        novas ? `${novas} avaria(s) nova(s)${graves ? `, ${graves} grave(s)` : ''}.` : 'Nenhuma avaria nova.',
+        vistoria.momento === 'DEVOLUCAO_CONDUTOR'
+          ? 'O item volta a ficar sem responsável.'
+          : quem ? `O item passa a constar com ${quem}.` : '',
+        'Depois de encerrada não dá mais pra mexer — ela vira o documento do estado do item hoje.'
+      ].filter(Boolean).join('\n\n')
+      if (!confirm(recado)) return
+      const b = q('#vi-encerrar'); b.disabled = true; b.textContent = 'encerrando...'
+      const { error: e } = await db.from('veiculo_vistoria').update({
+        observacoes: q('#vi-obs').value.trim() || null,
+        encerrada_em: new Date().toISOString()
+      }).eq('id', vistoria.id)
+      if (e) { aviso(e.message); b.disabled = false; b.textContent = 'Encerrar vistoria'; return }
+      fundo.remove()
+      // a hora de assinar o termo é esta: as duas pessoas ainda estão
+      // uma na frente da outra, ao lado do item
+      if (MOMENTOS_COM_TERMO.includes(vistoria.momento)) {
+        abrirTermoResponsabilidade(veiculo, { ...vistoria, encerrada_em: new Date().toISOString() }, aoFechar)
+      } else aoFechar()
+    }
+  }
+
+  redesenhar()
+}
+
+// ---------------------------------------------------------------
+// Termo de responsabilidade
+//
+// O termo prende o item a uma pessoa NO ESTADO em que ele estava. Por
+// isso nasce de uma vistoria: um papel dizendo só "fulano está com o
+// carro", sem o croqui junto, não resolve nada no dia da discussão.
+//
+// A assinatura é no dedo, na tela, ali no pátio — das 54 pessoas
+// ativas só 19 têm login e 25 têm telefone, então qualquer caminho que
+// dependa disso deixaria de fora justamente quem dirige.
+// ---------------------------------------------------------------
+const MOMENTOS_COM_TERMO = ['ENTREGA_CONDUTOR', 'RECEBIMENTO', 'SAIDA_VENDA']
+// os rótulos da tela são conversados de propósito ("passou pra alguém");
+// num documento que pode ir parar numa discussão, não servem
+const MOMENTO_FORMAL = {
+  RECEBIMENTO: 'Recebimento do item',
+  ENTREGA_CONDUTOR: 'Entrega do item a responsável',
+  DEVOLUCAO_CONDUTOR: 'Devolução do item',
+  PERIODICA: 'Vistoria periódica',
+  SAIDA_VENDA: 'Saída por venda'
+}
+const momentoFormal = m => MOMENTO_FORMAL[m] || ROTULO_MOMENTO_VISTORIA[m] || m
+
+async function hashDoTexto (texto) {
+  try {
+    const bytes = new TextEncoder().encode(texto)
+    const buf = await crypto.subtle.digest('SHA-256', bytes)
+    return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('')
+  } catch {
+    return '' // navegador sem crypto.subtle (http antigo): grava sem hash em vez de travar
+  }
+}
+
+function textoTermoResponsabilidade (veiculo, vistoria, avarias, nomeRecebe, docRecebe, nomeEntrega) {
+  const ident = [
+    veiculo.descricao,
+    veiculo.placa ? `placa ${veiculo.placa}` : null,
+    veiculo.ano_modelo ? `ano/modelo ${veiculo.ano_modelo}` : null,
+    veiculo.renavam ? `Renavam ${veiculo.renavam}` : null,
+    veiculo.chassi ? `chassi ${veiculo.chassi}` : null
+  ].filter(Boolean).join(', ')
+
+  const listaAvarias = avarias.length
+    ? avarias.map((a, i) => {
+      const g = GRAV_AVARIA[a.gravidade] || GRAV_AVARIA.leve
+      return `${i + 1}) ${a.parte} — ${a.tipo}, gravidade ${g.rotulo.toLowerCase()}` +
+        `${a.observacao ? `. ${a.observacao}` : ''}` +
+        `${a.ja_existia ? ' (já constava em vistoria anterior)' : ''}`
+    }).join('\n')
+    : 'Nenhuma avaria registrada na vistoria.'
+
+  return [
+    'TERMO DE RESPONSABILIDADE — ITEM DA FROTA',
+    '',
+    `Recebedor: ${nomeRecebe}${docRecebe ? `, CPF ${docRecebe}` : ''}.`,
+    `Entregue por: ${nomeEntrega}.`,
+    `Item: ${ident}.`,
+    `Vistoria: ${momentoFormal(vistoria.momento)}, realizada em ${fmtQuando(vistoria.criado_em) || ''}` +
+      `${vistoria.km ? `, hodômetro ${fmtNum(vistoria.km)} km` : ''}.`,
+    '',
+    '1 — DO RECEBIMENTO',
+    'A pessoa acima identificada declara receber o item descrito neste termo e conferir, no ato, o estado registrado na vistoria citada, cujo croqui e relação de avarias fazem parte deste documento.',
+    '',
+    'ESTADO DO ITEM NA ENTREGA — AVARIAS REGISTRADAS',
+    listaAvarias,
+    '',
+    '2 — DA DEVOLUÇÃO',
+    'O item deve ser devolvido nas mesmas condições em que foi recebido, ressalvado o desgaste natural decorrente do uso normal. Qualquer avaria não constante deste termo, apurada na vistoria de devolução, será tratada como ocorrida no período em que o item esteve sob a responsabilidade da pessoa signatária.',
+    '',
+    '3 — DAS INFRAÇÕES DE TRÂNSITO',
+    'As infrações de trânsito cometidas no período em que o item esteve sob a responsabilidade da pessoa signatária são de responsabilidade dela, que desde já autoriza a indicação de seu nome como condutor perante o órgão de trânsito competente.',
+    '',
+    '4 — DA VIGÊNCIA',
+    'Este termo vigora da data da assinatura até o registro, no sistema, da vistoria de devolução do item.',
+    '',
+    'As partes assinam abaixo, declarando ter lido e concordado com o acima exposto.'
+  ].join('\n')
+}
+
+// bloco de assinatura no dedo: canvas simples, ponteiro unificado
+// (mouse, dedo e caneta entram pelo mesmo evento)
+function ligarAssinatura (canvas) {
+  const ctx = canvas.getContext('2d')
+  const escala = window.devicePixelRatio || 1
+  canvas.width = canvas.offsetWidth * escala
+  canvas.height = canvas.offsetHeight * escala
+  ctx.scale(escala, escala)
+  ctx.lineWidth = 2
+  ctx.lineCap = 'round'
+  ctx.lineJoin = 'round'
+  ctx.strokeStyle = '#111'
+  let riscando = false
+  let temTraco = false
+
+  const ponto = e => {
+    const r = canvas.getBoundingClientRect()
+    return { x: e.clientX - r.left, y: e.clientY - r.top }
+  }
+  canvas.onpointerdown = e => {
+    riscando = true; temTraco = true
+    canvas.setPointerCapture(e.pointerId)
+    const p = ponto(e); ctx.beginPath(); ctx.moveTo(p.x, p.y)
+  }
+  canvas.onpointermove = e => {
+    if (!riscando) return
+    e.preventDefault()
+    const p = ponto(e); ctx.lineTo(p.x, p.y); ctx.stroke()
+  }
+  const soltar = () => { riscando = false }
+  canvas.onpointerup = soltar
+  canvas.onpointercancel = soltar
+  canvas.onpointerleave = soltar
+
+  return {
+    limpar () { ctx.clearRect(0, 0, canvas.width, canvas.height); temTraco = false },
+    vazia: () => !temTraco,
+    // fundo branco: assinatura transparente some no PDF e no tema claro
+    imagem () {
+      if (!temTraco) return null
+      const fora = document.createElement('canvas')
+      fora.width = canvas.width; fora.height = canvas.height
+      const c = fora.getContext('2d')
+      c.fillStyle = '#fff'; c.fillRect(0, 0, fora.width, fora.height)
+      c.drawImage(canvas, 0, 0)
+      return fora.toDataURL('image/png')
+    }
+  }
+}
+
+async function abrirTermoResponsabilidade (veiculo, vistoria, aoFechar = () => {}) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:820px;"><p class="texto-dim2">carregando termo...</p></div>`
+  document.body.appendChild(fundo)
+  const fechar = () => { fundo.remove(); aoFechar() }
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const [{ data: existente }, { data: avarias }] = await Promise.all([
+    db.from('veiculo_termo').select('*').eq('vistoria_id', vistoria.id).maybeSingle(),
+    db.from('veiculo_avaria').select('*').eq('vistoria_id', vistoria.id).order('criado_em')
+  ])
+
+  const modal = fundo.querySelector('.modal')
+  const q = s => modal.querySelector(s)
+  const assinado = !!existente?.assinado_em
+
+  // ---- já assinado: é documento, só se lê e se imprime ----
+  if (assinado) {
+    modal.innerHTML = `
+      <h3 style="margin-bottom:2px;">Termo de responsabilidade</h3>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 14px;line-height:1.5;">
+        Assinado em ${fmtQuando(existente.assinado_em) || ''} por
+        <b>${esc(existente.nome_recebe)}</b>, entregue por ${esc(existente.nome_entrega)}.
+        ${existente.hash ? `<br><span class="texto-dim2" style="font-size:11px;">
+          Impressão digital do texto assinado: <code>${esc(existente.hash.slice(0, 24))}…</code> —
+          serve pra provar depois qual texto estava na tela.</span>` : ''}
+      </p>
+      <div style="max-height:46vh;overflow-y:auto;border:1px solid var(--line);border-radius:8px;
+        padding:14px 16px;background:var(--panel);white-space:pre-wrap;font-size:12.5px;line-height:1.65;
+        ">${esc(existente.texto)}</div>
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:12px;">
+        ${[['assinatura_recebe', existente.nome_recebe, 'recebeu'],
+           ['assinatura_entrega', existente.nome_entrega, 'entregou']].map(([campo, nome, papel]) => `
+          <div>
+            ${existente[campo] ? `<img src="${existente[campo]}" alt="assinatura de ${esc(nome)}"
+              style="width:100%;height:78px;object-fit:contain;background:#fff;border-radius:6px;">`
+              : `<div style="height:78px;border:1px dashed var(--line2);border-radius:6px;"></div>`}
+            <div style="border-top:1px solid var(--line2);margin-top:4px;padding-top:4px;font-size:11.5px;">
+              <b>${esc(nome)}</b> <span class="texto-dim2">— ${papel}</span></div>
+          </div>`).join('')}
+      </div>
+      <div class="acoes" style="margin-top:14px;">
+        <button class="btn" id="tm-pdf">📄 Baixar PDF</button>
+        <button class="btn-secundario" id="tm-fechar" style="margin-left:auto;">Fechar</button>
+      </div>`
+    q('#tm-fechar').onclick = fechar
+    q('#tm-pdf').onclick = () => pdfTermoResponsabilidade(existente, veiculo, vistoria, avarias || [])
+    return
+  }
+
+  // ---- ainda não assinado: monta e coleta as duas assinaturas ----
+  const euNome = PERFIL.nome || 'responsável pela entrega'
+  const sugerido = FROTA_CACHE.pessoas.find(p => p.id === vistoria.pessoa_posse_id)
+
+  modal.innerHTML = `
+    <h3 style="margin-bottom:2px;">Termo de responsabilidade</h3>
+    <p class="texto-dim2" style="font-size:12px;margin:0 0 14px;line-height:1.55;">
+      O texto abaixo é montado a partir desta vistoria — as avarias que estão no croqui entram nele.
+      Depois de assinado não dá mais pra mexer: pra corrigir, é nova vistoria e novo termo.</p>
+
+    <div class="form-grade">
+      <div class="campo"><label>Quem está recebendo *</label>
+        <input id="tm-nome" value="${esc(sugerido?.nome || '')}" placeholder="nome completo"></div>
+      <div class="campo"><label>CPF de quem recebe</label>
+        <input id="tm-doc" placeholder="opcional, mas ajuda se virar discussão"></div>
+    </div>
+
+    <div style="margin-top:12px;">
+      <div class="texto-dim2" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">
+        Texto do termo</div>
+      <div id="tm-texto" style="max-height:34vh;overflow-y:auto;border:1px solid var(--line);border-radius:8px;
+        padding:14px 16px;background:var(--panel);white-space:pre-wrap;font-size:12.5px;line-height:1.65;"></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:14px;">
+      ${[['recebe', 'Assinatura de quem recebe'], ['entrega', 'Assinatura de quem entrega']].map(([k, rot]) => `
+        <div>
+          <div style="display:flex;align-items:baseline;gap:8px;">
+            <span class="texto-dim2" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;flex:1;">${rot}</span>
+            <button type="button" class="btn-secundario mini" data-limpar="${k}">limpar</button>
+          </div>
+          <canvas id="tm-ass-${k}" style="width:100%;height:96px;background:#fff;border:1px solid var(--line2);
+            border-radius:8px;touch-action:none;cursor:crosshair;display:block;margin-top:4px;"></canvas>
+          <div class="texto-dim2" style="font-size:11px;margin-top:3px;">
+            ${k === 'recebe' ? 'a pessoa assina com o dedo' : esc(euNome)}</div>
+        </div>`).join('')}
+    </div>
+
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="tm-assinar">Assinar e gerar o termo</button>
+      <button class="btn-secundario" id="tm-fechar" style="margin-left:auto;">Cancelar</button>
+    </div>
+    <div class="recado oculto" id="tm-recado"></div>`
+
+  q('#tm-fechar').onclick = fechar
+  const aviso = t => { const el = q('#tm-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+
+  const montarTexto = () => textoTermoResponsabilidade(
+    veiculo, vistoria, avarias || [],
+    q('#tm-nome').value.trim() || '__________',
+    q('#tm-doc').value.trim(), euNome)
+
+  const repintar = () => { q('#tm-texto').textContent = montarTexto() }
+  q('#tm-nome').oninput = repintar
+  q('#tm-doc').oninput = repintar
+  repintar()
+
+  const assRecebe = ligarAssinatura(q('#tm-ass-recebe'))
+  const assEntrega = ligarAssinatura(q('#tm-ass-entrega'))
+  modal.querySelectorAll('[data-limpar]').forEach(b => {
+    b.onclick = () => (b.dataset.limpar === 'recebe' ? assRecebe : assEntrega).limpar()
+  })
+
+  q('#tm-assinar').onclick = async () => {
+    const nome = q('#tm-nome').value.trim()
+    if (!nome) { aviso('Escreva o nome de quem está recebendo.'); return }
+    if (assRecebe.vazia()) { aviso('Falta a assinatura de quem recebe — é ela que dá valor ao termo.'); return }
+    if (assEntrega.vazia()) { aviso('Falta a sua assinatura, de quem está entregando.'); return }
+
+    const b = q('#tm-assinar'); b.disabled = true; b.textContent = 'gravando...'
+    const texto = montarTexto()
+    const corpo = {
+      vistoria_id: vistoria.id, veiculo_id: veiculo.id,
+      pessoa_id: vistoria.pessoa_posse_id || null,
+      nome_recebe: nome, doc_recebe: q('#tm-doc').value.trim() || null,
+      nome_entrega: euNome, texto, hash: await hashDoTexto(texto),
+      assinatura_recebe: assRecebe.imagem(), assinatura_entrega: assEntrega.imagem(),
+      assinado_em: new Date().toISOString(),
+      navegador: String(navigator.userAgent || '').slice(0, 300),
+      criado_por: PERFIL.pessoaId
+    }
+    // upsert pela vistoria: se alguém começou o termo e não assinou,
+    // a linha existente é a mesma
+    const { data: salvo, error } = await db.from('veiculo_termo')
+      .upsert(corpo, { onConflict: 'vistoria_id' }).select().single()
+    if (error) { aviso(error.message); b.disabled = false; b.textContent = 'Assinar e gerar o termo'; return }
+
+    pdfTermoResponsabilidade(salvo, veiculo, vistoria, avarias || [])
+    fechar()
+  }
+}
+
+// ---------------------------------------------------------------
+// PDF do termo. Refeito a partir do texto guardado, não de um arquivo
+// salvo — arquivo salvo é mais uma cópia pra divergir do registro.
+// ---------------------------------------------------------------
+function pdfTermoResponsabilidade (termo, veiculo, vistoria, avarias) {
+  const { jsPDF } = window.jspdf || {}
+  if (!jsPDF) { alert('O gerador de PDF não carregou. Recarregue a página e tente de novo.'); return }
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' })
+  const M = 18            // margem
+  const L = 210 - M * 2   // largura útil
+  let y = M
+
+  const quebra = (altura = 8) => { if (y + altura > 282) { doc.addPage(); y = M } }
+  const paragrafo = (txt, { tamanho = 9.5, estilo = 'normal', recuo = 0, espaco = 3.4, cor = [25, 25, 25] } = {}) => {
+    doc.setFont('helvetica', estilo); doc.setFontSize(tamanho); doc.setTextColor(...cor)
+    for (const linha of doc.splitTextToSize(String(txt), L - recuo)) {
+      quebra(6); doc.text(linha, M + recuo, y); y += tamanho * 0.42 + 1.4
+    }
+    y += espaco
+  }
+
+  // ---- cabeçalho ----
+  doc.setFillColor(28, 40, 34); doc.rect(0, 0, 210, 26, 'F')
+  doc.setTextColor(255, 255, 255)
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(13)
+  doc.text('TERMO DE RESPONSABILIDADE', M, 12)
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5)
+  doc.text('Grupo Gefoscal — Frota · item sob responsabilidade de terceiro', M, 18)
+  doc.setFontSize(7.5)
+  doc.text(`Emitido em ${fmtQuando(termo.assinado_em || termo.criado_em) || ''}`, 210 - M, 18, { align: 'right' })
+  y = 34
+
+  // ---- identificação, em duas colunas ----
+  // duas colunas de pares: em uma coluna só, a identificação empurrava
+  // as assinaturas pra uma segunda página sozinhas — e termo com folha
+  // de assinatura solta é convite pra discussão
+  const esquerda = [
+    ['Item', veiculo.descricao || '—'],
+    ['Placa', veiculo.placa || '—'],
+    ['Ano/Modelo', veiculo.ano_modelo || '—'],
+    ['Renavam', veiculo.renavam || '—'],
+    ['Chassi', veiculo.chassi || '—']
+  ]
+  const direita = [
+    ['Recebedor', termo.nome_recebe],
+    ['CPF', termo.doc_recebe || '—'],
+    ['Entregue por', termo.nome_entrega],
+    ['Hodômetro', vistoria.km ? `${fmtNum(vistoria.km)} km` : '—'],
+    ['Vistoria', `${momentoFormal(vistoria.momento)} · ${fmtQuando(vistoria.criado_em) || ''}`]
+  ]
+  const rotulo = { fontStyle: 'bold', fillColor: [244, 246, 243], cellWidth: 24 }
+  doc.autoTable({
+    body: esquerda.map((e, i) => [...e, ...(direita[i] || ['', ''])]),
+    startY: y, margin: { left: M, right: M },
+    theme: 'grid', styles: { fontSize: 8, cellPadding: 1.5, lineColor: [205, 210, 205], overflow: 'linebreak' },
+    columnStyles: { 0: rotulo, 1: { cellWidth: 63 }, 2: rotulo, 3: {} }
+  })
+  y = doc.lastAutoTable.finalY + 6
+
+  // ---- avarias: é o que o termo prende ----
+  quebra(20)
+  paragrafo('ESTADO DO ITEM NA ENTREGA', { tamanho: 10, estilo: 'bold', espaco: 1.5 })
+  if (avarias.length) {
+    doc.autoTable({
+      head: [['#', 'Peça', 'Tipo', 'Gravidade', 'Observação', 'Origem']],
+      body: avarias.map((a, i) => [
+        i + 1, a.parte, a.tipo,
+        (GRAV_AVARIA[a.gravidade] || GRAV_AVARIA.leve).rotulo,
+        a.observacao || '—',
+        a.ja_existia ? 'vistoria anterior' : 'esta vistoria'
+      ]),
+      startY: y, margin: { left: M, right: M },
+      theme: 'grid', styles: { fontSize: 8, cellPadding: 1.6, lineColor: [205, 210, 205] },
+      headStyles: { fillColor: [28, 40, 34], fontSize: 8 },
+      columnStyles: { 0: { cellWidth: 8 }, 3: { cellWidth: 18 }, 5: { cellWidth: 24 } }
+    })
+    y = doc.lastAutoTable.finalY + 7
+  } else {
+    paragrafo('Nenhuma avaria registrada na vistoria.', { tamanho: 9 })
+  }
+
+  // ---- cláusulas: só o corpo do termo, sem repetir o cabeçalho ----
+  quebra(20)
+  const corpo = String(termo.texto || '')
+  const inicio = corpo.indexOf('1 — DO RECEBIMENTO')
+  // a relação de avarias já saiu na tabela acima: pula esse trecho do
+  // texto e volta a imprimir na próxima cláusula numerada
+  let pulando = false
+  for (const bruta of (inicio >= 0 ? corpo.slice(inicio) : corpo).split('\n')) {
+    const linha = bruta.trim()
+    const ehClausula = /^\d+\s*—/.test(linha)
+    if (ehClausula) pulando = false
+    else if (/^ESTADO DO ITEM/.test(linha)) { pulando = true; continue }
+    if (pulando) continue
+    if (!linha) { y += 1.5; continue }
+    if (ehClausula) { quebra(14); paragrafo(linha, { tamanho: 9.5, estilo: 'bold', espaco: 1.2 }) }
+    else paragrafo(linha, { tamanho: 9 })
+  }
+
+  // ---- assinaturas ----
+  quebra(46)
+  y += 4
+  const largura = (L - 10) / 2
+  ;[[termo.assinatura_recebe, termo.nome_recebe, 'recebeu o item'],
+    [termo.assinatura_entrega, termo.nome_entrega, 'entregou o item']].forEach(([img, nome, papel], i) => {
+    const x = M + i * (largura + 10)
+    if (img) { try { doc.addImage(img, 'PNG', x, y, largura, 20) } catch { /* assinatura ilegível: fica a linha */ } }
+    doc.setDrawColor(150, 158, 150); doc.line(x, y + 22, x + largura, y + 22)
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(25, 25, 25)
+    doc.text(String(nome), x, y + 27)
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(110, 118, 110)
+    doc.text(papel, x, y + 31)
+  })
+  y += 38
+
+  // ---- rodapé de autenticidade ----
+  quebra(14)
+  doc.setDrawColor(215, 220, 215); doc.line(M, y, 210 - M, y); y += 4
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(120, 128, 120)
+  const rodape = [
+    `Assinado eletronicamente em ${fmtQuando(termo.assinado_em) || '—'}.`,
+    termo.hash ? `Impressão digital do texto assinado (SHA-256): ${termo.hash}` : null,
+    'Documento gerado pelo sistema do Grupo Gefoscal a partir da vistoria de avarias vinculada.'
+  ].filter(Boolean)
+  rodape.forEach(t => { doc.splitTextToSize(t, L).forEach(l => { doc.text(l, M, y); y += 3.2 }) })
+
+  const arquivo = `termo-${(veiculo.placa || veiculo.descricao || 'item').toString()
+    .replace(/[^\w]+/g, '-').toLowerCase()}-${String(termo.assinado_em || '').slice(0, 10)}.pdf`
+  doc.save(arquivo)
+}
+
+// ---------------------------------------------------------------
+// Abrir vistoria nova. O croqui e o momento vêm escolhidos com um
+// chute razoável; quem está com o item só aparece quando faz sentido
+// perguntar, pra não pedir dado à toa em recebimento e devolução.
+// ---------------------------------------------------------------
+function formNovaVistoria (veiculo, aoAbrir) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  const sugerido = croquiSugerido(veiculo)
+  fundo.innerHTML = `<div class="modal" style="max-width:520px;">
+    <h3>Nova vistoria</h3>
+    <p class="texto-dim2" style="font-size:12.5px;line-height:1.55;margin:-8px 0 14px;">
+      ${esc(veiculo.descricao || 'item')}${veiculo.placa ? ' · ' + esc(veiculo.placa) : ''}.
+      As avarias da última vistoria encerrada já entram marcadas como "já existia" —
+      você só marca o que apareceu depois.</p>
+    <div class="form-grade">
+      <div class="campo" style="grid-column:1/-1;"><label>Momento *</label>
+        <select id="nv-momento">${MOMENTOS_VISTORIA.map(([v, r]) =>
+          `<option value="${v}">${esc(r)}</option>`).join('')}</select></div>
+      <div class="campo"><label>Croqui</label>
+        <select id="nv-croqui">${Object.entries(CROQUIS_AVARIA).map(([k, c]) =>
+          `<option value="${k}" ${k === sugerido ? 'selected' : ''}>${esc(c.nome)}</option>`).join('')}</select></div>
+      <div class="campo"><label>Hodômetro (km)</label>
+        <input id="nv-km" type="number" step="1" inputmode="numeric" placeholder="opcional"></div>
+      <div class="campo" style="grid-column:1/-1;" id="nv-posse-campo"><label>Fica com quem</label>
+        <select id="nv-posse">${opcoesFin(FROTA_CACHE.pessoas, 'ninguém em específico', veiculo.condutor_principal_id)}</select>
+        <span class="texto-dim2" style="font-size:11px;">Ao encerrar, o item passa a constar com essa pessoa.</span></div>
+    </div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="nv-abrir">Abrir vistoria</button>
+      <button class="btn-secundario" id="nv-cancelar">Cancelar</button>
+    </div>
+    <div class="recado oculto" id="nv-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const q = s => fundo.querySelector(s)
+  const fechar = () => fundo.remove()
+  q('#nv-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  // devolução e saída não têm "fica com quem": o item volta pra empresa
+  // ou sai pro comprador
+  const ajustarPosse = () => {
+    const m = q('#nv-momento').value
+    q('#nv-posse-campo').hidden = m === 'DEVOLUCAO_CONDUTOR' || m === 'SAIDA_VENDA'
+  }
+  q('#nv-momento').onchange = ajustarPosse
+  ajustarPosse()
+
+  q('#nv-abrir').onclick = async () => {
+    const b = q('#nv-abrir'); b.disabled = true; b.textContent = 'abrindo...'
+    const semPosse = q('#nv-posse-campo').hidden
+    const { data: id, error } = await db.rpc('veiculo_vistoria_abrir', {
+      p_veiculo_id: veiculo.id,
+      p_momento: q('#nv-momento').value,
+      p_croqui: q('#nv-croqui').value,
+      p_km: q('#nv-km').value ? Number(q('#nv-km').value) : null,
+      p_pessoa_posse_id: semPosse ? null : (q('#nv-posse').value || null)
+    })
+    if (error) {
+      const el = q('#nv-recado'); el.textContent = error.message; el.classList.remove('oculto')
+      el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+      b.disabled = false; b.textContent = 'Abrir vistoria'; return
+    }
+    fechar()
+    aoAbrir(id)
+  }
 }
 
 function formFrotaItem (item) {
@@ -39103,6 +40100,12 @@ function formFrotaItem (item) {
       <div class="recado oculto" id="fr-recado"></div>
 
       ${item ? `
+        <div class="cabeca-secao" style="margin-top:20px;">
+          <h3 style="font-family:var(--serif);font-size:15px;">🔧 Avarias e com quem está</h3>
+          <button type="button" class="btn-secundario mini" id="fr-nova-vistoria">+ Nova vistoria</button>
+        </div>
+        <div id="fr-vistorias"><p class="texto-dim2">carregando...</p></div>
+
         <div class="cabeca-secao" style="margin-top:20px;"><h3 style="font-family:var(--serif);font-size:15px;">Fotos e documentos</h3></div>
         <div id="fr-anexos"><p class="texto-dim2">carregando...</p></div>
         <div class="form-grade" style="margin-top:10px;">
@@ -39243,6 +40246,108 @@ function formFrotaItem (item) {
         </div>
       </details>`
   })().catch(e => console.error('histórico de tags:', e))
+
+  // ----- vistorias de avaria + posse -------------------------------
+  // "Com quem está" e "como está" nascem do mesmo evento: a vistoria.
+  // Por isso os dois moram no mesmo bloco, e não em dois campos soltos
+  // que ninguém lembra de atualizar junto.
+  const carregarVistorias = async () => {
+    const caixa = q('#fr-vistorias')
+    if (!caixa) return
+    const [{ data: vist, error: eVist }, { data: veic }] = await Promise.all([
+      db.from('veiculo_vistoria')
+        .select('id,momento,croqui,km,encerrada_em,criado_em,observacoes,vistoriador:vistoriador_id(nome),posse:pessoa_posse_id(nome)')
+        .eq('veiculo_id', item.id).order('criado_em', { ascending: false }).limit(20),
+      db.from('veiculo').select('posse_pessoa_id,posse_desde,croqui_tipo,posse:posse_pessoa_id(nome)')
+        .eq('id', item.id).maybeSingle()
+    ])
+    if (eVist) { caixa.innerHTML = `<p class="vazio">${esc(eVist.message)}</p>`; return }
+
+    const lista = vist || []
+    const ids = lista.map(v => v.id)
+    const [{ data: contagem }, { data: termos }] = ids.length
+      ? await Promise.all([
+        db.from('veiculo_avaria').select('vistoria_id,gravidade,ja_existia').in('vistoria_id', ids),
+        db.from('veiculo_termo').select('vistoria_id,nome_recebe,assinado_em').in('vistoria_id', ids)
+      ])
+      : [{ data: [] }, { data: [] }]
+    const termoPorVistoria = Object.fromEntries((termos || []).map(t => [t.vistoria_id, t]))
+    const porVistoria = {}
+    ;(contagem || []).forEach(a => {
+      const c = (porVistoria[a.vistoria_id] ||= { total: 0, novas: 0, graves: 0 })
+      c.total++
+      if (!a.ja_existia) c.novas++
+      if (a.gravidade === 'grave') c.graves++
+    })
+
+    const ultimaEncerrada = lista.find(v => v.encerrada_em)
+    const cUltima = ultimaEncerrada ? porVistoria[ultimaEncerrada.id] : null
+
+    caixa.innerHTML = `
+      <div class="panel" style="padding:11px 14px;margin-bottom:10px;display:flex;gap:16px;
+        flex-wrap:wrap;align-items:baseline;font-size:12.5px;">
+        <span><span class="texto-dim2">Está com</span>
+          <b>${veic?.posse?.nome ? esc(veic.posse.nome) : 'ninguém — na empresa'}</b>
+          ${veic?.posse_desde ? `<span class="texto-dim2"> desde ${fmtData(String(veic.posse_desde).slice(0, 10)) || ''}</span>` : ''}</span>
+        ${cUltima ? `<span><span class="texto-dim2">Estado na última vistoria</span>
+          <b>${cUltima.total} avaria(s)</b>${cUltima.graves
+            ? `<span style="color:var(--critico-text);"> · ${cUltima.graves} grave(s)</span>` : ''}</span>` : ''}
+      </div>
+
+      ${lista.length ? lista.map(v => {
+        const c = porVistoria[v.id] || { total: 0, novas: 0, graves: 0 }
+        const emAberto = !v.encerrada_em
+        const termo = termoPorVistoria[v.id]
+        // termo só faz sentido quando o item muda de mão; devolução e
+        // periódica não entregam nada a ninguém
+        const cabeTermo = !emAberto && MOMENTOS_COM_TERMO.includes(v.momento)
+        return `<div class="panel" style="padding:10px 13px;margin-bottom:7px;display:flex;gap:10px;
+          align-items:baseline;flex-wrap:wrap;${emAberto ? 'border-color:var(--gold);' : ''}">
+          <span style="min-width:0;flex:1;">
+            <b style="font-size:12.5px;">${esc(ROTULO_MOMENTO_VISTORIA[v.momento] || v.momento)}</b>
+            ${emAberto ? '<span class="badge-alerta" style="margin-left:6px;">em aberto</span>' : ''}
+            <div class="texto-dim2" style="font-size:11.5px;margin-top:2px;">
+              ${fmtQuando(v.criado_em) || ''}${v.vistoriador?.nome ? ' · ' + esc(v.vistoriador.nome) : ''}
+              ${v.km ? ' · ' + fmtNum(v.km) + ' km' : ''}
+              ${v.posse?.nome ? ' · foi pra ' + esc(v.posse.nome) : ''}
+            </div>
+            <div style="font-size:11.5px;margin-top:2px;" class="texto-dim">
+              ${c.total ? `${c.total} avaria(s)` : 'sem avaria marcada'}${
+                c.novas ? ` · <b>${c.novas} nova(s)</b>` : ''}${
+                c.graves ? ` · <span style="color:var(--critico-text);">${c.graves} grave(s)</span>` : ''}
+            </div>
+            ${cabeTermo ? `<div style="font-size:11.5px;margin-top:3px;">${termo?.assinado_em
+              ? `<span style="color:var(--good-text);">✍️ Termo assinado por ${esc(termo.nome_recebe)}
+                 em ${fmtData(String(termo.assinado_em).slice(0, 10)) || ''}</span>`
+              : `<span style="color:var(--warn-text);">⚠ Sem termo de responsabilidade assinado</span>`}</div>` : ''}
+          </span>
+          <span style="display:flex;gap:5px;flex-wrap:wrap;flex:none;">
+            <button type="button" class="btn-secundario mini" data-vistoria="${esc(v.id)}">
+              ${emAberto ? 'continuar' : 'ver croqui'}</button>
+            ${cabeTermo ? `<button type="button" class="${termo?.assinado_em ? 'btn-secundario' : 'btn'} mini"
+              data-termo="${esc(v.id)}">${termo?.assinado_em ? '📄 Termo' : '✍️ Gerar termo'}</button>` : ''}
+          </span>
+        </div>`
+      }).join('')
+      : `<p class="texto-dim2" style="font-size:12px;line-height:1.55;">
+          Nenhuma vistoria ainda. A primeira é a que vale mais: é ela que registra como o item
+          estava quando chegou — sem ela, qualquer avaria que aparecer depois é discussão.</p>`}`
+
+    caixa.querySelectorAll('[data-vistoria]').forEach(b => {
+      b.onclick = () => abrirVistoriaAvarias(item, b.dataset.vistoria, carregarVistorias)
+    })
+    caixa.querySelectorAll('[data-termo]').forEach(b => {
+      b.onclick = () => {
+        const v = lista.find(x => x.id === b.dataset.termo)
+        if (v) abrirTermoResponsabilidade(item, v, carregarVistorias)
+      }
+    })
+  }
+  carregarVistorias()
+
+  const btnNovaVist = q('#fr-nova-vistoria')
+  if (btnNovaVist) btnNovaVist.onclick = () =>
+    formNovaVistoria(item, id => abrirVistoriaAvarias(item, id, carregarVistorias))
 
   // ----- fotos e documentos já anexados -----
   const carregarAnexos = async () => {
