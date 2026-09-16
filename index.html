@@ -740,13 +740,28 @@ tbody tr:hover { background: var(--hover-bg); }
 /* faixa de tags sobre a foto do card */
 .fr-faixa-tags { position:absolute; inset:8px 8px auto 8px; display:flex; gap:6px;
   justify-content:space-between; align-items:flex-start; pointer-events:none; flex-wrap:wrap; }
-.tag-filtro { display:inline-flex; align-items:center; gap:5px; cursor:pointer; font:inherit;
-  font-size:11.5px; font-weight:600; padding:5px 11px; border-radius:20px; line-height:1.4;
-  color:var(--tag); border:1px solid var(--tag); background:transparent; opacity:.55;
-  transition:opacity .13s ease, background .13s ease; }
-.tag-filtro:hover { opacity:.85; }
-.tag-filtro.ativo { opacity:1; background:var(--hover-bg); box-shadow:inset 0 0 0 1px var(--tag); }
-.tag-filtro .conta { font-weight:400; opacity:.75; }
+/* Filtro de tags: chip neutro quando desligado, aceso na cor da própria
+   tag quando ligado. Antes todos vinham coloridos e meio apagados ao
+   mesmo tempo — dava pra ver seis cores e não dava pra ver o que estava
+   marcado, que é a única coisa que o filtro precisa dizer. */
+.tag-filtro { display:inline-flex; align-items:center; gap:6px; cursor:pointer; font:inherit;
+  font-size:11.5px; font-weight:600; padding:5px 10px; border-radius:8px; line-height:1.35;
+  color:var(--dim); border:1px solid var(--line2); background:var(--panel);
+  transition:border-color .12s ease, color .12s ease, background .12s ease; }
+.tag-filtro:hover { color:var(--txt); border-color:var(--dim); }
+.tag-filtro.ativo { background:var(--tag); border-color:var(--tag); color:var(--tag-txt); }
+.tag-filtro .conta { font-weight:500; font-size:10.5px; opacity:.6;
+  font-variant-numeric:tabular-nums; }
+.tag-filtro.ativo .conta { opacity:.8; }
+.tag-filtro.zerado { opacity:.42; }
+
+/* barra de filtros dos Itens: um bloco só, sem moldura pesada */
+.fr-barra { background:var(--surface2); border:1px solid var(--line2); border-radius:12px;
+  padding:10px 12px; margin-bottom:14px; display:flex; flex-direction:column; gap:8px; }
+.fr-barra-linha { display:flex; gap:7px; align-items:center; flex-wrap:wrap; }
+.fr-eixo { font-size:10px; text-transform:uppercase; letter-spacing:.07em; color:var(--dim2);
+  min-width:74px; flex:none; }
+.fr-barra select { font-size:12.5px; padding:4px 8px; }
 /* Resumo da originação: os filtros viraram cartões. Continuam sendo
    filtro — clicou, a lista embaixo obedece — só que agora também
    respondem "como está a fila" antes de qualquer clique. */
@@ -38855,13 +38870,6 @@ async function frotaItens (alvo, editavel) {
       </span>
       <button class="btn-secundario mini" id="fr-ocultar-avulsos">ocultar os ${avulsosNaoOcultos.length} da lista de Itens</button>
     </div>` : ''}
-    <div class="filtros" style="margin-bottom:14px;">
-      <div class="campo"><label>Setor</label>
-        <select id="fr-filtro-setor"><option value="">todos</option>${FROTA_CACHE.setores.map(s => `<option value="${s.id}">${esc(s.nome)}</option>`).join('')}</select></div>
-      <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;margin-top:20px;">
-        <input type="checkbox" id="fr-mostrar-ocultos"> mostrar também os ocultos (${lista.filter(i => i.oculto).length})
-      </label>
-    </div>
     <div id="fr-filtro-tags"></div>
     <div class="cabeca-secao" style="margin-bottom:14px;">
       <div class="subabas" style="margin:0;">
@@ -38876,34 +38884,35 @@ async function frotaItens (alvo, editavel) {
   const desenharFiltroTags = () => {
     const base = itensDeNegocio()
     const conta = (campo, chave) => base.filter(i => i[campo] === chave).length
-    const semTag = base.filter(i => !i.negociacao_status).length
+    const ocultos = lista.filter(i => i.oculto).length
+    const temFiltro = filtroSetorId || filtroNeg.size || filtroLoc.size || mostrarOcultos
+
     const linha = (titulo, tags, campo, conjunto) => `
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:7px;">
-        <span class="texto-dim2" style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;
-          min-width:112px;">${titulo}</span>
-        ${tags.map(t => `<button type="button" class="tag-filtro${conjunto.has(t.chave) ? ' ativo' : ''}"
-          style="--tag:${t.cor};" data-tag-campo="${campo}" data-tag="${t.chave}"
-          title="${esc(t.quando)}">${t.emoji} ${esc(t.rotulo)}
-          <span class="conta">${conta(campo, t.chave)}</span></button>`).join('')}
+      <div class="fr-barra-linha">
+        <span class="fr-eixo">${titulo}</span>
+        ${tags.map(t => {
+          const n = conta(campo, t.chave)
+          return `<button type="button" class="tag-filtro${conjunto.has(t.chave) ? ' ativo' : ''}${
+            n ? '' : ' zerado'}" style="--tag:${t.cor};--tag-txt:${t.txt};"
+            data-tag-campo="${campo}" data-tag="${t.chave}" title="${esc(t.quando)}"
+            >${t.emoji} ${esc(t.rotulo)} <span class="conta">${n}</span></button>`
+        }).join('')}
       </div>`
+
     $('#fr-filtro-tags').innerHTML = `
-      <div class="panel" style="padding:12px 14px;margin-bottom:14px;">
+      <div class="fr-barra">
+        <div class="fr-barra-linha">
+          <span class="fr-eixo">Setor</span>
+          <select id="fr-filtro-setor"><option value="">todos</option>${FROTA_CACHE.setores.map(s =>
+            `<option value="${s.id}" ${s.id === filtroSetorId ? 'selected' : ''}>${esc(s.nome)}</option>`).join('')}</select>
+          ${ocultos ? `<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--dim);">
+            <input type="checkbox" id="fr-mostrar-ocultos" ${mostrarOcultos ? 'checked' : ''}>
+            ocultos (${ocultos})</label>` : ''}
+          ${temFiltro ? `<button type="button" class="btn-secundario mini" id="fr-tags-limpar"
+            style="margin-left:auto;">limpar filtros</button>` : ''}
+        </div>
         ${linha('Negociação', TAGS_NEGOCIACAO, 'negociacao_status', filtroNeg)}
         ${linha('Localização', TAGS_LOCAL, 'local_produto', filtroLoc)}
-        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:4px;">
-          <span class="texto-dim2" style="font-size:11px;line-height:1.5;">
-            ${base.length
-              ? `${base.length} item(ns) recebido(s) em negócio${semTag ? ` · ${semTag} ainda sem status` : ''}.
-                 Pode marcar mais de uma tag na mesma linha; entre as duas linhas é E
-                 (ex.: Vendido <b>e</b> Na Indústria).`
-              : `Nenhum item recebido em negócio ainda. As tags aparecem nos itens do tipo
-                 "Recebido em negócio (para revenda)" — frota própria e caminhão de terceiro
-                 que só passou pra carregar ficam de fora.`}
-          </span>
-          ${(filtroNeg.size || filtroLoc.size)
-            ? `<button type="button" class="btn-secundario mini" id="fr-tags-limpar"
-                 style="margin-left:auto;">limpar filtro de tags</button>` : ''}
-        </div>
       </div>`
 
     $('#fr-filtro-tags').querySelectorAll('[data-tag]').forEach(b => {
@@ -38913,12 +38922,17 @@ async function frotaItens (alvo, editavel) {
         desenharFiltroTags(); desenhar()
       }
     })
+    // os controles nascem junto com a barra, então religam a cada redesenho
+    $('#fr-filtro-setor').onchange = e => { filtroSetorId = e.target.value; desenharFiltroTags(); desenhar() }
+    const chkOcultos = $('#fr-mostrar-ocultos')
+    if (chkOcultos) chkOcultos.onchange = e => { mostrarOcultos = e.target.checked; desenharFiltroTags(); desenhar() }
     const limpar = $('#fr-tags-limpar')
-    if (limpar) limpar.onclick = () => { filtroNeg.clear(); filtroLoc.clear(); desenharFiltroTags(); desenhar() }
+    if (limpar) limpar.onclick = () => {
+      filtroNeg.clear(); filtroLoc.clear(); filtroSetorId = ''; mostrarOcultos = false
+      desenharFiltroTags(); desenhar()
+    }
   }
 
-  $('#fr-filtro-setor').onchange = () => { filtroSetorId = $('#fr-filtro-setor').value; desenharFiltroTags(); desenhar() }
-  $('#fr-mostrar-ocultos').onchange = () => { mostrarOcultos = $('#fr-mostrar-ocultos').checked; desenharFiltroTags(); desenhar() }
   const btnOcultarAvulsos = $('#fr-ocultar-avulsos')
   if (btnOcultarAvulsos) btnOcultarAvulsos.onclick = async () => {
     if (!confirm(`Ocultar os ${avulsosNaoOcultos.length} veículos sem contraparte/vínculo da lista de Itens? Você pode reverter a qualquer momento desmarcando "oculto" na edição de cada um.`)) return
