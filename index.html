@@ -42236,37 +42236,78 @@ const DISC_DUPLA = {
   CS: 'Qualidade acima de quantidade. Detalhista, discreto, e sensível a crítica no trabalho dele.'
 }
 
-// A linha dos 50 é o que separa "alto" de "baixo" no DISC — sem ela
-// desenhada, quatro barras coloridas não dizem nada: a pessoa não sabe
-// de onde está lendo. Com ela, dá pra ver num relance o que passa e o
-// que não passa da metade.
+// ---------------------------------------------------------------
+// Gráficos do DISC.
+//
+// O eixo Y é alto e marcado de 25 em 25. Sem referência do lado, quatro
+// barras coloridas não dizem nada: dá pra ver qual é a maior, mas não
+// dá pra dizer "isso é 70" nem comparar com o laudo de outra pessoa.
+// Com a régua, a leitura vira exata — e a linha dos 50, que é o que
+// separa alto de baixo no DISC, ganha destaque sobre as outras.
+// ---------------------------------------------------------------
+const DISC_MARCAS = [25, 50, 75, 100]
+
+const eixoYDisc = altura => `<div style="position:relative;width:20px;height:${altura}px;flex:none;">
+  ${DISC_MARCAS.map(v => `<span style="position:absolute;bottom:${v}%;right:0;transform:translateY(50%);
+    font-size:9px;line-height:1;color:var(--dim2);font-variant-numeric:tabular-nums;">${v}</span>`).join('')}
+</div>`
+
+const gradeYDisc = () => DISC_MARCAS.map(v => `<div style="position:absolute;left:0;right:0;bottom:${v}%;
+  height:0;border-top:1px ${v === 50 ? 'solid' : 'dashed'} var(--line2);
+  opacity:${v === 50 ? .95 : .45};"></div>`).join('')
+
 const barraDisc = (valores, tamanho = 'normal') => {
   if (!valores) return '<span class="texto-dim2">sem gráfico</span>'
   const mini = tamanho === 'mini'
-  const altura = mini ? 26 : 74
-  return `<div style="display:flex;gap:${mini ? 4 : 10}px;align-items:flex-end;">
-    ${DISC_LETRAS.map(l => {
-      const v = Math.max(0, Math.min(100, Number(valores[l] ?? 0)))
-      const f = DISC_FATOR[l]
-      const forte = v >= 50
-      return `<div style="flex:1;min-width:0;text-align:center;" title="${f.nome} — ${f.frase}: ${v}">
-        <div style="position:relative;height:${altura}px;display:flex;align-items:flex-end;
-          background:linear-gradient(var(--line2),var(--line2)) no-repeat left 50%/100% 1px;
-          border-radius:${mini ? 4 : 7}px;">
-          <div style="width:100%;height:${Math.max(4, v)}%;
-            background:${forte ? f.cor : `color-mix(in srgb, ${f.cor} 42%, transparent)`};
-            border:1px solid ${f.cor};border-bottom:none;
-            border-radius:${mini ? 4 : 7}px ${mini ? 4 : 7}px 0 0;
-            display:flex;align-items:flex-start;justify-content:center;">
-            ${!mini && v >= 26 ? `<span style="font-size:10px;font-weight:700;margin-top:3px;
-              color:${forte ? '#fff' : 'var(--txt)'};">${v}</span>` : ''}
-          </div>
-        </div>
-        <div style="font-size:${mini ? 9 : 12}px;font-weight:800;margin-top:4px;
-          color:${forte ? f.cor : 'var(--dim2)'};">${l}${!mini && v < 26 ? `<span class="texto-dim2" style="font-weight:600;"> ${v}</span>` : ''}</div>
-        ${mini ? '' : `<div class="texto-dim2" style="font-size:9px;line-height:1.25;margin-top:1px;">${esc(f.nome)}</div>`}
-      </div>`
-    }).join('')}
+  const altura = mini ? 28 : 150
+
+  const colunas = DISC_LETRAS.map(l => {
+    const v = Math.max(0, Math.min(100, Number(valores[l] ?? 0)))
+    const f = DISC_FATOR[l]
+    const forte = v >= 50
+    return { l, v, f, forte }
+  })
+
+  // barra estreita e centrada: ocupando a coluna inteira ela vira bloco
+  // de cor, e o gráfico deixa de parecer gráfico
+  const barras = colunas.map(({ v, f, forte }) => `
+    <div style="flex:1;min-width:0;height:100%;display:flex;align-items:flex-end;justify-content:center;">
+      <div title="${f.nome} — ${f.frase}: ${v}" style="width:100%;max-width:${mini ? 999 : 58}px;height:${Math.max(3, v)}%;
+        background:${forte ? f.cor : `color-mix(in srgb, ${f.cor} 40%, transparent)`};
+        border:1px solid ${f.cor};border-bottom:none;
+        border-radius:${mini ? 4 : 7}px ${mini ? 4 : 7}px 0 0;
+        display:flex;align-items:flex-start;justify-content:center;">
+        ${!mini && v >= 14 ? `<span style="font-size:10.5px;font-weight:700;margin-top:3px;
+          color:${forte ? '#fff' : 'var(--txt)'};">${v}</span>` : ''}
+      </div>
+    </div>`).join('')
+
+  const rotulos = colunas.map(({ l, v, f, forte }) => `
+    <div style="flex:1;min-width:0;text-align:center;">
+      <div style="font-size:${mini ? 9 : 12.5}px;font-weight:800;color:${forte ? f.cor : 'var(--dim2)'};">
+        ${l}${!mini && v < 14 ? `<span class="texto-dim2" style="font-weight:600;"> ${v}</span>` : ''}</div>
+      ${mini ? '' : `<div class="texto-dim2" style="font-size:9px;line-height:1.25;margin-top:1px;">${esc(f.nome)}</div>`}
+    </div>`).join('')
+
+  if (mini) {
+    return `<div>
+      <div style="position:relative;height:${altura}px;">
+        <div style="position:absolute;left:0;right:0;bottom:50%;height:0;border-top:1px solid var(--line2);"></div>
+        <div style="position:absolute;inset:0;display:flex;gap:4px;">${barras}</div>
+      </div>
+      <div style="display:flex;gap:4px;margin-top:3px;">${rotulos}</div>
+    </div>`
+  }
+
+  return `<div style="display:flex;gap:8px;align-items:flex-start;">
+    ${eixoYDisc(altura)}
+    <div style="flex:1;min-width:0;">
+      <div style="position:relative;height:${altura}px;">
+        ${gradeYDisc()}
+        <div style="position:absolute;inset:0;display:flex;gap:10px;">${barras}</div>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:6px;">${rotulos}</div>
+    </div>
   </div>`
 }
 
@@ -42276,39 +42317,58 @@ const barraDisc = (valores, tamanho = 'normal') => {
 const barraDiscDupla = (nat, ada) => {
   if (!nat) return '<span class="texto-dim2">sem gráfico</span>'
   if (!ada) return barraDisc(nat)
+  const altura = 185
+
+  const colunas = DISC_LETRAS.map(l => ({
+    l,
+    f: DISC_FATOR[l],
+    n: Math.max(0, Math.min(100, Number(nat[l] ?? 0))),
+    a: Math.max(0, Math.min(100, Number(ada[l] ?? 0)))
+  }))
+
+  const barras = colunas.map(({ f, n, a }) => `
+    <div style="flex:1;min-width:0;height:100%;display:flex;align-items:flex-end;justify-content:center;">
+      <div style="position:relative;width:100%;max-width:58px;height:100%;display:flex;align-items:flex-end;">
+        <div title="${f.nome}: natural ${n}, adaptado ${a}" style="width:100%;height:${Math.max(3, n)}%;
+          background:${n >= 50 ? f.cor : `color-mix(in srgb, ${f.cor} 40%, transparent)`};
+          border:1px solid ${f.cor};border-bottom:none;border-radius:7px 7px 0 0;
+          display:flex;align-items:flex-start;justify-content:center;">
+          ${n >= 13 ? `<span style="font-size:10.5px;font-weight:700;margin-top:3px;
+            color:${n >= 50 ? '#fff' : 'var(--txt)'};">${n}</span>` : ''}
+        </div>
+        ${/* o adaptado atravessa a barra como um traço: fica óbvio pra que
+              lado a pessoa se puxa, sem precisar de um segundo gráfico.
+              O número vai na DIREITA — no meio ele batia no valor do
+              natural quando os dois ficavam perto. */ ''}
+        <div style="position:absolute;left:-4px;right:-4px;bottom:${a}%;height:0;
+          border-top:2px dashed var(--txt);opacity:.85;"></div>
+        <div style="position:absolute;right:-6px;bottom:calc(${a}% + 3px);
+          font-size:9px;font-weight:700;background:var(--panel);padding:0 3px;border-radius:3px;
+          line-height:1.4;">${a}</div>
+      </div>
+    </div>`).join('')
+
+  const rotulos = colunas.map(({ l, f, n, a }) => {
+    const d = a - n
+    return `<div style="flex:1;min-width:0;text-align:center;">
+      <div style="font-size:12.5px;font-weight:800;color:${n >= 50 ? f.cor : 'var(--dim2)'};">${l}</div>
+      <div class="texto-dim2" style="font-size:9px;line-height:1.25;">${esc(f.nome)}</div>
+      ${Math.abs(d) >= 15 ? `<div style="font-size:9.5px;font-weight:700;margin-top:2px;
+        color:${d > 0 ? 'var(--warn-text)' : 'var(--dim)'};">${d > 0 ? '▲' : '▼'} ${Math.abs(d)}</div>`
+        : '<div style="height:14px;"></div>'}
+    </div>`
+  }).join('')
+
   return `
-    <div style="display:flex;gap:10px;align-items:flex-end;">
-      ${DISC_LETRAS.map(l => {
-        const n = Math.max(0, Math.min(100, Number(nat[l] ?? 0)))
-        const a = Math.max(0, Math.min(100, Number(ada[l] ?? 0)))
-        const f = DISC_FATOR[l]
-        const d = a - n
-        return `<div style="flex:1;min-width:0;text-align:center;"
-          title="${f.nome}: natural ${n}, adaptado ${a}">
-          <div style="position:relative;height:96px;display:flex;align-items:flex-end;
-            background:linear-gradient(var(--line2),var(--line2)) no-repeat left 50%/100% 1px;">
-            <div style="width:100%;height:${Math.max(4, n)}%;
-              background:${n >= 50 ? f.cor : `color-mix(in srgb, ${f.cor} 42%, transparent)`};
-              border:1px solid ${f.cor};border-bottom:none;border-radius:7px 7px 0 0;
-              display:flex;align-items:flex-start;justify-content:center;">
-              ${n >= 22 ? `<span style="font-size:10px;font-weight:700;margin-top:3px;
-                color:${n >= 50 ? '#fff' : 'var(--txt)'};">${n}</span>` : ''}
-            </div>
-            ${/* o adaptado entra como um traço atravessando a barra:
-                  fica óbvio pra que lado a pessoa está se puxando */ ''}
-            <div style="position:absolute;left:-3px;right:-3px;bottom:${a}%;height:0;
-              border-top:2px dashed var(--txt);opacity:.8;"></div>
-            <div style="position:absolute;right:-4px;bottom:calc(${a}% - 6px);font-size:8.5px;
-              font-weight:700;background:var(--panel);padding:0 2px;border-radius:3px;">${a}</div>
-          </div>
-          <div style="font-size:12px;font-weight:800;margin-top:5px;
-            color:${n >= 50 ? f.cor : 'var(--dim2)'};">${l}</div>
-          <div class="texto-dim2" style="font-size:9px;line-height:1.25;">${esc(f.nome)}</div>
-          ${Math.abs(d) >= 15 ? `<div style="font-size:9.5px;font-weight:700;margin-top:2px;
-            color:${d > 0 ? 'var(--warn-text)' : 'var(--dim)'};">${d > 0 ? '▲' : '▼'} ${Math.abs(d)}</div>`
-            : '<div style="height:13px;"></div>'}
-        </div>`
-      }).join('')}
+    <div style="display:flex;gap:8px;align-items:flex-start;">
+      ${eixoYDisc(altura)}
+      <div style="flex:1;min-width:0;">
+        <div style="position:relative;height:${altura}px;">
+          ${gradeYDisc()}
+          <div style="position:absolute;inset:0;display:flex;gap:10px;">${barras}</div>
+        </div>
+        <div style="display:flex;gap:10px;margin-top:6px;">${rotulos}</div>
+      </div>
     </div>
     <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:10px;
       padding-top:9px;border-top:1px solid var(--line2);font-size:11px;" class="texto-dim">
@@ -42318,7 +42378,6 @@ const barraDiscDupla = (nat, ada) => {
       <span style="display:flex;align-items:center;gap:6px;">
         <span style="width:16px;border-top:2px dashed var(--txt);"></span>
         traço = <b>adaptado</b>, como acha que precisa ser</span>
-      <span class="texto-dim2">linha do meio = 50</span>
     </div>`
 }
 
