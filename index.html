@@ -692,6 +692,11 @@ tbody tr:hover { background: var(--hover-bg); }
 .mk-aniv-linha:hover { background:var(--hover-bg); }
 .mes-cal-mkt:hover { transform:translateY(-2px); box-shadow:0 8px 20px rgba(0,0,0,.25); border-color:var(--rust) !important; }
 .chip-filtro.ativo { background:var(--rust); border-color:var(--rust); color:#fff; }
+/* corrigir/excluir uma linha do histórico: discreto até passar o mouse */
+.lnk-crud { background:none; border:none; cursor:pointer; padding:1px 4px; line-height:1;
+  font-size:11.5px; opacity:.38; transition:opacity .12s ease; color:inherit; }
+.lnk-crud:hover { opacity:1; }
+.lnk-crud[disabled] { opacity:.2; cursor:default; }
 .linha-os-manut { display:flex; align-items:center; justify-content:space-between; gap:10px;
   padding:12px 18px; cursor:pointer; border-bottom:1px solid var(--line); transition:.12s ease; }
 .linha-os-manut:last-child { border-bottom:none; }
@@ -19177,6 +19182,35 @@ async function blocoNegociacaoLead (fundo, l, editavel) {
 
   const recarregar = () => blocoNegociacaoLead(fundo, l, editavel)
 
+  // ---- corrigir / excluir uma linha do histórico --------------------
+  // Até aqui o histórico só sabia crescer: lançou duplicado ou no lead
+  // errado, ficava de pé pra sempre. Agora toda linha tem ✏️ e 🗑.
+  // Excluir passa pelo excluir_registro, que guarda cópia, autor e
+  // motivo — corrigir não é apagar rastro.
+  // Quem pode o quê é o mesmo critério do resto do CRM: preço é mais
+  // fechado que o resto, porque é ele que prova reajuste no meio da
+  // negociação.
+  const nc = nivelCrm()
+  const podeCorrigir = editavel && nc >= 2
+  const podeApagar = editavel && (nc >= 3 || ehAdminSistema())
+  const podeMexerNoPreco = editavel && (nc >= 4 || ehAdminSistema())
+
+  const botoesLinha = (tipo, id) => {
+    const corrigir = tipo === 'preco' ? podeMexerNoPreco : podeCorrigir
+    const apagar = tipo === 'preco' ? podeMexerNoPreco : podeApagar
+    if (!id || (!corrigir && !apagar)) return ''
+    return `<span style="margin-left:auto;display:flex;gap:2px;flex:none;">
+      ${corrigir ? `<button type="button" class="lnk-crud ng-editar" data-tipo="${tipo}"
+        data-id="${esc(id)}" title="corrigir">✏️</button>` : ''}
+      ${apagar ? `<button type="button" class="lnk-crud ng-apagar" data-tipo="${tipo}"
+        data-id="${esc(id)}" title="excluir">🗑</button>` : ''}
+    </span>`
+  }
+  // envelope de uma linha: o que o ✏️ e o 🗑 procuram pra saber onde abrir
+  const linhaCrud = (tipo, id, dentro) => id
+    ? `<div data-hist-linha="${tipo}:${esc(id)}">${dentro}<div class="ng-edit-cx"></div></div>`
+    : dentro
+
   // discagem desta pessoa neste lead, ainda sem resultado — é ela que o
   // relato ou o formulário devem FECHAR, em vez de abrir outra linha
   const doze = Date.now() - 12 * 3600 * 1000
@@ -19188,7 +19222,7 @@ async function blocoNegociacaoLead (fundo, l, editavel) {
   const linhaPreco = (p, i) => {
     const ant = i > 0 ? precos[i - 1] : null
     const v = ant ? variacaoPreco(ant.preco, p.preco) : null
-    return `
+    return linhaCrud('preco', p.id, `
       <div style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;font-size:12.5px;padding:4px 0;border-top:${i ? '1px solid var(--line2)' : 'none'};">
         <b style="min-width:120px;">R$ ${fmtNum(p.preco)}<span class="texto-dim2" style="font-weight:400;font-size:11px;">/${esc((p.unidade || 'TONELADA').toLowerCase())}</span></b>
         ${v ? `<span style="font-weight:700;color:${v.subiu ? 'var(--critico-text)' : 'var(--good-text)'};">
@@ -19200,7 +19234,8 @@ async function blocoNegociacaoLead (fundo, l, editavel) {
         ${p.frete ? `<span class="texto-dim2">${esc(p.frete)}</span>` : ''}
         ${p.definido_por ? `<span class="texto-dim2">definido por ${esc(p.definido_por)}</span>` : ''}
         ${p.motivo ? `<span class="texto-dim2" style="font-style:italic;">${esc(p.motivo)}</span>` : ''}
-      </div>`
+        ${botoesLinha('preco', p.id)}
+      </div>`)
   }
 
   const avisoReajuste = mov && mov.subiu ? `
@@ -19238,7 +19273,7 @@ async function blocoNegociacaoLead (fundo, l, editavel) {
   const linhaObjecao = o => {
     const doCat = achaObjecao(o.codigo)
     const sugestoes = (doCat?.respostas || [])
-    return `
+    return linhaCrud('objecao', o.id, `
       <div style="padding:8px 0;border-top:1px solid var(--line2);font-size:12.5px;">
         <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;">
           <b>${esc(o.rotulo)}</b>
@@ -19246,6 +19281,7 @@ async function blocoNegociacaoLead (fundo, l, editavel) {
           ${o.contornada
             ? `<span class="badge-bom">contornada</span>`
             : (editavel ? `<button type="button" class="btn-secundario mini obj-contornar" data-id="${o.id}">marcar contornada</button>` : '')}
+          ${botoesLinha('objecao', o.id)}
         </div>
         ${o.observacao ? `<div class="texto-dim" style="margin-top:3px;">${esc(o.observacao)}</div>` : ''}
         ${o.contornada && o.resposta ? `<div class="texto-dim" style="margin-top:3px;">↳ ${esc(o.resposta)}</div>` : ''}
@@ -19256,14 +19292,15 @@ async function blocoNegociacaoLead (fundo, l, editavel) {
               ${sugestoes.map(s => `<li>${esc(s.texto)}</li>`).join('')}
             </ul>
           </details>` : ''}
-      </div>`
+      </div>`)
   }
 
   // ---- perda -------------------------------------------------------
-  const blocoPerda = perda ? `
+  const blocoPerda = perda ? linhaCrud('perda', perda.id, `
     <div style="margin-top:8px;padding:10px 12px;border-left:3px solid ${corAtribuicao(perda.atribuicao)};background:var(--hover-bg);font-size:12.5px;line-height:1.6;">
-      <div><b>Perdido:</b> ${esc(perda.rotulo)}
-        <span class="texto-dim2">(causa ${esc(ROTULO_ATRIBUICAO[perda.atribuicao] || perda.atribuicao)})</span></div>
+      <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;"><span><b>Perdido:</b> ${esc(perda.rotulo)}
+        <span class="texto-dim2">(causa ${esc(ROTULO_ATRIBUICAO[perda.atribuicao] || perda.atribuicao)})</span></span>
+        ${botoesLinha('perda', perda.id)}</div>
       ${perda.observacao ? `<div class="texto-dim">${esc(perda.observacao)}</div>` : ''}
       ${perda.concorrente ? `<div class="texto-dim">Concorrente: ${esc(perda.concorrente)}${
         perda.preco_concorrente ? ` a R$ ${fmtNum(perda.preco_concorrente)}` : ''}</div>` : ''}
@@ -19271,7 +19308,7 @@ async function blocoNegociacaoLead (fundo, l, editavel) {
         Nosso preço tinha subido de R$ ${fmtNum(perda.preco_inicial)} para R$ ${fmtNum(perda.preco_final)}
         (+${Number(perda.variacao_pct).toFixed(1)}%) antes da perda.</div>` : ''}
       <div class="texto-dim2" style="font-size:11px;">registrado por ${esc(perda.quem || '—')} em ${fmtData(perda.quando) || '—'}</div>
-    </div>` : ''
+    </div>`) : ''
 
   alvo.innerHTML = `
     <div class="cabeca-secao" style="margin-top:16px;margin-bottom:4px;">
@@ -19317,15 +19354,16 @@ async function blocoNegociacaoLead (fundo, l, editavel) {
         <span class="texto-dim">Conta o que deu — pelo microfone ou pelo formulário — pra essa ligação
         deixar de ser só uma tentativa.</span></div>` : ''}
       ${(ligacoes || []).length
-        ? `<div style="margin-top:6px;">${ligacoes.map((g, i) => `
+        ? `<div style="margin-top:6px;">${ligacoes.map((g, i) => linhaCrud('ligacao', g.id, `
             <div style="padding:7px 0;border-top:${i ? '1px solid var(--line2)' : 'none'};font-size:12.5px;">
               <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;">
                 <b>${esc(ROTULO_RESULTADO_LIGACAO[g.resultado] || g.resultado)}</b>
                 <span class="texto-dim2">${fmtQuando(g.criado_em) || ''}${g.pessoa?.nome ? ' · ' + esc(g.pessoa.nome) : ''}</span>
                 ${g.audio_url ? `<button type="button" class="btn-secundario mini ng-ouvir" data-caminho="${esc(g.audio_url)}">ouvir</button>` : ''}
+                ${botoesLinha('ligacao', g.id)}
               </div>
               ${g.resumo_ia || g.observacao ? `<div class="texto-dim" style="margin-top:2px;">${esc(g.resumo_ia || g.observacao)}</div>` : ''}
-            </div>`).join('')}</div>`
+            </div>`)).join('')}</div>`
         : `<p class="texto-dim2" style="font-size:12px;margin:6px 0 0;">Nenhuma ligação registrada.</p>`}
       <div id="ng-form-relato"></div>
     </div>
@@ -19457,6 +19495,158 @@ async function blocoNegociacaoLead (fundo, l, editavel) {
   // ---- registrar perda ---------------------------------------------
   const btnPerder = alvo.querySelector('#ng-perder')
   if (btnPerder) btnPerder.onclick = () => abrirFormPerda(alvo, l, cat, mov, recarregar)
+
+  // ---- corrigir e excluir linha do histórico -------------------------
+  const acharRegistro = (tipo, id) =>
+    tipo === 'preco' ? precos.find(x => String(x.id) === id)
+      : tipo === 'objecao' ? objecoes.find(x => String(x.id) === id)
+        : tipo === 'perda' ? (perda && String(perda.id) === id ? perda : null)
+          : (ligacoes || []).find(x => String(x.id) === id)
+
+  const descreverRegistro = (tipo, r) => {
+    if (!r) return 'registro do histórico'
+    if (tipo === 'preco') return `preço R$ ${fmtNum(r.preco)}/${String(r.unidade || 'TONELADA').toLowerCase()}${
+      r.produto ? ' — ' + r.produto : ''} de ${fmtData(r.quando) || '—'}`
+    if (tipo === 'objecao') return `objeção "${r.rotulo}" de ${fmtData(r.quando) || '—'}`
+    if (tipo === 'perda') return `perda "${r.rotulo}" de ${fmtData(r.quando) || '—'}`
+    return `ligação ${ROTULO_RESULTADO_LIGACAO[r.resultado] || r.resultado} de ${fmtQuando(r.criado_em) || '—'}`
+  }
+  const TABELA_HIST = { preco: 'lead_preco', objecao: 'lead_objecao', perda: 'lead_perda', ligacao: 'lead_ligacao' }
+
+  alvo.querySelectorAll('.ng-editar').forEach(b => {
+    b.onclick = () => {
+      const envelope = b.closest('[data-hist-linha]')
+      const cx = envelope?.querySelector('.ng-edit-cx')
+      if (!cx) return
+      if (cx.innerHTML) { cx.innerHTML = ''; return }   // segundo clique fecha
+      formEditarHistorico(cx, b.dataset.tipo, acharRegistro(b.dataset.tipo, b.dataset.id), cat, recarregar)
+    }
+  })
+
+  alvo.querySelectorAll('.ng-apagar').forEach(b => {
+    b.onclick = () => {
+      const tipo = b.dataset.tipo
+      const r = acharRegistro(tipo, b.dataset.id)
+      excluirComJustificativa({
+        tabela: TABELA_HIST[tipo], id: b.dataset.id, modulo: 'CRM',
+        titulo: `Excluir ${tipo === 'preco' ? 'preço' : tipo} do histórico`,
+        descricao: `${l.nome ? l.nome + ' — ' : ''}${descreverRegistro(tipo, r)}`,
+        aoExcluir: recarregar
+      })
+    }
+  })
+}
+
+// ---------------------------------------------------------------
+// Corrigir uma linha do histórico da ficha (preço, objeção, perda,
+// ligação). Abre dentro da própria linha, como o resto do bloco de
+// negociação faz — nada de modal em cima de modal.
+//
+// Quem grava é o crm_historico_editar: ele decide QUAIS colunas podem
+// mudar e traduz código de catálogo em id. Aqui só se monta o formulário
+// e se lê o que a pessoa escreveu.
+// ---------------------------------------------------------------
+function formEditarHistorico (cx, tipo, r, cat, recarregar) {
+  if (!r) { cx.innerHTML = `<p class="texto-dim2" style="font-size:11.5px;">
+    Esse registro não está mais na tela. Feche e abra a ficha de novo.</p>`; return }
+
+  const campo = (rotulo, dentro, span = 1) =>
+    `<div class="campo" ${span > 1 ? `style="grid-column:span ${span};"` : ''}><label>${rotulo}</label>${dentro}</div>`
+  const txt = (id, valor, ph = '') =>
+    `<input id="${id}" value="${esc(valor ?? '')}" placeholder="${esc(ph)}">`
+  const num = (id, valor, passo = '0.01') =>
+    `<input id="${id}" type="number" step="${passo}" inputmode="decimal" value="${valor ?? ''}">`
+  // Se o valor gravado não está mais na lista (objeção desativada do
+  // catálogo, unidade antiga), ele entra como opção mesmo assim: senão o
+  // select abriria na primeira opção e trocaria o registro sozinho.
+  const opcoes = (lista, atual) => {
+    const a = String(atual ?? '')
+    const temAtual = a === '' || lista.some(([v]) => String(v) === a)
+    const todas = temAtual ? lista : [[a, `${a} (fora do catálogo)`], ...lista]
+    return todas.map(([v, rot]) =>
+      `<option value="${esc(v)}" ${String(v) === a ? 'selected' : ''}>${esc(rot)}</option>`).join('')
+  }
+
+  let grade = ''
+  if (tipo === 'preco') {
+    grade = `
+      ${campo('Preço (R$) *', num('ed-preco', r.preco))}
+      ${campo('Unidade', `<select id="ed-unidade">${opcoes(
+        [['TONELADA', 'por tonelada'], ['SACA', 'por saca'], ['TOTAL', 'valor total']], r.unidade)}</select>`)}
+      ${campo('Produto', txt('ed-produto', r.produto, 'ex: MAP, KCl...'))}
+      ${campo('Volume (t)', num('ed-volume', r.volume))}
+      ${campo('Condição', txt('ed-condicao', r.condicao, 'ex: 30/60/90'))}
+      ${campo('Frete', `<select id="ed-frete">${opcoes(
+        [['', '—'], ['CIF', 'CIF'], ['FOB', 'FOB']], r.frete)}</select>`)}
+      ${campo('Quem definiu o preço', txt('ed-quem', r.definido_por))}
+      ${campo('Por que esse preço / o que mudou', txt('ed-motivo', r.motivo), 2)}`
+  } else if (tipo === 'objecao') {
+    grade = `
+      ${campo('Qual objeção', `<select id="ed-codigo">${opcoes(
+        (cat.objecoes || []).map(o => [o.codigo, o.rotulo]), r.codigo)}</select>`, 2)}
+      ${campo('Onde apareceu', `<select id="ed-origem">${opcoes(
+        [['LIGACAO', 'Ligação'], ['WHATSAPP', 'WhatsApp'], ['VISITA', 'Visita'],
+          ['IA', 'Robô'], ['OUTRO', 'Outro']], r.origem)}</select>`)}
+      ${campo('Situação', `<select id="ed-contornada">${opcoes(
+        [['false', 'em aberto'], ['true', 'contornada']], r.contornada ? 'true' : 'false')}</select>`)}
+      ${campo('Observação', txt('ed-obs', r.observacao), 2)}
+      ${campo('Como foi contornada', txt('ed-resp', r.resposta, 'só se estiver contornada'), 2)}`
+  } else if (tipo === 'perda') {
+    grade = `
+      ${campo('Motivo da perda', `<select id="ed-motcod">${opcoes(
+        (cat.motivos_perda || []).map(m => [m.codigo, m.rotulo]), r.codigo)}</select>`, 2)}
+      ${campo('Concorrente', txt('ed-conc', r.concorrente))}
+      ${campo('Preço do concorrente (R$)', num('ed-precoconc', r.preco_concorrente))}
+      ${campo('Observação', txt('ed-obs', r.observacao), 2)}`
+  } else {
+    grade = `
+      ${/* vem do ROTULO, não do RESULTADO_LIGACAO: aquele não tem DISCOU, e
+            uma discagem em aberto viraria "Atendeu" sozinha ao salvar */ ''}
+      ${campo('O que deu', `<select id="ed-res">${opcoes(
+        Object.entries(ROTULO_RESULTADO_LIGACAO), r.resultado)}</select>`, 2)}
+      ${campo('Relato da ligação', `<textarea id="ed-obs" style="min-height:70px;">${
+        esc(r.resumo_ia || r.observacao || '')}</textarea>`, 2)}`
+  }
+
+  cx.innerHTML = `
+    <div style="margin-top:8px;padding:10px 0 4px;border-top:1px dashed var(--line2);">
+      <div class="texto-dim2" style="font-size:11px;margin-bottom:6px;">
+        Corrigindo o registro. O que você escrever aqui substitui o que está gravado.</div>
+      <div class="form-grade" style="grid-template-columns:repeat(2,1fr);">${grade}</div>
+      <div class="acoes" style="margin-top:6px;">
+        <button type="button" class="btn mini" id="ed-salvar">Salvar correção</button>
+        <button type="button" class="btn-secundario mini" id="ed-cancelar">Cancelar</button>
+      </div>
+    </div>`
+
+  const q = s => cx.querySelector(s)
+  const val = s => (q(s)?.value ?? '').trim()
+  q('#ed-cancelar').onclick = () => { cx.innerHTML = '' }
+
+  q('#ed-salvar').onclick = async () => {
+    let dados
+    if (tipo === 'preco') {
+      if (!Number(val('#ed-preco')) || Number(val('#ed-preco')) <= 0) { alert('Escreva o preço.'); return }
+      dados = { preco: val('#ed-preco'), unidade: val('#ed-unidade'), produto: val('#ed-produto'),
+        volume: val('#ed-volume'), condicao: val('#ed-condicao'), frete: val('#ed-frete'),
+        definido_por_nome: val('#ed-quem'), motivo: val('#ed-motivo') }
+    } else if (tipo === 'objecao') {
+      dados = { codigo: val('#ed-codigo'), origem: val('#ed-origem'), observacao: val('#ed-obs'),
+        contornada: val('#ed-contornada'), resposta_livre: val('#ed-resp') }
+    } else if (tipo === 'perda') {
+      dados = { motivo_codigo: val('#ed-motcod'), observacao: val('#ed-obs'),
+        concorrente: val('#ed-conc'), preco_concorrente: val('#ed-precoconc') }
+    } else {
+      dados = { resultado: val('#ed-res'), observacao: val('#ed-obs') }
+    }
+    const b = q('#ed-salvar')
+    b.disabled = true; b.textContent = 'salvando...'
+    const { error } = await db.rpc('crm_historico_editar', {
+      p_tipo: tipo.toUpperCase(), p_id: r.id, p_dados: dados
+    })
+    if (error) { alert(error.message); b.disabled = false; b.textContent = 'Salvar correção'; return }
+    recarregar()
+  }
 }
 
 // Formulário de perda. Mostra, antes de gravar, o que vai ficar
@@ -19580,11 +19770,17 @@ async function painelHistoricoLigacoes (caixa, lead) {
       : r === 'DISCOU' ? 'var(--warn-text)'
       : r === 'NUMERO_ERRADO' ? 'var(--critico-text)' : 'var(--dim)'
 
+  // corrigir/excluir a ligação aqui também: quem está trabalhando a fila
+  // é quem percebe na hora que lançou duplicado ou no lead errado
+  const nc = nivelCrm()
+  const podeCorrigir = nc >= 2
+  const podeApagar = nc >= 3 || ehAdminSistema()
+
   const linha = g => {
     const texto = g.resumo_ia || g.observacao || ''
     const temMais = g.transcricao && g.transcricao !== texto
     return `
-      <div style="padding:9px 0;border-top:1px solid var(--line2);">
+      <div data-hist-linha="ligacao:${esc(g.id)}" style="padding:9px 0;border-top:1px solid var(--line2);">
         <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;font-size:11.5px;">
           <b style="color:${corDoResultado(g.resultado)};">
             ${esc(ROTULO_RESULTADO_LIGACAO[g.resultado] ?? g.resultado)}</b>
@@ -19593,6 +19789,12 @@ async function painelHistoricoLigacoes (caixa, lead) {
           ${g.duracao_seg ? `<span class="texto-dim2">· ${Math.round(g.duracao_seg / 60)} min</span>` : ''}
           ${g.resultado === 'DISCOU'
             ? `<span class="texto-dim2" style="font-style:italic;">— ligou e não disse o que deu</span>` : ''}
+          ${podeCorrigir || podeApagar ? `<span style="margin-left:auto;display:flex;gap:2px;flex:none;">
+            ${podeCorrigir ? `<button type="button" class="lnk-crud hl-editar" data-id="${esc(g.id)}"
+              title="corrigir">✏️</button>` : ''}
+            ${podeApagar ? `<button type="button" class="lnk-crud hl-apagar" data-id="${esc(g.id)}"
+              title="excluir">🗑</button>` : ''}
+          </span>` : ''}
         </div>
         ${texto ? `<p style="font-size:12.5px;line-height:1.6;margin:5px 0 0;max-width:70ch;">${esc(texto)}</p>` : ''}
         ${temMais ? `<details style="margin-top:4px;">
@@ -19601,6 +19803,7 @@ async function painelHistoricoLigacoes (caixa, lead) {
             white-space:pre-wrap;">${esc(g.transcricao)}</p></details>` : ''}
         ${g.audio_url ? `<audio controls preload="none" src="${esc(g.audio_url)}"
           style="margin-top:6px;height:30px;max-width:260px;"></audio>` : ''}
+        <div class="ng-edit-cx"></div>
       </div>`
   }
 
@@ -19615,6 +19818,30 @@ async function painelHistoricoLigacoes (caixa, lead) {
       </div>
       ${ligacoes.map(linha).join('')}
     </div>`
+
+  const recarregar = () => painelHistoricoLigacoes(caixa, lead)
+
+  caixa.querySelectorAll('.hl-editar').forEach(b => {
+    b.onclick = () => {
+      const cx = b.closest('[data-hist-linha]')?.querySelector('.ng-edit-cx')
+      if (!cx) return
+      if (cx.innerHTML) { cx.innerHTML = ''; return }
+      formEditarHistorico(cx, 'ligacao', ligacoes.find(g => String(g.id) === b.dataset.id), {}, recarregar)
+    }
+  })
+
+  caixa.querySelectorAll('.hl-apagar').forEach(b => {
+    b.onclick = () => {
+      const g = ligacoes.find(x => String(x.id) === b.dataset.id)
+      excluirComJustificativa({
+        tabela: 'lead_ligacao', id: b.dataset.id, modulo: 'CRM',
+        titulo: 'Excluir ligação do histórico',
+        descricao: `${lead.nome ? lead.nome + ' — ' : ''}ligação ${
+          g ? (ROTULO_RESULTADO_LIGACAO[g.resultado] || g.resultado) : ''} de ${g ? (fmtQuando(g.criado_em) || '—') : '—'}`,
+        aoExcluir: recarregar
+      })
+    }
+  })
 }
 
 const COLUNAS_ORIGINACAO = [
@@ -19927,14 +20154,35 @@ let ORIG_FILTRO = 'todos'
 // mexe nisso: ele já só enxerga o que é dele, por RLS.
 let ORIG_PESSOA = ''
 let ORIG_BUSCA = ''
-// A tela é redesenhada inteira a cada tecla, então o foco e a posição do
-// cursor precisam voltar na mão — senão a pessoa digita "jad" e perde o
-// campo no meio da palavra.
+// Busca: a pessoa escreve à vontade, a tela NÃO pisca. Quem digita manda
+// no campo; o resultado chega por baixo quando o banco responde. Por isso
+// o redesenho que vem da busca não apaga a tela, guarda o que já está
+// escrito e onde o cursor estava, e devolve tudo no lugar depois.
 let ORIG_FOCO_BUSCA = false
 let ORIG_ESPERA = null
+let ORIG_BUSCANDO = false   // este redesenho veio da busca? então não limpa a tela
+let ORIG_DIGITADO = null    // o que estava escrito no campo na hora da troca
+let ORIG_CARET = null       // onde o cursor estava na hora da troca
+let ORIG_SEQ = 0            // resposta atrasada não atropela busca mais nova
 
 async function crmOriginacao (alvo, editavel, gerencia) {
-  alvo.innerHTML = `<p class="texto-dim2">carregando fila...</p>`
+  // Se o redesenho veio da busca, a tela fica como está: só a lista
+  // desbota e o campo ganha uma borda dourada dizendo "estou procurando".
+  // Limpar tudo aqui é o que fazia a pessoa perder o campo no meio da
+  // palavra — uma letra e sumia.
+  // Duas buscas no ar ao mesmo tempo: vale a última. Sem isso a resposta
+  // de "jo" pode chegar depois da de "joão" e mandar a tela pra trás.
+  const meuTurno = ++ORIG_SEQ
+  const campoVivo = ORIG_BUSCANDO ? alvo.querySelector('#org-busca') : null
+  if (campoVivo) {
+    ORIG_DIGITADO = campoVivo.value
+    ORIG_CARET = campoVivo.selectionStart
+    campoVivo.style.borderColor = 'var(--gold)'
+    const listaVelha = alvo.querySelector('#org-lista')
+    if (listaVelha) { listaVelha.style.opacity = '.45'; listaVelha.style.transition = 'opacity .12s' }
+  } else {
+    alvo.innerHTML = `<p class="texto-dim2">carregando fila...</p>`
+  }
 
   const vendoArquivados = ORIG_FILTRO === 'arquivados'
   const [{ data, error }, cat] = await Promise.all([
@@ -19943,6 +20191,8 @@ async function crmOriginacao (alvo, editavel, gerencia) {
       p_busca: ORIG_BUSCA || null }),
     catalogosNegociacao()
   ])
+  if (meuTurno !== ORIG_SEQ) return   // chegou tarde: já tem busca mais nova
+  ORIG_BUSCANDO = false
   if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
 
   const d = data || {}
@@ -20136,10 +20386,10 @@ async function crmOriginacao (alvo, editavel, gerencia) {
         style="color:var(--critico-text);border-color:var(--critico-text);">🗑 Excluir de vez</button>` : ''}
     </div>` : ''}
 
-    ${ORIG_VISTA === 'quadro'
+    <div id="org-lista">${ORIG_VISTA === 'quadro'
       ? quadroOriginacaoHtml(todos.filter(i => !i.arquivado))
       : (lista.length ? lista.map(cartao).join('')
-        : `<p class="vazio" style="padding:26px 0;">Nada nesse filtro.</p>`)}
+        : `<p class="vazio" style="padding:26px 0;">Nada nesse filtro.</p>`)}</div>
 
     ${todos.length >= 120 ? `<p class="texto-dim2" style="font-size:11px;">
       Mostrando 120 de ${d.total}${ORIG_BUSCA ? ' que deram com a busca' : ' na fila'}.
@@ -20156,41 +20406,51 @@ async function crmOriginacao (alvo, editavel, gerencia) {
 
   const campoBusca = alvo.querySelector('#org-busca')
   if (campoBusca) {
-    // devolve o foco e põe o cursor no fim, depois do redesenho
+    // dispara a busca: só depois que a pessoa parar de escrever
+    const procurar = texto => {
+      clearTimeout(ORIG_ESPERA)
+      if (texto.trim() === ORIG_BUSCA) return
+      ORIG_BUSCA = texto.trim()
+      ORIG_FOCO_BUSCA = true
+      ORIG_BUSCANDO = true
+      recarregar()
+    }
+
     if (ORIG_FOCO_BUSCA) {
       ORIG_FOCO_BUSCA = false
+      // o que a pessoa escreveu enquanto o banco respondia vale mais que o
+      // value que veio do redesenho
+      if (ORIG_DIGITADO != null && ORIG_DIGITADO !== campoBusca.value) campoBusca.value = ORIG_DIGITADO
       campoBusca.focus()
-      const fim = campoBusca.value.length
-      campoBusca.setSelectionRange(fim, fim)
+      const pos = ORIG_CARET == null ? campoBusca.value.length
+        : Math.min(ORIG_CARET, campoBusca.value.length)
+      campoBusca.setSelectionRange(pos, pos)
+      const aindaDigitado = campoBusca.value
+      ORIG_DIGITADO = null; ORIG_CARET = null
+      // escreveu mais durante a ida ao banco: procura de novo, sem piscar
+      if (aindaDigitado.trim() !== ORIG_BUSCA) {
+        ORIG_ESPERA = setTimeout(() => procurar(aindaDigitado), 120)
+      }
     }
+
     campoBusca.oninput = () => {
       const texto = campoBusca.value
       clearTimeout(ORIG_ESPERA)
-      // espera a pessoa parar de digitar: uma ida ao banco por tecla é
-      // busca que pisca e devolve resultado de letra antiga
-      ORIG_ESPERA = setTimeout(() => {
-        if (texto.trim() === ORIG_BUSCA) return
-        ORIG_BUSCA = texto.trim()
-        ORIG_FOCO_BUSCA = true
-        recarregar()
-      }, 350)
+      // 450ms: dá tempo de escrever a palavra inteira. Uma ida ao banco por
+      // tecla é busca que pisca e devolve resultado de letra antiga.
+      ORIG_ESPERA = setTimeout(() => procurar(texto), 450)
     }
     campoBusca.onkeydown = e => {
-      if (e.key === 'Escape' && ORIG_BUSCA) {
-        clearTimeout(ORIG_ESPERA); ORIG_BUSCA = ''; ORIG_FOCO_BUSCA = true; recarregar()
+      if (e.key === 'Escape' && (ORIG_BUSCA || campoBusca.value)) {
+        clearTimeout(ORIG_ESPERA); campoBusca.value = ''; procurar('')
       }
-      if (e.key === 'Enter') {
-        clearTimeout(ORIG_ESPERA)
-        if (campoBusca.value.trim() !== ORIG_BUSCA) {
-          ORIG_BUSCA = campoBusca.value.trim(); ORIG_FOCO_BUSCA = true; recarregar()
-        }
-      }
+      if (e.key === 'Enter') { e.preventDefault(); procurar(campoBusca.value) }
     }
   }
 
   const limparBusca = alvo.querySelector('#org-limpar-busca')
   if (limparBusca) limparBusca.onclick = () => {
-    clearTimeout(ORIG_ESPERA); ORIG_BUSCA = ''; ORIG_FOCO_BUSCA = true; recarregar()
+    clearTimeout(ORIG_ESPERA); ORIG_BUSCA = ''; ORIG_FOCO_BUSCA = true; ORIG_BUSCANDO = true; recarregar()
   }
 
   // Registrar o resultado da ligação de originação. É o clique que solta
