@@ -19545,6 +19545,78 @@ function abrirFormPerda (alvo, l, cat, mov, recarregar) {
 // consultor, ou não conseguiu e passou pro Eduardo. Do Eduardo em
 // diante o lead não volta pra cá; ele segue até a reunião do consultor.
 // ---------------------------------------------------------------
+// ---------------------------------------------------------------
+// Histórico de ligações no próprio card da originação.
+//
+// Por que existe: as ligações sempre foram guardadas — cada uma vira uma
+// linha em lead_ligacao e nada é sobrescrito. Só que o card mostrava
+// apenas o placar ("7 tentativas · última 15/09") e a gaveta do 🎙️ é um
+// gravador, sempre em branco quando abre. Da cadeira de quem liga,
+// parecia que o relato anterior tinha sumido a cada novo registro.
+//
+// Não sumia: estava na ficha, a dois cliques de distância. Aqui ele vem
+// pro lugar onde a pessoa está trabalhando.
+// ---------------------------------------------------------------
+async function painelHistoricoLigacoes (caixa, lead) {
+  caixa.innerHTML = `<p class="texto-dim2" style="font-size:12px;margin:10px 0 0;">carregando o histórico...</p>`
+
+  const { data: ligacoes, error } = await db.from('lead_ligacao')
+    .select('id,resultado,observacao,resumo_ia,transcricao,audio_url,duracao_seg,criado_em,pessoa:pessoa_id(nome)')
+    .eq('lead_id', lead.id).order('criado_em', { ascending: false }).limit(30)
+
+  if (error) {
+    caixa.innerHTML = `<p style="font-size:12px;color:var(--warn-text);margin:10px 0 0;">${esc(error.message)}</p>`
+    return
+  }
+  if (!(ligacoes || []).length) {
+    caixa.innerHTML = `<p class="texto-dim2" style="font-size:12px;margin:10px 0 0;">Nenhuma ligação registrada ainda.</p>`
+    return
+  }
+
+  // DISCOU é o clique em "Ligar" que ninguém voltou pra fechar. Fica na
+  // lista de propósito: é ele que mostra o buraco do processo.
+  const corDoResultado = r =>
+    r === 'ATENDEU' ? 'var(--good-text)'
+      : r === 'DISCOU' ? 'var(--warn-text)'
+      : r === 'NUMERO_ERRADO' ? 'var(--critico-text)' : 'var(--dim)'
+
+  const linha = g => {
+    const texto = g.resumo_ia || g.observacao || ''
+    const temMais = g.transcricao && g.transcricao !== texto
+    return `
+      <div style="padding:9px 0;border-top:1px solid var(--line2);">
+        <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;font-size:11.5px;">
+          <b style="color:${corDoResultado(g.resultado)};">
+            ${esc(ROTULO_RESULTADO_LIGACAO[g.resultado] ?? g.resultado)}</b>
+          <span class="texto-dim2">${fmtQuando(g.criado_em) || ''}</span>
+          ${g.pessoa?.nome ? `<span class="texto-dim2">· ${esc(g.pessoa.nome)}</span>` : ''}
+          ${g.duracao_seg ? `<span class="texto-dim2">· ${Math.round(g.duracao_seg / 60)} min</span>` : ''}
+          ${g.resultado === 'DISCOU'
+            ? `<span class="texto-dim2" style="font-style:italic;">— ligou e não disse o que deu</span>` : ''}
+        </div>
+        ${texto ? `<p style="font-size:12.5px;line-height:1.6;margin:5px 0 0;max-width:70ch;">${esc(texto)}</p>` : ''}
+        ${temMais ? `<details style="margin-top:4px;">
+          <summary class="texto-dim2" style="font-size:11px;cursor:pointer;">o que foi falado, na íntegra</summary>
+          <p class="texto-dim" style="font-size:12px;line-height:1.6;margin:5px 0 0;max-width:70ch;
+            white-space:pre-wrap;">${esc(g.transcricao)}</p></details>` : ''}
+        ${g.audio_url ? `<audio controls preload="none" src="${esc(g.audio_url)}"
+          style="margin-top:6px;height:30px;max-width:260px;"></audio>` : ''}
+      </div>`
+  }
+
+  const semRelato = (ligacoes || []).filter(g => g.resultado === 'DISCOU').length
+
+  caixa.innerHTML = `
+    <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line);">
+      <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;margin-bottom:2px;">
+        <b style="font-size:12.5px;">${ligacoes.length} ligação(ões) registrada(s)</b>
+        ${semRelato ? `<span class="texto-dim2" style="font-size:11px;color:var(--warn-text);">
+          ${semRelato} sem relato</span>` : ''}
+      </div>
+      ${ligacoes.map(linha).join('')}
+    </div>`
+}
+
 const COLUNAS_ORIGINACAO = [
   { chave: 'a_contatar',      nome: 'A contatar',      dica: 'ninguém falou ainda' },
   { chave: 'tentando',        nome: 'Tentando',        dica: 'ligou e não falou' },
@@ -19981,6 +20053,8 @@ async function crmOriginacao (alvo, editavel, gerencia) {
             : `<button type="button" class="btn mini org-ligar">📞 Liguei pra ${esc(telefoneBonito(tel))}</button>`)}
         ${editavel ? `<button type="button" class="btn-secundario mini org-resultado">Registrar resultado</button>` : ''}
         ${editavel ? `<button type="button" class="btn-secundario mini org-relato">🎙️ Contar como foi</button>` : ''}
+        ${Number(i.tentativas) ? `<button type="button" class="btn-secundario mini org-historico"
+          title="todas as ligações desse lead">🕘 Histórico (${i.tentativas})</button>` : ''}
         <button type="button" class="btn-secundario mini org-ficha">Abrir ficha</button>
         ${editavel && !i.no_sdr && !semTelefone && !i.bloqueio_lgpd
           ? `<button type="button" class="btn-secundario mini org-sdr">→ Passar pro Eduardo</button>` : ''}
@@ -20193,6 +20267,10 @@ async function crmOriginacao (alvo, editavel, gerencia) {
     const btnRel = card.querySelector('.org-relato')
     if (btnRel) btnRel.onclick = () =>
       abrirGavetaDoCartao(card, 'relato', cx => painelRelato(cx, item, recarregar))
+
+    const btnHist = card.querySelector('.org-historico')
+    if (btnHist) btnHist.onclick = () =>
+      abrirGavetaDoCartao(card, 'historico', cx => painelHistoricoLigacoes(cx, item))
 
     const marca = card.querySelector('.org-marca')
     if (marca) marca.onchange = () => {
