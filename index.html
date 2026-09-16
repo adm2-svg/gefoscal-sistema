@@ -903,6 +903,26 @@ tbody tr:hover { background: var(--hover-bg); }
 .faixa-etapa button .n { display:block; font-size:16px; font-family:var(--serif); }
 
 
+/* ---- Meu RH ----------------------------------------------------
+   A tela era uma pilha de títulos iguais, e tudo parecia ter o mesmo
+   peso. Cada seção agora tem ícone, uma régua fina e o número do que
+   tem dentro, pra dar onde parar o olho. */
+.mrh-secao { display:flex; align-items:center; gap:9px; margin:22px 0 11px; }
+.mrh-secao:first-of-type { margin-top:0; }
+.mrh-secao .ic { width:28px; height:28px; border-radius:8px; display:grid; place-items:center;
+  background:var(--surface2); border:1px solid var(--line2); font-size:14px; flex:none; }
+.mrh-secao h4 { font-family:var(--serif); font-size:15.5px; margin:0; font-weight:500; }
+.mrh-secao .n { font-size:11px; color:var(--dim2); background:var(--surface2);
+  border-radius:20px; padding:1px 9px; font-variant-numeric:tabular-nums; flex:none; }
+.mrh-secao .risco { flex:1; height:1px; background:var(--line2); }
+.mrh-cartoes { display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:12px; }
+.mrh-num { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:6px; }
+.mrh-num .caixa { background:var(--panel); border:1px solid var(--line); border-radius:12px;
+  padding:13px 15px; display:flex; flex-direction:column; gap:2px; }
+.mrh-num .caixa .v { font-family:var(--serif); font-size:27px; line-height:1.05; }
+.mrh-num .caixa .r { font-size:10.5px; text-transform:uppercase; letter-spacing:.07em;
+  color:var(--dim2); line-height:1.35; }
+
 /* ---- Resumo grande do financeiro ---- */
 .resumo-topo { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr));
                gap:12px; margin-bottom:20px; }
@@ -42216,23 +42236,90 @@ const DISC_DUPLA = {
   CS: 'Qualidade acima de quantidade. Detalhista, discreto, e sensível a crítica no trabalho dele.'
 }
 
+// A linha dos 50 é o que separa "alto" de "baixo" no DISC — sem ela
+// desenhada, quatro barras coloridas não dizem nada: a pessoa não sabe
+// de onde está lendo. Com ela, dá pra ver num relance o que passa e o
+// que não passa da metade.
 const barraDisc = (valores, tamanho = 'normal') => {
   if (!valores) return '<span class="texto-dim2">sem gráfico</span>'
-  const alt = tamanho === 'mini' ? 5 : 8
-  return `<div style="display:flex;gap:${tamanho === 'mini' ? 3 : 5}px;align-items:flex-end;">
+  const mini = tamanho === 'mini'
+  const altura = mini ? 26 : 74
+  return `<div style="display:flex;gap:${mini ? 4 : 10}px;align-items:flex-end;">
     ${DISC_LETRAS.map(l => {
-      const v = Number(valores[l] ?? 0)
-      return `<div style="flex:1;text-align:center;" title="${DISC_FATOR[l].nome}: ${v}">
-        <div style="height:${tamanho === 'mini' ? 22 : 44}px;display:flex;align-items:flex-end;">
-          <div style="width:100%;height:${Math.max(3, v)}%;background:${DISC_FATOR[l].cor};
-            border-radius:${alt}px ${alt}px 2px 2px;opacity:${v >= 50 ? 1 : .5};"></div>
+      const v = Math.max(0, Math.min(100, Number(valores[l] ?? 0)))
+      const f = DISC_FATOR[l]
+      const forte = v >= 50
+      return `<div style="flex:1;min-width:0;text-align:center;" title="${f.nome} — ${f.frase}: ${v}">
+        <div style="position:relative;height:${altura}px;display:flex;align-items:flex-end;
+          background:linear-gradient(var(--line2),var(--line2)) no-repeat left 50%/100% 1px;
+          border-radius:${mini ? 4 : 7}px;">
+          <div style="width:100%;height:${Math.max(4, v)}%;
+            background:${forte ? f.cor : `color-mix(in srgb, ${f.cor} 42%, transparent)`};
+            border:1px solid ${f.cor};border-bottom:none;
+            border-radius:${mini ? 4 : 7}px ${mini ? 4 : 7}px 0 0;
+            display:flex;align-items:flex-start;justify-content:center;">
+            ${!mini && v >= 26 ? `<span style="font-size:10px;font-weight:700;margin-top:3px;
+              color:${forte ? '#fff' : 'var(--txt)'};">${v}</span>` : ''}
+          </div>
         </div>
-        <div style="font-size:${tamanho === 'mini' ? 8.5 : 10}px;font-weight:700;margin-top:2px;
-          color:${v >= 50 ? DISC_FATOR[l].cor : 'var(--dim2)'};">${l}</div>
-        ${tamanho === 'mini' ? '' : `<div class="texto-dim2" style="font-size:9.5px;">${v}</div>`}
+        <div style="font-size:${mini ? 9 : 12}px;font-weight:800;margin-top:4px;
+          color:${forte ? f.cor : 'var(--dim2)'};">${l}${!mini && v < 26 ? `<span class="texto-dim2" style="font-weight:600;"> ${v}</span>` : ''}</div>
+        ${mini ? '' : `<div class="texto-dim2" style="font-size:9px;line-height:1.25;margin-top:1px;">${esc(f.nome)}</div>`}
       </div>`
     }).join('')}
   </div>`
+}
+
+// Natural e adaptado no MESMO gráfico. Separados em dois quadros, a
+// diferença entre os dois — que é o dado que interessa — exigia a
+// pessoa comparar de cabeça duas figuras lado a lado.
+const barraDiscDupla = (nat, ada) => {
+  if (!nat) return '<span class="texto-dim2">sem gráfico</span>'
+  if (!ada) return barraDisc(nat)
+  return `
+    <div style="display:flex;gap:10px;align-items:flex-end;">
+      ${DISC_LETRAS.map(l => {
+        const n = Math.max(0, Math.min(100, Number(nat[l] ?? 0)))
+        const a = Math.max(0, Math.min(100, Number(ada[l] ?? 0)))
+        const f = DISC_FATOR[l]
+        const d = a - n
+        return `<div style="flex:1;min-width:0;text-align:center;"
+          title="${f.nome}: natural ${n}, adaptado ${a}">
+          <div style="position:relative;height:96px;display:flex;align-items:flex-end;
+            background:linear-gradient(var(--line2),var(--line2)) no-repeat left 50%/100% 1px;">
+            <div style="width:100%;height:${Math.max(4, n)}%;
+              background:${n >= 50 ? f.cor : `color-mix(in srgb, ${f.cor} 42%, transparent)`};
+              border:1px solid ${f.cor};border-bottom:none;border-radius:7px 7px 0 0;
+              display:flex;align-items:flex-start;justify-content:center;">
+              ${n >= 22 ? `<span style="font-size:10px;font-weight:700;margin-top:3px;
+                color:${n >= 50 ? '#fff' : 'var(--txt)'};">${n}</span>` : ''}
+            </div>
+            ${/* o adaptado entra como um traço atravessando a barra:
+                  fica óbvio pra que lado a pessoa está se puxando */ ''}
+            <div style="position:absolute;left:-3px;right:-3px;bottom:${a}%;height:0;
+              border-top:2px dashed var(--txt);opacity:.8;"></div>
+            <div style="position:absolute;right:-4px;bottom:calc(${a}% - 6px);font-size:8.5px;
+              font-weight:700;background:var(--panel);padding:0 2px;border-radius:3px;">${a}</div>
+          </div>
+          <div style="font-size:12px;font-weight:800;margin-top:5px;
+            color:${n >= 50 ? f.cor : 'var(--dim2)'};">${l}</div>
+          <div class="texto-dim2" style="font-size:9px;line-height:1.25;">${esc(f.nome)}</div>
+          ${Math.abs(d) >= 15 ? `<div style="font-size:9.5px;font-weight:700;margin-top:2px;
+            color:${d > 0 ? 'var(--warn-text)' : 'var(--dim)'};">${d > 0 ? '▲' : '▼'} ${Math.abs(d)}</div>`
+            : '<div style="height:13px;"></div>'}
+        </div>`
+      }).join('')}
+    </div>
+    <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:10px;
+      padding-top:9px;border-top:1px solid var(--line2);font-size:11px;" class="texto-dim">
+      <span style="display:flex;align-items:center;gap:6px;">
+        <span style="width:16px;height:9px;border:1px solid var(--dim);background:var(--surface2);
+          border-radius:3px 3px 0 0;"></span> barra = <b>natural</b>, como é</span>
+      <span style="display:flex;align-items:center;gap:6px;">
+        <span style="width:16px;border-top:2px dashed var(--txt);"></span>
+        traço = <b>adaptado</b>, como acha que precisa ser</span>
+      <span class="texto-dim2">linha do meio = 50</span>
+    </div>`
 }
 
 // A distância entre ser e ter que ser.
@@ -42420,11 +42507,9 @@ async function abrirPerfilPessoaRH (opts = {}) {
         <p style="font-size:13.5px;line-height:1.55;margin:6px 0 0;">${esc(DISC_DUPLA[dupla])}</p>
       </div>` : ''}
 
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
-        <div class="caixa-texto"><div class="rot">Natural — como é</div>
-          <div style="margin-top:8px;">${barraDisc(disc.disc_natural)}</div></div>
-        <div class="caixa-texto"><div class="rot">Adaptado — como acha que precisa ser</div>
-          <div style="margin-top:8px;">${barraDisc(disc.disc_adaptado)}</div></div>
+      <div class="caixa-texto" style="margin-bottom:14px;">
+        <div class="rot">Como é × como acha que precisa ser</div>
+        <div style="margin-top:12px;">${barraDiscDupla(disc.disc_natural, disc.disc_adaptado)}</div>
       </div>
 
       ${tensao ? `<div style="padding:11px 13px;border-left:3px solid var(--warn-text);background:var(--surface2);
@@ -42938,12 +43023,20 @@ function estilosLikertUmaVez () {
     .lk-chip.escolhida { box-shadow:0 0 0 2px var(--panel), 0 0 0 4px var(--rust); transform:translateY(-2px); }
     .lk-chip.queimada { opacity:.26; cursor:not-allowed; }
     .lk-chip.queimada:hover { transform:none; }
-    .lk-legenda { display:flex; justify-content:space-between; font-size:10px; letter-spacing:.03em;
-      text-transform:uppercase; color:var(--dim2); margin:2px 10px 12px; }
+    /* A legenda fica DEBAIXO das cores, do tamanho exato da régua
+       (5 x 30px + 4 x 5px de vão = 170px). Espalhada na largura toda,
+       "tem tudo a ver" ficava num canto da tela e "nada a ver" no
+       outro, longe das cores que os dois explicam. */
+    .lk-legenda { display:flex; justify-content:space-between; font-size:9.5px; letter-spacing:.03em;
+      text-transform:uppercase; color:var(--dim2); width:170px; gap:6px; }
+    .lk-legenda b { font-weight:700; color:var(--dim); }
+    .lk-rodape { display:flex; justify-content:flex-end; margin:3px 10px 12px; }
     @media (max-width:560px) {
       .lk-linha { flex-direction:column; align-items:stretch; gap:7px; padding:10px; }
       .lk-escala { justify-content:space-between; }
       .lk-chip { width:17%; height:34px; }
+      .lk-rodape { margin:3px 10px 12px; }
+      .lk-legenda { width:100%; }
     }`
   document.head.appendChild(s)
 }
@@ -43089,8 +43182,8 @@ async function abrirQuestionarioLikert (cfg) {
           ${ESCALA_LIKERT.map(e => `<div class="lk-chip" style="background:${e.cor};cursor:default;"
              title="${esc(e.rotulo)}"></div>`).join('')}
         </div>
-        <div class="lk-legenda" style="margin:6px 2px 0;max-width:210px;">
-          <span>tem tudo a ver</span><span>nada a ver</span>
+        <div class="lk-legenda" style="margin:5px 2px 0;">
+          <span><b>tudo</b> a ver</span><span><b>nada</b> a ver</span>
         </div>
       </div>
 
@@ -43153,7 +43246,9 @@ async function abrirQuestionarioLikert (cfg) {
       <p class="texto-dim2" style="font-size:12px;margin:0 0 10px;line-height:1.5;">${r.pergunta}</p>
 
       <div class="lk-bloco" id="lk-linhas"></div>
-      <div class="lk-legenda"><span>tem tudo a ver</span><span>nada a ver</span></div>
+      <div class="lk-rodape">
+        <div class="lk-legenda"><span><b>tudo</b> a ver</span><span><b>nada</b> a ver</span></div>
+      </div>
 
       <div class="recado oculto" id="lk-recado"></div>
       <div class="acoes" style="margin-top:14px;display:flex;gap:8px;align-items:center;">
@@ -43295,11 +43390,9 @@ function abrirQuestionarioDisc (aoTerminar) {
           <span class="chip" style="font-size:12px;font-weight:700;background:rgba(var(--rust-rgb),.14);color:var(--rust);border:none;">${esc(dupla)}</span>
         </div>
         <p class="texto-dim2" style="font-size:12px;margin:0 0 14px;">Este é o seu perfil de comportamento.</p>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
-          <div class="caixa-texto"><div class="rot">Como você é</div>
-            <div style="margin-top:8px;">${barraDisc(res.natural)}</div></div>
-          <div class="caixa-texto"><div class="rot">Como você age no trabalho</div>
-            <div style="margin-top:8px;">${barraDisc(res.adaptado)}</div></div>
+        <div class="caixa-texto" style="margin-bottom:14px;">
+          <div class="rot">Como você é × como você age no trabalho</div>
+          <div style="margin-top:12px;">${barraDiscDupla(res.natural, res.adaptado)}</div>
         </div>
         ${DISC_DUPLA[dupla] ? `<div class="caixa-texto" style="margin-bottom:14px;">
           <div class="rot">Em uma frase</div>
@@ -44149,11 +44242,9 @@ async function blocoMeuDisc (alvo) {
       <h3 style="font-family:var(--serif);font-size:16px;">Seu perfil de comportamento</h3>
       <span class="chip" style="font-size:12px;font-weight:700;background:rgba(var(--rust-rgb),.14);color:var(--rust);border:none;">${esc(dupla || '—')}</span>
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
-      <div class="caixa-texto"><div class="rot">Como você é</div>
-        <div style="margin-top:8px;">${barraDisc(meu.disc_natural)}</div></div>
-      <div class="caixa-texto"><div class="rot">Como você se apresenta</div>
-        <div style="margin-top:8px;">${barraDisc(meu.disc_adaptado)}</div></div>
+    <div class="caixa-texto">
+      <div class="rot">Como você é × como você se apresenta</div>
+      <div style="margin-top:12px;">${barraDiscDupla(meu.disc_natural, meu.disc_adaptado)}</div>
     </div>
     ${DISC_DUPLA[dupla] ? `<p style="font-size:13px;line-height:1.55;margin:12px 0 0;">${esc(DISC_DUPLA[dupla])}</p>` : ''}
     <p class="texto-dim2" style="font-size:11px;margin:10px 0 0;">
@@ -46553,6 +46644,14 @@ function formPdi (item, aoFechar) {
 }
 
 // ----- Meu desempenho (autoatendimento, mesmo sem acesso ao módulo) -----
+// cabeçalho de seção do Meu RH: ícone, nome e quantos itens tem dentro
+function secaoMeuRh (icone, titulo, quantos) {
+  return `<div class="mrh-secao"><span class="ic">${icone}</span>
+    <h4>${esc(titulo)}</h4>
+    ${quantos ? `<span class="n">${quantos}</span>` : ''}
+    <span class="risco"></span></div>`
+}
+
 async function desempMeu (alvo) {
   if (!PERFIL.pessoaId) { alvo.innerHTML = `<p class="vazio">Seu login não está ligado a uma pessoa do cadastro.</p>`; return }
 
@@ -46597,16 +46696,19 @@ async function desempMeu (alvo) {
   }
 
   alvo.innerHTML = `
-    <div class="resumo-topo" style="margin-bottom:16px;">
-      ${kpi('Minha média de conduta', media(notasConduta))}
-      ${kpi('Avaliações recebidas', (conduta || []).length)}
-      ${kpi('Avaliações 360 respondidas sobre mim', (resp360 || []).length)}
-      ${kpi('Planos de desenvolvimento', (pdi || []).length)}
-      ${kpi('Pontos bônus', totalBonus)}
+    <div class="mrh-num">
+      ${[['Média de conduta', media(notasConduta), 'var(--rust)'],
+         ['Avaliações recebidas', (conduta || []).length, 'var(--txt)'],
+         ['360 sobre você', (resp360 || []).length, 'var(--txt)'],
+         ['Planos em aberto', (pdi || []).filter(p => p.status !== 'CONCLUIDO').length, 'var(--txt)'],
+         ['Pontos bônus', totalBonus, totalBonus > 0 ? 'var(--good-text)' : 'var(--dim2)']
+        ].map(([r, v, cor]) => `<div class="caixa">
+          <span class="v" style="color:${cor};">${v}</span>
+          <span class="r">${r}</span></div>`).join('')}
     </div>
 
-    <h4 style="font-family:var(--serif);font-size:15px;margin:0 0 10px;">🎓 Minhas trilhas de treinamento</h4>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px;margin-bottom:18px;">
+    ${secaoMeuRh("🎓", "Minhas trilhas de treinamento", listaAtribs.length)}
+    <div class="mrh-cartoes" style="margin-bottom:18px;">
       ${listaAtribs.map(a => {
         const prog = progressoTrilhas[a.id] || { total: 0, feitos: 0, pct: 0 }
         const concluida = prog.total > 0 && prog.feitos >= prog.total
@@ -46619,12 +46721,16 @@ async function desempMeu (alvo) {
           <div style="background:var(--surface2);border-radius:5px;height:8px;overflow:hidden;margin-bottom:6px;">
             <div style="width:${prog.pct}%;height:100%;background:${concluida ? 'var(--good-text,#4caf50)' : 'var(--rust)'};"></div>
           </div>
-          <div class="texto-dim2" style="font-size:11px;">${prog.feitos}/${prog.total} módulos ${concluida ? (temCert ? '· 🏆 certificado emitido' : '· concluída!') : ''}</div>
+          <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;">
+            <span class="texto-dim2" style="font-size:11px;">${prog.feitos}/${prog.total} módulos${concluida ? (temCert ? ' · 🏆 certificado' : ' · concluída!') : ''}</span>
+            <b style="font-size:13px;font-variant-numeric:tabular-nums;
+              color:${concluida ? 'var(--good-text)' : prog.pct ? 'var(--rust)' : 'var(--dim2)'};">${prog.pct}%</b>
+          </div>
         </div>`
       }).join('') || '<p class="vazio">Nenhuma trilha atribuída a você ainda.</p>'}
     </div>
 
-    <h4 style="font-family:var(--serif);font-size:15px;margin:0 0 10px;">Minhas avaliações de conduta</h4>
+    ${secaoMeuRh("📋", "Minhas avaliações de conduta", (conduta || []).length)}
     <div class="panel" style="padding:0;margin-bottom:18px;"><div class="tabela-scroll">
       <table><thead><tr><th>Data</th><th class="num">Prazos</th><th class="num">Demandas</th><th class="num">Postura</th><th>Observações</th></tr></thead><tbody>
         ${(conduta || []).map(c => `<tr>
@@ -46637,7 +46743,7 @@ async function desempMeu (alvo) {
       </tbody></table>
     </div></div>
 
-    <h4 style="font-family:var(--serif);font-size:15px;margin:0 0 10px;">Minha avaliação 360 (ciclos encerrados/respondidos)</h4>
+    ${secaoMeuRh("🔄", "Minha avaliação 360", (resp360 || []).length)}
     <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:18px;">
       ${(resp360 || []).map(r => {
         const notas = [r.nota_competencia_tecnica, r.nota_trabalho_equipe, r.nota_comunicacao, r.nota_lideranca, r.nota_proatividade].filter(n => n != null)
@@ -46650,7 +46756,7 @@ async function desempMeu (alvo) {
       }).join('') || `<p class="vazio">Nenhuma avaliação 360 concluída sobre você ainda.</p>`}
     </div>
 
-    <h4 style="font-family:var(--serif);font-size:15px;margin:0 0 10px;">Meus planos de desenvolvimento</h4>
+    ${secaoMeuRh("🌱", "Meus planos de desenvolvimento", (pdi || []).length)}
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px;margin-bottom:18px;">
       ${(pdi || []).map(p => `
         <div class="panel" style="padding:14px;">
@@ -46663,7 +46769,7 @@ async function desempMeu (alvo) {
         </div>`).join('') || `<p class="vazio">Nenhum plano de desenvolvimento ainda.</p>`}
     </div>
 
-    <h4 style="font-family:var(--serif);font-size:15px;margin:0 0 10px;">🏆 Pontos bônus <span class="texto-dim2" style="font-size:12px;font-weight:400;">— total ${totalBonus}</span></h4>
+    ${secaoMeuRh("🏆", "Pontos bônus", (bonus || []).length)}
     <div class="panel" style="padding:0;"><div class="tabela-scroll">
       <table><thead><tr><th>Quando</th><th>Motivo</th><th class="num">Pontos</th></tr></thead><tbody>
         ${(bonus || []).map(b => `<tr>
