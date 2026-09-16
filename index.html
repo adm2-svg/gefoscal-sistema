@@ -692,6 +692,18 @@ tbody tr:hover { background: var(--hover-bg); }
 .mk-aniv-linha:hover { background:var(--hover-bg); }
 .mes-cal-mkt:hover { transform:translateY(-2px); box-shadow:0 8px 20px rgba(0,0,0,.25); border-color:var(--rust) !important; }
 .chip-filtro.ativo { background:var(--rust); border-color:var(--rust); color:#fff; }
+/* Selo de tag da Frota. A cor vem da própria tag, por --tag, pra
+   identificar de relance sem precisar ler. */
+.tag-frota { display:inline-flex; align-items:center; gap:4px; font-size:10.5px; font-weight:600;
+  padding:2px 8px; border-radius:20px; line-height:1.55; white-space:nowrap;
+  color:var(--tag); border:1px solid var(--tag); background:transparent; }
+.tag-filtro { display:inline-flex; align-items:center; gap:5px; cursor:pointer; font:inherit;
+  font-size:11.5px; font-weight:600; padding:5px 11px; border-radius:20px; line-height:1.4;
+  color:var(--tag); border:1px solid var(--tag); background:transparent; opacity:.55;
+  transition:opacity .13s ease, background .13s ease; }
+.tag-filtro:hover { opacity:.85; }
+.tag-filtro.ativo { opacity:1; background:var(--hover-bg); box-shadow:inset 0 0 0 1px var(--tag); }
+.tag-filtro .conta { font-weight:400; opacity:.75; }
 /* Resumo da originação: os filtros viraram cartões. Continuam sendo
    filtro — clicou, a lista embaixo obedece — só que agora também
    respondem "como está a fila" antes de qualquer clique. */
@@ -38203,6 +38215,60 @@ const ROTULO_STATUS_FROTA = { EM_USO: 'Em uso', DISPONIVEL_VENDA: 'Disponível p
 const ROTULO_CAT_ACAO_FROTA = { MANUTENCAO: 'manutenção', FRETE: 'frete', VISTORIA: 'vistoria', OUTRO: 'outro' }
 const ROTULO_TIPO_CUSTO_VEICULO = { IPVA: 'IPVA', LICENCIAMENTO: 'licenciamento', MULTA: 'multa', SEGURO: 'seguro', IMPOSTO_VENDA: 'imposto sobre venda', OUTRO: 'outro' }
 
+// ---------------------------------------------------------------
+// Tags do setor de Frota: Status da Negociação e Localização.
+//
+// Lista fechada de propósito. Texto livre é o que faz nascer "vendido"
+// e "Vendido" como duas coisas diferentes — e aí não dá pra filtrar
+// nem contar. O que vai pro banco é o código (NEGOCIANDO); o rótulo é
+// só o que a pessoa lê, e mudar o rótulo aqui não bagunça o histórico.
+//
+// Cada item tem UM status e UM local, então são dois campos com CHECK
+// no banco, não uma tabela de tags soltas.
+// ---------------------------------------------------------------
+const TAGS_NEGOCIACAO = [
+  { chave: 'NEGOCIANDO', emoji: '🟡', rotulo: 'Negociando', cor: 'var(--gold)',
+    quando: 'proposta enviada ou em conversa com o cliente, ainda sem fechamento' },
+  { chave: 'VENDIDO', emoji: '🟢', rotulo: 'Vendido', cor: 'var(--good-text)',
+    quando: 'venda fechada e confirmada pelo cliente' },
+  { chave: 'PARA_TRANSFERENCIA', emoji: '🔵', rotulo: 'Para Transferência', cor: '#4a90d9',
+    quando: 'vendido, mas ainda precisa ser transferido entre locais' },
+  { chave: 'TRANSFERENCIA_DIRETA', emoji: '🟣', rotulo: 'Transferência Direta', cor: '#9b6bd6',
+    quando: 'sai direto da origem para o cliente, sem passar pela revenda' },
+  { chave: 'PARA_DAR_BAIXA', emoji: '⚫', rotulo: 'Para Dar Baixa', cor: 'var(--dim)',
+    quando: 'operação concluída, aguardando baixa no estoque/sistema' }
+]
+const TAGS_LOCAL = [
+  { chave: 'NA_INDUSTRIA', emoji: '🏭', rotulo: 'Na Indústria', cor: '#c98b3a',
+    quando: 'ainda na fábrica' },
+  { chave: 'NA_REVENDA', emoji: '🏬', rotulo: 'Na Revenda', cor: 'var(--good-text)',
+    quando: 'já disponível no estoque da revenda' },
+  { chave: 'A_RECEBER', emoji: '🚚', rotulo: 'A Receber', cor: 'var(--warn-text)',
+    quando: 'em trânsito, ainda não chegou ao destino' }
+]
+const TAG_NEG = Object.fromEntries(TAGS_NEGOCIACAO.map(t => [t.chave, t]))
+const TAG_LOC = Object.fromEntries(TAGS_LOCAL.map(t => [t.chave, t]))
+
+// selo da tag. `desde` é a data da última mudança — é o que responde
+// "há quanto tempo esse item está parado nessa etapa".
+function selinhoTagFrota (t, desde) {
+  if (!t) return ''
+  return `<span class="tag-frota" style="--tag:${t.cor};" title="${esc(t.quando)}${
+    desde ? ` · desde ${fmtData(String(desde).slice(0, 10)) || ''}` : ''}">${t.emoji} ${esc(t.rotulo)}</span>`
+}
+const tagsDoItemFrota = i => [
+  selinhoTagFrota(TAG_NEG[i.negociacao_status], i.negociacao_status_em),
+  selinhoTagFrota(TAG_LOC[i.local_produto], i.local_produto_em)
+].filter(Boolean).join(' ')
+
+// Quem recebe tag: item recebido em negócio pra revenda. Frota própria
+// e caminhão de terceiro que só passou pra carregar ficam de fora —
+// senão a lista vira um mar de tag em branco. Um item que JÁ tem tag
+// entra na regra mesmo sem contraparte, pra nada sumir da tela depois
+// de marcado.
+const ehItemDeNegocioFrota = i => !i.eh_proprio &&
+  !!(i.contraparte || i.processo_id || i.negociacao_status || i.local_produto)
+
 async function paginaFrota () {
   if (!podeVer('frota')) { areaLivre().innerHTML =
     `<div class="panel" style="padding:22px;"><p class="texto-dim">
@@ -38603,7 +38669,9 @@ async function frotaItens (alvo, editavel) {
   const [{ data, error }, { data: custosDoc }, { data: custosManut }, custosComb, custosPecas] = await Promise.all([
     db.from('veiculo').select(`id,placa,descricao,eh_proprio,ano_modelo,renavam,chassi,contraparte,
       valor_entrada,data_entrada,status_frota,valor_venda,data_venda,comprador,processo_id,observacoes,responsavel_id,
-      ipva_vencimento, setor_id, condutor_principal_id, oculto, responsavel:responsavel_id ( nome ),
+      ipva_vencimento, setor_id, condutor_principal_id, oculto,
+      negociacao_status, negociacao_status_em, local_produto, local_produto_em,
+      responsavel:responsavel_id ( nome ),
       setor:setor_id ( nome ), condutor:condutor_principal_id ( nome )`).order('data_entrada', { ascending: false, nullsFirst: false }),
     db.from('veiculo_custo').select('veiculo_id,valor'),
     db.from('ordem_servico').select('veiculo_id,valor_total').not('veiculo_id', 'is', null),
@@ -38644,8 +38712,19 @@ async function frotaItens (alvo, editavel) {
   let modo = 'vitrine'
   let mostrarOcultos = false
   let filtroSetorId = ''
-  const listaFiltrada = () => lista.filter(i =>
+  // marcar mais de uma tag soma (ex.: Negociando + Vendido). Entre os
+  // dois campos é E, não OU: "Vendido E ainda Na Indústria".
+  const filtroNeg = new Set()
+  const filtroLoc = new Set()
+
+  const antesDasTags = () => lista.filter(i =>
     (mostrarOcultos || !i.oculto) && (!filtroSetorId || i.setor_id === filtroSetorId))
+  const listaFiltrada = () => antesDasTags().filter(i =>
+    (!filtroNeg.size || filtroNeg.has(i.negociacao_status)) &&
+    (!filtroLoc.size || filtroLoc.has(i.local_produto)))
+  // os contadores olham a base sem as tags: assim o número não some
+  // quando você clica num filtro, que é o que confunde na hora de usar
+  const itensDeNegocio = () => antesDasTags().filter(ehItemDeNegocioFrota)
 
   // "avulso" = não é frota própria E não tem nenhum rastro de negócio de
   // verdade (contraparte ou vínculo jurídico) — ou seja, só passou pra
@@ -38673,6 +38752,7 @@ async function frotaItens (alvo, editavel) {
         <input type="checkbox" id="fr-mostrar-ocultos"> mostrar também os ocultos (${lista.filter(i => i.oculto).length})
       </label>
     </div>
+    <div id="fr-filtro-tags"></div>
     <div class="cabeca-secao" style="margin-bottom:14px;">
       <div class="subabas" style="margin:0;">
         <button data-modo="vitrine" class="ativo">Vitrine</button>
@@ -38682,8 +38762,53 @@ async function frotaItens (alvo, editavel) {
     </div>
     <div id="fr-conteudo"></div>`
 
-  $('#fr-filtro-setor').onchange = () => { filtroSetorId = $('#fr-filtro-setor').value; desenhar() }
-  $('#fr-mostrar-ocultos').onchange = () => { mostrarOcultos = $('#fr-mostrar-ocultos').checked; desenhar() }
+  // ----- filtro por tag (Status da Negociação × Localização) ---------
+  const desenharFiltroTags = () => {
+    const base = itensDeNegocio()
+    const conta = (campo, chave) => base.filter(i => i[campo] === chave).length
+    const semTag = base.filter(i => !i.negociacao_status).length
+    const linha = (titulo, tags, campo, conjunto) => `
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:7px;">
+        <span class="texto-dim2" style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;
+          min-width:112px;">${titulo}</span>
+        ${tags.map(t => `<button type="button" class="tag-filtro${conjunto.has(t.chave) ? ' ativo' : ''}"
+          style="--tag:${t.cor};" data-tag-campo="${campo}" data-tag="${t.chave}"
+          title="${esc(t.quando)}">${t.emoji} ${esc(t.rotulo)}
+          <span class="conta">${conta(campo, t.chave)}</span></button>`).join('')}
+      </div>`
+    $('#fr-filtro-tags').innerHTML = `
+      <div class="panel" style="padding:12px 14px;margin-bottom:14px;">
+        ${linha('Negociação', TAGS_NEGOCIACAO, 'negociacao_status', filtroNeg)}
+        ${linha('Localização', TAGS_LOCAL, 'local_produto', filtroLoc)}
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:4px;">
+          <span class="texto-dim2" style="font-size:11px;line-height:1.5;">
+            ${base.length
+              ? `${base.length} item(ns) recebido(s) em negócio${semTag ? ` · ${semTag} ainda sem status` : ''}.
+                 Pode marcar mais de uma tag na mesma linha; entre as duas linhas é E
+                 (ex.: Vendido <b>e</b> Na Indústria).`
+              : `Nenhum item recebido em negócio ainda. As tags aparecem nos itens do tipo
+                 "Recebido em negócio (para revenda)" — frota própria e caminhão de terceiro
+                 que só passou pra carregar ficam de fora.`}
+          </span>
+          ${(filtroNeg.size || filtroLoc.size)
+            ? `<button type="button" class="btn-secundario mini" id="fr-tags-limpar"
+                 style="margin-left:auto;">limpar filtro de tags</button>` : ''}
+        </div>
+      </div>`
+
+    $('#fr-filtro-tags').querySelectorAll('[data-tag]').forEach(b => {
+      b.onclick = () => {
+        const conjunto = b.dataset.tagCampo === 'negociacao_status' ? filtroNeg : filtroLoc
+        conjunto.has(b.dataset.tag) ? conjunto.delete(b.dataset.tag) : conjunto.add(b.dataset.tag)
+        desenharFiltroTags(); desenhar()
+      }
+    })
+    const limpar = $('#fr-tags-limpar')
+    if (limpar) limpar.onclick = () => { filtroNeg.clear(); filtroLoc.clear(); desenharFiltroTags(); desenhar() }
+  }
+
+  $('#fr-filtro-setor').onchange = () => { filtroSetorId = $('#fr-filtro-setor').value; desenharFiltroTags(); desenhar() }
+  $('#fr-mostrar-ocultos').onchange = () => { mostrarOcultos = $('#fr-mostrar-ocultos').checked; desenharFiltroTags(); desenhar() }
   const btnOcultarAvulsos = $('#fr-ocultar-avulsos')
   if (btnOcultarAvulsos) btnOcultarAvulsos.onclick = async () => {
     if (!confirm(`Ocultar os ${avulsosNaoOcultos.length} veículos sem contraparte/vínculo da lista de Itens? Você pode reverter a qualquer momento desmarcando "oculto" na edição de cada um.`)) return
@@ -38708,6 +38833,7 @@ async function frotaItens (alvo, editavel) {
   }
 
   const desenhar = () => { modo === 'vitrine' ? desenharVitrine() : desenharTabela() }
+  desenharFiltroTags()
 
   const desenharVitrine = () => {
     $('#fr-conteudo').innerHTML = `
@@ -38737,6 +38863,8 @@ async function frotaItens (alvo, editavel) {
                   : i.status_frota === 'DISPONIVEL_VENDA' ? '<span class="badge-alerta">à venda</span>'
                   : '<span class="chip">em uso</span>'}
               </div>
+              ${tagsDoItemFrota(i) ? `<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px;">
+                ${tagsDoItemFrota(i)}</div>` : ''}
               <div style="margin-top:10px;">
                 <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;">${rotuloPreco}</div>
                 <div style="font-family:var(--serif);font-size:19px;color:var(--rust);">${preco != null ? 'R$ ' + fmtNum(preco) : '—'}</div>
@@ -38775,7 +38903,7 @@ async function frotaItens (alvo, editavel) {
     $('#fr-conteudo').innerHTML = `
     <div class="panel" style="padding:0;"><div class="tabela-scroll">
       <table><thead><tr>
-        <th>Item</th><th>Tipo</th><th>Origem / contraparte</th>
+        <th>Item</th><th>Tipo</th><th>Tags</th><th>Origem / contraparte</th>
         <th class="num">Valor recebido</th><th>Status</th><th class="num">Valor final</th><th>Resultado</th>
         <th>Vínculo jurídico</th><th>Responsável</th><th>Setor</th><th>Condutor principal</th>${editavel ? '<th></th>' : ''}
       </tr></thead><tbody>
@@ -38787,6 +38915,7 @@ async function frotaItens (alvo, editavel) {
         <td><b>${esc(i.descricao)}</b>${i.ano_modelo ? ` <span class="texto-dim2">(${esc(i.ano_modelo)})</span>` : ''}
           ${ident ? `<br><span class="texto-dim2" style="font-size:11px;">${esc(ident)}</span>` : ''}</td>
         <td><span class="chip">${i.eh_proprio ? 'Frota própria' : ehAvulso(i) ? 'Terceiro avulso' : 'Recebido em negócio'}</span></td>
+        <td style="white-space:nowrap;">${tagsDoItemFrota(i) || '<span class="texto-dim2">—</span>'}</td>
         <td class="texto-dim">${esc(i.contraparte || '—')}</td>
         <td class="num">${i.valor_entrada != null ? 'R$ ' + fmtNum(i.valor_entrada) : '<span class="texto-dim2">—</span>'}</td>
         <td>${i.status_frota === 'VENDIDO' ? '<span class="badge-bom">vendido</span>'
@@ -38804,7 +38933,7 @@ async function frotaItens (alvo, editavel) {
           <button class="btn-secundario mini" data-editar="${i.id}">editar</button>
           ${i.status_frota !== 'VENDIDO' ? `<button class="btn-secundario mini" data-vender="${i.id}">vender</button>` : ''}
         </td>` : ''}
-      </tr>`}).join('') || `<tr><td colspan="${editavel ? 12 : 11}" class="vazio">Nenhum item cadastrado ainda.</td></tr>`}
+      </tr>`}).join('') || `<tr><td colspan="${editavel ? 13 : 12}" class="vazio">Nenhum item cadastrado ainda.</td></tr>`}
       </tbody></table>
     </div></div>`
 
@@ -38872,6 +39001,41 @@ function formFrotaItem (item) {
           </select>
           ${item?.status_frota === 'VENDIDO' ? '<span class="texto-dim2" style="font-size:11px;">venda já registrada, use "vender" pra corrigir</span>' : ''}</div>
       </div>
+
+      ${/* Tags do setor de Frota. Só fazem sentido em item recebido pra
+            revenda, então o bloco aparece e some junto com o campo Tipo. */ ''}
+      <div id="fr-bloco-tags" ${(item && item.eh_proprio) || (!item) ? 'hidden' : ''}
+        style="margin-top:14px;padding:12px 14px;border:1px solid var(--line2);border-radius:12px;">
+        <div style="font-size:12.5px;font-weight:700;margin-bottom:2px;">Tags da revenda</div>
+        <p class="texto-dim2" style="font-size:11px;line-height:1.5;margin:0 0 10px;">
+          Lista fechada, pra dar pra filtrar e contar. Toda troca fica registrada com data e autor.</p>
+        <div class="form-grade">
+          <div class="campo"><label>Status da Negociação</label>
+            <select id="fr-tag-neg">
+              <option value="">— sem status —</option>
+              ${TAGS_NEGOCIACAO.map(t => `<option value="${t.chave}" ${
+                item?.negociacao_status === t.chave ? 'selected' : ''}>${t.emoji} ${esc(t.rotulo)}</option>`).join('')}
+            </select>
+            <span class="texto-dim2" id="fr-tag-neg-quando" style="font-size:10.5px;line-height:1.4;"></span>
+            ${item?.negociacao_status_em ? `<span class="texto-dim2" style="font-size:10.5px;">
+              nesse status desde ${fmtData(String(item.negociacao_status_em).slice(0, 10)) || ''}</span>` : ''}
+          </div>
+          <div class="campo"><label>Localização do Produto</label>
+            <select id="fr-tag-loc">
+              <option value="">— sem localização —</option>
+              ${TAGS_LOCAL.map(t => `<option value="${t.chave}" ${
+                item?.local_produto === t.chave ? 'selected' : ''}>${t.emoji} ${esc(t.rotulo)}</option>`).join('')}
+            </select>
+            <span class="texto-dim2" id="fr-tag-loc-quando" style="font-size:10.5px;line-height:1.4;"></span>
+            ${item?.local_produto_em ? `<span class="texto-dim2" style="font-size:10.5px;">
+              aí desde ${fmtData(String(item.local_produto_em).slice(0, 10)) || ''}</span>` : ''}
+          </div>
+        </div>
+        <p class="texto-dim2" style="font-size:10.5px;line-height:1.5;margin:8px 0 0;">
+          Marcar <b>🟢 Vendido</b> aqui já põe o Status acima em "Vendido" sozinho — não precisa
+          preencher duas vezes.</p>
+        ${item ? `<div id="fr-tag-historico" style="margin-top:10px;"></div>` : ''}
+      </div>
       <div class="campo" style="margin-top:12px;"><label>Observações</label>
         <textarea id="fr-obs" style="min-height:64px;">${v('observacoes')}</textarea></div>
       <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;margin-top:10px;">
@@ -38919,6 +39083,21 @@ function formFrotaItem (item) {
     el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
   }
 
+  // ----- tags: mostrar/esconder junto com o Tipo, e explicar a escolha ----
+  const blocoTags = q('#fr-bloco-tags')
+  const ajustarBlocoTags = () => { blocoTags.hidden = q('#fr-tipo').value === '1' }
+  q('#fr-tipo').onchange = ajustarBlocoTags
+  ajustarBlocoTags()
+
+  const explicar = (sel, alvo, mapa) => {
+    const el = q(alvo)
+    const pintar = () => { el.textContent = mapa[q(sel).value]?.quando || '' }
+    q(sel).onchange = pintar
+    pintar()
+  }
+  explicar('#fr-tag-neg', '#fr-tag-neg-quando', TAG_NEG)
+  explicar('#fr-tag-loc', '#fr-tag-loc-quando', TAG_LOC)
+
   q('#fr-setor-novo').onclick = async () => {
     const nome = prompt('Nome do novo setor responsável:')
     if (!nome || !nome.trim()) return
@@ -38949,6 +39128,10 @@ function formFrotaItem (item) {
       setor_id: q('#fr-setor').value || null,
       processo_id: q('#fr-processo').value || null,
       status_frota: q('#fr-status').value,
+      // frota própria não carrega tag de revenda: se alguém trocou o
+      // Tipo, as tags vão embora junto em vez de ficar de fantasma
+      negociacao_status: q('#fr-tipo').value === '1' ? null : (q('#fr-tag-neg').value || null),
+      local_produto: q('#fr-tipo').value === '1' ? null : (q('#fr-tag-loc').value || null),
       oculto: q('#fr-oculto').checked,
       observacoes: q('#fr-obs').value.trim() || null
     }
@@ -38973,6 +39156,40 @@ function formFrotaItem (item) {
   }
 
   if (!item) return
+
+  // ----- andamento das tags: quando mudou, de quê pra quê e por quem ----
+  // É a pergunta por trás do "registrar a data em que a tag foi
+  // alterada": quanto tempo o item ficou parado em cada etapa.
+  ;(async () => {
+    const caixa = q('#fr-tag-historico')
+    if (!caixa) return
+    const { data: hist } = await db.from('veiculo_tag_historico')
+      .select('campo,de,para,criado_em,pessoa:pessoa_id(nome)')
+      .eq('veiculo_id', item.id).order('criado_em', { ascending: false }).limit(20)
+    if (!(hist || []).length) {
+      caixa.innerHTML = `<p class="texto-dim2" style="font-size:10.5px;margin:0;">
+        Sem troca de tag registrada ainda.</p>`
+      return
+    }
+    const nome = (campo, chave) => {
+      if (!chave) return 'sem tag'
+      const t = campo === 'negociacao_status' ? TAG_NEG[chave] : TAG_LOC[chave]
+      return t ? `${t.emoji} ${t.rotulo}` : chave
+    }
+    caixa.innerHTML = `
+      <details>
+        <summary style="cursor:pointer;font-size:11px;color:var(--dim);">
+          andamento das tags (${hist.length})</summary>
+        <div style="margin-top:6px;">
+          ${hist.map(h => `<div style="font-size:11px;line-height:1.55;padding:3px 0;
+            border-top:1px solid var(--line2);">
+            <span class="texto-dim2">${fmtQuando(h.criado_em) || ''}</span> ·
+            ${esc(nome(h.campo, h.de))} → <b>${esc(nome(h.campo, h.para))}</b>
+            ${h.pessoa?.nome ? `<span class="texto-dim2"> · ${esc(h.pessoa.nome)}</span>` : ''}
+          </div>`).join('')}
+        </div>
+      </details>`
+  })().catch(e => console.error('histórico de tags:', e))
 
   // ----- fotos e documentos já anexados -----
   const carregarAnexos = async () => {
@@ -39097,6 +39314,11 @@ function formFrotaVenda (item, custosDoc, custosManut) {
       status_frota: 'VENDIDO', valor_venda: val,
       data_venda: q('#fv-data').value || new Date().toISOString().slice(0, 10),
       comprador: q('#fv-comprador').value.trim() || null,
+      // o outro lado do amarramento: registrar a venda por aqui também
+      // acerta a tag da revenda, senão ela ficaria dizendo "Negociando"
+      // num item já vendido. Só pra item de revenda — frota própria não
+      // usa tag.
+      ...(item.eh_proprio ? {} : { negociacao_status: 'VENDIDO' }),
       editado_por: PERFIL.pessoaId, editado_em: new Date().toISOString()
     }).eq('id', item.id)
     if (error) { el.textContent = error.message; el.classList.remove('oculto'); return }
