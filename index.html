@@ -697,6 +697,14 @@ tbody tr:hover { background: var(--hover-bg); }
 .tag-frota { display:inline-flex; align-items:center; gap:4px; font-size:10.5px; font-weight:600;
   padding:2px 8px; border-radius:20px; line-height:1.55; white-space:nowrap;
   color:var(--tag); border:1px solid var(--tag); background:transparent; }
+/* preenchida: é a que vai por cima da foto da vitrine, onde precisa
+   vencer a imagem de fundo */
+.tag-frota.solida { background:var(--tag); border-color:var(--tag); color:var(--tag-txt);
+  font-size:11px; padding:4px 10px; font-weight:700;
+  box-shadow:0 2px 8px rgba(0,0,0,.45); }
+/* faixa de tags sobre a foto do card */
+.fr-faixa-tags { position:absolute; inset:8px 8px auto 8px; display:flex; gap:6px;
+  justify-content:space-between; align-items:flex-start; pointer-events:none; flex-wrap:wrap; }
 .tag-filtro { display:inline-flex; align-items:center; gap:5px; cursor:pointer; font:inherit;
   font-size:11.5px; font-weight:600; padding:5px 11px; border-radius:20px; line-height:1.4;
   color:var(--tag); border:1px solid var(--tag); background:transparent; opacity:.55;
@@ -38226,40 +38234,62 @@ const ROTULO_TIPO_CUSTO_VEICULO = { IPVA: 'IPVA', LICENCIAMENTO: 'licenciamento'
 // Cada item tem UM status e UM local, então são dois campos com CHECK
 // no banco, não uma tabela de tags soltas.
 // ---------------------------------------------------------------
+// `txt` é a cor da letra quando o selo é preenchido: em cima de amarelo
+// e âmbar, letra branca não se lê.
 const TAGS_NEGOCIACAO = [
-  { chave: 'NEGOCIANDO', emoji: '🟡', rotulo: 'Negociando', cor: 'var(--gold)',
+  { chave: 'NEGOCIANDO', emoji: '🟡', rotulo: 'Negociando', cor: 'var(--gold)', txt: '#17191b',
     quando: 'proposta enviada ou em conversa com o cliente, ainda sem fechamento' },
-  { chave: 'VENDIDO', emoji: '🟢', rotulo: 'Vendido', cor: 'var(--good-text)',
+  { chave: 'VENDIDO', emoji: '🟢', rotulo: 'Vendido', cor: 'var(--good-text)', txt: '#fff',
     quando: 'venda fechada e confirmada pelo cliente' },
-  { chave: 'PARA_TRANSFERENCIA', emoji: '🔵', rotulo: 'Para Transferência', cor: '#4a90d9',
+  { chave: 'PARA_TRANSFERENCIA', emoji: '🔵', rotulo: 'Para Transferência', cor: '#4a90d9', txt: '#fff',
     quando: 'vendido, mas ainda precisa ser transferido entre locais' },
-  { chave: 'TRANSFERENCIA_DIRETA', emoji: '🟣', rotulo: 'Transferência Direta', cor: '#9b6bd6',
+  { chave: 'TRANSFERENCIA_DIRETA', emoji: '🟣', rotulo: 'Transferência Direta', cor: '#9b6bd6', txt: '#fff',
     quando: 'sai direto da origem para o cliente, sem passar pela revenda' },
-  { chave: 'PARA_DAR_BAIXA', emoji: '⚫', rotulo: 'Para Dar Baixa', cor: 'var(--dim)',
+  { chave: 'PARA_DAR_BAIXA', emoji: '⚫', rotulo: 'Para Dar Baixa', cor: '#6b7177', txt: '#fff',
     quando: 'operação concluída, aguardando baixa no estoque/sistema' }
 ]
 const TAGS_LOCAL = [
-  { chave: 'NA_INDUSTRIA', emoji: '🏭', rotulo: 'Na Indústria', cor: '#c98b3a',
+  { chave: 'NA_INDUSTRIA', emoji: '🏭', rotulo: 'Na Indústria', cor: '#b0762c', txt: '#fff',
     quando: 'ainda na fábrica' },
-  { chave: 'NA_REVENDA', emoji: '🏬', rotulo: 'Na Revenda', cor: 'var(--good-text)',
+  { chave: 'NA_REVENDA', emoji: '🏬', rotulo: 'Na Revenda', cor: 'var(--good-text)', txt: '#fff',
     quando: 'já disponível no estoque da revenda' },
-  { chave: 'A_RECEBER', emoji: '🚚', rotulo: 'A Receber', cor: 'var(--warn-text)',
+  { chave: 'A_RECEBER', emoji: '🚚', rotulo: 'A Receber', cor: 'var(--warn-text)', txt: '#17191b',
     quando: 'em trânsito, ainda não chegou ao destino' }
 ]
 const TAG_NEG = Object.fromEntries(TAGS_NEGOCIACAO.map(t => [t.chave, t]))
 const TAG_LOC = Object.fromEntries(TAGS_LOCAL.map(t => [t.chave, t]))
 
-// selo da tag. `desde` é a data da última mudança — é o que responde
-// "há quanto tempo esse item está parado nessa etapa".
-function selinhoTagFrota (t, desde) {
-  if (!t) return ''
-  return `<span class="tag-frota" style="--tag:${t.cor};" title="${esc(t.quando)}${
-    desde ? ` · desde ${fmtData(String(desde).slice(0, 10)) || ''}` : ''}">${t.emoji} ${esc(t.rotulo)}</span>`
+// "há quanto tempo está assim" — é o que transforma a tag de enfeite em
+// informação: 🔵 Para Transferência há 18 dias é um problema, há 1 dia não.
+function tempoNaTagFrota (desde) {
+  if (!desde) return ''
+  const n = Math.floor((Date.now() - new Date(desde).getTime()) / 86400000)
+  return n <= 0 ? 'hoje' : n === 1 ? 'há 1 dia' : `há ${n} dias`
 }
-const tagsDoItemFrota = i => [
-  selinhoTagFrota(TAG_NEG[i.negociacao_status], i.negociacao_status_em),
-  selinhoTagFrota(TAG_LOC[i.local_produto], i.local_produto_em)
+
+// Dois feitios do mesmo selo: `solido` é o que vai na foto da vitrine,
+// preenchido, pra ler de longe; o vazado é o da tabela, que já é
+// densa e não aguenta bloco de cor em toda linha.
+function selinhoTagFrota (t, desde, solido = false) {
+  if (!t) return ''
+  const quanto = tempoNaTagFrota(desde)
+  return `<span class="tag-frota${solido ? ' solida' : ''}" style="--tag:${t.cor};--tag-txt:${t.txt};"
+    title="${esc(t.quando)}${quanto ? ` · ${quanto}` : ''}">${t.emoji} ${esc(t.rotulo)}</span>`
+}
+const tagsDoItemFrota = (i, solido = false) => [
+  selinhoTagFrota(TAG_NEG[i.negociacao_status], i.negociacao_status_em, solido),
+  selinhoTagFrota(TAG_LOC[i.local_produto], i.local_produto_em, solido)
 ].filter(Boolean).join(' ')
+
+// a frase que conta a história do item em uma linha
+function andamentoTagFrota (i) {
+  const partes = []
+  const n = TAG_NEG[i.negociacao_status]
+  const l = TAG_LOC[i.local_produto]
+  if (n) partes.push(`${n.rotulo.toLowerCase()} ${tempoNaTagFrota(i.negociacao_status_em)}`)
+  if (l) partes.push(`${l.rotulo.toLowerCase()} ${tempoNaTagFrota(i.local_produto_em)}`)
+  return partes.join(' · ')
+}
 
 // Quem recebe tag: item recebido em negócio pra revenda. Frota própria
 // e caminhão de terceiro que só passou pra carregar ficam de fora —
@@ -38848,9 +38878,21 @@ async function frotaItens (alvo, editavel) {
           const dias = diasAteVencimento(i.ipva_vencimento)
           const ipvaApi = ipvaPorVeiculo[i.id]
           const foto = fotoPrincipal[i.id]
-          return `<div class="panel" style="padding:0;overflow:hidden;cursor:pointer;" data-abrir="${i.id}">
-            <div style="height:150px;background:${foto ? `url('${foto}') center/cover` : 'var(--surface2)'};display:flex;align-items:center;justify-content:center;">
+          const tagNeg = TAG_NEG[i.negociacao_status]
+          const tagLoc = TAG_LOC[i.local_produto]
+          const andamento = andamentoTagFrota(i)
+          // espinha colorida na lateral do card: dá pra varrer a vitrine
+          // inteira e saber em que pé está cada item sem ler nada
+          // borda, não sombra interna: a sombra parava na foto e a faixa
+          // só aparecia na metade de baixo do card
+          const espinha = tagNeg ? `border-left:5px solid ${tagNeg.cor};` : ''
+          return `<div class="panel" style="padding:0;overflow:hidden;cursor:pointer;${espinha}" data-abrir="${i.id}">
+            <div style="position:relative;height:150px;background:${foto ? `url('${foto}') center/cover` : 'var(--surface2)'};display:flex;align-items:center;justify-content:center;">
               ${!foto ? `<span class="texto-dim2" style="font-size:12px;">sem foto</span>` : ''}
+              ${tagNeg || tagLoc ? `<div class="fr-faixa-tags">
+                <span>${selinhoTagFrota(tagNeg, i.negociacao_status_em, true)}</span>
+                <span>${selinhoTagFrota(tagLoc, i.local_produto_em, true)}</span>
+              </div>` : ''}
             </div>
             <div style="padding:14px;">
               <div style="display:flex;justify-content:space-between;align-items:start;gap:8px;">
@@ -38859,12 +38901,15 @@ async function frotaItens (alvo, editavel) {
                   <div class="texto-dim2" style="font-size:11.5px;">${esc(i.ano_modelo || '')}${i.placa ? (i.ano_modelo ? ' · ' : '') + esc(i.placa) : ''}</div>
                   ${i.setor?.nome || i.condutor?.nome ? `<div class="texto-dim2" style="font-size:11px;margin-top:2px;">${i.setor?.nome ? '🏷️ ' + esc(i.setor.nome) : ''}${i.setor?.nome && i.condutor?.nome ? ' · ' : ''}${i.condutor?.nome ? '👤 ' + esc(i.condutor.nome) : ''}</div>` : ''}
                 </div>
-                ${i.status_frota === 'VENDIDO' ? '<span class="badge-bom">vendido</span>'
+                ${/* com tag de negociação, o selo antigo só repetiria "vendido"
+                      duas vezes com nomes diferentes — a tag já diz mais */ ''}
+                ${tagNeg ? '' : i.status_frota === 'VENDIDO' ? '<span class="badge-bom">vendido</span>'
                   : i.status_frota === 'DISPONIVEL_VENDA' ? '<span class="badge-alerta">à venda</span>'
                   : '<span class="chip">em uso</span>'}
               </div>
-              ${tagsDoItemFrota(i) ? `<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px;">
-                ${tagsDoItemFrota(i)}</div>` : ''}
+              ${andamento ? `<div style="margin-top:7px;padding:6px 9px;border-radius:8px;
+                background:var(--hover-bg);border-left:3px solid ${(tagNeg || tagLoc).cor};
+                font-size:11.5px;line-height:1.5;">${esc(andamento)}</div>` : ''}
               <div style="margin-top:10px;">
                 <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;">${rotuloPreco}</div>
                 <div style="font-family:var(--serif);font-size:19px;color:var(--rust);">${preco != null ? 'R$ ' + fmtNum(preco) : '—'}</div>
@@ -38915,7 +38960,13 @@ async function frotaItens (alvo, editavel) {
         <td><b>${esc(i.descricao)}</b>${i.ano_modelo ? ` <span class="texto-dim2">(${esc(i.ano_modelo)})</span>` : ''}
           ${ident ? `<br><span class="texto-dim2" style="font-size:11px;">${esc(ident)}</span>` : ''}</td>
         <td><span class="chip">${i.eh_proprio ? 'Frota própria' : ehAvulso(i) ? 'Terceiro avulso' : 'Recebido em negócio'}</span></td>
-        <td style="white-space:nowrap;">${tagsDoItemFrota(i) || '<span class="texto-dim2">—</span>'}</td>
+        <td style="white-space:nowrap;">${tagsDoItemFrota(i)
+          ? `<div style="display:flex;flex-direction:column;gap:3px;align-items:flex-start;">
+               ${selinhoTagFrota(TAG_NEG[i.negociacao_status], i.negociacao_status_em)}
+               ${selinhoTagFrota(TAG_LOC[i.local_produto], i.local_produto_em)}
+               <span class="texto-dim2" style="font-size:10px;">${esc(andamentoTagFrota(i))}</span>
+             </div>`
+          : '<span class="texto-dim2">—</span>'}</td>
         <td class="texto-dim">${esc(i.contraparte || '—')}</td>
         <td class="num">${i.valor_entrada != null ? 'R$ ' + fmtNum(i.valor_entrada) : '<span class="texto-dim2">—</span>'}</td>
         <td>${i.status_frota === 'VENDIDO' ? '<span class="badge-bom">vendido</span>'
@@ -39017,8 +39068,9 @@ function formFrotaItem (item) {
                 item?.negociacao_status === t.chave ? 'selected' : ''}>${t.emoji} ${esc(t.rotulo)}</option>`).join('')}
             </select>
             <span class="texto-dim2" id="fr-tag-neg-quando" style="font-size:10.5px;line-height:1.4;"></span>
-            ${item?.negociacao_status_em ? `<span class="texto-dim2" style="font-size:10.5px;">
-              nesse status desde ${fmtData(String(item.negociacao_status_em).slice(0, 10)) || ''}</span>` : ''}
+            ${item?.negociacao_status && item?.negociacao_status_em ? `<span class="texto-dim2" style="font-size:10.5px;">
+              nesse status desde ${fmtData(String(item.negociacao_status_em).slice(0, 10)) || ''}
+              (${tempoNaTagFrota(item.negociacao_status_em)})</span>` : ''}
           </div>
           <div class="campo"><label>Localização do Produto</label>
             <select id="fr-tag-loc">
@@ -39027,8 +39079,9 @@ function formFrotaItem (item) {
                 item?.local_produto === t.chave ? 'selected' : ''}>${t.emoji} ${esc(t.rotulo)}</option>`).join('')}
             </select>
             <span class="texto-dim2" id="fr-tag-loc-quando" style="font-size:10.5px;line-height:1.4;"></span>
-            ${item?.local_produto_em ? `<span class="texto-dim2" style="font-size:10.5px;">
-              aí desde ${fmtData(String(item.local_produto_em).slice(0, 10)) || ''}</span>` : ''}
+            ${item?.local_produto && item?.local_produto_em ? `<span class="texto-dim2" style="font-size:10.5px;">
+              aí desde ${fmtData(String(item.local_produto_em).slice(0, 10)) || ''}
+              (${tempoNaTagFrota(item.local_produto_em)})</span>` : ''}
           </div>
         </div>
         <p class="texto-dim2" style="font-size:10.5px;line-height:1.5;margin:8px 0 0;">
