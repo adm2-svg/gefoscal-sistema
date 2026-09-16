@@ -2411,7 +2411,9 @@ async function abrirApp () {
     db.from('usuario_papel').select('papel').eq('user_id', user.id),
     db.from('modulo').select('id,chave,nome,ordem').order('ordem'),
     db.from('usuario_perfil')
-      .select('pessoa_id,setor_id,ativo,pessoa:pessoa_id(nome,setor_id,foto_url,capa_url,telefone,cargo,setor:setor_id(nome))')
+      .select(`pessoa_id,setor_id,ativo,setor:setor_id(nome),
+        pessoa:pessoa_id(nome,setor_id,foto_url,capa_url,telefone,cargo,cargo_id,
+          cargo_rel:cargo_id(nome),setor:setor_id(nome))`)
       .eq('user_id', user.id).maybeSingle()
   ])
 
@@ -2425,8 +2427,13 @@ async function abrirApp () {
   PERFIL.nome = perfil?.pessoa?.nome || user.email
   PERFIL.fotoUrl = perfil?.pessoa?.foto_url ?? null
   PERFIL.capaUrl = perfil?.pessoa?.capa_url ?? null
-  PERFIL.cargo = perfil?.pessoa?.cargo ?? null
-  PERFIL.setorNome = perfil?.pessoa?.setor?.nome ?? null
+  // O cargo que a Administração grava é o VÍNCULO (cargo_id). Ler só o
+  // texto solto fazia o cargo de quase todo mundo não aparecer em lugar
+  // nenhum, mesmo estando vinculado certinho.
+  PERFIL.cargo = perfil?.pessoa?.cargo_rel?.nome ?? perfil?.pessoa?.cargo ?? null
+  // O nome do setor tem de vir do MESMO lugar que o id. Lendo de fontes
+  // diferentes, o sistema filtrava por um setor e mostrava outro na tela.
+  PERFIL.setorNome = (perfil?.setor_id ? perfil?.setor?.nome : perfil?.pessoa?.setor?.nome) ?? null
   PERFIL.telefone = perfil?.pessoa?.telefone ?? null
 
   if (PERFIL.papeis.length === 0 || perfil?.ativo === false) {
