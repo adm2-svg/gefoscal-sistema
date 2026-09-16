@@ -692,6 +692,27 @@ tbody tr:hover { background: var(--hover-bg); }
 .mk-aniv-linha:hover { background:var(--hover-bg); }
 .mes-cal-mkt:hover { transform:translateY(-2px); box-shadow:0 8px 20px rgba(0,0,0,.25); border-color:var(--rust) !important; }
 .chip-filtro.ativo { background:var(--rust); border-color:var(--rust); color:#fff; }
+/* Resumo da originação: os filtros viraram cartões. Continuam sendo
+   filtro — clicou, a lista embaixo obedece — só que agora também
+   respondem "como está a fila" antes de qualquer clique. */
+.org-resumo { display:grid; grid-template-columns:repeat(auto-fit,minmax(138px,1fr));
+  gap:8px; margin:0 0 14px; }
+.org-kpi { background:var(--surface2); border:1px solid var(--line2); border-radius:12px;
+  padding:11px 13px; cursor:pointer; text-align:left; font:inherit; color:inherit;
+  display:block; transition:border-color .14s ease, transform .14s ease, background .14s ease; }
+.org-kpi:hover { border-color:var(--rust); transform:translateY(-1px); }
+.org-kpi.ativo { border-color:var(--rust); background:var(--hover-bg); }
+.org-kpi .topo-kpi { display:flex; align-items:baseline; gap:7px; }
+.org-kpi .ic { font-size:13px; opacity:.85; flex:none; }
+.org-kpi .n { font-family:var(--serif); font-size:23px; line-height:1.05; }
+.org-kpi .r { display:block; font-size:10.5px; color:var(--dim2); margin-top:4px;
+  text-transform:uppercase; letter-spacing:.04em; line-height:1.3; }
+.org-kpi.ativo .r { color:var(--rust); }
+.org-kpi.alerta .n { color:var(--warn-text); }
+/* botão de mover coluna dentro do card do quadro (o corpo do card abre a ficha) */
+.qo-mover-btn { background:none; border:none; cursor:pointer; font-size:12px; line-height:1;
+  opacity:.4; padding:1px 3px; color:inherit; flex:none; transition:opacity .12s ease; }
+.qo-mover-btn:hover { opacity:1; }
 /* corrigir/excluir uma linha do histórico: discreto até passar o mouse */
 .lnk-crud { background:none; border:none; cursor:pointer; padding:1px 4px; line-height:1;
   font-size:11.5px; opacity:.38; transition:opacity .12s ease; color:inherit; }
@@ -19904,7 +19925,10 @@ function quadroOriginacaoHtml (itens) {
           </div>
           ${lista.map(i => `
             <div class="qo-card" draggable="true" data-qo="${i.id}">
-              <h6>${esc(i.nome || 'sem nome')}</h6>
+              <div style="display:flex;gap:5px;align-items:flex-start;">
+                <h6 style="flex:1;min-width:0;">${esc(i.nome || 'sem nome')}</h6>
+                <button type="button" class="qo-mover-btn" title="mover de coluna">⇅</button>
+              </div>
               <div class="texto-dim2" style="font-size:10.5px;line-height:1.4;">
                 ${esc([i.municipio, i.uf].filter(Boolean).join('/') || '—')}
                 ${i.cultura ? ' · ' + esc(i.cultura) : ''}
@@ -19926,7 +19950,6 @@ function quadroOriginacaoHtml (itens) {
                 <div class="qo-botoes">
                   ${i.no_sdr ? `<span class="texto-dim2" style="font-size:10px;">já está com o Eduardo</span>`
                     : `<button type="button" class="btn mini qo-eduardo">→ Passar pro Eduardo</button>`}
-                  <button type="button" class="btn-secundario mini qo-ficha">Abrir ficha</button>
                 </div>
               </div>
             </div>`).join('') || `<p class="texto-dim2" style="font-size:11px;margin:4px 2px;">vazio</p>`}
@@ -19934,10 +19957,11 @@ function quadroOriginacaoHtml (itens) {
       }).join('')}
     </div>
     <p class="texto-dim2" style="font-size:11px;line-height:1.5;margin:8px 2px 0;">
-      <b>Clique no card</b> pra abrir a lista e mudar de coluna, ou arraste, o que for
-      mais rápido. <b>Com o Eduardo</b> não está na lista de propósito: é o botão
-      "Passar pro Eduardo", porque ali você escolhe a abordagem e o contato entra
-      de verdade na fila do bot — mudar só o rótulo deixaria o Eduardo sem saber.
+      <b>Clique no card</b> pra abrir a ficha. Pra trocar de coluna, arraste o card
+      ou use o <b>⇅</b> no canto dele. <b>Com o Eduardo</b> não está na lista de
+      propósito: é o botão "Passar pro Eduardo", porque ali você escolhe a abordagem
+      e o contato entra de verdade na fila do bot — mudar só o rótulo deixaria o
+      Eduardo sem saber.
     </p>`
 }
 
@@ -19945,7 +19969,16 @@ function quadroOriginacaoHtml (itens) {
 // solta: entrar nela exige a transferência de verdade, com escolha de
 // abordagem — arrastar só mudaria o rótulo e o bot nunca saberia.
 function ligarQuadroOriginacao (editavel, recarregar, aoAbrirFicha) {
-  if (!editavel) return
+  // quem não edita continua podendo clicar no card e ler a ficha — só não
+  // arrasta, não move e não passa pro Eduardo
+  if (!editavel) {
+    document.querySelectorAll('.qo-card').forEach(c => {
+      c.draggable = false
+      c.querySelector('.qo-mover-btn')?.remove()
+      if (aoAbrirFicha) c.onclick = () => aoAbrirFicha(c.dataset.qo)
+    })
+    return
+  }
   let arrastado = null
   let acabouDeArrastar = false
 
@@ -19976,11 +20009,19 @@ function ligarQuadroOriginacao (editavel, recarregar, aoAbrirFicha) {
       setTimeout(() => { acabouDeArrastar = false }, 250)
     }
 
-    // clicar no card abre a gaveta. Clique DENTRO da gaveta não fecha —
-    // senão escolher no select fecharia antes de salvar.
+    // Clicar no card abre a FICHA — é o que a pessoa espera de um card com
+    // o nome de alguém. Mudar de coluna continua sendo arrastar, ou o ⇅.
+    // Clique DENTRO da gaveta não faz nada: senão escolher no select
+    // fecharia antes de salvar.
     c.onclick = e => {
       if (acabouDeArrastar) return
       if (editor && editor.contains(e.target)) return
+      if (aoAbrirFicha) aoAbrirFicha(id)
+    }
+
+    const btnMover = c.querySelector('.qo-mover-btn')
+    if (btnMover) btnMover.onclick = e => {
+      e.stopPropagation()
       const abrindo = editor.hidden
       document.querySelectorAll('.qo-editor').forEach(x => { x.hidden = true })
       document.querySelectorAll('.qo-card').forEach(x => x.classList.remove('aberto'))
@@ -19997,13 +20038,11 @@ function ligarQuadroOriginacao (editavel, recarregar, aoAbrirFicha) {
     }
 
     const btnEdu = c.querySelector('.qo-eduardo')
-    if (btnEdu) btnEdu.onclick = () => {
+    if (btnEdu) btnEdu.onclick = e => {
+      e.stopPropagation()
       const nome = c.querySelector('h6')?.textContent || ''
       abrirPassarProEduardo([id], [nome], recarregar)
     }
-
-    const btnFicha = c.querySelector('.qo-ficha')
-    if (btnFicha && aoAbrirFicha) btnFicha.onclick = () => aoAbrirFicha(id)
   })
 
   document.querySelectorAll('.qo-col').forEach(col => {
@@ -20199,15 +20238,28 @@ async function crmOriginacao (alvo, editavel, gerencia) {
   const todos = d.itens || []
   const hojeIso = new Date().toISOString().slice(0, 10)
 
+  // Os filtros como cartão de resumo: [chave, ícone, rótulo, quantos, alerta?].
+  // Continuam sendo filtro — clicou, a lista embaixo obedece. A diferença é
+  // que agora eles já contam como está a fila antes de qualquer clique.
+  // [chave, ícone, rótulo, quantos (null = só ícone), dica, acender?]
+  const nunca = todos.filter(i => !i.ultima_ligacao).length
   const filtros = vendoArquivados
-    ? [['todos', 'Voltar pra fila'], ['arquivados', `Fora da fila (${d.arquivados ?? todos.length})`]]
+    ? [
+      ['todos', '↩', 'Voltar pra fila', null, 'sair dos arquivados e ver a fila de novo'],
+      ['arquivados', '📦', 'Fora da fila', d.arquivados ?? todos.length,
+        'saíram da fila, mas continuam no sistema com todo o histórico']
+    ]
     : [
-      ['todos', `Todos (${todos.length})`],
-      ['esperando', `Esperando ligação (${todos.filter(i => i.contato_situacao === 'aguardando_ligacao').length})`],
-      ['nunca', `Nunca ligados (${todos.filter(i => !i.ultima_ligacao).length})`],
-      ['agendados', `Com retorno marcado (${todos.filter(i => i.proximo_compromisso).length})`],
-      ['hoje', `Pra hoje (${todos.filter(i => (i.proximo_compromisso || '').slice(0, 10) === hojeIso).length})`],
-      ['arquivados', `Fora da fila (${d.arquivados ?? 0})`]
+      ['todos', '👥', 'Na fila', todos.length, 'tudo que está na originação agora'],
+      ['nunca', '🆕', 'Nunca ligados', nunca, 'ninguém discou pra essas pessoas ainda', nunca > 0],
+      ['esperando', '⏳', 'Esperando ligação', todos.filter(i => i.contato_situacao === 'aguardando_ligacao').length,
+        'o robô está segurando até alguém ligar'],
+      ['agendados', '📅', 'Retorno marcado', todos.filter(i => i.proximo_compromisso).length,
+        'tem compromisso marcado pra frente'],
+      ['hoje', '🔔', 'Retorno hoje', todos.filter(i => (i.proximo_compromisso || '').slice(0, 10) === hojeIso).length,
+        'o retorno marcado cai hoje'],
+      ['arquivados', '📦', 'Fora da fila', d.arquivados ?? 0,
+        'saíram da fila, mas continuam no sistema com todo o histórico']
     ]
   const lista = vendoArquivados ? todos : todos.filter(i =>
     ORIG_FILTRO === 'esperando' ? i.contato_situacao === 'aguardando_ligacao'
@@ -20356,21 +20408,31 @@ async function crmOriginacao (alvo, editavel, gerencia) {
       guardados), CPF/CNPJ, cidade da fazenda, UF, e-mail e cultivo. Não olha observação nem nome da lista.
       ${vendoArquivados ? '' : 'Se for alguém que saiu da fila, veja em "Fora da fila".'}</span></p>` : ''}
 
-    <div style="display:flex;gap:6px;flex-wrap:wrap;margin:0 0 12px;">
-      ${filtros.map(([v, r]) => `<button type="button" class="btn-secundario mini org-filtro"
-        data-f="${v}" ${v === ORIG_FILTRO ? 'style="border-color:var(--rust);color:var(--rust);"' : ''}>${esc(r)}</button>`).join('')}
+    <div class="org-resumo">
+      ${filtros.map(([v, ic, rot, n, dica, alerta]) => `
+        <button type="button" class="org-kpi org-filtro${v === ORIG_FILTRO ? ' ativo' : ''}${
+          alerta ? ' alerta' : ''}" data-f="${v}" title="${esc(dica || rot)}">
+          <span class="topo-kpi">${n === null
+            ? `<span class="n">${ic}</span>`
+            : `<span class="ic">${ic}</span><span class="n">${n}</span>`}</span>
+          <span class="r">${esc(rot)}</span>
+        </button>`).join('')}
     </div>
 
     ${vendoArquivados ? `<p class="texto-dim2" style="font-size:11.5px;line-height:1.6;margin:-4px 0 12px;">
       Estes leads saíram da fila mas continuam no sistema, com todo o histórico. Devolver é um clique.</p>` : ''}
 
-    ${vendoArquivados ? '' : `<div style="display:flex;gap:6px;margin-bottom:12px;align-items:center;">
+    ${vendoArquivados ? '' : `<div style="display:flex;gap:6px;margin-bottom:12px;align-items:center;flex-wrap:wrap;">
+      ${/* "Fila de hoje" mentia: nada ali é de hoje — dá pra falar hoje, amanhã
+            ou semana que vem. É a lista de trabalho do acompanhamento. */ ''}
       <button type="button" class="chip-filtro ${ORIG_VISTA === 'fila' ? 'ativo' : ''}" data-vista="fila">
-        📞 Fila de hoje</button>
+        📞 Acompanhamento</button>
       <button type="button" class="chip-filtro ${ORIG_VISTA === 'quadro' ? 'ativo' : ''}" data-vista="quadro">
         📋 Quadro</button>
       <span class="texto-dim2" style="font-size:11px;margin-left:4px;">
-        ${ORIG_VISTA === 'fila' ? 'quem ligar agora' : 'onde está cada um'}</span>
+        ${ORIG_VISTA === 'fila' ? 'quem contatar e o que já rolou' : 'onde está cada um'}</span>
+      ${editavel ? `<button type="button" class="btn mini" id="org-novo" style="margin-left:auto;"
+        title="cadastrar um lead novo direto na originação">+ Novo</button>` : ''}
     </div>`}
 
     ${editavel ? `<div id="org-barra" class="panel" style="display:none;padding:10px 14px;margin-bottom:10px;
@@ -20553,6 +20615,12 @@ async function crmOriginacao (alvo, editavel, gerencia) {
   alvo.querySelectorAll('[data-vista]').forEach(b => {
     b.onclick = () => { ORIG_VISTA = b.dataset.vista; recarregar() }
   })
+
+  // lead novo entra em NOVO / a_contatar, que é exatamente o que a fila
+  // da originação lê — então ele aparece aqui assim que salvar
+  const btnNovo = alvo.querySelector('#org-novo')
+  if (btnNovo) btnNovo.onclick = () => formLead(null, editavel, gerencia, recarregar)
+
   if (ORIG_VISTA === 'quadro') {
     estilosQuadroUmaVez()
     ligarQuadroOriginacao(editavel, recarregar, async id => {
