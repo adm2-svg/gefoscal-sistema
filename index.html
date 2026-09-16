@@ -38788,7 +38788,7 @@ async function frotaItens (alvo, editavel) {
   // enquanto alguém ainda está marcando no pátio.
   const { data: vistoriasRaw } = ids.length
     ? await db.from('veiculo_vistoria').select('id,veiculo_id,encerrada_em,momento')
-        .in('veiculo_id', ids).not('encerrada_em', 'is', null)
+        .in('veiculo_id', ids).not('encerrada_em', 'is', null).is('cancelada_em', null)
         .order('encerrada_em', { ascending: false })
     : { data: [] }
   const ultimaVistoria = {}
@@ -39346,7 +39346,8 @@ async function abrirVistoriaAvarias (veiculo, vistoriaId, aoFechar = () => {}) {
 
   let avarias = avariasRaw || []
   let alvo = null
-  const aberta = !vistoria.encerrada_em && podeEditar('frota')
+  // cancelada não se mexe: continua aberta pra consulta, fechada pra edição
+  const aberta = !vistoria.encerrada_em && !vistoria.cancelada_em && podeEditar('frota')
 
   const modal = fundo.querySelector('.modal')
   modal.innerHTML = `
@@ -39357,7 +39358,11 @@ async function abrirVistoriaAvarias (veiculo, vistoriaId, aoFechar = () => {}) {
       ${fmtQuando(vistoria.criado_em) || ''}
       ${vistoria.vistoriador?.nome ? ' · por ' + esc(vistoria.vistoriador.nome) : ''}
       ${vistoria.km ? ' · ' + fmtNum(vistoria.km) + ' km' : ''}
-      ${vistoria.encerrada_em
+      ${vistoria.cancelada_em
+        ? `<br><b style="color:var(--critico-text);">Cancelada em ${fmtQuando(vistoria.cancelada_em) || ''}.</b>
+           ${vistoria.motivo_cancelamento ? `<span class="texto-dim2">Motivo: "${esc(vistoria.motivo_cancelamento)}".</span>` : ''}
+           <span class="texto-dim2">Não conta mais em lugar nenhum; fica aqui só como registro.</span>`
+        : vistoria.encerrada_em
         ? `<br><b style="color:var(--good-text);">Encerrada em ${fmtQuando(vistoria.encerrada_em) || ''}.</b>
            <span class="texto-dim2">Vistoria encerrada não se mexe — é o documento do estado do item naquele dia.</span>`
         : (aberta ? '' : '<br><span class="texto-dim2">Você não tem permissão pra editar a Frota, então está só vendo.</span>')}
@@ -39532,6 +39537,53 @@ async function abrirVistoriaAvarias (veiculo, vistoriaId, aoFechar = () => {}) {
   }
 
   redesenhar()
+}
+
+// ---------------------------------------------------------------
+// Cancelar vistoria. Cancela, não apaga: a linha continua lá com o
+// motivo do lado. Apagar deixaria buraco no histórico do item e levaria
+// junto as avarias, que são o registro de um dia que existiu.
+// ---------------------------------------------------------------
+function cancelarVistoriaFrota (vistoria, aoFeito = () => {}) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:520px;">
+    <h3>Cancelar vistoria</h3>
+    <p class="texto-dim" style="font-size:13px;line-height:1.55;margin:0 0 4px;">
+      Vai ser cancelada: <b style="color:var(--txt);">${esc(ROTULO_MOMENTO_VISTORIA[vistoria.momento] || vistoria.momento)}</b>
+      de ${fmtQuando(vistoria.criado_em) || ''}.</p>
+    <p class="texto-dim2" style="font-size:12px;line-height:1.5;margin:0 0 14px;">
+      Ela não some: fica riscada no histórico, com seu nome, a data e o motivo.
+      As avarias marcadas nela param de contar.
+      ${vistoria.encerrada_em ? '<br><b>Esta vistoria estava encerrada</b> — se foi ela que entregou o item pra alguém, a posse volta pro que valia antes.' : ''}</p>
+    <div class="campo"><label>Por que está cancelando? *</label>
+      <textarea id="cv-motivo" style="min-height:76px;"
+        placeholder="ex: abri duas sem querer, era o veículo errado"></textarea>
+      <span class="texto-dim2" style="font-size:11px;">Pelo menos uma frase.</span></div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="cv-ok" style="background:var(--warn-text);border-color:var(--warn-text);">Cancelar vistoria</button>
+      <button class="btn-secundario" id="cv-voltar">Voltar</button>
+    </div>
+    <div class="recado oculto" id="cv-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const q = s => fundo.querySelector(s)
+  const fechar = () => fundo.remove()
+  q('#cv-voltar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  setTimeout(() => q('#cv-motivo').focus(), 50)
+
+  q('#cv-ok').onclick = async () => {
+    const motivo = q('#cv-motivo').value.trim()
+    const el = q('#cv-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto')
+      el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    if (motivo.length < 10) { aviso('Escreva o motivo — pelo menos uma frase.'); return }
+    const b = q('#cv-ok'); b.disabled = true; b.textContent = 'cancelando...'
+    const { error } = await db.rpc('veiculo_vistoria_cancelar', { p_id: vistoria.id, p_motivo: motivo })
+    if (error) { aviso(error.message); b.disabled = false; b.textContent = 'Cancelar vistoria'; return }
+    fechar(); aoFeito()
+  }
 }
 
 // ---------------------------------------------------------------
@@ -40263,15 +40315,21 @@ function formFrotaItem (item) {
     if (!caixa) return
     const [{ data: vist, error: eVist }, { data: veic }] = await Promise.all([
       db.from('veiculo_vistoria')
-        .select('id,momento,croqui,km,encerrada_em,criado_em,observacoes,vistoriador:vistoriador_id(nome),posse:pessoa_posse_id(nome)')
-        .eq('veiculo_id', item.id).order('criado_em', { ascending: false }).limit(20),
+        .select(`id,momento,croqui,km,encerrada_em,criado_em,observacoes,
+          cancelada_em,motivo_cancelamento,
+          vistoriador:vistoriador_id(nome),posse:pessoa_posse_id(nome),cancelador:cancelada_por(nome)`)
+        .eq('veiculo_id', item.id).order('criado_em', { ascending: false }).limit(30),
       db.from('veiculo').select('posse_pessoa_id,posse_desde,croqui_tipo,posse:posse_pessoa_id(nome)')
         .eq('id', item.id).maybeSingle()
     ])
     if (eVist) { caixa.innerHTML = `<p class="vazio">${esc(eVist.message)}</p>`; return }
 
-    const lista = vist || []
-    const ids = lista.map(v => v.id)
+    // cancelada não conta em nada: nem em "última vistoria", nem no
+    // placar de avarias. Só continua consultável.
+    const todasVist = vist || []
+    const lista = todasVist.filter(v => !v.cancelada_em)
+    const canceladas = todasVist.filter(v => v.cancelada_em)
+    const ids = todasVist.map(v => v.id)
     const [{ data: contagem }, { data: termos }] = ids.length
       ? await Promise.all([
         db.from('veiculo_avaria').select('vistoria_id,gravidade,ja_existia').in('vistoria_id', ids),
@@ -40333,12 +40391,36 @@ function formFrotaItem (item) {
               ${emAberto ? 'continuar' : 'ver croqui'}</button>
             ${cabeTermo ? `<button type="button" class="${termo?.assinado_em ? 'btn-secundario' : 'btn'} mini"
               data-termo="${esc(v.id)}">${termo?.assinado_em ? '📄 Termo' : '✍️ Gerar termo'}</button>` : ''}
+            ${podeEditar('frota') && !termo?.assinado_em ? `<button type="button" class="btn-secundario mini"
+              data-cancelar="${esc(v.id)}" title="cancelar esta vistoria"
+              style="color:var(--critico-text);border-color:var(--critico-text);">🗑</button>` : ''}
           </span>
         </div>`
       }).join('')
       : `<p class="texto-dim2" style="font-size:12px;line-height:1.55;">
-          Nenhuma vistoria ainda. A primeira é a que vale mais: é ela que registra como o item
-          estava quando chegou — sem ela, qualquer avaria que aparecer depois é discussão.</p>`}`
+          Nenhuma vistoria ativa. A primeira é a que vale mais: é ela que registra como o item
+          estava quando chegou — sem ela, qualquer avaria que aparecer depois é discussão.</p>`}
+
+      ${canceladas.length ? `<details style="margin-top:8px;">
+        <summary style="cursor:pointer;font-size:11.5px;color:var(--dim);">
+          ${canceladas.length} vistoria(s) cancelada(s)</summary>
+        <div style="margin-top:6px;">
+          ${canceladas.map(v => `<div class="panel" style="padding:9px 12px;margin-bottom:6px;
+            opacity:.7;border-style:dashed;">
+            <div style="font-size:12.5px;">
+              <s>${esc(ROTULO_MOMENTO_VISTORIA[v.momento] || v.momento)}</s>
+              <span class="texto-dim2"> · aberta ${fmtQuando(v.criado_em) || ''}</span>
+            </div>
+            <div class="texto-dim2" style="font-size:11.5px;margin-top:2px;">
+              Cancelada ${fmtQuando(v.cancelada_em) || ''}${v.cancelador?.nome ? ' por ' + esc(v.cancelador.nome) : ''}
+            </div>
+            ${v.motivo_cancelamento ? `<div class="texto-dim" style="font-size:11.5px;margin-top:2px;
+              font-style:italic;">"${esc(v.motivo_cancelamento)}"</div>` : ''}
+            <button type="button" class="btn-secundario mini" data-vistoria="${esc(v.id)}"
+              style="margin-top:6px;">ver croqui</button>
+          </div>`).join('')}
+        </div>
+      </details>` : ''}`
 
     caixa.querySelectorAll('[data-vistoria]').forEach(b => {
       b.onclick = () => abrirVistoriaAvarias(item, b.dataset.vistoria, carregarVistorias)
@@ -40347,6 +40429,12 @@ function formFrotaItem (item) {
       b.onclick = () => {
         const v = lista.find(x => x.id === b.dataset.termo)
         if (v) abrirTermoResponsabilidade(item, v, carregarVistorias)
+      }
+    })
+    caixa.querySelectorAll('[data-cancelar]').forEach(b => {
+      b.onclick = () => {
+        const v = lista.find(x => x.id === b.dataset.cancelar)
+        if (v) cancelarVistoriaFrota(v, carregarVistorias)
       }
     })
   }
