@@ -18795,7 +18795,8 @@ async function carregarFazendasLead (fundo, l, editavel) {
         style="padding:2px 8px;" title="abrir no mapa de satélite">🛰️ Mapa</button>
       ${editavel ? `<button type="button" class="btn-secundario mini" data-excluir-fazenda="${f.id}" style="padding:2px 8px;">✕</button>` : ''}
     </div>`
-  }).join('') : `<p class="texto-dim2" style="font-size:12px;">Nenhuma fazenda cadastrada ainda.</p>`
+  }).join('') : `<p class="texto-dim2" style="font-size:12px;">Nenhuma fazenda cadastrada ainda.${
+    editavel ? ' Digite o nome e clique em <b>Adicionar</b>, ou vá direto no <b>🛰️ No mapa</b> pra achar no satélite.' : ''}</p>`
 
   alvoLista.querySelectorAll('[data-mapa-fazenda]').forEach(btn => {
     btn.onclick = () => abrirMapaFazenda(
@@ -18811,23 +18812,45 @@ async function carregarFazendasLead (fundo, l, editavel) {
     }
   })
 
-  const btnAdd = fundo.querySelector('#fz-adicionar')
-  if (btnAdd) btnAdd.onclick = async () => {
-    const fazenda = fundo.querySelector('#fz-fazenda').value.trim()
+  // guarda a fazenda com o que estiver preenchido e devolve a linha criada
+  const gravarFazendaDoFormulario = async nomeForcado => {
+    const fazenda = nomeForcado || fundo.querySelector('#fz-fazenda').value.trim()
     const regiao = fundo.querySelector('#fz-regiao').value.trim()
     const area = fundo.querySelector('#fz-area').value
     const pivos = fundo.querySelector('#fz-pivos').value
-    if (!fazenda) { alert('Informe ao menos o nome da fazenda.'); return }
-    const { error: e1 } = await db.from('lead_fazenda').insert({
+    if (!fazenda) { alert('Informe ao menos o nome da fazenda.'); return null }
+    const { data, error: e1 } = await db.from('lead_fazenda').insert({
       lead_id: l.id, fazenda, regiao: regiao || null,
       area_ha: area ? Number(area) : null, pivos: pivos ? Number(pivos) : null, criado_por: PERFIL.pessoaId
-    })
-    if (e1) { alert('Não consegui salvar: ' + e1.message); return }
+    }).select('id,fazenda,regiao,area_ha,pivos,lat,lng,zoom,endereco').single()
+    if (e1) { alert('Não consegui salvar: ' + e1.message); return null }
     fundo.querySelector('#fz-fazenda').value = ''
     fundo.querySelector('#fz-regiao').value = ''
     fundo.querySelector('#fz-area').value = ''
     fundo.querySelector('#fz-pivos').value = ''
+    return data
+  }
+
+  const btnAdd = fundo.querySelector('#fz-adicionar')
+  if (btnAdd) btnAdd.onclick = async () => {
+    const nova = await gravarFazendaDoFormulario()
+    if (nova) carregarFazendasLead(fundo, l, editavel)
+  }
+
+  // "No mapa" cadastra e já abre o satélite. O talhão precisa de uma
+  // fazenda com id pra se pendurar, então gravar antes não é burocracia:
+  // é o que faz o desenho ter onde ficar.
+  const btnMapa = fundo.querySelector('#fz-no-mapa')
+  if (btnMapa) btnMapa.onclick = async () => {
+    let nome = fundo.querySelector('#fz-fazenda').value.trim()
+    if (!nome) {
+      nome = (prompt('Nome da fazenda (pode ajustar depois):', '') || '').trim()
+      if (!nome) return
+    }
+    const nova = await gravarFazendaDoFormulario(nome)
+    if (!nova) return
     carregarFazendasLead(fundo, l, editavel)
+    abrirMapaFazenda(nova, l, editavel, () => carregarFazendasLead(fundo, l, editavel))
   }
 }
 
@@ -22226,7 +22249,17 @@ function formLead (l, editavel, gerencia, aoFechar) {
       <div class="campo"><label>Região</label><input id="fz-regiao" placeholder="ex: oeste da Bahia"></div>
       <div class="campo"><label>Área (ha)</label><input id="fz-area" type="number" step="0.01"></div>
       <div class="campo"><label>Pivôs</label><input id="fz-pivos" type="number" step="1"></div>
-      <button class="btn-secundario mini" id="fz-adicionar" type="button" style="height:38px;">+ Adicionar</button>
+      ${/* Dois jeitos de cadastrar, porque são dois momentos diferentes:
+            quem já sabe o nome e a área digita e clica em Adicionar; quem
+            só sabe "é perto de tal cidade" abre o mapa, acha, marca e
+            desenha — e a fazenda nasce dali. Antes o mapa só existia
+            depois da fazenda cadastrada, o que deixava o botão invisível
+            justamente pra quem ainda ia cadastrar. */ ''}
+      <div style="display:flex;gap:6px;">
+        <button class="btn-secundario mini" id="fz-adicionar" type="button" style="height:38px;">+ Adicionar</button>
+        <button class="btn-secundario mini" id="fz-no-mapa" type="button" style="height:38px;"
+          title="achar no satélite e desenhar os talhões">🛰️ No mapa</button>
+      </div>
     </div>` : ''}
 
     <div class="cabeca-secao" style="margin-top:16px;margin-bottom:4px;">
