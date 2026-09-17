@@ -114,6 +114,14 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 .fundo-nav-mobile { display: none; }
 /* deixa qualquer tabela larga rolar de lado no celular, em vez de estourar a tela */
 @media (max-width: 760px) { .grade-painel-comb { grid-template-columns: 1fr !important; } }
+/* Controle financeiro dividido com o painel de Filtros: só a partir do
+   monitor. A faixa de tablet do sistema termina em 1199px; abaixo disso
+   cada coluna fica com menos de 400px, e aí o .form-grade — cujos 190px
+   existem justamente pra caber campo com a fonte de 16px que forçamos
+   em ≤860px — só entrega duas colunas espremidas. Em iPad em pé
+   (768/810/820/834) empilhado lê melhor que espremido.
+   760px não serve aqui: entre 761 e 1199 a divisão ainda não cabe. */
+@media (max-width: 1199px) { .grade-financeiro-comb { grid-template-columns: 1fr !important; } }
 .nav { background: var(--panel); border-right: 1px solid var(--line); padding: 20px 13px;
        overflow-y: auto; overflow-x: hidden; }
 .nav h1 { font-family: var(--serif); font-size: 19px; margin: 0 0 2px; }
@@ -18470,13 +18478,13 @@ async function formAtribuirLead (l, aoFechar) {
         <div style="font-size:12.5px;">📅 <b>${esc(fmtReuniao(reuniao.data_hora) || fmtQuando(reuniao.data_hora) || '')}</b>
           ${reuniao.titulo ? ' — ' + esc(reuniao.titulo) : ''}
           <span class="texto-dim2">${reuniao.confirmado_em ? '(já confirmada)' : '(pré-agendada pela originação)'}</span></div>
-        <label style="display:flex;gap:7px;align-items:center;font-size:12px;font-weight:400;margin-top:9px;cursor:pointer;">
+        <label style="display:flex;gap:7px;align-items:flex-start;font-size:12px;font-weight:400;margin-top:9px;cursor:pointer;">
           <input type="radio" name="at-reu" value="confirmar" checked>
           <span>Confirmar essa data pro consultor</span></label>
-        <label style="display:flex;gap:7px;align-items:center;font-size:12px;font-weight:400;margin-top:5px;cursor:pointer;">
+        <label style="display:flex;gap:7px;align-items:flex-start;font-size:12px;font-weight:400;margin-top:5px;cursor:pointer;">
           <input type="radio" name="at-reu" value="remarcar">
           <span>Remarcar — o consultor não pode nessa data</span></label>
-        <div id="at-remarcar" class="form-grade oculto" style="margin-top:9px;grid-template-columns:1fr 1fr;">
+        <div id="at-remarcar" class="form-grade oculto" style="margin-top:9px;">
           <div class="campo"><label>Nova data</label><input type="date" id="at-data" value="${dt.slice(0, 10)}"></div>
           <div class="campo"><label>Hora</label><input type="time" id="at-hora" value="${dt.slice(11, 16)}"></div>
         </div>
@@ -22585,9 +22593,11 @@ async function crmGestaoTab (alvo, editavel) {
     <div class="resumo-topo" style="margin-bottom:16px;">
       ${[['Leads em aberto (equipe)', emAberto.length, ''], ['Valor em funil (equipe)', 'R$ ' + fmtNum(valorPipeline), ''],
          ['Taxa de conversão', taxaConversao != null ? taxaConversao + '%' : '—', ''],
-         ['Da originação (esperando consultor)', daOriginacao.length, daOriginacao.length ? 'destaque' : ''],
-         ['Pool cru (sem vendedor)', poolSemVendedor, poolSemVendedor ? 'alerta' : '']]
-        .map(([rot, val, cl]) => `<div class="bloco ${cl}"><div class="rot">${rot}</div><div class="val">${val}</div></div>`).join('')}
+         ['Esperando consultor', daOriginacao.length, daOriginacao.length ? 'destaque' : '',
+          poolSemVendedor ? `+${poolSemVendedor} pool` : '']]
+        .map(([rot, val, cl, selo]) => `<div class="bloco ${cl}"><div class="rot">${esc(rot)}${
+          selo ? `<span class="texto-dim2" style="text-transform:none;letter-spacing:0;font-size:10px;flex:none;">${esc(selo)}</span>` : ''
+        }</div><div class="val">${val}</div></div>`).join('')}
     </div>
 
     <div id="cg-originacao" style="margin-bottom:16px;"></div>
@@ -35548,7 +35558,7 @@ async function combPainel (alvo, editavel) {
           <button class="btn-secundario mini" id="pn-precos">Configurar preços</button>` : ''}
         </div>
       </div>
-      <div class="form-grade" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));">
+      <div class="form-grade">
         <div class="campo"><label>Data inicial</label><input type="date" id="pn-de" value="${inicioMes}"></div>
         <div class="campo"><label>Data final</label><input type="date" id="pn-ate" value="${hoje}"></div>
         <div class="campo"><label>Veículo / equipamento</label>
@@ -35722,9 +35732,9 @@ async function combPainel (alvo, editavel) {
         <h3 style="font-family:var(--serif);font-size:16px;">Controle financeiro</h3>
         <span class="texto-dim2" style="font-size:11px;">preços usados para estimar o valor gasto</span>
       </div>
-      <div class="grade-painel-comb"
+      <div class="grade-financeiro-comb"
            style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start;margin-bottom:18px;">
-        <div class="resumo-topo" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:0;">
+        <div class="resumo-topo" style="margin-bottom:0;">
           ${TIPOS_COMBUSTIVEL.map(t => `<div class="bloco">
             <div class="rot">${esc(ROTULO_COMBUSTIVEL[t])}</div>
             <div class="val" style="font-size:20px;color:var(--gold, #c8a11a);">R$ ${fmtNum(COMB_CACHE.precos[t] ?? 0, 2)}</div>
