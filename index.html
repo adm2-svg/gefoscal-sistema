@@ -107,6 +107,44 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   .kpi .nota, .chip, .anexo-link { font-size: 13px; }
   table { font-size: 14.5px; }
 }
+/* O mesmo zoom automático do Safari acontece no iPAD, e a regra acima não
+   alcançava: ela mora dentro do @media de 860px, e iPad em paisagem tem
+   1080, 1180 ou 1194px de largura. Resultado: a pessoa tocava num campo
+   (a data do filtro de Solicitações, por exemplo), o Safari dava zoom
+   sozinho, e como o sistema nunca recarrega a página ao trocar de tela o
+   zoom ficava preso — daí a sensação de "a tela não se adapta, corta
+   tudo, tenho que ficar puxando". Não era a grade: grade responsiva quebra
+   linha, não corta palavra no meio.
+   O que dispara o zoom é ser touch, não ser estreito. Por isso a condição
+   certa é pointer:coarse, que pega telefone e tablet em qualquer largura e
+   deixa o computador com mouse de fora. */
+@media (pointer: coarse) {
+  input, select, textarea { font-size: 16px !important; }
+}
+/* ---- Rede de segurança: nada mais largo que a tela --------------------
+   O sistema tem ~1000 telas montadas em HTML inline, e conferir uma a uma
+   não escala. Estas quatro regras resolvem no nível do documento as quatro
+   maneiras de um elemento ficar maior que o espaço que tem:
+
+   1. palavra sem espaço (e-mail, URL, CNPJ colado, nome de arquivo) que
+      não quebra e empurra a coluna inteira pra fora;
+   2. mídia com largura natural maior que o container;
+   3. filho de flex/grid que se recusa a encolher — o padrão do CSS é
+      min-width:auto, ou seja "não fico menor que meu conteúdo", e é isso
+      que faz uma tabela ou um texto longo furar o painel;
+   4. tabela larga, que passa a rolar dentro da própria caixa em vez de
+      esticar a página.
+
+   Nenhuma delas muda nada quando o conteúdo já cabe — só entram em ação
+   quando a alternativa seria cortar. */
+body { overflow-wrap: break-word; }
+img, video, canvas, iframe { max-width: 100%; height: auto; }
+.app > *, .conteudo, .conteudo > *,
+.panel, .bloco, .campo, .cabeca-secao, .subabas, .acoes, .filtros,
+.resumo-topo > *, .form-grade > *, .qo-card, .modal { min-width: 0; }
+.tabela-scroll { max-width: 100%; }
+/* ---------------------------------------------------------------------- */
+
 .botao-abrir-menu { display: none; align-items: center; justify-content: center; width: 38px; height: 38px;
   border-radius: 8px; background: var(--surface2); border: 1px solid var(--line2); color: var(--txt);
   cursor: pointer; flex: none; }
@@ -222,7 +260,7 @@ body { zoom: 1; transition: zoom .2s; }
 .topo { display:flex; justify-content:space-between; align-items:flex-start;
         gap:16px; flex-wrap:wrap; margin-bottom:20px; }
 .topo h2 { font-family: var(--serif); margin:0 0 4px; font-size:24px; }
-.kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(165px,1fr)); gap:12px; margin-bottom:20px; }
+.kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(165px, 100%), 1fr)); gap:12px; margin-bottom:20px; }
 .kpi .rotulo { color:var(--dim2); font-size:11px; text-transform:uppercase; letter-spacing:.5px; }
 .kpi .valor { font-family:var(--serif); font-size:26px; margin-top:6px; }
 .kpi .nota { color:var(--dim); font-size:12px; margin-top:2px; }
@@ -243,7 +281,11 @@ tbody tr:hover { background: var(--hover-bg); }
    página inteira. Só aparece no celular, e só quando a tabela em questão
    realmente não coube (função avisarRolagemTabelas, no fim do script). */
 .dica-rolagem-tabela { display:none; }
-@media (max-width:860px) {
+/* 1199px e não 860px: no tablet a tabela larga também rola de lado, e o
+   aviso do gesto só aparecia no celular — quem estava no iPad via a tabela
+   cortada sem saber que era pra arrastar. O JS que insere a dica nunca teve
+   trava de largura: ele olha se a tabela realmente não coube. */
+@media (max-width:1199px) {
   .dica-rolagem-tabela { display:block; font-size:11px; color:var(--dim2); text-align:center;
     padding:7px 10px; background:var(--surface2); border-bottom:1px solid var(--line); }
 }
@@ -367,7 +409,7 @@ tbody tr:hover { background: var(--hover-bg); }
 .doc .assinaturas { margin-top:14px; }
 @media (max-width:720px) { .doc .grade-info { grid-template-columns:repeat(2,1fr); } }
 .doc-corpo { padding:22px; display:grid; gap:16px; }
-.doc-linha { display:grid; gap:16px; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); }
+.doc-linha { display:grid; gap:16px; grid-template-columns:repeat(auto-fit,minmax(min(240px, 100%), 1fr)); }
 .doc .bloco { border:1px solid var(--borda); border-radius:8px; overflow:hidden; background:#fff; }
 .doc .bloco > h4 { margin:0; background:var(--verde-claro); color:var(--verde);
               font-size:12px; letter-spacing:.7px; text-transform:uppercase;
@@ -421,7 +463,7 @@ tbody tr:hover { background: var(--hover-bg); }
 .doc .prop-validade { margin-top:12px; font-size:12.5px; color:#8a5a12; font-weight:600; }
 
 /* ---- Financeiro e Projetos ---- */
-.orc-grade { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px; margin-top:10px; }
+.orc-grade { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(220px, 100%), 1fr)); gap:14px; margin-top:10px; }
 .orc-item { border:1px solid var(--line); border-radius:8px; padding:12px 14px; }
 .orc-item .linha1 { display:flex; justify-content:space-between; align-items:baseline; font-size:13px; margin-bottom:6px; }
 .orc-item .linha1 .real.estourado { color:var(--warn-text); }
@@ -454,7 +496,7 @@ tbody tr:hover { background: var(--hover-bg); }
 .postit .fechar { position:absolute; top:4px; right:6px; background:none; border:none; cursor:pointer;
                    font-size:14px; color:#241f17; opacity:.5; }
 .postit .fechar:hover { opacity:1; }
-.grade-meses-mkt { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:12px; }
+.grade-meses-mkt { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(230px, 100%), 1fr)); gap:12px; }
 .cartao-mes-mkt { border:1px solid var(--line); border-radius:8px; padding:10px; background:var(--panel); }
 .cartao-mes-mkt h4 { font-family:var(--serif); font-size:13px; margin:0 0 8px; }
 .cartao-mes-mkt table { width:100%; font-size:11px; }
@@ -502,7 +544,7 @@ tbody tr:hover { background: var(--hover-bg); }
 .check-pessoas label { display:flex; align-items:center; gap:5px; font-size:12.5px; color:var(--dim);
                         border:1px solid var(--line); border-radius:20px; padding:4px 10px; cursor:pointer; }
 .hist-item { font-size:12.5px; border-left:2px solid var(--line); padding-left:9px; margin-bottom:7px; color:var(--dim); }
-.kanban { display:grid; grid-template-columns:repeat(4,minmax(220px,1fr)); gap:14px; align-items:start; overflow-x:auto; }
+.kanban { display:grid; grid-template-columns:repeat(4,minmax(min(220px, 100%), 1fr)); gap:14px; align-items:start; overflow-x:auto; }
 .coluna-kanban { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px; min-height:120px; }
 .coluna-kanban h4 { font-family:var(--serif); font-size:14px; margin:2px 4px 10px; display:flex; justify-content:space-between; }
 .coluna-kanban .grupo-resp { font-size:10.5px; text-transform:uppercase; letter-spacing:.4px;
@@ -521,7 +563,7 @@ tbody tr:hover { background: var(--hover-bg); }
 
 /* ---- Cards de KPI do CRM (Painel) — cartão com ícone, número grande e
    um respiro decorativo no canto, no estilo pedido pela Amanda ---- */
-.crm-kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:14px; }
+.crm-kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(170px, 100%), 1fr)); gap:14px; }
 .crm-kpi { position:relative; overflow:hidden; background:var(--panel); border:1px solid var(--line);
            border-radius:16px; padding:16px; transition:transform .15s ease, box-shadow .15s ease, border-color .15s ease; }
 .crm-kpi:hover { transform:translateY(-2px); box-shadow:0 10px 22px rgba(0,0,0,.10); border-color:var(--line2); }
@@ -604,7 +646,7 @@ tbody tr:hover { background: var(--hover-bg); }
 .tec-farol.verde { background:var(--good-text); }
 .tec-farol.amarelo { background:var(--warn-text); }
 .tec-farol.vermelho { background:var(--critico-text); }
-.tec-kanban { display:grid; grid-template-columns:repeat(6,minmax(210px,1fr)); gap:12px; overflow-x:auto;
+.tec-kanban { display:grid; grid-template-columns:repeat(6,minmax(min(210px, 100%), 1fr)); gap:12px; overflow-x:auto;
               padding-bottom:8px; align-items:start; -webkit-overflow-scrolling:touch; }
 .tec-col { background:var(--surface2); border:1px solid var(--line); border-radius:14px; min-width:200px; }
 .tec-col.sobre { border-color:var(--rust); }
@@ -658,7 +700,7 @@ tbody tr:hover { background: var(--hover-bg); }
 }
 @media (max-width:640px) {
   .crm-col { min-width:78vw; }
-  .crm-kpis { grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; }
+  .crm-kpis { grid-template-columns:repeat(auto-fit,minmax(min(140px, 100%), 1fr)); gap:10px; }
   .crm-kpi { padding:13px; }
   .crm-kpi .val { font-size:20px; }
 }
@@ -697,7 +739,7 @@ tbody tr:hover { background: var(--hover-bg); }
 .cartao-ferramenta:hover { border-color:var(--rust); }
 .cartao-ferramenta h4 { font-family:var(--serif); font-size:15px; margin:0 0 5px; }
 .cartao-ferramenta p { margin:0; font-size:12.5px; color:var(--dim); line-height:1.5; }
-.grade-cartoes { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px; }
+.grade-cartoes { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(260px, 100%), 1fr)); gap:12px; }
 .lead-linha td { vertical-align:top; }
 .lead-obs { color:var(--dim2); font-size:11.5px; margin-top:3px; max-width:520px; line-height:1.45; }
 
@@ -787,7 +829,7 @@ tbody tr:hover { background: var(--hover-bg); }
 /* Resumo da originação: os filtros viraram cartões. Continuam sendo
    filtro — clicou, a lista embaixo obedece — só que agora também
    respondem "como está a fila" antes de qualquer clique. */
-.org-resumo { display:grid; grid-template-columns:repeat(auto-fit,minmax(138px,1fr));
+.org-resumo { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(138px, 100%), 1fr));
   gap:8px; margin:0 0 14px; }
 .org-kpi { background:var(--surface2); border:1px solid var(--line2); border-radius:12px;
   padding:11px 13px; cursor:pointer; text-align:left; font:inherit; color:inherit;
@@ -826,7 +868,7 @@ tbody tr:hover { background: var(--hover-bg); }
 @media (max-width:700px){ .grade-funil-dir { flex-direction:column; } }
 
 /* ---- Painel Executivo — cards com régua (substituem o antigo Dashboard Diretor) ---- */
-.pe-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(290px,1fr)); gap:14px; margin-top:14px; }
+.pe-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(290px, 100%), 1fr)); gap:14px; margin-top:14px; }
 .pe-card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:18px 20px;
            display:flex; flex-direction:column; transition:border-color .15s ease, box-shadow .15s ease; }
 .pe-card:hover { border-color:var(--dim2); }
@@ -937,8 +979,8 @@ tbody tr:hover { background: var(--hover-bg); }
 .mrh-secao .n { font-size:11px; color:var(--dim2); background:var(--surface2);
   border-radius:20px; padding:1px 9px; font-variant-numeric:tabular-nums; flex:none; }
 .mrh-secao .risco { flex:1; height:1px; background:var(--line2); }
-.mrh-cartoes { display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:12px; }
-.mrh-num { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:6px; }
+.mrh-cartoes { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(250px, 100%), 1fr)); gap:12px; }
+.mrh-num { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(150px, 100%), 1fr)); gap:10px; margin-bottom:6px; }
 .mrh-num .caixa { background:var(--panel); border:1px solid var(--line); border-radius:12px;
   padding:13px 15px; display:flex; flex-direction:column; gap:2px; }
 .mrh-num .caixa .v { font-family:var(--serif); font-size:27px; line-height:1.05; }
@@ -946,7 +988,7 @@ tbody tr:hover { background: var(--hover-bg); }
   color:var(--dim2); line-height:1.35; }
 
 /* ---- Resumo grande do financeiro ---- */
-.resumo-topo { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr));
+.resumo-topo { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(210px, 100%), 1fr));
                gap:12px; margin-bottom:20px; }
 .resumo-topo .bloco { background:var(--panel); padding:19px 22px; border:1px solid var(--line);
                border-radius:10px; display:flex; flex-direction:column; justify-content:center;
@@ -993,7 +1035,7 @@ tr.abrivel .seta { display:inline-block; color:var(--dim2); font-size:10px;
 tr.abrivel.aberta .seta { transform:rotate(90deg); color:var(--rust); }
 tr.detalhe > td { background:var(--hover-bg); padding:0; border-bottom:1px solid var(--line2); }
 tr.detalhe .conteudo { padding:16px 18px; }
-.det-grade { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
+.det-grade { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(180px, 100%), 1fr));
              gap:12px 22px; margin-bottom:12px; }
 .det-grade .rot { color:var(--dim2); font-size:10px; text-transform:uppercase;
                   letter-spacing:.1em; }
@@ -1005,7 +1047,7 @@ tr.detalhe .conteudo { padding:16px 18px; }
 
 
 /* ---- Documentos anexados dentro do detalhe ---- */
-.docs-anexos { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr));
+.docs-anexos { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(230px, 100%), 1fr));
                gap:9px; margin:12px 0 4px; }
 .doc-card { border:1px solid var(--line2); border-radius:8px; padding:11px 13px;
             background:var(--panel); display:flex; gap:11px; align-items:flex-start; }
@@ -1108,8 +1150,8 @@ tr.detalhe .conteudo { padding:16px 18px; }
 .subabas-rh button:hover { color:var(--txt); border-color:var(--rust); transform:translateY(-1px); box-shadow:0 4px 10px rgba(0,0,0,.08); }
 .subabas-rh button.ativo { color:#fff; border-color:var(--rust); background:linear-gradient(135deg,var(--rust),#b5652f);
                   box-shadow:0 4px 12px rgba(var(--rust-rgb),.35); }
-.form-grade { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:12px; }
-.grade-modulos { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:8px; margin-top:6px; }
+.form-grade { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(190px, 100%), 1fr)); gap:12px; }
+.grade-modulos { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(230px, 100%), 1fr)); gap:8px; margin-top:6px; }
 .linha-modulo { display:flex; align-items:center; gap:12px; padding:8px 10px;
                 border:1px solid var(--line); border-radius:6px; font-size:13px; }
 .linha-modulo .nome { flex:1; }
@@ -1182,7 +1224,7 @@ textarea { width:100%; min-height:230px; font-family:ui-monospace,SFMono-Regular
 .cartao-sol .titulo { font-size:14px; flex:1; min-width:180px; }
 .cartao-sol .meta { color:var(--dim2); font-size:12px; margin-top:4px; }
 .cartao-sol .botoes { display:flex; gap:6px; }
-.ficha { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:14px 20px; }
+.ficha { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(190px, 100%), 1fr)); gap:14px 20px; }
 .ficha .item .rot { color:var(--dim2); font-size:10.5px; text-transform:uppercase; letter-spacing:.4px; }
 .ficha .item .val { font-size:13.5px; margin-top:3px; }
 .passo { display:flex; gap:10px; align-items:flex-start; padding:8px 0;
@@ -3607,7 +3649,7 @@ async function painelExecutivoDiretor (area) {
       </button>
     </div>
     <p class="texto-dim2" style="font-size:11.5px;margin:10px 0 14px;">Clique num card pra ir direto naquela área.</p>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px;">
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(210px, 100%), 1fr));gap:10px;">
       ${financeiro ? cartao('financeiro', 'Financeiro', [
           ['A pagar (7 dias)', 'R$ ' + fmtNum(financeiro.pagar_semana)],
           ['A receber (7 dias)', 'R$ ' + fmtNum(financeiro.receber_semana)],
@@ -5220,7 +5262,7 @@ async function vgIndicadores (area) {
   const mostrar = itens.slice(0, 4)
 
   caixa.innerHTML = `
-    <div style="display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));">
+    <div style="display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(min(215px, 100%), 1fr));">
       ${mostrar.map(i => {
         const v = vgVariacao(i.novos, i.antes)
         const chama = i.urgente && Number(i.valor) > 0
@@ -5263,7 +5305,7 @@ async function vgIndicadores (area) {
 // Avisos + o que está esperando a pessoa, lado a lado.
 async function vgAvisosEDestaque (area, avisos) {
   const linha = document.createElement('div')
-  linha.style.cssText = 'display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));margin-bottom:16px;'
+  linha.style.cssText = 'display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(min(310px, 100%), 1fr));margin-bottom:16px;'
   area.appendChild(linha)
 
   // --- avisos -----------------------------------------------------
@@ -9855,7 +9897,7 @@ async function painelExecutivoCompleto (area) {
   bloco.innerHTML = `
     <div class="cabeca-secao"><h3 style="font-family:var(--serif);font-size:18px;">👑 Painel Executivo — tudo num lugar só</h3></div>
     <p class="texto-dim2" style="font-size:12px;margin:-6px 0 14px;">Clica num card pra ir direto naquela área.</p>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;">
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(200px, 100%), 1fr));gap:10px;">
       ${financeiro ? cartao('💰', 'Financeiro', 'financeiro', [['A pagar', 'R$ ' + fmtNum(financeiro.aPagar)], ['Vencidos', financeiro.vencidos, financeiro.vencidos > 0]]) : ''}
       ${compras ? cartao('🛒', 'Compras', 'compras', [['Pendentes', compras.pendentes, compras.pendentes > 0]]) : ''}
       ${crm ? cartao('🤝', 'CRM Comercial', 'crm', [['Negociações abertas', crm.abertas]]) : ''}
@@ -12869,7 +12911,7 @@ async function expedPainel (alvo) {
           <span style="background:rgba(255,255,255,.15);color:#fff;padding:6px 14px;border-radius:20px;font-size:12px;">
             ${comNF.length} NF${comNF.length !== 1 ? 's' : ''} no período</span>
         </div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:16px;">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(150px, 100%), 1fr));gap:16px;">
           <div><div style="color:rgba(255,255,255,.65);font-size:11px;text-transform:uppercase;letter-spacing:.08em;">Valor faturado</div>
             <div style="color:#fff;font-family:var(--serif);font-size:26px;margin-top:4px;">R$ ${fmtNum(valorTotal)}</div></div>
           <div><div style="color:rgba(255,255,255,.65);font-size:11px;text-transform:uppercase;letter-spacing:.08em;">Toneladas</div>
@@ -12880,7 +12922,7 @@ async function expedPainel (alvo) {
             <div style="color:#fff;font-family:var(--serif);font-size:26px;margin-top:4px;">${lista.length}</div></div>
         </div>
       </div>
-      ${produtosOrdenados.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-bottom:22px;">
+      ${produtosOrdenados.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(220px, 100%), 1fr));gap:10px;margin-bottom:22px;">
         ${produtosOrdenados.map(([p, v]) => `
           <div class="panel" style="padding:14px 16px;border-left:3px solid ${corBorda};">
             <div style="font-weight:600;font-size:13px;margin-bottom:5px;">${esc(p)}</div>
@@ -14824,7 +14866,7 @@ async function renderListaAgentesIA (alvo, editavel) {
       <h3 style="font-family:var(--serif);font-size:16px;margin:0;">Seus especialistas</h3>
       ${editavel ? `<button class="btn" id="ia-novo-agente">+ Criar especialista</button>` : ''}
     </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;">
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(260px, 100%), 1fr));gap:14px;">
       ${lista.map(a => `<div class="panel mke-card" data-abrir-agente="${a.id}" style="padding:18px;cursor:pointer;
         border-left:4px solid ${COR_ESPECIALIDADE_IA[a.especialidade] || 'var(--line2)'};${a.ativo ? '' : 'opacity:.55;'}">
         <div style="display:flex;align-items:center;gap:10px;">
@@ -15824,7 +15866,7 @@ async function tiOrcamento (alvo, editavel) {
       ${editavel ? `<button class="btn" id="dt-nova">+ Nova despesa</button>` : ''}
     </div>
 
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;">
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(300px, 100%), 1fr));gap:12px;">
     ${lista.map(d => `<div class="panel mke-card" style="padding:16px 18px;border-left:4px solid ${d.status === 'ATIVA' ? (COR_CATEGORIA_TI[d.categoria] || 'var(--line2)') : 'var(--line2)'};${d.status !== 'ATIVA' ? 'opacity:.6;' : ''}">
       <div class="cabeca-secao">
         <div style="display:flex;align-items:center;gap:10px;">
@@ -16172,7 +16214,7 @@ async function tiMapa (alvo) {
         <h3 style="font-family:var(--serif);font-size:15px;">Referência — Estoque e Produção do período</h3>
         <span class="texto-dim2" style="font-size:11px;">${fmtData(de)} a ${fmtData(ate)}</span>
       </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-bottom:20px;">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(200px, 100%), 1fr));gap:10px;margin-bottom:20px;">
         ${ordenado.map(([nome, v]) => `
           <div class="panel" style="padding:14px 16px;border-left:3px solid var(--dim2);">
             <div style="font-weight:600;font-size:12.5px;margin-bottom:5px;">${esc(nome)}</div>
@@ -16797,7 +16839,7 @@ async function labEstoque (alvo, editavel) {
     const itens = Object.values(porMaterial).sort((a, b) => a.material.localeCompare(b.material))
 
     $('#le-resumo').innerHTML = `
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(220px, 100%), 1fr));gap:10px;">
         ${itens.map(m => `<div class="panel" style="padding:14px 16px;border-left:3px solid ${m.controlado_pf || m.controlado_exercito ? 'var(--warn-text)' : 'var(--dim2)'};">
           <div style="font-weight:600;font-size:13px;margin-bottom:4px;">${esc(m.material)}
             ${m.controlado_pf ? '<span class="badge-alerta" style="font-size:9px;margin-left:4px;">PF</span>' : ''}
@@ -17886,7 +17928,7 @@ function renderCrmCalendario (alvo, editavel, gerencia) {
         <button class="btn-secundario mini" id="crc-ano-seguinte">${CRM_CAL_ANO + 1} →</button>
       </div>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px;margin-bottom:18px;">
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(84px, 100%), 1fr));gap:8px;margin-bottom:18px;">
       ${CRM_CAL_MESES.map((nome, i) => {
         const qtd = porMes[i].length
         return `<button class="crc-mes" data-mes="${i}" style="padding:10px 6px;text-align:center;cursor:pointer;
@@ -22379,7 +22421,7 @@ function renderCrmCalendarioEquipe (alvo) {
         <button class="btn-secundario mini" id="cge-ano-seguinte">${CRM_CAL_EQ_ANO + 1} →</button>
       </div>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(78px,1fr));gap:6px;margin-bottom:16px;">
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(78px, 100%), 1fr));gap:6px;margin-bottom:16px;">
       ${CRM_CAL_MESES.map((nome, i) => {
         const qtd = porMes[i].length
         return `<button class="cge-mes" data-mes="${i}" style="padding:8px 4px;text-align:center;cursor:pointer;
@@ -24823,7 +24865,7 @@ function estilosSdrUmaVez () {
 
     /* Cartões usados nas outras sub-abas */
     .sdr-cartoes { display:grid; gap:14px;
-      grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); }
+      grid-template-columns:repeat(auto-fill, minmax(min(260px, 100%), 1fr)); }
     .sdr-cartao { border:1px solid var(--line2); border-radius:14px; padding:16px;
       background:var(--panel); transition:border-color .15s ease, transform .15s ease,
       box-shadow .15s ease; }
@@ -26000,7 +26042,7 @@ async function sdrAbaFunil (alvo) {
       </p>
       <button class="btn-secundario mini" id="sdr-funil-novo-lead" style="flex:none;">+ Novo lead</button>
     </div>
-    <div class="crm-board" style="grid-template-columns:repeat(${STATUS_LEAD_SDR.length},minmax(220px,1fr));">
+    <div class="crm-board" style="grid-template-columns:repeat(${STATUS_LEAD_SDR.length},minmax(min(220px, 100%), 1fr));">
       ${STATUS_LEAD_SDR.map(st => {
         const desta = lista.filter(l => (l.status || 'novo') === st)
         return `<div class="crm-col" data-coluna-sdr="${st}">
@@ -26208,7 +26250,7 @@ async function sdrAbaCanais (alvo) {
     <p class="texto-dim2" style="margin-bottom:14px;">
       Os números de WhatsApp que a IA atende. O oficial da Meta atende qualquer pessoa;
       o do QR Code só fala com quem está numa lista ativa.</p>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(320px, 100%), 1fr));gap:14px;">
       ${(canais || []).map(c => cartaoCanal(c, podeMexer)).join('')}
     </div>`
 
@@ -26899,7 +26941,7 @@ async function sdrAbaListas (alvo) {
       <button class="btn mini" id="sl-nova" style="flex:none;">+ Nova lista</button>
     </div>
     ${(listas || []).length ? `
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(300px, 100%), 1fr));gap:14px;">
         ${listas.map(l => {
           const p = porLista[l.id] || { total: 0, feitos: 0 }
           const cor = l.situacao === 'ativa' ? 'var(--good-text)'
@@ -27445,7 +27487,7 @@ function painelVozSdr (cfg) {
       <span class="texto-dim2" style="font-size:11.5px;">
         Desmarcado, ele continua ouvindo e transcrevendo, mas responde só por texto.</span>
 
-      <div class="form-grade" style="grid-template-columns:repeat(auto-fit,minmax(190px,1fr));margin-top:12px;">
+      <div class="form-grade" style="grid-template-columns:repeat(auto-fit,minmax(min(190px, 100%), 1fr));margin-top:12px;">
         <div class="campo"><label>Voz</label>
           <select id="vz-voz" ${podeMexer ? '' : 'disabled'}>
             ${VOZES_TTS.map(([v, r]) => `<option value="${v}" ${cfg.voz_tts === v ? 'selected' : ''}>${esc(r)}</option>`).join('')}
@@ -35694,7 +35736,7 @@ async function combPainel (alvo, editavel) {
         </div>
       </div>
 
-      <div class="resumo-topo" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:16px;">
+      <div class="resumo-topo" style="grid-template-columns:repeat(auto-fit,minmax(min(150px, 100%), 1fr));margin-bottom:16px;">
         ${kpiCard('Total abastecido (L)', fmtNum(totalLitros), 'no período filtrado')}
         ${kpiCard('Qtd. abastecimentos', lista.length, 'registros filtrados')}
         ${kpiCard('Média por abastecimento', fmtNum(mediaAbastecimento) + ' L', 'média por lançamento')}
@@ -39360,7 +39402,7 @@ async function frotaItens (alvo, editavel) {
 
   const desenharVitrine = () => {
     $('#fr-conteudo').innerHTML = `
-      <div class="grade-cartoes" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;">
+      <div class="grade-cartoes" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(260px, 100%), 1fr));gap:16px;">
         ${listaFiltrada().map(i => {
           const gasto = custoTotalFrota(i, custosDoc, custosManut, custosComb, custosPecas)
           const gastoManut = (custosManut || []).filter(o => o.veiculo_id === i.id).reduce((s, o) => s + Number(o.valor_total || 0), 0)
@@ -44863,7 +44905,7 @@ async function desempTrilhas (alvo, editavel) {
     <div class="acoes" style="margin-bottom:16px;"><button class="btn" id="tr-nova">+ Nova trilha</button></div>
 
     ${lista.length ? `
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;">
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(260px, 100%), 1fr));gap:14px;">
         ${lista.map(t => `
           <div class="panel" style="padding:16px;cursor:pointer;${t.ativa ? '' : 'opacity:.55;'}" data-abrir-trilha="${t.id}">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
@@ -45414,7 +45456,7 @@ async function desenharDesempIndividual (alvo, editavel) {
       Nota = pontualidade + bônus de até ${TETO_BONUS_VOLUME} pts pra quem conclui mais solicitações que a média do time no mês (média deste mês: ${Math.round(mediaGrupoMes * 10) / 10}).
       <span style="opacity:.8;">✎ ajustado pelo RH</span> · <span style="opacity:.8;">📎 tem anexo</span> · <span style="opacity:.8;">📝 tem observação</span> · <span style="opacity:.8;">🚀 ganhou bônus por volume</span></p>
 
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px;">
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(230px, 100%), 1fr));gap:14px;">
       ${linhas.map(l => `
         <div class="panel" style="padding:16px;cursor:pointer;transition:transform .12s ease,box-shadow .12s ease;" data-abrir-pessoa="${l.pessoa.id}"
           onmouseenter="this.style.transform='translateY(-2px)';this.style.boxShadow='0 8px 18px rgba(0,0,0,.12)'"
@@ -45509,7 +45551,7 @@ async function desenharDesempPrestadores (alvo) {
       Desempenho dos Prestadores Atrelados (terceiros) nas solicitações delegadas a eles nesse mês.
       Não afeta a agilidade de ninguém da empresa — é só acompanhamento de fornecedor externo.</p>
 
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px;">
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(230px, 100%), 1fr));gap:14px;">
       ${linhas.map(l => `
         <div class="panel" style="padding:16px;">
           <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;">
@@ -45811,7 +45853,7 @@ async function recrKanbanVagas (area) {
       <button class="btn-secundario mini" id="recr-ver-canceladas">Ver vagas canceladas</button>
     </div>
     <div id="recr-canceladas" class="oculto" style="margin-bottom:14px;"></div>
-    <div style="display:grid;grid-template-columns:repeat(6,minmax(180px,1fr));gap:12px;overflow-x:auto;">
+    <div style="display:grid;grid-template-columns:repeat(6,minmax(min(180px, 100%), 1fr));gap:12px;overflow-x:auto;">
       ${ETAPAS_VAGA.map(([chave, rotulo]) => {
         const daColuna = lista.filter(v => v.etapa === chave)
         return `<div>
@@ -46675,7 +46717,7 @@ async function desemp360 (alvo, editavel) {
 
     ${listaCiclos.length ? `
       <h4 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Ciclos de avaliação</h4>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;">
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(260px, 100%), 1fr));gap:14px;">
         ${listaCiclos.map(c => {
           const prog = progressoPorCiclo[c.id]
           const pct = prog?.total ? Math.round(prog.respondidas / prog.total * 100) : 0
@@ -46924,7 +46966,7 @@ async function desempPdi (alvo, editavel) {
     ${editavel ? `<div class="acoes" style="margin-bottom:16px;"><button class="btn" id="pdi-novo">+ Novo plano</button></div>` : ''}
 
     ${lista.length ? `
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;">
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(280px, 100%), 1fr));gap:14px;">
         ${lista.map(p => `
           <div class="panel" style="padding:16px;cursor:pointer;" data-abrir-pdi="${p.id}" title="Ver relatório completo do plano">
             <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;">
@@ -47195,7 +47237,7 @@ async function desempMeu (alvo) {
     </div>
 
     ${secaoMeuRh("🌱", "Meus planos de desenvolvimento", (pdi || []).length)}
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px;margin-bottom:18px;">
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(240px, 100%), 1fr));gap:10px;margin-bottom:18px;">
       ${(pdi || []).map(p => `
         <div class="panel" style="padding:14px;">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
@@ -47907,7 +47949,7 @@ async function mktQuadro (alvo, editavel) {
       <input id="mkq-busca" placeholder="Buscar por título, código ou responsável" style="flex:1;min-width:220px;" value="${esc(MKT_QUADRO_BUSCA)}">
     </div>
 
-    <div id="mkq-colunas" style="display:grid;grid-template-columns:repeat(4,minmax(230px,1fr));gap:14px;overflow-x:auto;"></div>`
+    <div id="mkq-colunas" style="display:grid;grid-template-columns:repeat(4,minmax(min(230px, 100%), 1fr));gap:14px;overflow-x:auto;"></div>`
 
   await montarAgendaEmbutida($('#mkq-bloco-agenda'), () => mktQuadro(alvo, editavel))
   renderMktQuadroColunas(alvo, editavel)
@@ -48072,7 +48114,7 @@ function renderMktCalendario (alvo, editavel) {
         <button class="btn-secundario mini" id="mkc-ano-seguinte">${MKT_CAL_ANO + 1} →</button>
       </div>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px;margin-bottom:18px;">
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(84px, 100%), 1fr));gap:8px;margin-bottom:18px;">
       ${NOMES_MES_MKT.map((nome, i) => {
         const qtd = porMes[i].length + relevantesPorMes[i].length
         return `<button class="mes-cal-mkt" data-mes="${i}" style="padding:10px 6px;text-align:center;cursor:pointer;
@@ -48460,7 +48502,7 @@ function renderMktAniversariantes (alvo, editavel) {
       <input id="mk-aniv-busca" placeholder="Buscar por nome ou dia (ex: 15 ou 15/08)..." style="flex:1;min-width:220px;" value="${esc(MKT_ANIV_BUSCA)}">
     </div>
 
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px;">
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(230px, 100%), 1fr));gap:14px;">
       ${MESES_MKT.map((nomeMes, i) => {
         const doMes = unificados.filter(a => a.mes === i + 1).sort((a, b) => a.nome.localeCompare(b.nome))
         if (!doMes.length && termo) return ''
@@ -48685,7 +48727,7 @@ function renderMktEstoque (alvo, editavel) {
         <h4 style="font-family:var(--serif);font-size:14.5px;margin:0;border-left:4px solid ${COR_CATEGORIA_ESTOQUE_MKT[cat] || 'var(--line2)'};padding-left:10px;">
           ${ICONE_CATEGORIA_ESTOQUE_MKT[cat] || '📦'} ${esc(cat)} <span class="texto-dim2" style="font-size:11px;font-weight:400;">(${porCategoria[cat].length})</span></h4>
       </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;margin-bottom:8px;">
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(230px, 100%), 1fr));gap:12px;margin-bottom:8px;">
         ${porCategoria[cat].map(i => {
           const semQtd = i.quantidade == null
           const baixo = !semQtd && i.quantidade > 0 && i.quantidade <= 3
