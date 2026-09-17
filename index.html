@@ -18579,17 +18579,22 @@ async function formAtribuirLead (l, aoFechar) {
     // 2) o dono. "entregue" sai daqui e não da mão de ninguém: atribuir É
     // sair da originação, e depender de alguém lembrar de arrastar o card
     // era o que deixava lead sem coluna certa.
-    const { error } = await db.from('lead').update({
+    // Entra no funil como "Em contato", não como "Novo": contato já houve,
+    // foi a originação que fez. Só sobe quem ainda está em NOVO — lead que
+    // já estava em proposta ou negociação não volta pra trás.
+    const mudancaLead = {
       vendedor_id: vendedorId, atribuido_por_id: PERFIL.pessoaId, atribuido_em: agora,
       situacao_originacao: 'entregue'
-    }).eq('id', l.id)
+    }
+    if (!l.etapa || l.etapa === 'NOVO') mudancaLead.etapa = 'CONTATO'
+    const { error } = await db.from('lead').update(mudancaLead).eq('id', l.id)
     if (error) {
       btn.disabled = false; btn.textContent = 'Enviar pro consultor'
       el.textContent = error.message; el.classList.remove('oculto'); return
     }
 
     await db.from('lead_historico').insert({
-      lead_id: l.id, etapa_de: l.etapa, etapa_para: l.etapa, pessoa_id: PERFIL.pessoaId,
+      lead_id: l.id, etapa_de: l.etapa, etapa_para: mudancaLead.etapa || l.etapa, pessoa_id: PERFIL.pessoaId,
       observacao: `Atribuído a ${nomeVendedor}.${notaReuniao}`
     })
 
@@ -20159,11 +20164,20 @@ const COLUNAS_ORIGINACAO = [
   { chave: 'qualificando',    nome: 'Qualificando',    dica: 'levantando cultura, área, momento' },
   { chave: 'reuniao_marcada', nome: 'Reunião marcada', dica: 'tem compromisso agendado' },
   { chave: 'na_gestao',       nome: 'Na gestão',       dica: 'esperando definirem o consultor', saida: true },
-  { chave: 'entregue',        nome: 'Entregue',        dica: 'consultor definido', saida: true },
   { chave: 'no_eduardo',      nome: 'Com o Eduardo',   dica: 'o bot assumiu o primeiro contato', saida: true },
   { chave: 'descartado',      nome: 'Descartado',      dica: 'não vale seguir', saida: true }
 ]
-const ROTULO_ORIGINACAO = Object.fromEntries(COLUNAS_ORIGINACAO.map(c => [c.chave, c.nome]))
+
+// 'entregue' NÃO é coluna do quadro, de propósito: entregar é sair da
+// originação, e o lead passa a viver no funil do vendedor. Enquanto era
+// coluna, 54 leads de carteira ficavam parados aqui dando a impressão de
+// trabalho pendente que não era da Bianca.
+// O rótulo continua existindo porque o valor segue no banco e aparece em
+// listas fora do quadro (o pool da Prospecção, o chip da fila).
+const ROTULO_ORIGINACAO = {
+  ...Object.fromEntries(COLUNAS_ORIGINACAO.map(c => [c.chave, c.nome])),
+  entregue: 'Entregue'
+}
 
 // Colunas que NÃO aceitam arrastar nem aparecem no "Mover para": entrar
 // nelas tem consequência fora do quadro (o bot assume a conversa; a gestão
