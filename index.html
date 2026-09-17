@@ -85,6 +85,11 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   .fundo-nav-mobile { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 999; }
   .fundo-nav-mobile.aberto { display: block; }
   .botao-abrir-menu { display: flex !important; }
+  /* No celular a lateral vira gaveta flutuante, então a coluna de 68px do
+     modo recolhido não tem dono — e o conteúdo, que passa a ser o primeiro
+     item da grade, ficava espremido nela. Quem recolheu a lateral no
+     computador abria o sistema no celular com 68px de largura útil. */
+  .app.nav-colapsada { grid-template-columns: 1fr; }
   /* No iPhone (Safari), campo de digitação com fonte abaixo de 16px faz o
      navegador dar zoom sozinho ao tocar nele — e como o sistema não recarrega
      a página ao trocar de tela, esse zoom fica "preso" até a pessoa tirar na
@@ -108,7 +113,6 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 .botao-abrir-menu svg { width: 20px; height: 20px; }
 .fundo-nav-mobile { display: none; }
 /* deixa qualquer tabela larga rolar de lado no celular, em vez de estourar a tela */
-@media (max-width: 860px) { .conteudo { padding: 16px 14px; } }
 @media (max-width: 760px) { .grade-painel-comb { grid-template-columns: 1fr !important; } }
 .nav { background: var(--panel); border-right: 1px solid var(--line); padding: 20px 13px;
        overflow-y: auto; overflow-x: hidden; }
@@ -184,6 +188,16 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 .status-conexao.offline .ponto { background:var(--warn-text); box-shadow:0 0 0 3px rgba(var(--warn-rgb),.2); }
 .status-conexao.offline .texto { color:var(--warn-text); }
 .conteudo { padding: 22px 26px; max-width: 1400px; transition:max-width .2s; }
+/* Estas duas vinham ANTES da linha de cima e por isso nunca valeram: mesma
+   força, e quem vem depois ganha. A margem de celular de 14px era letra
+   morta — todo mundo levava 26px de cada lado, inclusive no telefone. */
+@media (max-width: 860px) { .conteudo { padding: 16px 14px; } }
+/* Faixa de tablet: entre o celular e o monitor grande. A lateral recolhe
+   sozinha por JS (reaproveitando .nav-colapsada); aqui só sobra apertar a
+   margem, que a 26px comia espaço que o iPad não tem pra dar. */
+@media (min-width: 861px) and (max-width: 1199px) {
+  .conteudo { padding: 18px clamp(12px, 2vw, 20px); }
+}
 :root[data-largura="amplo"] .conteudo { max-width: 1800px; }
 :root[data-largura="cheio"] .conteudo { max-width: none; }
 /* Fonte proporcional ao modo de largura escolhido — cresce um pouquinho
@@ -46984,16 +46998,54 @@ if (btnLargura) btnLargura.onclick = () => {
   aplicarLargura(LARGURAS[(LARGURAS.indexOf(atual) + 1) % LARGURAS.length])
 }
 
-if (localStorage.getItem('gefoscal-nav-colapsada') === '1') {
-  $('#tela-app').classList.add('nav-colapsada')
+// ---------------------------------------------------------------
+// A faixa de tablet (861–1199px)
+//
+// O sistema tinha um ponto de virada só, em 860px: abaixo vira celular,
+// acima monta tela de monitor grande. Todo iPad cai acima — e num iPad
+// Air 13" em pé (1024px) sobravam 752px de conteúdo depois do menu de
+// 220px e das margens. Largura de celular grande com layout de desktop
+// em cima.
+//
+// Nessa faixa a lateral recolhe sozinha: devolve 152px ao conteúdo, que
+// é 20% do espaço útil de um iPad em pé. Reaproveita a classe
+// .nav-colapsada que já existe — as ~20 regras de CSS do modo recolhido
+// valem iguais, não tem nada duplicado.
+//
+// A preferência salva continua sendo da pessoa: no tablet ela pode
+// abrir a lateral na mão, e isso vale até girar o aparelho; em tela
+// grande volta a valer o que ela escolheu.
+// ---------------------------------------------------------------
+const FAIXA_TABLET = window.matchMedia('(min-width: 861px) and (max-width: 1199px)')
+let lateralNaMao = false   // a pessoa mexeu na lateral DENTRO da faixa?
+
+const prefereRecolhida = () => localStorage.getItem('gefoscal-nav-colapsada') === '1'
+
+const aplicarLateral = () => {
+  const app = $('#tela-app')
+  if (!app) return
+  if (FAIXA_TABLET.matches) {
+    if (lateralNaMao) return          // mexeu na mão? a escolha dela manda
+    app.classList.add('nav-colapsada')
+  } else {
+    app.classList.toggle('nav-colapsada', prefereRecolhida())
+  }
   ajustarLogoLateral()
 }
+
+aplicarLateral()
+// girar o iPad é uma troca de faixa: a escolha manual daquela sessão cai
+FAIXA_TABLET.addEventListener('change', () => { lateralNaMao = false; aplicarLateral() })
+
 // Dois gatilhos, um comportamento: o do cabeçalho da lateral (que é onde
 // o modelo põe) e o antigo da barra de cima, que fica pra quando a lateral
 // está recolhida e o de dentro dela some.
 const alternarLateral = () => {
   const colapsada = $('#tela-app').classList.toggle('nav-colapsada')
-  localStorage.setItem('gefoscal-nav-colapsada', colapsada ? '1' : '0')
+  // dentro da faixa de tablet a escolha é só desta sessão — gravar faria
+  // o tablet mandar no computador da pessoa
+  if (FAIXA_TABLET.matches) lateralNaMao = true
+  else localStorage.setItem('gefoscal-nav-colapsada', colapsada ? '1' : '0')
   ajustarLogoLateral()
 }
 // Rodapé: o ano sai do relógio, não fica escrito na mão — senão em
