@@ -50473,7 +50473,7 @@ function ligarIconizacaoGlobal () {
 
 async function garantirDpPessoas () {
   if (window.__DP_PESSOAS && window.__DP_PESSOAS.length) return
-  const { data } = await db.from('pessoa').select('id,nome')
+  const { data } = await db.from('pessoa').select('id,nome,cargo')
     .or('data_admissao.not.is.null,cpf.not.is.null,tipo.eq.INTERNO').order('nome')
   window.__DP_PESSOAS = data || []
 }
@@ -51909,11 +51909,137 @@ const fmtHoras = h => {
   return min ? `${inteiro}h${String(min).padStart(2, '0')}` : `${inteiro}h`
 }
 
+// ---------------------------------------------------------------
+// Modelo do termo — escrito uma vez, preenchido sozinho.
+//
+// O Jurídico redige o texto com marcadores no lugar dos dados. Na hora de
+// emitir, o sistema troca cada marcador pelo valor daquele termo. Antes
+// disso o DP colava o texto inteiro toda vez e trocava o nome na mão —
+// que é precisamente onde nasce o documento com o nome da pessoa errada.
+//
+// O arquivo original (o .pdf ou .docx que o Mikael escreveu) fica anexo
+// ao modelo. Ele NÃO é lido pelo sistema: serve de prova de origem do
+// texto, pra quem vier depois saber de onde aquilo saiu.
+// ---------------------------------------------------------------
+const MARCADORES_TERMO = [
+  ['{{funcionario}}', 'nome do funcionário'],
+  ['{{cargo}}', 'cargo dele'],
+  ['{{empresa}}', 'empresa que assina'],
+  ['{{cnpj}}', 'CNPJ dessa empresa'],
+  ['{{data_extra}}', 'dia da hora extra'],
+  ['{{horas}}', 'quantas horas (ex: 2h30)'],
+  ['{{data_folga}}', 'dia da folga'],
+  ['{{mes}}', 'mês/ano da hora extra'],
+  ['{{hoje}}', 'data de hoje']
+]
+
+// Substituição literal, sem regex montada com o conteúdo: o texto vem de
+// quem escreveu o modelo, e nada nele deve virar código.
+function aplicarMarcadores (texto, d) {
+  const valores = {
+    '{{funcionario}}': d.funcionario || '', '{{cargo}}': d.cargo || '',
+    '{{empresa}}': d.empresa || '', '{{cnpj}}': d.cnpj || '',
+    '{{data_extra}}': d.data_extra ? (fmtData(d.data_extra) || '') : '',
+    '{{horas}}': d.horas ? fmtHoras(d.horas) : '',
+    '{{data_folga}}': d.data_folga ? (fmtData(d.data_folga) || '') : '',
+    '{{mes}}': d.data_extra ? d.data_extra.slice(5, 7) + '/' + d.data_extra.slice(0, 4) : '',
+    '{{hoje}}': fmtData(hojeISO()) || ''
+  }
+  return MARCADORES_TERMO.reduce((t, [m]) => t.split(m).join(valores[m]), texto || '')
+}
+
+async function abrirModeloTermo (chave, aoFechar) {
+  const { data: mod, error } = await db.from('documento_modelo').select('*').eq('chave', chave).maybeSingle()
+  if (error) { alert(error.message); return }
+  const m = mod || { chave, nome: 'Modelo', texto: '' }
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:720px;">
+    <h3>Modelo — ${esc(m.nome)}</h3>
+    <p class="texto-dim2" style="font-size:12px;margin:-6px 0 12px;line-height:1.6;">
+      Escreva o texto uma vez. Onde entrar dado do termo, use um marcador da lista abaixo —
+      o sistema troca sozinho na hora de emitir. Clique no marcador pra inserir onde o cursor está.</p>
+
+    <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px;">
+      ${MARCADORES_TERMO.map(([mk, dica]) => `<button type="button" class="btn-secundario mini mod-mk"
+        data-mk="${esc(mk)}" title="${esc(dica)}">${esc(mk)}</button>`).join('')}
+    </div>
+
+    <div class="campo"><label>Texto do termo</label>
+      <textarea id="mod-texto" rows="12" style="font-family:ui-monospace,monospace;font-size:12.5px;"
+        placeholder="Ex: Eu, {{funcionario}}, portador do cargo de {{cargo}}, declaro que no dia {{data_extra}} prestei {{horas}} em jornada extraordinária junto à {{empresa}} (CNPJ {{cnpj}}), e que opto por compensar esse período em folga no dia {{data_folga}}.">${esc(m.texto || '')}</textarea></div>
+
+    <div class="campo" style="margin-top:12px;">
+      <label>Arquivo original do Jurídico (opcional)</label>
+      ${m.arquivo_caminho ? `<p class="texto-dim2" style="font-size:12px;margin:0 0 6px;">
+        Anexado: <a href="#" id="mod-abrir" class="anexo-link">${esc(m.arquivo_nome || 'arquivo')}</a></p>` : ''}
+      <input type="file" id="mod-arquivo" accept=".pdf,.doc,.docx,.odt,.txt">
+      <span class="texto-dim2" style="font-size:11px;line-height:1.5;">
+        Fica guardado como prova de origem do texto. O sistema <b>não lê o arquivo</b> —
+        o que sai no documento é o texto escrito acima.</span></div>
+
+    <div class="recado oculto" id="mod-erro"></div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="mod-salvar">Salvar modelo</button>
+      <button class="btn-secundario" id="mod-fechar">Fechar</button>
+    </div>
+  </div>`
+  document.body.appendChild(fundo)
+  const q = sel => fundo.querySelector(sel)
+  const fechar = () => fundo.remove()
+  q('#mod-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const abrir = q('#mod-abrir')
+  if (abrir) abrir.onclick = e => { e.preventDefault(); abrirArquivo(m.arquivo_caminho) }
+
+  // insere o marcador onde o cursor está, em vez de mandar a pessoa digitar
+  // as chaves duplas na mão e errar
+  fundo.querySelectorAll('.mod-mk').forEach(b => {
+    b.onclick = () => {
+      const ta = q('#mod-texto')
+      const i = ta.selectionStart ?? ta.value.length
+      const f = ta.selectionEnd ?? i
+      ta.value = ta.value.slice(0, i) + b.dataset.mk + ta.value.slice(f)
+      ta.focus()
+      ta.selectionStart = ta.selectionEnd = i + b.dataset.mk.length
+    }
+  })
+
+  q('#mod-salvar').onclick = async () => {
+    const btn = q('#mod-salvar'); const erro = q('#mod-erro')
+    const avisa = t => { erro.textContent = t; erro.classList.remove('oculto')
+      btn.disabled = false; btn.textContent = 'Salvar modelo' }
+    const texto = q('#mod-texto').value.trim()
+    if (!texto) return avisa('O texto do modelo não pode ficar vazio.')
+
+    btn.disabled = true; btn.textContent = 'salvando...'
+    erro.classList.add('oculto')
+
+    const mudanca = { texto, atualizado_por: PERFIL.pessoaId, atualizado_em: new Date().toISOString() }
+    const arq = q('#mod-arquivo').files?.[0]
+    if (arq) {
+      try {
+        const enviado = await enviarArquivo(arq, 'modelos')
+        mudanca.arquivo_caminho = enviado.caminho
+        mudanca.arquivo_nome = enviado.nome
+      } catch (e) { return avisa(e.message) }
+    }
+
+    const { error: e2 } = await db.from('documento_modelo').update(mudanca).eq('chave', chave)
+    if (e2) return avisa(e2.message)
+    fechar()
+    if (aoFechar) aoFechar()
+  }
+}
+
 async function pontoTermosCompensacao (corpo, editavel, recarregar) {
   corpo.innerHTML = `<p class="texto-dim2">carregando os termos...</p>`
-  const [{ data, error }, { data: empresas }] = await Promise.all([
+  const [{ data, error }, { data: empresas }, { data: modelo }] = await Promise.all([
     db.from('ponto_compensacao').select(SEL_COMP).order('criado_em', { ascending: false }).limit(300),
-    db.from('empresa').select('id,nome,cnpj').eq('status', 'ATIVO').order('nome')
+    db.from('empresa').select('id,nome,cnpj').eq('status', 'ATIVO').order('nome'),
+    db.from('documento_modelo').select('*').eq('chave', 'ponto_compensacao').maybeSingle()
   ])
   if (faltaMigracao(error) || error) { corpo.innerHTML = `<p class="vazio">${esc(error?.message ?? '')}</p>`; return }
   const lista = data || []
@@ -51921,7 +52047,13 @@ async function pontoTermosCompensacao (corpo, editavel, recarregar) {
 
   corpo.innerHTML = `
     ${editavel ? `<div class="acoes" style="margin-bottom:16px;">
-      <button class="btn" id="pt-novo-termo">${icDp('novo')}Novo termo de compensação</button></div>` : ''}
+      <button class="btn" id="pt-novo-termo">${icDp('novo')}Novo termo de compensação</button>
+      <button class="btn-secundario" id="pt-modelo">Modelo do termo</button></div>` : ''}
+    ${editavel && !modelo?.texto ? `<div class="panel" style="padding:12px 16px;margin-bottom:14px;
+      border-left:4px solid var(--warn-text);">
+      <b style="font-size:13px;">O modelo ainda está vazio.</b>
+      <span class="texto-dim2" style="font-size:12px;">Abra "Modelo do termo" e cole o texto do Jurídico
+      uma vez — depois todo termo emitido já sai preenchido.</span></div>` : ''}
 
     <p class="texto-dim2" style="font-size:12px;line-height:1.6;margin:-4px 0 14px;max-width:80ch;">
       Para quando o funcionário faz hora extra e prefere folgar em vez de receber. Quem tem acesso ao
@@ -51974,12 +52106,15 @@ async function pontoTermosCompensacao (corpo, editavel, recarregar) {
   // o texto do último termo emitido vira o padrão do próximo: o texto é do
   // Mikael e não muda toda vez — obrigar a colar de novo a cada emissão é
   // o tipo de atrito que faz a pessoa parar de usar a tela.
-  const textoPadrao = lista[0]?.texto || ''
-  if (btnNovo) btnNovo.onclick = () => formTermoCompensacao(recarregar, empresas || [], null, textoPadrao)
+  const textoModelo = modelo?.texto || ''
+  if (btnNovo) btnNovo.onclick = () => formTermoCompensacao(recarregar, empresas || [], null, textoModelo)
+
+  const btnModelo = corpo.querySelector('#pt-modelo')
+  if (btnModelo) btnModelo.onclick = () => abrirModeloTermo('ponto_compensacao', recarregar)
 
   corpo.querySelectorAll('[data-editar-comp]').forEach(b => {
     b.onclick = () => formTermoCompensacao(recarregar, empresas || [],
-      lista.find(t => t.id === b.dataset.editarComp), textoPadrao)
+      lista.find(t => t.id === b.dataset.editarComp), textoModelo)
   })
 
   corpo.querySelectorAll('[data-pdf-comp]').forEach(b => {
@@ -52010,7 +52145,7 @@ async function pontoTermosCompensacao (corpo, editavel, recarregar) {
   })
 }
 
-function formTermoCompensacao (aoFechar, empresas = [], termo = null, textoPadrao = '') {
+function formTermoCompensacao (aoFechar, empresas = [], termo = null, textoModelo = '') {
   const pessoas = window.__DP_PESSOAS || []
   const ed = !!termo
   const fundo = document.createElement('div')
@@ -52035,11 +52170,12 @@ function formTermoCompensacao (aoFechar, empresas = [], termo = null, textoPadra
         <input type="date" id="tc-folga" value="${termo?.data_folga ?? ''}"></div>
     </div>
     <div class="campo" style="margin-top:12px;"><label>Texto do termo *</label>
-      <textarea id="tc-texto" rows="7"
-        placeholder="Cole aqui o texto que o Jurídico definiu.">${esc(termo?.texto ?? textoPadrao)}</textarea>
-      <span class="texto-dim2" style="font-size:11px;">
-        ${ed ? 'É o corpo do documento — sai no PDF exatamente como estiver aqui.'
-             : 'Vem preenchido com o texto do último termo emitido. Sai no PDF exatamente como estiver aqui.'}</span></div>
+      <textarea id="tc-texto" rows="8"
+        placeholder="Preencha os campos acima — o texto vem do modelo, já com os dados no lugar.">${esc(termo?.texto ?? '')}</textarea>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px;">
+        <button type="button" class="btn-secundario mini" id="tc-remodelo">Preencher pelo modelo</button>
+        <span class="texto-dim2" style="font-size:11px;">
+          É o corpo do documento — sai no PDF exatamente como estiver aqui.</span></div></div>
     <div class="recado oculto" id="tc-erro"></div>
     <div class="acoes" style="margin-top:14px;">
       <button class="btn" id="tc-emitir">${ed ? 'Salvar alterações' : 'Emitir termo'}</button>
@@ -52052,6 +52188,34 @@ function formTermoCompensacao (aoFechar, empresas = [], termo = null, textoPadra
   q('#tc-cancelar').onclick = fechar
   fundo.onclick = e => { if (e.target === fundo) fechar() }
 
+  // O texto se refaz a partir do modelo a cada campo mexido — mas para de
+  // se refazer assim que a pessoa escreve no textarea. Sobrescrever o que
+  // alguém acabou de digitar é pior do que não ajudar.
+  let textoTocado = !!termo
+  const pessoaNome = id => (pessoas.find(p => p.id === id) || {}).nome
+  const pessoaCargo = id => (pessoas.find(p => p.id === id) || {}).cargo
+  const aplicarModelo = (forcar = false) => {
+    if (!textoModelo) return
+    if (textoTocado && !forcar) return
+    const emp = empresas.find(e => e.id === q('#tc-empresa').value) || {}
+    q('#tc-texto').value = aplicarMarcadores(textoModelo, {
+      funcionario: pessoaNome(q('#tc-pessoa').value),
+      cargo: pessoaCargo(q('#tc-pessoa').value),
+      empresa: emp.nome, cnpj: emp.cnpj,
+      data_extra: q('#tc-data').value,
+      horas: Number(q('#tc-horas').value),
+      data_folga: q('#tc-folga').value
+    })
+  }
+  ;['#tc-empresa', '#tc-pessoa', '#tc-data', '#tc-horas', '#tc-folga'].forEach(sel => {
+    q(sel).addEventListener('change', () => aplicarModelo())
+  })
+  q('#tc-texto').addEventListener('input', () => { textoTocado = true })
+  q('#tc-remodelo').onclick = () => {
+    if (!textoModelo) { alert('Não há modelo salvo ainda. Abra "Modelo do termo" e escreva o texto uma vez.'); return }
+    aplicarModelo(true); textoTocado = false
+  }
+
   // a folga só faz sentido dentro do mês da hora extra: travar o próprio
   // campo evita a pessoa descobrir isso só depois de preencher tudo
   const limitarFolga = () => {
@@ -52061,8 +52225,9 @@ function formTermoCompensacao (aoFechar, empresas = [], termo = null, textoPadra
     q('#tc-folga').min = d
     q('#tc-folga').max = new Date(ano, mes, 0).toISOString().slice(0, 10)
   }
-  q('#tc-data').onchange = limitarFolga
+  q('#tc-data').addEventListener('change', limitarFolga)
   limitarFolga()
+  aplicarModelo()
 
   q('#tc-emitir').onclick = async () => {
     const btn = q('#tc-emitir'); const erro = q('#tc-erro')
