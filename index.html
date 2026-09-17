@@ -793,14 +793,18 @@ tbody tr:hover { background: var(--hover-bg); }
 
 /* Selo de tag da Frota. A cor vem da própria tag, por --tag, pra
    identificar de relance sem precisar ler. */
-.tag-frota { display:inline-flex; align-items:center; gap:4px; font-size:10.5px; font-weight:600;
-  padding:2px 8px; border-radius:20px; line-height:1.55; white-space:nowrap;
-  color:var(--tag); border:1px solid var(--tag); background:transparent; }
+/* O selo vazado é o da tabela. Era 10.5px e sumia no meio da linha: a
+   tag só serve se der pra bater o olho e saber onde o item está e como
+   ele está, sem parar pra ler. Agora tem corpo — fundo de 12% da própria
+   cor, borda mais firme e uma bolinha maciça na frente. */
+.tag-frota { display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:700;
+  padding:4px 11px; border-radius:20px; line-height:1.45; white-space:nowrap;
+  color:var(--tag); border:1.5px solid var(--tag); background:transparent;
+  box-shadow:inset 0 0 0 999px color-mix(in srgb, var(--tag) 12%, transparent); }
 /* preenchida: é a que vai por cima da foto da vitrine, onde precisa
    vencer a imagem de fundo */
 .tag-frota.solida { background:var(--tag); border-color:var(--tag); color:var(--tag-txt);
-  font-size:11px; padding:4px 10px; font-weight:700;
-  box-shadow:0 2px 8px rgba(0,0,0,.45); }
+  font-size:12.5px; padding:5px 12px; font-weight:700; box-shadow:0 2px 8px rgba(0,0,0,.45); }
 /* faixa de tags sobre a foto do card */
 .fr-faixa-tags { position:absolute; inset:8px 8px auto 8px; display:flex; gap:6px;
   justify-content:space-between; align-items:flex-start; pointer-events:none; flex-wrap:wrap; }
@@ -38924,6 +38928,13 @@ const ROTULO_TIPO_CUSTO_VEICULO = { IPVA: 'IPVA', LICENCIAMENTO: 'licenciamento'
 // `txt` é a cor da letra quando o selo é preenchido: em cima de amarelo
 // e âmbar, letra branca não se lê.
 const TAGS_NEGOCIACAO = [
+  // As duas primeiras são o estado de base do item — o que ele É hoje,
+  // antes de qualquer negócio. Vêm primeiro porque é a distinção que se
+  // olha primeiro na lista: este aqui está à venda ou está trabalhando?
+  { chave: 'A_VENDA', emoji: '🏷️', rotulo: 'À Venda', cor: '#c0632a', txt: '#fff',
+    quando: 'item disponível para venda, ainda sem comprador em conversa' },
+  { chave: 'EM_USO', emoji: '🔧', rotulo: 'Em Uso', cor: '#2f8f83', txt: '#fff',
+    quando: 'item em operação na empresa, não está à venda' },
   { chave: 'NEGOCIANDO', emoji: '🟡', rotulo: 'Negociando', cor: 'var(--gold)', txt: '#17191b',
     quando: 'proposta enviada ou em conversa com o cliente, ainda sem fechamento' },
   { chave: 'VENDIDO', emoji: '🟢', rotulo: 'Vendido', cor: 'var(--good-text)', txt: '#fff',
@@ -38941,7 +38952,9 @@ const TAGS_LOCAL = [
   { chave: 'NA_REVENDA', emoji: '🏬', rotulo: 'Na Revenda', cor: 'var(--good-text)', txt: '#fff',
     quando: 'já disponível no estoque da revenda' },
   { chave: 'A_RECEBER', emoji: '🚚', rotulo: 'A Receber', cor: 'var(--warn-text)', txt: '#17191b',
-    quando: 'em trânsito, ainda não chegou ao destino' }
+    quando: 'em trânsito, ainda não chegou ao destino' },
+  { chave: 'ESCRITORIO', emoji: '🏢', rotulo: 'No Escritório', cor: '#5b6b8c', txt: '#fff',
+    quando: 'no escritório / sede administrativa' }
 ]
 const TAG_NEG = Object.fromEntries(TAGS_NEGOCIACAO.map(t => [t.chave, t]))
 const TAG_LOC = Object.fromEntries(TAGS_LOCAL.map(t => [t.chave, t]))
@@ -38978,13 +38991,6 @@ function andamentoTagFrota (i) {
   return partes.join(' · ')
 }
 
-// Quem recebe tag: item recebido em negócio pra revenda. Frota própria
-// e caminhão de terceiro que só passou pra carregar ficam de fora —
-// senão a lista vira um mar de tag em branco. Um item que JÁ tem tag
-// entra na regra mesmo sem contraparte, pra nada sumir da tela depois
-// de marcado.
-const ehItemDeNegocioFrota = i => !i.eh_proprio &&
-  !!(i.contraparte || i.processo_id || i.negociacao_status || i.local_produto)
 
 async function paginaFrota () {
   if (!podeVer('frota')) { areaLivre().innerHTML =
@@ -39479,7 +39485,9 @@ async function frotaItens (alvo, editavel) {
     (!filtroLoc.size || filtroLoc.has(i.local_produto)))
   // os contadores olham a base sem as tags: assim o número não some
   // quando você clica num filtro, que é o que confunde na hora de usar
-  const itensDeNegocio = () => antesDasTags().filter(ehItemDeNegocioFrota)
+  // qualquer item salvo pode receber tag (frota própria também vai pra
+  // venda um dia), então a contagem olha a lista visível inteira
+  const itensDeNegocio = () => antesDasTags()
 
   // "avulso" = não é frota própria E não tem nenhum rastro de negócio de
   // verdade (contraparte ou vínculo jurídico) — ou seja, só passou pra
@@ -39696,10 +39704,10 @@ async function frotaItens (alvo, editavel) {
           ${ident ? `<br><span class="texto-dim2" style="font-size:11px;">${esc(ident)}</span>` : ''}</td>
         <td><span class="chip">${i.eh_proprio ? 'Frota própria' : ehAvulso(i) ? 'Terceiro avulso' : 'Recebido em negócio'}</span></td>
         <td style="white-space:nowrap;">${tagsDoItemFrota(i)
-          ? `<div style="display:flex;flex-direction:column;gap:3px;align-items:flex-start;">
+          ? `<div style="display:flex;flex-direction:column;gap:5px;align-items:flex-start;">
                ${selinhoTagFrota(TAG_NEG[i.negociacao_status], i.negociacao_status_em)}
                ${selinhoTagFrota(TAG_LOC[i.local_produto], i.local_produto_em)}
-               <span class="texto-dim2" style="font-size:10px;">${esc(andamentoTagFrota(i))}</span>
+               <span class="texto-dim2" style="font-size:11px;">${esc(andamentoTagFrota(i))}</span>
              </div>`
           : '<span class="texto-dim2">—</span>'}</td>
         <td class="texto-dim">${esc(i.contraparte || '—')}</td>
@@ -40852,18 +40860,23 @@ function formFrotaItem (item) {
   // escondem mais o bloco — só mudam o aviso, porque frota própria em uso
   // normalmente não precisa de tag de revenda, mas PODE precisar no dia em
   // que for posta à venda. -----
-  const blocoTags = q('#fr-bloco-tags')
   const avisoTags = q('#fr-tags-aviso')
+  // O aviso não bloqueia nada: só sugere a tag de estado que combina com
+  // o Status escolhido logo acima, pra lista não ficar com item sem tag.
   const ajustarBlocoTags = () => {
     if (!avisoTags) return
-    const proprio = q('#fr-tipo').value === '1'
-    const emUso = q('#fr-status').value === 'EM_USO'
-    avisoTags.textContent = (proprio && emUso)
-      ? 'Item da frota própria em uso — as tags só são necessárias quando ele for pra venda.'
+    const st = q('#fr-status').value
+    const sugerida = st === 'EM_USO' ? 'EM_USO'
+      : st === 'DISPONIVEL_VENDA' ? 'A_VENDA'
+      : st === 'VENDIDO' ? 'VENDIDO' : ''
+    const atual = q('#fr-tag-neg') ? q('#fr-tag-neg').value : ''
+    avisoTags.textContent = (sugerida && atual !== sugerida && TAG_NEG[sugerida])
+      ? `Pelo Status acima, a tag de negociação seria "${TAG_NEG[sugerida].rotulo}".`
       : ''
   }
   q('#fr-tipo').onchange = ajustarBlocoTags
   q('#fr-status').onchange = ajustarBlocoTags
+  if (q('#fr-tag-neg')) q('#fr-tag-neg').addEventListener('change', ajustarBlocoTags)
   ajustarBlocoTags()
 
   const explicar = (sel, alvo, mapa) => {
