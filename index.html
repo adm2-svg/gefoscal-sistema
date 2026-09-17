@@ -40753,13 +40753,19 @@ function formFrotaItem (item) {
           ${item?.status_frota === 'VENDIDO' ? '<span class="texto-dim2" style="font-size:11px;">venda já registrada, use "vender" pra corrigir</span>' : ''}</div>
       </div>
 
-      ${/* Tags do setor de Frota. Só fazem sentido em item recebido pra
-            revenda, então o bloco aparece e some junto com o campo Tipo. */ ''}
-      <div id="fr-bloco-tags" ${(item && item.eh_proprio) || (!item) ? 'hidden' : ''}
+      ${/* As tags valiam só pra item recebido de terceiro, partindo da ideia
+            de que "revenda = veículo que não é nosso". Não é: veículo próprio
+            também vai à venda — tem um assim na frota agora, e ele não tinha
+            como receber tag nenhuma. Agora o bloco vale pra qualquer item já
+            salvo; só em cadastro novo ele espera, porque o histórico de tag
+            precisa de um id pra se pendurar. */ ''}
+      <div id="fr-bloco-tags" ${!item ? 'hidden' : ''}
         style="margin-top:14px;padding:12px 14px;border:1px solid var(--line2);border-radius:12px;">
         <div style="font-size:12.5px;font-weight:700;margin-bottom:2px;">Tags da revenda</div>
         <p class="texto-dim2" style="font-size:11px;line-height:1.5;margin:0 0 10px;">
           Lista fechada, pra dar pra filtrar e contar. Toda troca fica registrada com data e autor.</p>
+        <p class="texto-dim2" id="fr-tags-aviso" style="font-size:11px;line-height:1.5;margin:-6px 0 10px;
+          color:var(--dim2);"></p>
         <div class="form-grade">
           <div class="campo"><label>Status da Negociação</label>
             <select id="fr-tag-neg">
@@ -40842,10 +40848,22 @@ function formFrotaItem (item) {
     el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
   }
 
-  // ----- tags: mostrar/esconder junto com o Tipo, e explicar a escolha ----
+  // ----- tags: valem pra qualquer item salvo. O Tipo e o Status não
+  // escondem mais o bloco — só mudam o aviso, porque frota própria em uso
+  // normalmente não precisa de tag de revenda, mas PODE precisar no dia em
+  // que for posta à venda. -----
   const blocoTags = q('#fr-bloco-tags')
-  const ajustarBlocoTags = () => { blocoTags.hidden = q('#fr-tipo').value === '1' }
+  const avisoTags = q('#fr-tags-aviso')
+  const ajustarBlocoTags = () => {
+    if (!avisoTags) return
+    const proprio = q('#fr-tipo').value === '1'
+    const emUso = q('#fr-status').value === 'EM_USO'
+    avisoTags.textContent = (proprio && emUso)
+      ? 'Item da frota própria em uso — as tags só são necessárias quando ele for pra venda.'
+      : ''
+  }
   q('#fr-tipo').onchange = ajustarBlocoTags
+  q('#fr-status').onchange = ajustarBlocoTags
   ajustarBlocoTags()
 
   const explicar = (sel, alvo, mapa) => {
@@ -40887,10 +40905,10 @@ function formFrotaItem (item) {
       setor_id: q('#fr-setor').value || null,
       processo_id: q('#fr-processo').value || null,
       status_frota: q('#fr-status').value,
-      // frota própria não carrega tag de revenda: se alguém trocou o
-      // Tipo, as tags vão embora junto em vez de ficar de fantasma
-      negociacao_status: q('#fr-tipo').value === '1' ? null : (q('#fr-tag-neg').value || null),
-      local_produto: q('#fr-tipo').value === '1' ? null : (q('#fr-tag-loc').value || null),
+      // a tag é do item, não do tipo dele: trocar de próprio pra terceiro
+      // (ou o contrário) não apaga mais o que foi marcado
+      negociacao_status: q('#fr-tag-neg') ? (q('#fr-tag-neg').value || null) : null,
+      local_produto: q('#fr-tag-loc') ? (q('#fr-tag-loc').value || null) : null,
       oculto: q('#fr-oculto').checked,
       observacoes: q('#fr-obs').value.trim() || null
     }
@@ -41213,9 +41231,9 @@ function formFrotaVenda (item, custosDoc, custosManut) {
       comprador: q('#fv-comprador').value.trim() || null,
       // o outro lado do amarramento: registrar a venda por aqui também
       // acerta a tag da revenda, senão ela ficaria dizendo "Negociando"
-      // num item já vendido. Só pra item de revenda — frota própria não
-      // usa tag.
-      ...(item.eh_proprio ? {} : { negociacao_status: 'VENDIDO' }),
+      // num item já vendido. Vale pra qualquer item — frota própria também
+      // é vendida.
+      negociacao_status: 'VENDIDO',
       editado_por: PERFIL.pessoaId, editado_em: new Date().toISOString()
     }).eq('id', item.id)
     if (error) { el.textContent = error.message; el.classList.remove('oculto'); return }
