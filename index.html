@@ -41649,7 +41649,8 @@ async function paginaJuridico () {
   JUR_CACHE.empresas = empresas || []
 
   const abas = [['painel', 'Painel'], ['contratos', 'Contratos'], ['licencas', 'Licenças e certidões'],
-    ['processos', 'Processos'], ['notificacoes', 'Notificações e autuações'], ['documentos', 'Documentos']]
+    ['processos', 'Processos'], ['notificacoes', 'Notificações e autuações'], ['documentos', 'Documentos'],
+    ['termos', 'Termos de compensação']]
   area.innerHTML = `
     <div style="background:linear-gradient(120deg,#1a1410 0%,#2b2018 55%,#1a1410 100%);border-radius:14px;padding:22px 26px;margin-bottom:18px;position:relative;overflow:hidden;border:1px solid #3a2e20;">
       <div style="position:absolute;right:-20px;top:-24px;font-size:120px;opacity:.08;line-height:1;">⚖️</div>
@@ -41681,6 +41682,10 @@ function abrirJuridico (sub, editavel) {
   if (sub === 'processos') juridicoProcessos(alvo, editavel)
   if (sub === 'notificacoes') juridicoNotificacoes(alvo, editavel)
   if (sub === 'documentos') juridicoDocumentos(alvo, editavel)
+  // O termo é redigido pelo Jurídico e emitido pelo DP. Aqui eles veem
+  // como está saindo na prática e mexem no modelo; emitir continua sendo
+  // do DP, então `editavel` entra como false de propósito.
+  if (sub === 'termos') pontoTermosCompensacao(alvo, false, () => abrirJuridico('termos', editavel), { podeModelo: editavel })
 }
 
 function diasParaVencer (data) {
@@ -52140,7 +52145,8 @@ async function abrirModeloTermo (chave, aoFechar) {
   }
 }
 
-async function pontoTermosCompensacao (corpo, editavel, recarregar) {
+async function pontoTermosCompensacao (corpo, editavel, recarregar, opcoes = {}) {
+  const podeModelo = opcoes.podeModelo ?? editavel
   corpo.innerHTML = `<p class="texto-dim2">carregando os termos...</p>`
   const [{ data, error }, { data: empresas }, { data: modelo }] = await Promise.all([
     db.from('ponto_compensacao').select(SEL_COMP).order('criado_em', { ascending: false }).limit(300),
@@ -52152,10 +52158,10 @@ async function pontoTermosCompensacao (corpo, editavel, recarregar) {
   const pendentes = lista.filter(t => t.status === 'AGUARDANDO_ASSINATURA')
 
   corpo.innerHTML = `
-    ${editavel ? `<div class="acoes" style="margin-bottom:16px;">
-      <button class="btn" id="pt-novo-termo">${icDp('novo')}Novo termo de compensação</button>
-      <button class="btn-secundario" id="pt-modelo">Modelo do termo</button></div>` : ''}
-    ${editavel && !modelo?.texto ? `<div class="panel" style="padding:12px 16px;margin-bottom:14px;
+    ${(editavel || podeModelo) ? `<div class="acoes" style="margin-bottom:16px;">
+      ${editavel ? `<button class="btn" id="pt-novo-termo">${icDp('novo')}Novo termo de compensação</button>` : ''}
+      ${podeModelo ? `<button class="btn-secundario" id="pt-modelo">Modelo do termo</button>` : ''}</div>` : ''}
+    ${podeModelo && !modelo?.texto ? `<div class="panel" style="padding:12px 16px;margin-bottom:14px;
       border-left:4px solid var(--warn-text);">
       <b style="font-size:13px;">O modelo ainda está vazio.</b>
       <span class="texto-dim2" style="font-size:12px;">Abra "Modelo do termo" e cole o texto do Jurídico
