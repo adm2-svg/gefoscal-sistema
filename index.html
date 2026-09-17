@@ -51956,6 +51956,36 @@ const intervaloDevido = horas => {
   return 'não obrigatório para esta duração'
 }
 
+// O Jurídico escreve o termo no Word com lacunas em COLCHETE —
+// [ENDEREÇO COMPLETO], [SETOR], [HH:MM]. É a convenção dele, não a minha, e
+// obrigar a trocar tudo por {{chave}} na mão é trabalho que o sistema pode
+// fazer. Aqui as lacunas mais comuns viram o marcador equivalente antes da
+// substituição; o que não bater vira campo pra preencher na tela.
+const LACUNAS_EM_COLCHETE = [
+  [/\[\s*ENDERE[ÇC]O[^\]]*\]/gi, '{{endereco}}'],
+  [/\[\s*SETOR[^\]]*\]/gi, '{{setor}}'],
+  [/\[\s*CARGO[^\]]*\]/gi, '{{cargo}}'],
+  [/\[\s*CPF[^\]]*\]/gi, '{{cpf}}'],
+  [/\[\s*(NOME|EMPREGADO|FUNCION[ÁA]RIO)[^\]]*\]/gi, '{{funcionario}}'],
+  [/\[\s*CNPJ[^\]]*\]/gi, '{{cnpj}}'],
+  [/\[\s*1\s*hora\s*\/\s*15\s*minutos[^\]]*\]/gi, '{{intervalo}}'],
+  [/\[\s*INTERVALO[^\]]*\]/gi, '{{intervalo}}']
+]
+
+function converterLacunas (texto) {
+  let t = texto || ''
+  LACUNAS_EM_COLCHETE.forEach(([re, marcador]) => { t = t.replace(re, marcador) })
+  // [HH:MM] aparece duas vezes na mesma frase: a primeira é a entrada, a
+  // segunda é a saída. Trocar as duas pelo mesmo marcador daria o mesmo
+  // horário nos dois lugares.
+  let vez = 0
+  t = t.replace(/\[\s*(HH:MM|HH\s*:\s*MM)\s*\]/gi, () => {
+    vez++
+    return vez === 1 ? '{{hora_inicio}}' : '{{hora_fim}}'
+  })
+  return t
+}
+
 // Substituição literal, sem regex montada com o conteúdo: o texto vem de
 // quem escreveu o modelo, e nada nele deve virar código.
 function aplicarMarcadores (texto, d) {
@@ -51974,7 +52004,7 @@ function aplicarMarcadores (texto, d) {
     '{{mes}}': d.data_extra ? d.data_extra.slice(5, 7) + '/' + d.data_extra.slice(0, 4) : '',
     '{{hoje}}': fmtData(hojeISO()) || ''
   }
-  return MARCADORES_TERMO.reduce((t, [m]) => t.split(m).join(valores[m]), texto || '')
+  return MARCADORES_TERMO.reduce((t, [m]) => t.split(m).join(valores[m]), converterLacunas(texto))
 }
 
 async function abrirModeloTermo (chave, aoFechar) {
@@ -52263,6 +52293,10 @@ function formTermoCompensacao (aoFechar, empresas = [], termo = null, textoModel
         <button type="button" class="btn-secundario mini" id="tc-remodelo">Preencher pelo modelo</button>
         <span class="texto-dim2" style="font-size:11px;">
           É o corpo do documento — sai no PDF exatamente como estiver aqui.</span></div></div>
+    ${/* O que o sistema não soube preencher sozinho vira campo aqui embaixo,
+          em vez de virar erro. Preencher é o que a pessoa quer fazer; ser
+          avisada de que falta, sem poder resolver, é só obstáculo. */ ''}
+    <div id="tc-lacunas" class="oculto" style="margin-top:12px;"></div>
     <div class="recado oculto" id="tc-erro"></div>
     <div class="acoes" style="margin-top:14px;">
       <button class="btn" id="tc-emitir">${ed ? 'Salvar alterações' : 'Emitir termo'}</button>
@@ -52307,14 +52341,46 @@ function formTermoCompensacao (aoFechar, empresas = [], termo = null, textoModel
   }
   ;['#tc-empresa', '#tc-pessoa', '#tc-data', '#tc-horas', '#tc-folga',
     '#tc-hini', '#tc-hfim', '#tc-endereco'].forEach(sel => {
-    q(sel).addEventListener('change', () => { mostrarEndereco(); aplicarModelo() })
+    q(sel).addEventListener('change', () => { mostrarEndereco(); aplicarModelo(); atualizarLacunas() })
   })
-  q('#tc-endereco').addEventListener('input', () => aplicarModelo())
+  q('#tc-endereco').addEventListener('input', () => { aplicarModelo(); atualizarLacunas() })
   mostrarEndereco()
-  q('#tc-texto').addEventListener('input', () => { textoTocado = true })
+  // varre o texto atrás de [QUALQUER COISA] e monta um campo por lacuna
+  const rotuloLacuna = g => g.replace(/^\[|\]$/g, '').trim()
+  const atualizarLacunas = () => {
+    const cx = q('#tc-lacunas')
+    const achadas = [...new Set((q('#tc-texto').value.match(/\[[^\]\n]{1,80}\]/g) || []))]
+    if (!achadas.length) { cx.classList.add('oculto'); cx.innerHTML = ''; return }
+    cx.classList.remove('oculto')
+    cx.innerHTML = `
+      <div class="panel" style="padding:12px 14px;border-left:4px solid var(--warn-text);">
+        <b style="font-size:13px;">Falta preencher ${achadas.length} ${achadas.length === 1 ? 'lacuna' : 'lacunas'} do texto</b>
+        <p class="texto-dim2" style="font-size:11.5px;margin:3px 0 10px;line-height:1.5;">
+          São os colchetes que o Jurídico deixou em aberto. Escreva o valor e ele entra no texto.</p>
+        <div class="form-grade">
+          ${achadas.map((g, i) => `<div class="campo">
+            <label>${esc(rotuloLacuna(g)).slice(0, 48)}</label>
+            <input data-lacuna="${esc(g)}" data-i="${i}" placeholder="o que entra aqui">
+          </div>`).join('')}
+        </div>
+      </div>`
+    cx.querySelectorAll('[data-lacuna]').forEach(inp => {
+      const aplicar = () => {
+        const v = inp.value.trim()
+        if (!v) return
+        q('#tc-texto').value = q('#tc-texto').value.split(inp.dataset.lacuna).join(v)
+        textoTocado = true
+        atualizarLacunas()
+      }
+      inp.addEventListener('change', aplicar)
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); aplicar() } })
+    })
+  }
+
+  q('#tc-texto').addEventListener('input', () => { textoTocado = true; atualizarLacunas() })
   q('#tc-remodelo').onclick = () => {
     if (!textoModelo) { alert('Não há modelo salvo ainda. Abra "Modelo do termo" e escreva o texto uma vez.'); return }
-    aplicarModelo(true); textoTocado = false
+    aplicarModelo(true); textoTocado = false; atualizarLacunas()
   }
 
   // a folga só faz sentido dentro do mês da hora extra: travar o próprio
@@ -52329,6 +52395,7 @@ function formTermoCompensacao (aoFechar, empresas = [], termo = null, textoModel
   q('#tc-data').addEventListener('change', limitarFolga)
   limitarFolga()
   aplicarModelo()
+  atualizarLacunas()
 
   q('#tc-emitir').onclick = async () => {
     const btn = q('#tc-emitir'); const erro = q('#tc-erro')
@@ -52355,10 +52422,12 @@ function formTermoCompensacao (aoFechar, empresas = [], termo = null, textoModel
     if (texto.includes('{{')) {
       return avisa('O texto ainda tem marcador do sistema sem preencher. Clique em "Preencher pelo modelo".')
     }
-    const lacunas = texto.match(/\[[^\]]{2,60}\]/g)
+    const lacunas = texto.match(/\[[^\]\n]{1,80}\]/g)
     if (lacunas) {
-      return avisa('Faltou preencher no texto: ' + [...new Set(lacunas)].slice(0, 4).join(' ')
-        + '. Preencha à mão ou peça pro Jurídico virar marcador no modelo.')
+      atualizarLacunas()
+      q('#tc-lacunas').scrollIntoView({ behavior: 'smooth', block: 'center' })
+      return avisa('Preencha as lacunas logo abaixo do texto — são '
+        + [...new Set(lacunas)].length + ' e estão marcadas em amarelo.')
     }
 
     btn.disabled = true; btn.textContent = ed ? 'salvando...' : 'emitindo...'
