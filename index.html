@@ -2682,6 +2682,9 @@ function ligarChecagemPeriodicaNotificacoes () {
 // apontar; hoje só existe 'solicitacao_interna', mas é só acrescentar
 // uma linha nova quando outro módulo passar a gerar notificação.
 const ABRIR_ENTIDADE_NOTIFICACAO = {
+  // pedido de contratação: leva pro RH já na aba certa. Pro RH cai na fila
+  // de decisão; pra quem pediu, na lista dos pedidos dele.
+  contratacao_pedido: async () => { RECR_SUBABA = 'pedidos'; irPara('desempenho') },
   // lead da originação esperando consultor, ou lead recém-atribuído: os
   // dois avisos apontam pra ficha. Sem isso o aviso vira um bilhete que
   // manda a pessoa procurar o nome no CRM na mão.
@@ -2918,7 +2921,7 @@ async function abrirNotificacoes () {
   }
 }
 
-const ICONE_NOTIF = { solicitacao_interna: '📋', solicitacao_compra: '🛒', sdr_lead: '📅', lead: '🌱' }
+const ICONE_NOTIF = { solicitacao_interna: '📋', solicitacao_compra: '🛒', sdr_lead: '📅', lead: '🌱', contratacao_pedido: '🧑‍🏭' }
 
 const esperaConfirmacao = n => !!(n.exige_confirmacao && !n.confirmada_em)
 
@@ -22527,7 +22530,7 @@ async function blocoDaOriginacao (alvo, leads, recarregar) {
         const pl = placar[l.id]
         return `<div class="panel" style="padding:14px 16px;">
           <div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;">
-            <div style="flex:1;min-width:220px;">
+            <div style="flex:1;min-width:150px;">
               <b style="font-size:14px;">${esc(l.nome)}</b>
               <div class="texto-dim2" style="font-size:11.5px;margin-top:2px;">
                 ${esc([l.municipio, l.uf].filter(Boolean).join(' / ') || 'local não informado')}
@@ -22545,7 +22548,7 @@ async function blocoDaOriginacao (alvo, leads, recarregar) {
               ${l.observacoes ? `<p class="texto-dim" style="font-size:12px;line-height:1.55;margin:6px 0 0;max-width:70ch;">
                 ${esc(l.observacoes)}</p>` : ''}
             </div>
-            <button class="btn mini" data-definir="${esc(l.id)}" style="flex:none;">Definir consultor</button>
+            <button class="btn mini" data-definir="${esc(l.id)}">Definir consultor</button>
           </div>
         </div>`
       }).join('')}
@@ -42415,7 +42418,25 @@ async function paginaDesempenho () {
           <div style="color:#eaf5ec;font-family:var(--serif);font-size:22px;margin-top:3px;">Seu espaço pessoal — conduta, avaliações e trilhas de desenvolvimento</div>
         </div>
       </div>
+      ${souGestor() ? `<div class="subabas" style="margin-bottom:14px;">
+        <button data-rhg="meu" class="ativo">🙋 Meu RH</button>
+        <button data-rhg="contratacao">🗂️ Recrutamento e Seleção</button>
+      </div>` : ''}
       <div id="sub-desempenho"></div>`
+
+    // Quem responde por um setor precisa de UMA coisa do RH que o "Meu RH"
+    // não dá: pedir gente pro setor. O resto do módulo continua fechado —
+    // DISC, 360, acompanhamento individual não são da conta dele.
+    if (souGestor()) {
+      area.querySelectorAll('[data-rhg]').forEach(b => {
+        b.onclick = () => {
+          area.querySelectorAll('[data-rhg]').forEach(x => x.classList.toggle('ativo', x === b))
+          const alvo = $('#sub-desempenho')
+          if (b.dataset.rhg === 'meu') desempMeu(alvo)
+          else recrContratacaoSolicitante(alvo)
+        }
+      })
+    }
     desempMeu($('#sub-desempenho'))
     return
   }
@@ -45272,7 +45293,7 @@ async function desempPainel (alvo, editavel) {
         <div style="display:flex;gap:24px;align-items:center;flex-wrap:wrap;">
           <div style="text-align:center;"><div style="font-family:var(--serif);font-size:26px;">${resumoMensal.media}</div>
             <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;">média geral do mês</div></div>
-          <div style="flex:1;min-width:200px;">
+          <div style="flex:1;min-width:150px;">
             ${resumoMensal.top3.map((t, i) => `<div style="display:flex;justify-content:space-between;align-items:center;font-size:12.5px;padding:3px 0;">
               <span>${i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉'} ${esc(t.nome)} <span class="texto-dim2" style="font-size:10.5px;">(${t.qtd} concluídas${t.bonus > 0 ? `, +${t.bonus} por volume` : ''})</span></span><b class="${corAgilidade(t.pontos)}">${t.pontos}</b></div>`).join('')}
           </div>
@@ -45816,6 +45837,7 @@ async function desempRecrutamento (alvo, editavel) {
   alvo.innerHTML = `
     <div class="subabas" style="margin-bottom:14px;">
       <button data-recr-sub="vagas" class="${RECR_SUBABA === 'vagas' ? 'ativo' : ''}">🗂️ Vagas</button>
+      <button data-recr-sub="pedidos" class="${RECR_SUBABA === 'pedidos' ? 'ativo' : ''}">📨 Pedidos de contratação</button>
       <button data-recr-sub="curriculos" class="${RECR_SUBABA === 'curriculos' ? 'ativo' : ''}">📇 Banco de Currículos</button>
     </div>
     <div id="recr-conteudo"><p class="texto-dim2">carregando...</p></div>`
@@ -45833,7 +45855,216 @@ async function desempRecrutamento (alvo, editavel) {
 function abrirRecrSubaba (alvo) {
   const area = $('#recr-conteudo')
   if (RECR_SUBABA === 'vagas') recrKanbanVagas(area)
+  if (RECR_SUBABA === 'pedidos') recrPedidosContratacao(area)
   if (RECR_SUBABA === 'curriculos') recrBancoCurriculos(area)
+}
+
+// ---------------------------------------------------------------
+// Pedido de contratação — as duas pontas.
+//
+// Antes, a vaga nascia já decidida: alguém do RH abria no Kanban e o
+// motivo, quem pediu e quando ficavam fora do sistema (WhatsApp, corredor).
+// Aqui o pedido vira registro: o gestor do setor diz o que precisa e por
+// quê, o RH decide, e aprovar CRIA a vaga — o "ok" e a abertura são o
+// mesmo ato, e não duas coisas que alguém pode esquecer de ligar.
+// ---------------------------------------------------------------
+const ROTULO_STATUS_CONTRATACAO = {
+  PENDENTE: 'Aguardando o RH', APROVADO: 'Aprovado', RECUSADO: 'Não aprovado', CANCELADO: 'Cancelado'
+}
+const TIPOS_CONTRATACAO_PEDIDO = ['CLT', 'PJ', 'Temporário', 'Estágio', 'Aprendiz']
+
+const seloContratacao = st => {
+  const cor = st === 'APROVADO' ? 'badge-bom' : st === 'RECUSADO' ? 'badge-alerta' : 'chip'
+  return `<span class="${cor}" style="font-size:10.5px;">${esc(ROTULO_STATUS_CONTRATACAO[st] || st)}</span>`
+}
+
+const linhaPedidoContratacao = (pd, comSolicitante) => `
+  <div class="panel" style="padding:14px 16px;">
+    <div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+      <div style="flex:1;min-width:150px;">
+        <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;">
+          <b style="font-size:14px;">${pd.quantidade > 1 ? pd.quantidade + '× ' : ''}${esc(pd.cargo)}</b>
+          ${seloContratacao(pd.status)}
+        </div>
+        <div class="texto-dim2" style="font-size:11.5px;margin-top:3px;">
+          ${esc(pd.setor?.nome || 'sem setor')}
+          ${comSolicitante ? ' · pedido por ' + esc(pd.solicitante?.nome || '—') : ''}
+          · ${fmtQuando(pd.criado_em) || ''}
+          ${pd.tipo_contratacao ? ' · ' + esc(pd.tipo_contratacao) : ''}
+        </div>
+        ${pd.horario ? `<div class="texto-dim" style="font-size:12px;margin-top:5px;">🕑 ${esc(pd.horario)}</div>` : ''}
+        <p class="texto-dim" style="font-size:12.5px;line-height:1.55;margin:6px 0 0;max-width:70ch;">${esc(pd.justificativa)}</p>
+        ${pd.requisitos ? `<p class="texto-dim2" style="font-size:12px;line-height:1.5;margin:5px 0 0;max-width:70ch;">
+          Requisitos: ${esc(pd.requisitos)}</p>` : ''}
+        ${pd.decidido_em ? `<div class="texto-dim2" style="font-size:11.5px;margin-top:7px;">
+          ${pd.status === 'APROVADO' ? '✓' : '✕'} ${esc(pd.decisor?.nome || 'RH')} em ${fmtQuando(pd.decidido_em) || ''}
+          ${pd.decisao_observacao ? ' — ' + esc(pd.decisao_observacao) : ''}
+          ${pd.status === 'APROVADO' ? ' · vaga aberta no Kanban' : ''}</div>` : ''}
+      </div>
+      ${pd.status === 'PENDENTE' && comSolicitante ? `<div style="display:flex;gap:6px;flex-wrap:wrap;">
+        <button class="btn mini" data-aprovar="${esc(pd.id)}">Aprovar e abrir vaga</button>
+        <button class="btn-secundario mini" data-recusar="${esc(pd.id)}">Não aprovar</button>
+      </div>` : ''}
+    </div>
+  </div>`
+
+const SEL_PEDIDO = `id,cargo,quantidade,horario,tipo_contratacao,justificativa,requisitos,status,
+  criado_em,decidido_em,decisao_observacao,vaga_id,
+  setor:setor_id(nome), solicitante:solicitante_id(nome), decisor:decidido_por(nome)`
+
+// ----- lado de quem pede (gestor de setor, sem o módulo de RH) -----
+async function recrContratacaoSolicitante (alvo) {
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  const [{ data: meusSetores }, { data: pedidos, error }] = await Promise.all([
+    db.from('setor').select('id,nome').eq('gestor_id', PERFIL.pessoaId).order('nome'),
+    db.from('contratacao_pedido').select(SEL_PEDIDO)
+      .eq('solicitante_id', PERFIL.pessoaId).order('criado_em', { ascending: false }).limit(60)
+  ])
+  if (faltaMigracao(error)) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  const setores = meusSetores || []
+  const lista = pedidos || []
+
+  alvo.innerHTML = `
+    <div class="cabeca-secao">
+      <h3 style="font-family:var(--serif);font-size:16px;">Solicitações de contratação</h3>
+      ${setores.length ? `<button class="btn" id="ct-nova">+ Solicitar contratação</button>` : ''}
+    </div>
+    <p class="texto-dim2" style="font-size:11.5px;margin:-6px 0 12px;line-height:1.55;">
+      ${setores.length
+        ? `Você responde por ${setores.map(x => esc(x.nome)).join(', ')}. O pedido vai pro RH,
+           que decide e devolve. Aprovado, a vaga já nasce aberta em Recrutamento e Seleção.`
+        : `Você ainda não está marcado como gestor de nenhum setor, então não dá pra pedir
+           contratação por aqui. Quem ajusta isso é a Administração, em Setores.`}</p>
+    <div style="display:grid;gap:10px;">
+      ${lista.map(pd => linhaPedidoContratacao(pd, false)).join('')
+        || `<p class="vazio">Nenhum pedido seu por enquanto.</p>`}
+    </div>`
+
+  const btn = $('#ct-nova')
+  if (btn) btn.onclick = () => formPedidoContratacao(setores, () => recrContratacaoSolicitante(alvo))
+}
+
+// ----- o formulário -----
+function formPedidoContratacao (setores, aoFechar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:560px;">
+    <h3>Solicitar contratação</h3>
+    <p class="texto-dim2" style="font-size:12px;margin:-6px 0 14px;">
+      Quem lê isso é o RH, pra decidir se abre a vaga. Quanto mais concreto o motivo,
+      menos ida e volta.</p>
+    <div class="form-grade">
+      <div class="campo"><label>Setor *</label>
+        <select id="ct-setor">${setores.map(x => `<option value="${esc(x.id)}">${esc(x.nome)}</option>`).join('')}</select></div>
+      <div class="campo"><label>Cargo *</label>
+        <input id="ct-cargo" placeholder="ex: Operador de moinho"></div>
+      <div class="campo"><label>Quantas pessoas</label>
+        <input type="number" id="ct-qtd" value="1" min="1" max="50"></div>
+      <div class="campo"><label>Tipo de contratação</label>
+        <select id="ct-tipo"><option value="">a definir com o RH</option>
+          ${TIPOS_CONTRATACAO_PEDIDO.map(t => `<option value="${t}">${t}</option>`).join('')}</select></div>
+    </div>
+    <div class="campo" style="margin-top:12px;"><label>Horário *</label>
+      <input id="ct-horario" placeholder="ex: turno B, 14h às 22h, de segunda a sábado"></div>
+    <div class="campo" style="margin-top:12px;"><label>Por que precisa *</label>
+      <textarea id="ct-just" rows="3"
+        placeholder="ex: saiu o Jonas em agosto e o terceiro turno está rodando com dois operadores; parada de moinho subiu."></textarea></div>
+    <div class="campo" style="margin-top:12px;"><label>Requisitos (opcional)</label>
+      <textarea id="ct-req" rows="2" placeholder="ex: experiência com moinho de bolas, NR-33."></textarea></div>
+    <div class="recado oculto" id="ct-erro"></div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="ct-enviar">Enviar pro RH</button>
+      <button class="btn-secundario" id="ct-cancelar">Cancelar</button>
+    </div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#ct-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  fundo.querySelector('#ct-enviar').onclick = async () => {
+    const btn = fundo.querySelector('#ct-enviar')
+    const erro = fundo.querySelector('#ct-erro')
+    const q = sel => fundo.querySelector(sel)
+    const cargo = q('#ct-cargo').value.trim()
+    const horario = q('#ct-horario').value.trim()
+    const just = q('#ct-just').value.trim()
+    const avisa = t => { erro.textContent = t; erro.classList.remove('oculto') }
+
+    if (!cargo) return avisa('Diga qual é o cargo.')
+    if (!horario) return avisa('O horário é o que o RH usa pra saber se é turno, escala ou comercial.')
+    if (!just) return avisa('A justificativa é o que o RH lê pra decidir — sem ela o pedido volta.')
+
+    btn.disabled = true; btn.textContent = 'enviando...'
+    erro.classList.add('oculto')
+    const { data, error } = await db.rpc('rh_pedir_contratacao', {
+      p_setor_id: q('#ct-setor').value || null,
+      p_cargo: cargo,
+      p_quantidade: Number(q('#ct-qtd').value) || 1,
+      p_horario: horario,
+      p_tipo_contratacao: q('#ct-tipo').value || null,
+      p_justificativa: just,
+      p_requisitos: q('#ct-req').value.trim() || null
+    })
+    if (error || !data?.ok) {
+      btn.disabled = false; btn.textContent = 'Enviar pro RH'
+      avisa(error?.message || data?.erro || 'Não deu certo.')
+      return
+    }
+    fechar(); aoFechar()
+  }
+}
+
+// ----- lado do RH -----
+async function recrPedidosContratacao (area) {
+  area.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  const { data, error } = await db.from('contratacao_pedido').select(SEL_PEDIDO)
+    .order('criado_em', { ascending: false }).limit(200)
+  if (faltaMigracao(error) || error) { area.innerHTML = `<p class="vazio">${esc(error?.message ?? '')}</p>`; return }
+  const lista = data || []
+  const pendentes = lista.filter(p => p.status === 'PENDENTE')
+  const resto = lista.filter(p => p.status !== 'PENDENTE')
+  const recarregar = () => recrPedidosContratacao(area)
+
+  area.innerHTML = `
+    <div class="resumo-topo" style="margin-bottom:16px;">
+      <div class="bloco ${pendentes.length ? 'destaque' : ''}">
+        <div class="rot">Esperando sua decisão</div><div class="val">${pendentes.length}</div></div>
+      <div class="bloco"><div class="rot">Aprovados</div>
+        <div class="val">${lista.filter(p => p.status === 'APROVADO').length}</div></div>
+      <div class="bloco"><div class="rot">Não aprovados</div>
+        <div class="val">${lista.filter(p => p.status === 'RECUSADO').length}</div></div>
+    </div>
+
+    <div class="cabeca-secao" style="margin-bottom:8px;">
+      <h3 style="font-family:var(--serif);font-size:16px;">Esperando decisão</h3>
+      <span class="texto-dim2" style="font-size:11px;">aprovar já abre a vaga no Kanban</span></div>
+    <div style="display:grid;gap:10px;margin-bottom:22px;">
+      ${pendentes.map(pd => linhaPedidoContratacao(pd, true)).join('')
+        || `<p class="vazio">Nada esperando você.</p>`}
+    </div>
+
+    ${resto.length ? `<div class="cabeca-secao" style="margin-bottom:8px;">
+      <h3 style="font-family:var(--serif);font-size:16px;">Já decididos</h3></div>
+    <div style="display:grid;gap:10px;">${resto.map(pd => linhaPedidoContratacao(pd, true)).join('')}</div>` : ''}`
+
+  const decidir = (id, aprovado) => {
+    const pd = lista.find(x => x.id === id)
+    const texto = aprovado
+      ? `Aprovar a contratação de ${pd.cargo}?\n\nA vaga vai ser aberta agora em Recrutamento e Seleção, e ${pd.solicitante?.nome || 'quem pediu'} é avisado.\n\nObservação (opcional):`
+      : `Não aprovar a contratação de ${pd.cargo}?\n\nDiga o motivo — é o que ${pd.solicitante?.nome || 'quem pediu'} vai ler:`
+    const obs = prompt(texto, '')
+    if (obs === null) return
+    if (!aprovado && !obs.trim()) { alert('Recusa sem motivo não ajuda ninguém. Escreva uma linha.'); return }
+    ;(async () => {
+      const { data: r, error: e } = await db.rpc('rh_decidir_contratacao',
+        { p_id: id, p_aprovado: aprovado, p_observacao: obs.trim() || null })
+      if (e || !r?.ok) { alert(e?.message || r?.erro || 'Não deu certo.'); return }
+      recarregar()
+    })()
+  }
+  area.querySelectorAll('[data-aprovar]').forEach(b => { b.onclick = () => decidir(b.dataset.aprovar, true) })
+  area.querySelectorAll('[data-recusar]').forEach(b => { b.onclick = () => decidir(b.dataset.recusar, false) })
 }
 
 // ----- Kanban de vagas -----
