@@ -50473,7 +50473,7 @@ function ligarIconizacaoGlobal () {
 
 async function garantirDpPessoas () {
   if (window.__DP_PESSOAS && window.__DP_PESSOAS.length) return
-  const { data } = await db.from('pessoa').select('id,nome,cargo')
+  const { data } = await db.from('pessoa').select('id,nome,cargo,cpf,setor:setor_id(nome)')
     .or('data_admissao.not.is.null,cpf.not.is.null,tipo.eq.INTERNO').order('nome')
   window.__DP_PESSOAS = data || []
 }
@@ -51898,7 +51898,7 @@ const ROTULO_STATUS_COMP = {
   AGUARDANDO_ASSINATURA: 'Aguardando assinatura', ASSINADO: 'Assinado', CANCELADO: 'Cancelado'
 }
 const SEL_COMP = `id,data_extra,horas,data_folga,texto,status,tem_login,
-  assinado_em,via_papel,criado_em,pessoa_id,empresa_id,
+  assinado_em,via_papel,criado_em,pessoa_id,empresa_id,hora_inicio,hora_fim,
   pessoa:pessoa_id ( nome, cargo ), emissor:emitido_por ( nome ),
   empresa:empresa_id ( nome, cnpj )`
 
@@ -51923,25 +51923,54 @@ const fmtHoras = h => {
 // ---------------------------------------------------------------
 const MARCADORES_TERMO = [
   ['{{funcionario}}', 'nome do funcionário'],
+  ['{{cpf}}', 'CPF dele'],
   ['{{cargo}}', 'cargo dele'],
+  ['{{setor}}', 'setor dele'],
   ['{{empresa}}', 'empresa que assina'],
   ['{{cnpj}}', 'CNPJ dessa empresa'],
+  ['{{endereco}}', 'endereço dessa empresa'],
   ['{{data_extra}}', 'dia da hora extra'],
+  ['{{dia_semana}}', 'dia da semana da hora extra'],
+  ['{{hora_inicio}}', 'hora de início'],
+  ['{{hora_fim}}', 'hora de término'],
+  ['{{intervalo}}', 'intervalo devido (calculado pelas horas)'],
   ['{{horas}}', 'quantas horas (ex: 2h30)'],
   ['{{data_folga}}', 'dia da folga'],
+  ['{{dia_semana_folga}}', 'dia da semana da folga'],
   ['{{mes}}', 'mês/ano da hora extra'],
   ['{{hoje}}', 'data de hoje']
 ]
+
+const DIAS_SEMANA = ['domingo', 'segunda-feira', 'terça-feira', 'quarta-feira',
+  'quinta-feira', 'sexta-feira', 'sábado']
+const diaDaSemana = iso => iso
+  ? DIAS_SEMANA[new Date(iso + 'T12:00:00').getDay()] : ''
+
+// art. 71 da CLT: acima de 6h o intervalo é de 1 hora; entre 4h e 6h, de
+// 15 minutos; abaixo disso não é devido. É regra fixa, então o sistema
+// calcula em vez de pedir pra alguém lembrar.
+const intervaloDevido = horas => {
+  const n = Number(horas || 0)
+  if (n > 6) return '1 (uma) hora'
+  if (n > 4) return '15 (quinze) minutos'
+  return 'não obrigatório para esta duração'
+}
 
 // Substituição literal, sem regex montada com o conteúdo: o texto vem de
 // quem escreveu o modelo, e nada nele deve virar código.
 function aplicarMarcadores (texto, d) {
   const valores = {
-    '{{funcionario}}': d.funcionario || '', '{{cargo}}': d.cargo || '',
+    '{{funcionario}}': d.funcionario || '', '{{cpf}}': d.cpf || '',
+    '{{cargo}}': d.cargo || '', '{{setor}}': d.setor || '',
     '{{empresa}}': d.empresa || '', '{{cnpj}}': d.cnpj || '',
+    '{{endereco}}': d.endereco || '',
     '{{data_extra}}': d.data_extra ? (fmtData(d.data_extra) || '') : '',
+    '{{dia_semana}}': diaDaSemana(d.data_extra),
+    '{{hora_inicio}}': d.hora_inicio || '', '{{hora_fim}}': d.hora_fim || '',
+    '{{intervalo}}': d.horas ? intervaloDevido(d.horas) : '',
     '{{horas}}': d.horas ? fmtHoras(d.horas) : '',
     '{{data_folga}}': d.data_folga ? (fmtData(d.data_folga) || '') : '',
+    '{{dia_semana_folga}}': diaDaSemana(d.data_folga),
     '{{mes}}': d.data_extra ? d.data_extra.slice(5, 7) + '/' + d.data_extra.slice(0, 4) : '',
     '{{hoje}}': fmtData(hojeISO()) || ''
   }
@@ -52085,7 +52114,7 @@ async function pontoTermosCompensacao (corpo, editavel, recarregar) {
   corpo.innerHTML = `<p class="texto-dim2">carregando os termos...</p>`
   const [{ data, error }, { data: empresas }, { data: modelo }] = await Promise.all([
     db.from('ponto_compensacao').select(SEL_COMP).order('criado_em', { ascending: false }).limit(300),
-    db.from('empresa').select('id,nome,cnpj').eq('status', 'ATIVO').order('nome'),
+    db.from('empresa').select('id,nome,cnpj,endereco').eq('status', 'ATIVO').order('nome'),
     db.from('documento_modelo').select('*').eq('chave', 'ponto_compensacao').maybeSingle()
   ])
   if (faltaMigracao(error) || error) { corpo.innerHTML = `<p class="vazio">${esc(error?.message ?? '')}</p>`; return }
@@ -52215,7 +52244,18 @@ function formTermoCompensacao (aoFechar, empresas = [], termo = null, textoModel
         <input type="number" id="tc-horas" step="0.5" min="0.5" max="24" value="${termo?.horas ?? 2}"></div>
       <div class="campo"><label>Folga (no mesmo mês) *</label>
         <input type="date" id="tc-folga" value="${termo?.data_folga ?? ''}"></div>
+      <div class="campo"><label>Entrou às</label>
+        <input type="time" id="tc-hini" value="${termo?.hora_inicio?.slice(0, 5) ?? ''}"></div>
+      <div class="campo"><label>Saiu às</label>
+        <input type="time" id="tc-hfim" value="${termo?.hora_fim?.slice(0, 5) ?? ''}"></div>
     </div>
+    ${/* o termo cita a sede da empresa, e não havia onde guardar isso —
+          preenche uma vez por empresa e fica salvo */ ''}
+    <div class="campo oculto" id="tc-end-wrap" style="margin-top:12px;">
+      <label>Endereço da empresa</label>
+      <input id="tc-endereco" placeholder="rua, número, bairro — Arraias/TO">
+      <span class="texto-dim2" style="font-size:11px;">
+        Essa empresa ainda não tem endereço cadastrado. O que você escrever aqui fica salvo nela.</span></div>
     <div class="campo" style="margin-top:12px;"><label>Texto do termo *</label>
       <textarea id="tc-texto" rows="8"
         placeholder="Preencha os campos acima — o texto vem do modelo, já com os dados no lugar.">${esc(termo?.texto ?? '')}</textarea>
@@ -52239,24 +52279,38 @@ function formTermoCompensacao (aoFechar, empresas = [], termo = null, textoModel
   // se refazer assim que a pessoa escreve no textarea. Sobrescrever o que
   // alguém acabou de digitar é pior do que não ajudar.
   let textoTocado = !!termo
-  const pessoaNome = id => (pessoas.find(p => p.id === id) || {}).nome
-  const pessoaCargo = id => (pessoas.find(p => p.id === id) || {}).cargo
+  const achaPessoa = id => pessoas.find(p => p.id === id) || {}
+  const achaEmpresa = () => empresas.find(e => e.id === q('#tc-empresa').value) || {}
+
+  // endereço só aparece quando falta: empresa já cadastrada não pede nada
+  const mostrarEndereco = () => {
+    const emp = achaEmpresa()
+    const falta = !!emp.id && !String(emp.endereco || '').trim()
+    q('#tc-end-wrap').classList.toggle('oculto', !falta)
+    if (!falta) q('#tc-endereco').value = ''
+  }
+
   const aplicarModelo = (forcar = false) => {
     if (!textoModelo) return
     if (textoTocado && !forcar) return
-    const emp = empresas.find(e => e.id === q('#tc-empresa').value) || {}
+    const emp = achaEmpresa()
+    const pes = achaPessoa(q('#tc-pessoa').value)
     q('#tc-texto').value = aplicarMarcadores(textoModelo, {
-      funcionario: pessoaNome(q('#tc-pessoa').value),
-      cargo: pessoaCargo(q('#tc-pessoa').value),
+      funcionario: pes.nome, cpf: pes.cpf, cargo: pes.cargo, setor: pes.setor?.nome,
       empresa: emp.nome, cnpj: emp.cnpj,
+      endereco: String(emp.endereco || '').trim() || q('#tc-endereco').value.trim(),
       data_extra: q('#tc-data').value,
       horas: Number(q('#tc-horas').value),
-      data_folga: q('#tc-folga').value
+      data_folga: q('#tc-folga').value,
+      hora_inicio: q('#tc-hini').value, hora_fim: q('#tc-hfim').value
     })
   }
-  ;['#tc-empresa', '#tc-pessoa', '#tc-data', '#tc-horas', '#tc-folga'].forEach(sel => {
-    q(sel).addEventListener('change', () => aplicarModelo())
+  ;['#tc-empresa', '#tc-pessoa', '#tc-data', '#tc-horas', '#tc-folga',
+    '#tc-hini', '#tc-hfim', '#tc-endereco'].forEach(sel => {
+    q(sel).addEventListener('change', () => { mostrarEndereco(); aplicarModelo() })
   })
+  q('#tc-endereco').addEventListener('input', () => aplicarModelo())
+  mostrarEndereco()
   q('#tc-texto').addEventListener('input', () => { textoTocado = true })
   q('#tc-remodelo').onclick = () => {
     if (!textoModelo) { alert('Não há modelo salvo ainda. Abra "Modelo do termo" e escreva o texto uma vez.'); return }
@@ -52295,16 +52349,37 @@ function formTermoCompensacao (aoFechar, empresas = [], termo = null, textoModel
     if (folga.slice(0, 7) !== data.slice(0, 7)) return avisa('A folga tem que cair no mesmo mês da hora extra.')
     if (folga < data) return avisa('A folga não pode ser antes do dia da hora extra.')
     if (!texto) return avisa('Cole o texto do termo — é ele que vale juridicamente.')
+    // Documento que vai pra assinatura com buraco no meio não serve. Dois
+    // tipos: marcador do sistema que não foi trocado, e lacuna deixada pelo
+    // Jurídico no modelo ([SETOR], [HH:MM]) que ninguém preencheu.
+    if (texto.includes('{{')) {
+      return avisa('O texto ainda tem marcador do sistema sem preencher. Clique em "Preencher pelo modelo".')
+    }
+    const lacunas = texto.match(/\[[^\]]{2,60}\]/g)
+    if (lacunas) {
+      return avisa('Faltou preencher no texto: ' + [...new Set(lacunas)].slice(0, 4).join(' ')
+        + '. Preencha à mão ou peça pro Jurídico virar marcador no modelo.')
+    }
 
     btn.disabled = true; btn.textContent = ed ? 'salvando...' : 'emitindo...'
     erro.classList.add('oculto')
+
+    // endereço digitado fica salvo na empresa — só se pede uma vez
+    const endNovo = q('#tc-endereco').value.trim()
+    if (endNovo && !q('#tc-end-wrap').classList.contains('oculto')) {
+      const { error: eE } = await db.from('empresa').update({ endereco: endNovo }).eq('id', empresa)
+      if (eE) return avisa('Não consegui salvar o endereço da empresa: ' + eE.message)
+      const alvo = empresas.find(x => x.id === empresa)
+      if (alvo) alvo.endereco = endNovo
+    }
 
     // editar é UPDATE direto: a RLS já limita ao DP, e reemitir dispararia
     // um aviso novo pra quem já foi avisado
     if (ed) {
       const { error } = await db.from('ponto_compensacao').update({
         empresa_id: empresa, pessoa_id: pessoa, data_extra: data,
-        horas, data_folga: folga, texto
+        horas, data_folga: folga, texto,
+        hora_inicio: q('#tc-hini').value || null, hora_fim: q('#tc-hfim').value || null
       }).eq('id', termo.id)
       if (error) return avisa(error.message)
       fechar(); aoFechar(); return
@@ -52312,7 +52387,8 @@ function formTermoCompensacao (aoFechar, empresas = [], termo = null, textoModel
 
     const { data: r, error } = await db.rpc('ponto_compensacao_emitir', {
       p_pessoa_id: pessoa, p_data_extra: data, p_horas: horas,
-      p_data_folga: folga, p_texto: texto, p_empresa_id: empresa
+      p_data_folga: folga, p_texto: texto, p_empresa_id: empresa,
+      p_hora_inicio: q('#tc-hini').value || null, p_hora_fim: q('#tc-hfim').value || null
     })
     if (error || !r?.ok) return avisa(error?.message || r?.erro || 'Não deu certo.')
     fechar()
