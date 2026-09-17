@@ -20653,9 +20653,8 @@ async function crmOriginacao (alvo, editavel, gerencia) {
     alvo.innerHTML = `<p class="texto-dim2">carregando fila...</p>`
   }
 
-  const vendoArquivados = ORIG_FILTRO === 'arquivados'
   const [{ data, error }, cat] = await Promise.all([
-    db.rpc('crm_fila_originacao', { p_limite: 120, p_arquivados: vendoArquivados,
+    db.rpc('crm_fila_originacao', { p_limite: 120, p_arquivados: false,
       p_pessoa_id: (gerencia && ORIG_PESSOA) ? ORIG_PESSOA : null,
       p_busca: ORIG_BUSCA || null }),
     catalogosNegociacao()
@@ -20673,13 +20672,13 @@ async function crmOriginacao (alvo, editavel, gerencia) {
   // que agora eles já contam como está a fila antes de qualquer clique.
   // [chave, ícone, rótulo, quantos (null = só ícone), dica, acender?]
   const nunca = todos.filter(i => !i.ultima_ligacao).length
-  const filtros = vendoArquivados
-    ? [
-      ['todos', '↩', 'Voltar pra fila', null, 'sair dos arquivados e ver a fila de novo'],
-      ['arquivados', '📦', 'Fora da fila', d.arquivados ?? todos.length,
-        'saíram da fila, mas continuam no sistema com todo o histórico']
-    ]
-    : [
+  // "Fora da fila" (os arquivados) não mora mais aqui. A originação é a
+  // fila de trabalho: o que entra vem de lista, de cadastro novo ou da
+  // gestão; o que sai, sai pelas colunas — Descartado, Na gestão, Eduardo.
+  // Arquivo é assunto de gestão, e já tem tela própria: CRM → Gestão →
+  // histórico da equipe (crmHistoricoEquipe), com filtro por vendedor e
+  // busca. Nada se perdeu, só deixou de ocupar a tela de quem liga.
+  const filtros = [
       ['todos', '👥', 'Na fila', todos.length, 'tudo que está na originação agora'],
       ['nunca', '🆕', 'Nunca ligados', nunca, 'ninguém discou pra essas pessoas ainda', nunca > 0],
       ['esperando', '⏳', 'Esperando ligação', todos.filter(i => i.contato_situacao === 'aguardando_ligacao').length,
@@ -20687,11 +20686,9 @@ async function crmOriginacao (alvo, editavel, gerencia) {
       ['agendados', '📅', 'Retorno marcado', todos.filter(i => i.proximo_compromisso).length,
         'tem compromisso marcado pra frente'],
       ['hoje', '🔔', 'Retorno hoje', todos.filter(i => (i.proximo_compromisso || '').slice(0, 10) === hojeIso).length,
-        'o retorno marcado cai hoje'],
-      ['arquivados', '📦', 'Fora da fila', d.arquivados ?? 0,
-        'saíram da fila, mas continuam no sistema com todo o histórico']
+        'o retorno marcado cai hoje']
     ]
-  const lista = vendoArquivados ? todos : todos.filter(i =>
+  const lista = todos.filter(i =>
     ORIG_FILTRO === 'esperando' ? i.contato_situacao === 'aguardando_ligacao'
       : ORIG_FILTRO === 'nunca' ? !i.ultima_ligacao
       : ORIG_FILTRO === 'agendados' ? !!i.proximo_compromisso
@@ -20790,10 +20787,6 @@ async function crmOriginacao (alvo, editavel, gerencia) {
         <button type="button" class="btn-secundario mini org-ficha">Abrir ficha</button>
         ${editavel && !i.no_sdr && !semTelefone && !i.bloqueio_lgpd
           ? `<button type="button" class="btn-secundario mini org-sdr">→ Passar pro Eduardo</button>` : ''}
-        ${editavel ? (i.arquivado
-          ? `<button type="button" class="btn-secundario mini org-desarquivar" style="margin-left:auto;">↩ Devolver pra fila</button>`
-          : `<button type="button" class="btn-secundario mini org-arquivar" style="margin-left:auto;"
-               title="sai da fila mas continua existindo">Tirar da fila</button>`) : ''}
         ${podeExcluir ? `<button type="button" class="btn-secundario mini org-lixeira"
           title="Excluir de vez" aria-label="Excluir de vez"
           style="color:var(--critico-text);border-color:var(--critico-text);">🗑</button>` : ''}
@@ -20836,7 +20829,7 @@ async function crmOriginacao (alvo, editavel, gerencia) {
       Nada com <b>${esc(ORIG_BUSCA)}</b>${(gerencia && ORIG_PESSOA) ? ' na fila dessa pessoa' : ''}.<br>
       <span class="texto-dim2" style="font-size:12px;">A busca olha nome, telefone (inclusive os
       guardados), CPF/CNPJ, cidade da fazenda, UF, e-mail e cultivo. Não olha observação nem nome da lista.
-      ${vendoArquivados ? '' : 'Se for alguém que saiu da fila, veja em "Fora da fila".'}</span></p>` : ''}
+      Se for alguém que já saiu da originação, o histórico está em Gestão.</span></p>` : ''}
 
     <div class="org-resumo">
       ${filtros.map(([v, ic, rot, n, dica, alerta]) => `
@@ -20849,10 +20842,7 @@ async function crmOriginacao (alvo, editavel, gerencia) {
         </button>`).join('')}
     </div>
 
-    ${vendoArquivados ? `<p class="texto-dim2" style="font-size:11.5px;line-height:1.6;margin:-4px 0 12px;">
-      Estes leads saíram da fila mas continuam no sistema, com todo o histórico. Devolver é um clique.</p>` : ''}
-
-    ${vendoArquivados ? '' : `<div style="display:flex;gap:6px;margin-bottom:12px;align-items:center;flex-wrap:wrap;">
+    ${`<div style="display:flex;gap:6px;margin-bottom:12px;align-items:center;flex-wrap:wrap;">
       ${/* "Fila de hoje" mentia: nada ali é de hoje — dá pra falar hoje, amanhã
             ou semana que vem. É a lista de trabalho do acompanhamento. */ ''}
       <button type="button" class="chip-filtro ${ORIG_VISTA === 'fila' ? 'ativo' : ''}" data-vista="fila">
@@ -20871,9 +20861,6 @@ async function crmOriginacao (alvo, editavel, gerencia) {
       <button type="button" class="btn-secundario mini" id="org-limpar">limpar seleção</button>
       <span style="flex:1;"></span>
       <button type="button" class="btn mini" id="org-lote-eduardo">→ Passar pro Eduardo</button>
-      ${vendoArquivados
-        ? `<button type="button" class="btn-secundario mini" id="org-lote-desarquivar">↩ Devolver pra fila</button>`
-        : `<button type="button" class="btn-secundario mini" id="org-lote-arquivar">Tirar da fila</button>`}
       ${podeExcluir ? `<button type="button" class="btn-secundario mini" id="org-lote-excluir"
         style="color:var(--critico-text);border-color:var(--critico-text);">🗑 Excluir de vez</button>` : ''}
     </div>` : ''}
@@ -21031,11 +21018,6 @@ async function crmOriginacao (alvo, editavel, gerencia) {
       atualizarBarra()
     }
 
-    const btnArq = card.querySelector('.org-arquivar')
-    if (btnArq) btnArq.onclick = () => arquivar([id], true, btnArq)
-    const btnDes = card.querySelector('.org-desarquivar')
-    if (btnDes) btnDes.onclick = () => arquivar([id], false, btnDes)
-
     const lixeira = card.querySelector('.org-lixeira')
     if (lixeira) lixeira.onclick = () => excluir([id], [item], lixeira)
   })
@@ -21070,10 +21052,6 @@ async function crmOriginacao (alvo, editavel, gerencia) {
 
   if (barra) {
     barra.querySelector('#org-limpar').onclick = () => { selecionados.clear(); recarregar() }
-    const loteArq = barra.querySelector('#org-lote-arquivar')
-    if (loteArq) loteArq.onclick = () => arquivar([...selecionados], true, loteArq)
-    const loteDes = barra.querySelector('#org-lote-desarquivar')
-    if (loteDes) loteDes.onclick = () => arquivar([...selecionados], false, loteDes)
     const loteEdu = barra.querySelector('#org-lote-eduardo')
     if (loteEdu) loteEdu.onclick = () => {
       const ids = [...selecionados]
@@ -21087,16 +21065,6 @@ async function crmOriginacao (alvo, editavel, gerencia) {
   }
 
   // Tirar da fila é reversível — não pede confirmação, avisa depois.
-  async function arquivar (ids, arquivar_, botao) {
-    if (!ids.length) return
-    const antes = botao.textContent
-    botao.disabled = true; botao.textContent = '...'
-    const { error } = await db.rpc('crm_arquivar_leads', { p_ids: ids, p_arquivar: arquivar_ })
-    if (error) { alert(error.message); botao.disabled = false; botao.textContent = antes; return }
-    selecionados.clear()
-    recarregar()
-  }
-
   // Excluir apaga junto tudo que estava pendurado no lead. Quem vai
   // apagar precisa ver o que vai junto ANTES, não descobrir depois.
   async function excluir (ids, itens, botao) {
