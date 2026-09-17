@@ -18414,17 +18414,30 @@ function renderCrmProgresso (alvo, editavel, gerencia) {
 async function crmAtribuir (alvo, { podeAtribuir = ehGestorComercial() } = {}) {
   alvo.innerHTML = `
     <div class="panel" style="padding:20px;margin-bottom:16px;">
-      <h3 style="font-family:var(--serif);font-size:16px;margin:0 0 6px;">Importar planilha de clientes</h3>
+      <h3 style="font-family:var(--serif);font-size:16px;margin:0 0 6px;">Importar lista de clientes</h3>
       <p class="texto-dim2" style="font-size:12px;margin:0 0 12px;">
-        Aceita .xlsx, .xls ou .csv. Reconhece colunas como nome/razão social, telefone, e-mail,
-        município, UF, origem, valor estimado e observação (não precisa bater o nome exato).
-        Os leads entram sem vendedor e caem na sua fila da Originação.</p>
+        Aceita <b>planilha</b> (.xlsx, .xls, .csv) e também <b>PDF ou foto</b> da tabela.
+        Reconhece nome/razão social, telefone, e-mail, município, UF e observação —
+        não precisa bater o nome exato da coluna.
+        Os leads entram sem vendedor e caem na fila da Originação como novos.</p>
       ${podeAtribuir ? '' : `<p class="texto-dim2" style="font-size:12px;margin:-6px 0 12px;line-height:1.55;">
         Quem define o consultor é a gestão. Quando o lead estiver qualificado,
         use <b>📤 Enviar pra gestão</b> no card, na aba Originação — o que você
         levantou e a reunião marcada vão junto.</p>`}
-      <div class="campo" style="margin-bottom:10px;"><input type="file" id="crm-arquivo" accept=".xlsx,.xls,.csv"></div>
-      <div class="acoes"><button class="btn-secundario" id="crm-ler">Ler planilha</button></div>
+      ${/* Nome da lista/região: é o que a Bianca vê na Originação pra saber
+            de onde veio o contato. Fica opcional de propósito — quem só
+            quer jogar leads no pool, como era antes, não precisa preencher
+            nada e o comportamento é o mesmo de sempre. */ ''}
+      <div class="form-grade" style="margin-bottom:10px;">
+        <div class="campo"><label>Nome da lista / região <span class="texto-dim2">(opcional)</span></label>
+          <input id="crm-lista-nome" placeholder="ex: Chapada Diamantina — Mucugê e Ibicoara"></div>
+        <div class="campo"><label>Quem vai trabalhar <span class="texto-dim2">(opcional)</span></label>
+          <select id="crm-lista-resp"><option value="">— ninguém específico —</option></select></div>
+      </div>
+      <div class="campo" style="margin-bottom:10px;">
+        <input type="file" id="crm-arquivo" accept=".xlsx,.xls,.csv,.pdf,.jpg,.jpeg,.png,.webp"></div>
+      <div class="acoes"><button class="btn-secundario" id="crm-ler">Ler arquivo</button></div>
+      <div id="crm-lendo" class="texto-dim2" style="font-size:12px;margin-top:6px;"></div>
       <div id="crm-preview" style="margin-top:14px;"></div>
       <div class="recado oculto" id="crm-recado-import"></div>
     </div>
@@ -18451,9 +18464,140 @@ async function crmAtribuir (alvo, { podeAtribuir = ehGestorComercial() } = {}) {
 
   let leadsProntos = []
 
+  // quem pode ficar como responsável da lista: gente de dentro, que é
+  // quem aparece na Originação
+  ;(async () => {
+    const sel = $('#crm-lista-resp')
+    if (!sel) return
+    const { data } = await db.from('pessoa').select('id,nome')
+      .eq('status', 'ATIVO').eq('tipo', 'INTERNO').order('nome')
+    sel.innerHTML = `<option value="">— ninguém específico —</option>` +
+      (data || []).map(p => `<option value="${esc(p.id)}">${esc(p.nome)}</option>`).join('')
+  })()
+
+  // Mostra a prévia e liga o botão de confirmar. É o mesmo destino pros
+  // dois caminhos de leitura (planilha e PDF), então mora num lugar só.
+  const mostrarPreview = (comoLeu, extra = '') => {
+    $('#crm-preview').innerHTML = `
+      <p class="texto-dim" style="font-size:13px;margin-bottom:8px;">
+        ${leadsProntos.length} lead(s) prontos pra importar (${esc(comoLeu)}).</p>
+      ${extra}
+      <div class="tabela-scroll" style="max-height:260px;margin-bottom:10px;">
+        <table><thead><tr><th>Nome</th><th>Telefone</th><th>Cidade</th><th>UF</th><th>Observação</th></tr></thead><tbody>
+        ${leadsProntos.slice(0, 50).map(l => `<tr>
+          <td><b>${esc(l.nome)}</b></td>
+          <td class="texto-dim2">${esc(l.telefone || '—')}</td>
+          <td class="texto-dim2">${esc(l.municipio || '—')}</td>
+          <td class="texto-dim2">${esc(l.uf || '—')}</td>
+          <td class="texto-dim2" style="max-width:240px;">${esc(l.observacoes || '—')}</td>
+        </tr>`).join('')}
+        </tbody></table>
+      </div>
+      ${leadsProntos.length > 50 ? `<p class="texto-dim2" style="font-size:11.5px;margin:-4px 0 8px;">
+        mostrando os 50 primeiros — todos os ${leadsProntos.length} serão importados.</p>` : ''}
+      <div class="acoes"><button class="btn" id="crm-confirmar-import">Confirmar importação</button></div>`
+    $('#crm-confirmar-import').onclick = confirmarImportacao
+  }
+
+  const arquivoParaBase64 = arq => new Promise((resolve, reject) => {
+    const leitor = new FileReader()
+    leitor.onload = () => resolve(String(leitor.result).split(',')[1] || '')
+    leitor.onerror = () => reject(new Error('Não deu para ler o arquivo.'))
+    leitor.readAsDataURL(arq)
+  })
+
+  // ----- gravar -----
+  //
+  // Sem nome de lista, o caminho é exatamente o de antes: leads entram no
+  // pool sem vendedor e pronto. Com nome, cria-se antes uma lista de
+  // ORIGINAÇÃO pra pendurar os leads — que é o que faz a Bianca ver de
+  // onde veio cada contato na fila dela.
+  //
+  // A lista nasce SEM CANAL e como rascunho de propósito: o disparo do bot
+  // (sdr_proximo_disparo) só enxerga lista ativa, com canal conectado E com
+  // linha em sdr_lista_contato. Nenhuma das três acontece aqui, então
+  // importar lista nunca vira mensagem no WhatsApp de ninguém.
+  const confirmarImportacao = async () => {
+    const btn = $('#crm-confirmar-import')
+    btn.disabled = true; btn.textContent = 'Importando...'
+    const destravar = () => { btn.disabled = false; btn.textContent = 'Confirmar importação' }
+
+    const nomeLista = ($('#crm-lista-nome')?.value || '').trim()
+    const respLista = $('#crm-lista-resp')?.value || null
+    let listaId = null
+
+    if (nomeLista) {
+      let anexo = null
+      const arq = $('#crm-arquivo').files[0]
+      if (arq) {
+        try { anexo = await enviarArquivo(arq, 'listas-crm') }
+        catch (e) { destravar(); avisoImport(e.message); return }
+      }
+      const { data: lista, error: eL } = await db.from('sdr_lista').insert({
+        nome: nomeLista, tipo: 'ORIGINACAO', situacao: 'rascunho',
+        canal_id: null, responsavel_id: respLista || null,
+        criado_por: PERFIL.pessoaId,
+        arquivo_caminho: anexo?.caminho ?? null, arquivo_nome: anexo?.nome ?? null,
+        observacoes: `Lista importada${anexo ? ' do arquivo ' + anexo.nome : ''} em ` +
+          (fmtData(hojeISO()) || '')
+      }).select('id').single()
+      if (eL) { destravar(); avisoImport('Não consegui criar a lista: ' + eL.message); return }
+      listaId = lista.id
+    }
+
+    const paraGravar = listaId
+      ? leadsProntos.map(l => ({ ...l, lista_origem_id: listaId }))
+      : leadsProntos
+    const { error } = await db.from('lead').insert(paraGravar)
+    destravar()
+    if (error) { avisoImport(error.message); return }
+
+    avisoImport(`${leadsProntos.length} lead(s) importado(s)` +
+      (nomeLista ? ` na lista "${nomeLista}" — já aparecem na Originação, em Acompanhamento, como novos.`
+                 : ' pro pool sem vendedor.'), true)
+    $('#crm-preview').innerHTML = ''
+    $('#crm-arquivo').value = ''
+    if ($('#crm-lista-nome')) $('#crm-lista-nome').value = ''
+    leadsProntos = []
+    carregarPool()
+  }
+
+  // ----- caminho do PDF / foto: quem lê é a IA, no servidor -----
+  const lerDocumento = async arquivo => {
+    const status = $('#crm-lendo')
+    const btn = $('#crm-ler')
+    if (arquivo.size > 10 * 1024 * 1024) { avisoImport('Arquivo muito grande — até 10 MB.'); return }
+    btn.disabled = true; btn.textContent = 'lendo o documento...'
+    status.textContent = 'Isso leva alguns segundos.'
+    try {
+      const { data, error } = await db.functions.invoke('crm-lista-pdf-extrair', {
+        body: { arquivo: { data: await arquivoParaBase64(arquivo), media_type: arquivo.type || 'application/pdf' } }
+      })
+      if (error || !data?.ok) throw new Error(data?.erro || error?.message || 'Não consegui ler esse arquivo.')
+      leadsProntos = data.leads.map(l => ({ ...l, origem: 'lista importada (PDF)', etapa: 'NOVO' }))
+      status.textContent = ''
+      mostrarPreview(
+        `lido do documento${data.colunas?.length ? ' — trouxe ' + data.colunas.join(', ') : ''}`,
+        `<p class="texto-dim2" style="font-size:11.5px;line-height:1.55;margin:-4px 0 10px;">
+           <b>Confira antes de confirmar.</b> Quem leu o documento foi a IA; ela não inventa contato,
+           mas pode errar um dígito de telefone ou trocar duas colunas parecidas.
+           ${data.aviso ? `<br><span style="color:var(--warn-text);">${esc(data.aviso)}</span>` : ''}
+           ${data.confianca && data.confianca !== 'alta'
+             ? `<br><span style="color:var(--warn-text);">Confiança ${esc(data.confianca)} — vale olhar linha por linha.</span>` : ''}
+         </p>`)
+    } catch (e) {
+      status.textContent = ''
+      avisoImport(String(e.message || e))
+    }
+    btn.disabled = false; btn.textContent = 'Ler arquivo'
+  }
+
   $('#crm-ler').onclick = () => {
     const arquivo = $('#crm-arquivo').files[0]
     if (!arquivo) { avisoImport('Escolha um arquivo primeiro.'); return }
+    const nome = (arquivo.name || '').toLowerCase()
+    const ehPlanilha = /\.(xlsx|xls|csv)$/.test(nome)
+    if (!ehPlanilha) { lerDocumento(arquivo); return }
     const leitor = new FileReader()
     leitor.onload = e => {
       try {
@@ -18485,20 +18629,7 @@ async function crmAtribuir (alvo, { podeAtribuir = ehGestorComercial() } = {}) {
           }))
           .filter(l => l.nome)
 
-        $('#crm-preview').innerHTML = `
-          <p class="texto-dim" style="font-size:13px;margin-bottom:8px;">
-            ${leadsProntos.length} lead(s) prontos pra importar (colunas reconhecidas: ${Object.keys(mapa).join(', ')}).</p>
-          <div class="acoes"><button class="btn" id="crm-confirmar-import">Confirmar importação</button></div>`
-        $('#crm-confirmar-import').onclick = async () => {
-          const btn = $('#crm-confirmar-import'); btn.disabled = true; btn.textContent = 'Importando...'
-          const { error } = await db.from('lead').insert(leadsProntos)
-          btn.disabled = false; btn.textContent = 'Confirmar importação'
-          if (error) { avisoImport(error.message); return }
-          avisoImport(`${leadsProntos.length} lead(s) importado(s) pro pool sem vendedor.`, true)
-          $('#crm-preview').innerHTML = ''
-          $('#crm-arquivo').value = ''
-          carregarPool()
-        }
+        mostrarPreview(`colunas reconhecidas: ${Object.keys(mapa).join(', ')}`)
       } catch (err) { avisoImport('Não consegui ler o arquivo: ' + err.message) }
     }
     leitor.readAsArrayBuffer(arquivo)
