@@ -51974,10 +51974,16 @@ async function abrirModeloTermo (chave, aoFechar) {
       <label>Arquivo original do Jurídico (opcional)</label>
       ${m.arquivo_caminho ? `<p class="texto-dim2" style="font-size:12px;margin:0 0 6px;">
         Anexado: <a href="#" id="mod-abrir" class="anexo-link">${esc(m.arquivo_nome || 'arquivo')}</a></p>` : ''}
-      <input type="file" id="mod-arquivo" accept=".pdf,.doc,.docx,.odt,.txt">
-      <span class="texto-dim2" style="font-size:11px;line-height:1.5;">
-        Fica guardado como prova de origem do texto. O sistema <b>não lê o arquivo</b> —
-        o que sai no documento é o texto escrito acima.</span></div>
+      <input type="file" id="mod-arquivo" accept=".pdf,.jpg,.jpeg,.png,.webp">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px;">
+        <button type="button" class="btn-secundario mini" id="mod-ler">📄 Ler o arquivo e preencher</button>
+        <span class="texto-dim2" style="font-size:11px;">PDF ou foto do termo.</span>
+      </div>
+      <span class="texto-dim2" style="font-size:11px;line-height:1.5;display:block;margin-top:6px;">
+        O sistema lê o documento, traz o texto e já troca o nome, as datas e as horas pelos
+        marcadores. <b>Confira antes de salvar</b> — quem responde pelo texto é o Jurídico,
+        não a leitura automática.</span>
+      <div id="mod-lendo" class="texto-dim2" style="font-size:12px;margin-top:6px;"></div></div>
 
     <div class="recado oculto" id="mod-erro"></div>
     <div class="acoes" style="margin-top:14px;">
@@ -52006,6 +52012,47 @@ async function abrirModeloTermo (chave, aoFechar) {
       ta.selectionStart = ta.selectionEnd = i + b.dataset.mk.length
     }
   })
+
+  // Ler o arquivo é o que a pessoa realmente quer: subir o termo do
+  // Jurídico e não digitar nada. A IA devolve o corpo do documento já com
+  // os marcadores no lugar dos dados — o trabalho chato que alguém teria
+  // que fazer na mão, e onde nasce erro de nome trocado.
+  const arquivoParaBase64 = arq => new Promise((resolve, reject) => {
+    const leitor = new FileReader()
+    leitor.onload = () => resolve(String(leitor.result).split(',')[1] || '')
+    leitor.onerror = () => reject(new Error('Não deu para ler o arquivo.'))
+    leitor.readAsDataURL(arq)
+  })
+
+  q('#mod-ler').onclick = async () => {
+    const arq = q('#mod-arquivo').files?.[0]
+    const status = q('#mod-lendo')
+    const btn = q('#mod-ler')
+    if (!arq) { alert('Escolha o arquivo do termo primeiro.'); return }
+    if (arq.size > 10 * 1024 * 1024) { alert('Arquivo muito grande — até 10 MB.'); return }
+
+    btn.disabled = true; btn.textContent = 'lendo o documento...'
+    status.textContent = 'Isso leva alguns segundos.'
+    status.style.color = ''
+    try {
+      const { data, error } = await db.functions.invoke('documento-modelo-extrair', {
+        body: { arquivo: { data: await arquivoParaBase64(arq), media_type: arq.type || 'application/pdf' } }
+      })
+      if (error || !data?.ok) throw new Error(data?.erro || error?.message || 'Não consegui ler esse arquivo.')
+
+      q('#mod-texto').value = data.extraido.texto
+      const achou = (data.extraido.marcadores || []).join(', ')
+      const conf = data.extraido.confianca
+      status.innerHTML = `✓ Texto trazido do arquivo.${achou ? ` Marcadores usados: <b>${esc(achou)}</b>.` : ''}
+        ${data.extraido.aviso ? `<br><span style="color:var(--warn-text);">${esc(data.extraido.aviso)}</span>` : ''}
+        ${conf && conf !== 'alta' ? `<br><span style="color:var(--warn-text);">
+          Confiança ${esc(conf)} — leia com atenção antes de salvar.</span>` : ''}`
+    } catch (e) {
+      status.textContent = String(e.message || e)
+      status.style.color = 'var(--warn-text)'
+    }
+    btn.disabled = false; btn.textContent = '📄 Ler o arquivo e preencher'
+  }
 
   q('#mod-salvar').onclick = async () => {
     const btn = q('#mod-salvar'); const erro = q('#mod-erro')
