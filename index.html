@@ -18652,7 +18652,8 @@ async function carregarAgendaLead (fundo, l, editavel) {
     if (!data) { alert('Escolha a data do compromisso.'); return }
     const { error: e1 } = await db.from('lead_compromisso').insert({
       lead_id: l.id, data_hora: new Date(`${data}T${hora}:00`).toISOString(),
-      titulo: titulo || null, criado_por: PERFIL.pessoaId
+      titulo: titulo || null, criado_por: PERFIL.pessoaId,
+      tipo: fundo.querySelector('#ag-tipo').value
     })
     if (e1) { alert('Não consegui salvar: ' + e1.message); return }
     fundo.querySelector('#ag-titulo').value = ''
@@ -20492,6 +20493,136 @@ function abrirPassarProEduardo (ids, nomes, aoTerminar) {
 }
 
 // ---------------------------------------------------------------
+// Relatório da operação de originação.
+//
+// O quadro responde "onde está cada um" e a fila responde "quem eu ligo
+// agora". Faltava a terceira pergunta, que é de quem gerencia: "o que foi
+// feito no período, e valeu a pena?".
+//
+// Tudo sai de registro que já existia — ligação, histórico e compromisso.
+// Nenhum contador novo pra alguém esquecer de preencher, e nada que dependa
+// de a pessoa lembrar de fechar o dia.
+// ---------------------------------------------------------------
+let ORIG_REL_DIAS = 7
+
+async function relatorioOriginacao (alvo) {
+  if (!alvo) return
+  const hoje = new Date()
+  const ate = hoje.toISOString().slice(0, 10)
+  const de = new Date(hoje.getTime() - (ORIG_REL_DIAS - 1) * 864e5).toISOString().slice(0, 10)
+
+  alvo.innerHTML = `<p class="texto-dim2">carregando o relatório...</p>`
+  const { data, error } = await db.rpc('crm_relatorio_originacao', { p_de: de, p_ate: ate })
+  if (error || !data?.ok) {
+    alvo.innerHTML = `<p class="vazio">${esc(error?.message || data?.erro || 'não deu certo')}</p>`
+    return
+  }
+
+  const t = data.totais || {}
+  const pessoas = data.por_pessoa || []
+  const dias = data.por_dia || []
+  const pct = (a, b) => b ? Math.round((a / b) * 100) : 0
+  const taxa = pct(t.atendeu, t.ligacoes)
+
+  const periodos = [[1, 'Hoje'], [7, '7 dias'], [30, '30 dias']]
+
+  const kpi = (rot, val, nota, cl = '') => `
+    <div class="bloco ${cl}"><div class="rot">${esc(rot)}</div>
+      <div class="val" style="font-size:24px;">${val}</div>
+      ${nota ? `<div class="nota">${esc(nota)}</div>` : ''}</div>`
+
+  alvo.innerHTML = `
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">
+      ${periodos.map(([n, r]) => `<button type="button" class="chip-filtro ${ORIG_REL_DIAS === n ? 'ativo' : ''}"
+        data-rel-dias="${n}">${r}</button>`).join('')}
+      <span class="texto-dim2" style="font-size:11px;margin-left:4px;">
+        ${esc(fmtData(de) || de)} a ${esc(fmtData(ate) || ate)}</span>
+      <button class="btn-secundario mini" id="rel-csv" style="margin-left:auto;">Exportar CSV</button>
+    </div>
+
+    <div class="panel" style="padding:22px;margin-bottom:16px;background:var(--rust);color:#fff;
+      display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px;">
+      <div>
+        <div style="font-size:12px;text-transform:uppercase;letter-spacing:.5px;opacity:.85;">Ligações no período</div>
+        <div style="font-family:var(--serif);font-size:38px;margin-top:4px;">${t.ligacoes || 0}</div>
+      </div>
+      <div style="display:flex;gap:20px;flex-wrap:wrap;">
+        <div><div style="font-size:11px;opacity:.8;">Conseguiu falar</div>
+          <div style="font-size:19px;">${t.atendeu || 0} <span style="opacity:.8;font-size:13px;">(${taxa}%)</span></div></div>
+        <div><div style="font-size:11px;opacity:.8;">Pessoas diferentes</div>
+          <div style="font-size:19px;">${t.leads_tocados || 0}</div></div>
+        <div><div style="font-size:11px;opacity:.8;">Reuniões marcadas</div>
+          <div style="font-size:19px;">${t.reunioes || 0}</div></div>
+        <div><div style="font-size:11px;opacity:.8;">Retornos marcados</div>
+          <div style="font-size:19px;">${t.retornos || 0}</div></div>
+      </div>
+    </div>
+
+    <div class="resumo-topo" style="margin-bottom:18px;">
+      ${kpi('Conseguiu falar', t.atendeu || 0, `${taxa}% das ligações`, taxa ? 'bom' : '')}
+      ${kpi('Não atendeu', t.nao_atendeu || 0, 'chamou e ninguém pegou')}
+      ${kpi('Caixa postal', t.caixa_postal || 0, 'caiu na caixa')}
+      ${kpi('Número errado', t.numero_errado || 0, 'cadastro pra corrigir', (t.numero_errado || 0) > 0 ? 'alerta' : '')}
+      ${kpi('Sem relato', t.sem_relato || 0, 'clicou em ligar e não voltou pra fechar', (t.sem_relato || 0) > 0 ? 'alerta' : '')}
+      ${kpi('Passados pro Eduardo', t.pro_eduardo || 0, 'o bot assumiu o contato')}
+      ${kpi('Enviados pra gestão', t.pra_gestao || 0, 'esperando definir consultor')}
+      ${kpi('Entregues a consultor', t.pro_consultor || 0, 'viraram carteira de vendedor')}
+      ${kpi('Reuniões marcadas', t.reunioes || 0, 'compromisso marcado como reunião', (t.reunioes || 0) > 0 ? 'bom' : '')}
+      ${kpi('Retornos marcados', t.retornos || 0, 'próxima tentativa agendada')}
+    </div>
+
+    <div class="panel" style="padding:18px;margin-bottom:16px;">
+      <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Ligações por dia</h3>
+      ${svgLinha(dias.map(d => ({ rotulo: fmtData(d.dia) || d.dia, valor: Number(d.ligacoes || 0) })))}
+    </div>
+
+    <div class="cabeca-secao">
+      <h3 style="font-family:var(--serif);font-size:16px;">Por pessoa</h3>
+      <span class="texto-dim2" style="font-size:11px;">quem registrou cada coisa</span></div>
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>Pessoa</th><th class="num">Ligações</th><th class="num">Pessoas</th>
+        <th class="num">Falou</th><th class="num">Taxa</th>
+        <th class="num">Não atendeu</th><th class="num">Caixa</th><th class="num">Nº errado</th>
+        <th class="num">Sem relato</th><th class="num">Eduardo</th><th class="num">Gestão</th>
+        <th class="num">Consultor</th><th class="num">Reuniões</th><th class="num">Retornos</th>
+      </tr></thead><tbody>
+        ${pessoas.map(p => `<tr>
+          <td><b>${esc(p.nome)}</b></td>
+          <td class="num">${p.ligacoes}</td>
+          <td class="num">${p.leads_tocados}</td>
+          <td class="num">${p.atendeu}</td>
+          <td class="num">${pct(p.atendeu, p.ligacoes)}%</td>
+          <td class="num texto-dim">${p.nao_atendeu}</td>
+          <td class="num texto-dim">${p.caixa_postal}</td>
+          <td class="num texto-dim">${p.numero_errado}</td>
+          <td class="num" ${p.sem_relato ? 'style="color:var(--warn-text);"' : ''}>${p.sem_relato}</td>
+          <td class="num">${p.pro_eduardo}</td>
+          <td class="num">${p.pra_gestao}</td>
+          <td class="num">${p.pro_consultor}</td>
+          <td class="num">${p.reunioes}</td>
+          <td class="num texto-dim">${p.retornos}</td>
+        </tr>`).join('') || `<tr><td colspan="14" class="vazio">Nenhum registro no período.</td></tr>`}
+      </tbody></table>
+    </div></div>
+    <p class="texto-dim2" style="font-size:11.5px;margin-top:8px;line-height:1.55;">
+      <b>Sem relato</b> é ligação que ficou em "discou": alguém clicou em ligar e não voltou pra dizer o que
+      deu. Não é erro do sistema — é o buraco do processo, e por isso aparece em vez de sumir.</p>`
+
+  alvo.querySelectorAll('[data-rel-dias]').forEach(b => {
+    b.onclick = () => { ORIG_REL_DIAS = Number(b.dataset.relDias); relatorioOriginacao(alvo) }
+  })
+
+  const btnCsv = alvo.querySelector('#rel-csv')
+  if (btnCsv) btnCsv.onclick = () => exportarCsv(`originacao_${de}_a_${ate}.csv`,
+    ['Pessoa', 'Ligações', 'Pessoas diferentes', 'Falou', 'Taxa %', 'Não atendeu', 'Caixa postal',
+     'Número errado', 'Sem relato', 'Pro Eduardo', 'Pra gestão', 'Pro consultor', 'Reuniões', 'Retornos'],
+    pessoas.map(p => [p.nome, p.ligacoes, p.leads_tocados, p.atendeu, pct(p.atendeu, p.ligacoes),
+      p.nao_atendeu, p.caixa_postal, p.numero_errado, p.sem_relato, p.pro_eduardo, p.pra_gestao,
+      p.pro_consultor, p.reunioes, p.retornos]))
+}
+
+// ---------------------------------------------------------------
 // Enviar pra gestão — o fim da originação para quem virou reunião.
 //
 // Por que existe: "Entregue" sempre foi só rótulo. Quem qualificava
@@ -20671,7 +20802,14 @@ async function crmOriginacao (alvo, editavel, gerencia) {
   // Continuam sendo filtro — clicou, a lista embaixo obedece. A diferença é
   // que agora eles já contam como está a fila antes de qualquer clique.
   // [chave, ícone, rótulo, quantos (null = só ícone), dica, acender?]
-  const nunca = todos.filter(i => !i.ultima_ligacao).length
+  // Os três estados de contato PARTICIONAM a fila: somados, dão o total.
+  // Antes havia só "Nunca ligados", e os 35 leads que já tinham sido
+  // tentados sem sucesso não apareciam em cartão nenhum — eram a maior
+  // parte da fila e ficavam invisíveis.
+  // 'tentativas' e 'atendidas' vêm contadas da própria RPC.
+  const nunca = todos.filter(i => !Number(i.tentativas)).length
+  const tentouSemFalar = todos.filter(i => Number(i.tentativas) > 0 && !Number(i.atendidas)).length
+  const jaFalou = todos.filter(i => Number(i.atendidas) > 0).length
   // "Fora da fila" (os arquivados) não mora mais aqui. A originação é a
   // fila de trabalho: o que entra vem de lista, de cadastro novo ou da
   // gestão; o que sai, sai pelas colunas — Descartado, Na gestão, Eduardo.
@@ -20680,20 +20818,19 @@ async function crmOriginacao (alvo, editavel, gerencia) {
   // busca. Nada se perdeu, só deixou de ocupar a tela de quem liga.
   const filtros = [
       ['todos', '👥', 'Na fila', todos.length, 'tudo que está na originação agora'],
-      ['nunca', '🆕', 'Nunca ligados', nunca, 'ninguém discou pra essas pessoas ainda', nunca > 0],
-      ['esperando', '⏳', 'Esperando ligação', todos.filter(i => i.contato_situacao === 'aguardando_ligacao').length,
-        'o robô está segurando até alguém ligar'],
-      ['agendados', '📅', 'Retorno marcado', todos.filter(i => i.proximo_compromisso).length,
-        'tem compromisso marcado pra frente'],
+      ['nunca', '🆕', 'Ninguém ligou ainda', nunca, 'nenhuma tentativa registrada', nunca > 0],
+      ['tentou', '📵', 'Tentou, não falou', tentouSemFalar,
+        'ligou uma ou mais vezes e não conseguiu falar', tentouSemFalar > 0],
+      ['falou', '💬', 'Já falou', jaFalou, 'alguém conversou com essa pessoa'],
       ['hoje', '🔔', 'Retorno hoje', todos.filter(i => (i.proximo_compromisso || '').slice(0, 10) === hojeIso).length,
         'o retorno marcado cai hoje']
     ]
   const lista = todos.filter(i =>
-    ORIG_FILTRO === 'esperando' ? i.contato_situacao === 'aguardando_ligacao'
-      : ORIG_FILTRO === 'nunca' ? !i.ultima_ligacao
-      : ORIG_FILTRO === 'agendados' ? !!i.proximo_compromisso
-        : ORIG_FILTRO === 'hoje' ? (i.proximo_compromisso || '').slice(0, 10) === hojeIso
-          : true)
+    ORIG_FILTRO === 'nunca' ? !Number(i.tentativas)
+      : ORIG_FILTRO === 'tentou' ? (Number(i.tentativas) > 0 && !Number(i.atendidas))
+        : ORIG_FILTRO === 'falou' ? Number(i.atendidas) > 0
+          : ORIG_FILTRO === 'hoje' ? (i.proximo_compromisso || '').slice(0, 10) === hojeIso
+            : true)
 
   // quem pode apagar de vez é quem pode apagar lead no banco; tirar da
   // fila é reversível, então basta poder editar
@@ -20849,8 +20986,11 @@ async function crmOriginacao (alvo, editavel, gerencia) {
         📞 Acompanhamento</button>
       <button type="button" class="chip-filtro ${ORIG_VISTA === 'quadro' ? 'ativo' : ''}" data-vista="quadro">
         📋 Quadro</button>
+      <button type="button" class="chip-filtro ${ORIG_VISTA === 'relatorio' ? 'ativo' : ''}" data-vista="relatorio">
+        📊 Relatório</button>
       <span class="texto-dim2" style="font-size:11px;margin-left:4px;">
-        ${ORIG_VISTA === 'fila' ? 'quem contatar e o que já rolou' : 'onde está cada um'}</span>
+        ${ORIG_VISTA === 'fila' ? 'quem contatar e o que já rolou'
+          : ORIG_VISTA === 'quadro' ? 'onde está cada um' : 'o que foi feito no período'}</span>
       ${editavel ? `<button type="button" class="btn mini" id="org-novo" style="margin-left:auto;"
         title="cadastrar um lead novo direto na originação">+ Novo</button>` : ''}
     </div>`}
@@ -20865,10 +21005,12 @@ async function crmOriginacao (alvo, editavel, gerencia) {
         style="color:var(--critico-text);border-color:var(--critico-text);">🗑 Excluir de vez</button>` : ''}
     </div>` : ''}
 
-    <div id="org-lista">${ORIG_VISTA === 'quadro'
-      ? quadroOriginacaoHtml(todos.filter(i => !i.arquivado))
-      : (lista.length ? lista.map(cartao).join('')
-        : `<p class="vazio" style="padding:26px 0;">Nada nesse filtro.</p>`)}</div>
+    <div id="org-lista">${ORIG_VISTA === 'relatorio'
+      ? `<p class="texto-dim2">carregando o relatório...</p>`
+      : ORIG_VISTA === 'quadro'
+        ? quadroOriginacaoHtml(todos.filter(i => !i.arquivado))
+        : (lista.length ? lista.map(cartao).join('')
+          : `<p class="vazio" style="padding:26px 0;">Nada nesse filtro.</p>`)}</div>
 
     ${todos.length >= 120 ? `<p class="texto-dim2" style="font-size:11px;">
       Mostrando 120 de ${d.total}${ORIG_BUSCA ? ' que deram com a busca' : ' na fila'}.
@@ -21033,6 +21175,8 @@ async function crmOriginacao (alvo, editavel, gerencia) {
   const btnNovo = alvo.querySelector('#org-novo')
   if (btnNovo) btnNovo.onclick = () => formLead(null, editavel, gerencia, recarregar)
 
+  if (ORIG_VISTA === 'relatorio') relatorioOriginacao(alvo.querySelector('#org-lista'))
+
   if (ORIG_VISTA === 'quadro') {
     estilosQuadroUmaVez()
     ligarQuadroOriginacao(editavel, recarregar, async id => {
@@ -21099,6 +21243,15 @@ function formResultadoLigacao (card, item, cat, recarregar) {
           <select class="rl-etapa"><option value="">deixar como está</option>
             ${ETAPAS_LEAD.map(e => `<option value="${e}" ${e === item.etapa ? 'selected' : ''}>${ROTULO_ETAPA_LEAD[e]}</option>`).join('')}</select></div>
         <div class="campo"><label>Voltar a falar em</label><input type="date" class="rl-data"></div>
+        ${/* Retorno e reunião não são a mesma coisa: retorno é a próxima
+              tentativa, reunião é o resultado que a originação persegue.
+              Enquanto os dois eram a mesma linha, o relatório contava
+              "10 reuniões" onde havia 8 retornos. */ ''}
+        <div class="campo"><label>Que compromisso é esse</label>
+          <select class="rl-tipo" data-sem-busca>
+            <option value="retorno">Retorno — falar de novo com ele</option>
+            <option value="reuniao">Reunião — com o consultor</option>
+          </select></div>
         <div class="campo"><label>O que ficou combinado</label>
           <input class="rl-titulo" placeholder="ex: mandar proposta, falar com o sócio"></div>
       </div>
@@ -21146,7 +21299,8 @@ function formResultadoLigacao (card, item, cat, recarregar) {
       p_etapa: cx.querySelector('.rl-etapa').value || null,
       p_proximo_em: dataRetorno ? new Date(dataRetorno + 'T09:00:00').toISOString() : null,
       p_proximo_titulo: cx.querySelector('.rl-titulo').value.trim() || null,
-      p_ligacao_id: item.ligacao_aberta_id || null
+      p_ligacao_id: item.ligacao_aberta_id || null,
+      p_proximo_tipo: cx.querySelector('.rl-tipo').value
     })
     if (error) { alert(error.message); btn.disabled = false; btn.textContent = 'Salvar'; return }
 
@@ -21580,9 +21734,14 @@ function formLead (l, editavel, gerencia, aoFechar) {
       <div id="ld-agenda-lista" style="margin-bottom:8px;"><p class="texto-dim2" style="font-size:12px;">carregando agenda...</p></div>
       ${l.bloqueio_lgpd ? `<p class="texto-dim2" style="font-size:12px;color:var(--critico-text);">
           🚫 Contato bloqueado por LGPD — não é possível agendar novo compromisso com ele.</p>`
-        : (editavel ? `<div class="form-grade" style="grid-template-columns:1fr 1fr 1.4fr auto;align-items:end;">
+        : (editavel ? `<div class="form-grade" style="align-items:end;">
         <div class="campo"><label>Data</label><input id="ag-data" type="date"></div>
         <div class="campo"><label>Hora</label><input id="ag-hora" type="time" value="09:00"></div>
+        <div class="campo"><label>Tipo</label>
+          <select id="ag-tipo" data-sem-busca>
+            <option value="retorno">Retorno</option>
+            <option value="reuniao">Reunião</option>
+          </select></div>
         <div class="campo"><label>Título / observação</label><input id="ag-titulo" placeholder="ex: ligar, levar proposta..."></div>
         <button class="btn-secundario mini" id="ag-adicionar" type="button" style="height:38px;">Adicionar</button>
       </div>` : '')}` : ''}
