@@ -2682,6 +2682,9 @@ function ligarChecagemPeriodicaNotificacoes () {
 // apontar; hoje só existe 'solicitacao_interna', mas é só acrescentar
 // uma linha nova quando outro módulo passar a gerar notificação.
 const ABRIR_ENTIDADE_NOTIFICACAO = {
+  // termo de compensação: pro funcionário, leva pro RH dele, que é onde
+  // ele assina. Pro DP que emitiu, o aviso é só "voltou assinado".
+  ponto_compensacao: async () => { irPara('desempenho') },
   // pedido de contratação: leva pro RH já na aba certa. Pro RH cai na fila
   // de decisão; pra quem pediu, na lista dos pedidos dele.
   contratacao_pedido: async () => { RECR_SUBABA = 'pedidos'; irPara('desempenho') },
@@ -2921,7 +2924,7 @@ async function abrirNotificacoes () {
   }
 }
 
-const ICONE_NOTIF = { solicitacao_interna: '📋', solicitacao_compra: '🛒', sdr_lead: '📅', lead: '🌱', contratacao_pedido: '🧑‍🏭' }
+const ICONE_NOTIF = { solicitacao_interna: '📋', solicitacao_compra: '🛒', sdr_lead: '📅', lead: '🌱', contratacao_pedido: '🧑‍🏭', ponto_compensacao: '📝' }
 
 const esperaConfirmacao = n => !!(n.exige_confirmacao && !n.confirmada_em)
 
@@ -47597,6 +47600,12 @@ async function desempMeu (alvo) {
       .eq('pessoa_id', PERFIL.pessoaId)
   ])
 
+  // termos de compensação esperando a assinatura dele. Vêm antes de tudo
+  // na tela: é a única coisa aqui que trava alguém do outro lado.
+  const { data: termosComp } = await db.from('ponto_compensacao').select(SEL_COMP)
+    .eq('pessoa_id', PERFIL.pessoaId).order('criado_em', { ascending: false }).limit(30)
+  const compPendentes = (termosComp || []).filter(t => t.status === 'AGUARDANDO_ASSINATURA')
+
   const media = arr => arr.length ? (arr.reduce((s, n) => s + n, 0) / arr.length).toFixed(1) : '—'
   const notasConduta = (conduta || []).flatMap(c => [c.nota_prazos, c.nota_demandas, c.nota_postura].filter(n => n != null))
   const totalBonus = (bonus || []).reduce((s, b) => s + Number(b.pontos || 0), 0)
@@ -47635,6 +47644,31 @@ async function desempMeu (alvo) {
           <span class="v" style="color:${cor};">${v}</span>
           <span class="r">${r}</span></div>`).join('')}
     </div>
+
+    ${compPendentes.length ? `
+      ${secaoMeuRh("📝", "Termos esperando sua assinatura", compPendentes.length)}
+      <div style="display:grid;gap:10px;margin-bottom:18px;">
+        ${compPendentes.map(t => `<div class="panel" style="padding:14px 16px;border-left:4px solid var(--warn-text);">
+          <b style="font-size:14px;">Compensação de ${fmtHoras(t.horas)}</b>
+          <div class="texto-dim2" style="font-size:12px;margin-top:3px;">
+            hora extra de ${fmtData(t.data_extra)}
+            ${t.data_folga ? ` · folga prevista ${fmtData(t.data_folga)}` : ' · folga a combinar'}
+            · emitido por ${esc(t.emissor?.nome ?? 'DP')}</div>
+          ${t.observacao ? `<p class="texto-dim" style="font-size:12.5px;line-height:1.55;margin:6px 0 0;max-width:70ch;">
+            ${esc(t.observacao)}</p>` : ''}
+          <p class="texto-dim2" style="font-size:12px;line-height:1.6;margin:10px 0 6px;max-width:75ch;">
+            Ao assinar, você declara que fez essas horas e que prefere <b>compensar em folga</b>
+            em vez de receber. Leia o documento inteiro antes — o botão abaixo abre ele.</p>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;">
+            <button class="btn-secundario mini" data-ver-comp="${esc(t.id)}">Ler o termo</button>
+          </div>
+          <label class="texto-dim2" style="font-size:11px;">Assine aqui, com o dedo ou o mouse</label>
+          <div data-ass-comp="${esc(t.id)}" style="max-width:420px;"></div>
+          <div class="acoes" style="margin-top:8px;">
+            <button class="btn mini" data-assinar-comp="${esc(t.id)}">Assinar termo</button>
+          </div>
+        </div>`).join('')}
+      </div>` : ''}
 
     ${secaoMeuRh("🎓", "Minhas trilhas de treinamento", listaAtribs.length)}
     <div class="mrh-cartoes" style="margin-bottom:18px;">
@@ -47711,6 +47745,34 @@ async function desempMeu (alvo) {
 
   alvo.querySelectorAll('[data-abrir-minha-trilha]').forEach(card => {
     card.onclick = () => abrirMinhaTrilha(listaAtribs.find(a => a.id === card.dataset.abrirMinhaTrilha), () => desempMeu(alvo))
+  })
+
+  // um canvas de assinatura por termo pendente. montarAssinatura é o mesmo
+  // componente do termo de veículo e do de EPI — assinar com o dedo já
+  // funciona em celular por causa do touch-action:none dele.
+  const assinaturas = {}
+  alvo.querySelectorAll('[data-ass-comp]').forEach(cx => {
+    assinaturas[cx.dataset.assComp] = montarAssinatura(cx)
+  })
+
+  alvo.querySelectorAll('[data-ver-comp]').forEach(b => {
+    b.onclick = () => pdfTermoCompensacao((termosComp || []).find(t => t.id === b.dataset.verComp))
+  })
+
+  alvo.querySelectorAll('[data-assinar-comp]').forEach(b => {
+    b.onclick = async () => {
+      const id = b.dataset.assinarComp
+      const ass = assinaturas[id]
+      if (!ass || !ass.temAssinatura()) { alert('Faça sua assinatura no quadro antes de confirmar.'); return }
+      b.disabled = true; b.textContent = 'assinando...'
+      const { data: r, error } = await db.rpc('ponto_compensacao_assinar',
+        { p_id: id, p_assinatura: ass.pegarImagem() })
+      if (error || !r?.ok) {
+        b.disabled = false; b.textContent = 'Assinar termo'
+        alert(error?.message || r?.erro || 'Não deu certo.'); return
+      }
+      desempMeu(alvo)
+    }
   })
 
   // o cartão do próprio perfil de comportamento entra no topo,
@@ -51366,6 +51428,7 @@ async function dpPonto (alvo, editavel) {
     <div class="subabas" style="margin-bottom:14px;">
       <button data-pt="inconsistencias" class="${aba === 'inconsistencias' ? 'ativo' : ''}">⏱️ Inconsistências</button>
       <button data-pt="faltas" class="${aba === 'faltas' ? 'ativo' : ''}">📄 Faltas</button>
+      <button data-pt="termos" class="${aba === 'termos' ? 'ativo' : ''}">📝 Termos</button>
     </div>
     <div id="ponto-corpo"></div>`
 
@@ -51411,7 +51474,7 @@ async function dpPonto (alvo, editavel) {
     corpo.querySelectorAll('[data-excluir-inc]').forEach(b => {
       b.onclick = () => excluirPontoInconsistencia(b.dataset.excluirInc, recarregar)
     })
-  } else {
+  } else if (aba === 'faltas') {
     corpo.innerHTML = `
       ${editavel ? `<div class="acoes" style="margin-bottom:16px;">
         <button class="btn" id="pt-nova-falta">${icDp('novo')}Registrar falta</button></div>` : ''}
@@ -51444,6 +51507,8 @@ async function dpPonto (alvo, editavel) {
     corpo.querySelectorAll('[data-pdf-falta]').forEach(b => {
       b.onclick = () => pdfPontoFalta(listaF.find(f => f.id === b.dataset.pdfFalta))
     })
+  } else {
+    pontoTermosCompensacao(corpo, editavel, recarregar)
   }
 
   // veio de uma notificação clicada: já abre o registro
@@ -51816,6 +51881,239 @@ function formPontoFalta (reg, aoSalvar) {
 }
 
 // ----- o documento que o funcionário assina -----
+// ---------------------------------------------------------------
+// Termo de compensação de horas.
+//
+// O caso real: o funcionário faz hora extra e não quer receber — quer
+// folgar depois. Isso sempre foi combinado no verbal, e some. Sem
+// registro de quanto foi, quando vai ser compensado, nem o aceite dele.
+//
+// Um termo por evento. Quem tem login assina na tela, no próprio RH;
+// quem não tem, o DP imprime e colhe no papel. O PDF sai igual nos dois
+// casos, porque é o mesmo documento — muda só onde a caneta encosta.
+// ---------------------------------------------------------------
+const ROTULO_STATUS_COMP = {
+  AGUARDANDO_ASSINATURA: 'Aguardando assinatura', ASSINADO: 'Assinado', CANCELADO: 'Cancelado'
+}
+const SEL_COMP = `id,data_extra,horas,data_folga,observacao,status,tem_login,
+  assinado_em,via_papel,criado_em,pessoa_id,
+  pessoa:pessoa_id ( nome, cargo ), emissor:emitido_por ( nome )`
+
+const fmtHoras = h => {
+  const n = Number(h || 0)
+  const inteiro = Math.floor(n)
+  const min = Math.round((n - inteiro) * 60)
+  return min ? `${inteiro}h${String(min).padStart(2, '0')}` : `${inteiro}h`
+}
+
+async function pontoTermosCompensacao (corpo, editavel, recarregar) {
+  corpo.innerHTML = `<p class="texto-dim2">carregando os termos...</p>`
+  const { data, error } = await db.from('ponto_compensacao').select(SEL_COMP)
+    .order('criado_em', { ascending: false }).limit(300)
+  if (faltaMigracao(error) || error) { corpo.innerHTML = `<p class="vazio">${esc(error?.message ?? '')}</p>`; return }
+  const lista = data || []
+  const pendentes = lista.filter(t => t.status === 'AGUARDANDO_ASSINATURA')
+
+  corpo.innerHTML = `
+    ${editavel ? `<div class="acoes" style="margin-bottom:16px;">
+      <button class="btn" id="pt-novo-termo">${icDp('novo')}Novo termo de compensação</button></div>` : ''}
+
+    <p class="texto-dim2" style="font-size:12px;line-height:1.6;margin:-4px 0 14px;max-width:80ch;">
+      Para quando o funcionário faz hora extra e prefere folgar em vez de receber. Quem tem acesso ao
+      sistema recebe o termo pra assinar no RH dele; quem não tem, o DP imprime e colhe a assinatura
+      no papel — o documento é o mesmo.</p>
+
+    ${pendentes.length ? `<div class="panel" style="padding:12px 16px;margin-bottom:14px;
+      border-left:4px solid var(--warn-text);">
+      <b style="font-size:13px;">${pendentes.length} termo(s) esperando assinatura.</b>
+      <span class="texto-dim2" style="font-size:12px;">
+        ${pendentes.filter(t => !t.tem_login).length} de quem não tem login — esses só saem no papel.</span>
+    </div>` : ''}
+
+    <div style="display:grid;gap:10px;">
+      ${lista.map(t => `<div class="panel" style="padding:14px 16px;
+        border-left:4px solid ${t.status === 'ASSINADO' ? 'var(--good-text)'
+          : t.status === 'CANCELADO' ? 'var(--dim2)' : 'var(--warn-text)'};">
+        <div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+          <div style="flex:1;min-width:150px;">
+            <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;">
+              <b style="font-size:14px;">${esc(t.pessoa?.nome ?? '—')}</b>
+              <span class="chip" style="font-size:10.5px;">${esc(ROTULO_STATUS_COMP[t.status] || t.status)}</span>
+              ${!t.tem_login && t.status === 'AGUARDANDO_ASSINATURA'
+                ? `<span class="texto-dim2" style="font-size:10.5px;">sem login — assina no papel</span>` : ''}
+            </div>
+            <div class="texto-dim2" style="font-size:11.5px;margin-top:3px;">
+              ${esc(t.pessoa?.cargo ?? '')}${t.pessoa?.cargo ? ' · ' : ''}
+              <b style="color:var(--txt);">${fmtHoras(t.horas)}</b> feitas em ${fmtData(t.data_extra)}
+              ${t.data_folga ? ` · folga prevista ${fmtData(t.data_folga)}` : ' · folga a combinar'}
+            </div>
+            ${t.observacao ? `<p class="texto-dim" style="font-size:12.5px;line-height:1.55;margin:6px 0 0;max-width:70ch;">
+              ${esc(t.observacao)}</p>` : ''}
+            <div class="texto-dim2" style="font-size:11px;margin-top:6px;">
+              emitido por ${esc(t.emissor?.nome ?? '—')} em ${fmtData(t.criado_em?.slice(0, 10))}
+              ${t.assinado_em ? ` · assinado em ${fmtQuando(t.assinado_em)}` : ''}
+              ${t.via_papel ? ' · assinatura no papel' : ''}
+            </div>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <button class="btn-secundario mini" data-pdf-comp="${esc(t.id)}">Ver / imprimir</button>
+            ${editavel && t.status === 'AGUARDANDO_ASSINATURA' ? `
+              <button class="btn-secundario mini" data-papel-comp="${esc(t.id)}"
+                title="marcar que a assinatura foi colhida no papel">Assinado no papel</button>` : ''}
+            ${editavel ? `<button class="lnk-crud" data-apagar-comp="${esc(t.id)}" title="excluir">🗑</button>` : ''}
+          </div>
+        </div>
+      </div>`).join('') || `<p class="vazio">Nenhum termo emitido ainda.</p>`}
+    </div>`
+
+  const btnNovo = corpo.querySelector('#pt-novo-termo')
+  if (btnNovo) btnNovo.onclick = () => formTermoCompensacao(recarregar)
+
+  corpo.querySelectorAll('[data-pdf-comp]').forEach(b => {
+    b.onclick = () => pdfTermoCompensacao(lista.find(t => t.id === b.dataset.pdfComp))
+  })
+
+  corpo.querySelectorAll('[data-papel-comp]').forEach(b => {
+    b.onclick = async () => {
+      if (!confirm('Confirmar que a assinatura foi colhida no papel?\n\nO termo sai da fila de pendentes e o PDF assinado fica com o DP.')) return
+      const { error } = await db.from('ponto_compensacao')
+        .update({ status: 'ASSINADO', via_papel: true, assinado_em: new Date().toISOString() })
+        .eq('id', b.dataset.papelComp)
+      if (error) { alert(error.message); return }
+      recarregar()
+    }
+  })
+
+  corpo.querySelectorAll('[data-apagar-comp]').forEach(b => {
+    b.onclick = () => {
+      const t = lista.find(x => x.id === b.dataset.apagarComp)
+      excluirComJustificativa({
+        tabela: 'ponto_compensacao', id: t.id, modulo: 'DP',
+        titulo: 'Excluir termo de compensação',
+        descricao: `${t.pessoa?.nome ?? ''} — ${fmtHoras(t.horas)} de ${fmtData(t.data_extra)}`,
+        aoExcluir: recarregar
+      })
+    }
+  })
+}
+
+function formTermoCompensacao (aoFechar) {
+  const pessoas = window.__DP_PESSOAS || []
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:560px;">
+    <h3>Novo termo de compensação</h3>
+    <p class="texto-dim2" style="font-size:12px;margin:-6px 0 14px;line-height:1.55;">
+      O funcionário fez hora extra e vai folgar em vez de receber. O termo registra quanto foi,
+      quando foi, e quando a folga acontece.</p>
+    <div class="form-grade">
+      <div class="campo"><label>Funcionário *</label>
+        <select id="tc-pessoa"><option value="">selecione...</option>
+          ${pessoas.map(p => `<option value="${esc(p.id)}">${esc(p.nome)}</option>`).join('')}</select></div>
+      <div class="campo"><label>Dia da hora extra *</label>
+        <input type="date" id="tc-data" value="${hojeISO()}"></div>
+      <div class="campo"><label>Quantas horas *</label>
+        <input type="number" id="tc-horas" step="0.5" min="0.5" max="24" value="2"></div>
+      <div class="campo"><label>Folga prevista</label>
+        <input type="date" id="tc-folga"></div>
+    </div>
+    <div class="campo" style="margin-top:12px;"><label>Observação</label>
+      <textarea id="tc-obs" rows="2" placeholder="ex: virada de turno no carregamento do dia 12; folga combinada com o encarregado."></textarea></div>
+    <div class="recado oculto" id="tc-erro"></div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="tc-emitir">Emitir termo</button>
+      <button class="btn-secundario" id="tc-cancelar">Cancelar</button>
+    </div>
+  </div>`
+  document.body.appendChild(fundo)
+  const q = sel => fundo.querySelector(sel)
+  const fechar = () => fundo.remove()
+  q('#tc-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  q('#tc-emitir').onclick = async () => {
+    const btn = q('#tc-emitir'); const erro = q('#tc-erro')
+    const avisa = t => { erro.textContent = t; erro.classList.remove('oculto') }
+    const pessoa = q('#tc-pessoa').value
+    const horas = Number(q('#tc-horas').value)
+    const data = q('#tc-data').value
+    const folga = q('#tc-folga').value
+    if (!pessoa) return avisa('Escolha o funcionário.')
+    if (!data) return avisa('Diga o dia em que a hora extra foi feita.')
+    if (!horas || horas <= 0) return avisa('Diga quantas horas foram.')
+    if (folga && folga < data) return avisa('A folga não pode ser antes do dia da hora extra.')
+
+    btn.disabled = true; btn.textContent = 'emitindo...'
+    erro.classList.add('oculto')
+    const { data: r, error } = await db.rpc('ponto_compensacao_emitir', {
+      p_pessoa_id: pessoa, p_data_extra: data, p_horas: horas,
+      p_data_folga: folga || null, p_observacao: q('#tc-obs').value.trim() || null
+    })
+    if (error || !r?.ok) {
+      btn.disabled = false; btn.textContent = 'Emitir termo'
+      avisa(error?.message || r?.erro || 'Não deu certo.'); return
+    }
+    fechar()
+    if (!r.tem_login) {
+      alert('Termo emitido.\n\nEssa pessoa não tem acesso ao sistema, então não dá pra assinar na tela — imprima o PDF e colha a assinatura no papel.')
+    }
+    aoFechar()
+  }
+}
+
+function pdfTermoCompensacao (t) {
+  if (!t) return
+  const corpo = `
+    <div class="grade-doc" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;">
+      ${docLinha('Funcionário', t.pessoa?.nome ?? '—')}${docLinha('Cargo', t.pessoa?.cargo ?? '—')}
+      ${docLinha('Dia da hora extra', fmtData(t.data_extra))}${docLinha('Horas realizadas', fmtHoras(t.horas))}
+      ${docLinha('Folga prevista', t.data_folga ? fmtData(t.data_folga) : 'a combinar')}
+      ${docLinha('Emitido em', fmtData((t.criado_em || '').slice(0, 10)))}
+    </div>
+
+    <p style="font-size:13.5px;line-height:1.8;text-align:justify;margin:0 0 14px;">
+      Declaro, para os devidos fins, que no dia <b>${fmtData(t.data_extra)}</b> prestei
+      <b>${fmtHoras(t.horas)}</b> de trabalho em jornada extraordinária, e que, de comum acordo com a
+      empresa, <b>opto por compensar esse período em descanso</b>, e não pelo pagamento em espécie
+      das horas correspondentes.
+      ${t.data_folga
+        ? `A compensação fica prevista para o dia <b>${fmtData(t.data_folga)}</b>.`
+        : `A data da compensação será definida entre as partes.`}
+    </p>
+
+    ${t.observacao ? `<div class="caixa-texto" style="margin-bottom:14px;">
+      <div class="rot">Observação</div><p>${esc(t.observacao)}</p></div>` : ''}
+
+    <p style="font-size:11.5px;color:#5b6b60;margin:0 0 4px;">
+      Declaro ter recebido a via deste documento e estar ciente do seu conteúdo.</p>
+
+    <div class="assinaturas" style="grid-template-columns:1fr 1fr;gap:50px;margin-top:6px;">
+      <div>
+        ${t.assinatura && !t.via_papel
+          ? `<img src="${esc(t.assinatura)}" alt="" style="display:block;height:52px;margin:0 auto -6px;">`
+          : ''}
+        <div class="risco"></div>Funcionário<br><b>${esc(t.pessoa?.nome ?? '')}</b>
+        ${t.assinado_em ? `<br><span style="font-size:10px;color:#5b6b60;">
+          assinado em ${fmtQuando(t.assinado_em) || ''}${t.via_papel ? ' (papel)' : ' (no sistema)'}</span>` : ''}
+      </div>
+      <div><div class="risco"></div>Responsável pela emissão<br><b>${esc(t.emissor?.nome ?? '')}</b></div>
+    </div>`
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = documentoPDF({
+    titulo: 'TERMO DE COMPENSAÇÃO DE HORAS',
+    subtitulo: t.pessoa?.nome ?? '',
+    corpo,
+    acoes: `<button class="btn" id="tcp-imprimir">${icDp('imprimir')}Baixar / imprimir</button>
+      <button class="btn-secundario" id="tcp-fechar">${icDp('fechar')}Fechar</button>`
+  })
+  document.body.appendChild(fundo)
+  fundo.querySelector('#tcp-fechar').onclick = () => fundo.remove()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+  fundo.querySelector('#tcp-imprimir').onclick = () => window.print()
+}
+
 function pdfPontoFalta (f) {
   if (!f) return
   const ehAdvertencia = f.tipo_documento === 'ADVERTENCIA'
