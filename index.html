@@ -35202,8 +35202,15 @@ async function combPainel (alvo, editavel) {
     ...COMB_CACHE.equipamentos.map(e => ({ valor: 'e:' + e.id, rotulo: `${e.tag}${e.descricao ? ' — ' + e.descricao : ''}` }))
   ]
 
-  alvo.innerHTML = `
-    <div class="panel" style="padding:18px;margin-bottom:16px;">
+  // O painel de Filtros mora dentro da seção "Controle financeiro", que é
+  // redesenhada a cada consulta. Por isso ele é montado UMA vez aqui, solto
+  // do documento, e só muda de LUGAR a cada render (appendChild move o nó).
+  // Mover preserva o que a pessoa digitou e os handlers já ligados; recriar
+  // o HTML perderia os dois.
+  const filtros = document.createElement('div')
+  filtros.className = 'panel'
+  filtros.style.cssText = 'padding:18px;'
+  filtros.innerHTML = `
       <div class="cabeca-secao" style="margin-bottom:12px;">
         <h3 style="font-family:var(--serif);font-size:17px;">Filtros</h3>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -35211,7 +35218,7 @@ async function combPainel (alvo, editavel) {
           <button class="btn-secundario mini" id="pn-precos">Configurar preços</button>` : ''}
         </div>
       </div>
-      <div class="form-grade">
+      <div class="form-grade" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));">
         <div class="campo"><label>Data inicial</label><input type="date" id="pn-de" value="${inicioMes}"></div>
         <div class="campo"><label>Data final</label><input type="date" id="pn-ate" value="${hoje}"></div>
         <div class="campo"><label>Veículo / equipamento</label>
@@ -35222,24 +35229,27 @@ async function combPainel (alvo, editavel) {
       <div class="acoes" style="margin-top:12px;">
         <button class="btn-secundario" id="pn-limpar">Limpar</button>
         <button class="btn" id="pn-aplicar">Aplicar filtros</button>
-      </div>
-    </div>
-    <div id="pn-conteudo"><p class="texto-dim2">carregando...</p></div>`
+      </div>`
+
+  // atalho: os campos do filtro vivem dentro de `filtros`, não no documento
+  const fq = sel => filtros.querySelector(sel)
+
+  alvo.innerHTML = `<div id="pn-conteudo"><p class="texto-dim2">carregando...</p></div>`
 
   if (editavel) {
-    $('#pn-lancar').onclick = () => abrirLancamentoRapido(carregar)
-    $('#pn-precos').onclick = () => abrirConfigurarPrecos(carregar)
+    fq('#pn-lancar').onclick = () => abrirLancamentoRapido(carregar)
+    fq('#pn-precos').onclick = () => abrirConfigurarPrecos(carregar)
   }
-  $('#pn-limpar').onclick = () => {
-    $('#pn-de').value = inicioMes; $('#pn-ate').value = hoje
-    $('#pn-alvo').value = ''; $('#pn-tipo').value = ''
+  fq('#pn-limpar').onclick = () => {
+    fq('#pn-de').value = inicioMes; fq('#pn-ate').value = hoje
+    fq('#pn-alvo').value = ''; fq('#pn-tipo').value = ''
     carregar()
   }
-  $('#pn-aplicar').onclick = carregar
+  fq('#pn-aplicar').onclick = carregar
 
   async function carregar () {
-    const de = $('#pn-de').value, ate = $('#pn-ate').value
-    const alvoFiltro = $('#pn-alvo').value, tipoFiltro = $('#pn-tipo').value
+    const de = fq('#pn-de').value, ate = fq('#pn-ate').value
+    const alvoFiltro = fq('#pn-alvo').value, tipoFiltro = fq('#pn-tipo').value
 
     let q = db.from('abastecimento').select(`
       id, tipo, litros, data_abastecimento, destino,
@@ -35256,8 +35266,15 @@ async function combPainel (alvo, editavel) {
       db.from('entrada_combustivel').select('tipo,litros'),
       db.from('abastecimento').select('tipo,litros')
     ])
-    if (faltaMigracao(error)) { $('#pn-conteudo').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-    if (error) { $('#pn-conteudo').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+    // em erro a tela some, mas o filtro precisa continuar de pé — senão a
+    // pessoa fica sem como mudar o período que causou o erro
+    const erroNaTela = msg => {
+      $('#pn-conteudo').innerHTML = `<p class="vazio">${esc(msg)}</p>
+        <div id="pn-filtros-slot" style="margin-top:16px;max-width:560px;"></div>`
+      $('#pn-filtros-slot').appendChild(filtros)
+    }
+    if (faltaMigracao(error)) { erroNaTela(error.message); return }
+    if (error) { erroNaTela(error.message); return }
 
     const lista = periodo || []
     const precoDe = t => COMB_CACHE.precos[t] ?? 0
@@ -35375,12 +35392,16 @@ async function combPainel (alvo, editavel) {
         <h3 style="font-family:var(--serif);font-size:16px;">Controle financeiro</h3>
         <span class="texto-dim2" style="font-size:11px;">preços usados para estimar o valor gasto</span>
       </div>
-      <div class="resumo-topo" style="margin-bottom:18px;">
-        ${TIPOS_COMBUSTIVEL.map(t => `<div class="bloco">
-          <div class="rot">${esc(ROTULO_COMBUSTIVEL[t])}</div>
-          <div class="val" style="font-size:20px;color:var(--gold, #c8a11a);">R$ ${fmtNum(COMB_CACHE.precos[t] ?? 0, 2)}</div>
-          <div class="nota">preço por litro</div>
-        </div>`).join('')}
+      <div class="grade-painel-comb"
+           style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start;margin-bottom:18px;">
+        <div class="resumo-topo" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:0;">
+          ${TIPOS_COMBUSTIVEL.map(t => `<div class="bloco">
+            <div class="rot">${esc(ROTULO_COMBUSTIVEL[t])}</div>
+            <div class="val" style="font-size:20px;color:var(--gold, #c8a11a);">R$ ${fmtNum(COMB_CACHE.precos[t] ?? 0, 2)}</div>
+            <div class="nota">preço por litro</div>
+          </div>`).join('')}
+        </div>
+        <div id="pn-filtros-slot"></div>
       </div>
 
       <div style="display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-bottom:16px;" class="grade-painel-comb">
@@ -35420,6 +35441,10 @@ async function combPainel (alvo, editavel) {
       </div></div>
       <p class="texto-dim2" style="font-size:12px;margin-top:8px;">
         Mostrando até 1000 lançamentos do período. Para editar ou excluir, use a aba Abastecimentos.</p>`
+
+    // o painel de Filtros volta pro lugar dele (o innerHTML acima desmontou
+    // a árvore antiga, mas o nó em si continua vivo na variável)
+    $('#pn-filtros-slot').appendChild(filtros)
 
     const preencherTabela = () => {
       const termo = $('#pn-busca').value.trim().toLowerCase()
