@@ -18767,16 +18767,41 @@ async function carregarPessoasLead (fundo, l, editavel) {
 // ----- Fazendas / regiões do lead (cliente pode ter mais de uma) -----
 async function carregarFazendasLead (fundo, l, editavel) {
   const alvoLista = fundo.querySelector('#ld-fazendas-lista')
-  const { data, error } = await db.from('lead_fazenda').select('id,fazenda,regiao,area_ha,pivos')
+  const { data, error } = await db.from('lead_fazenda')
+    .select('id,fazenda,regiao,area_ha,pivos,lat,lng,zoom,endereco')
     .eq('lead_id', l.id).order('criado_em', { ascending: true })
   if (error) { alvoLista.innerHTML = `<p class="vazio" style="font-size:12px;">${esc(error.message)}</p>`; return }
 
   const itens = data || []
-  alvoLista.innerHTML = itens.length ? itens.map(f => `
-    <div class="passo" style="align-items:center;">
-      <span style="flex:1;"><b>${esc(f.fazenda)}</b>${f.regiao ? ' — ' + esc(f.regiao) : ''}${f.area_ha != null ? ' · ' + fmtNum(f.area_ha) + ' ha' : ''}${f.pivos != null ? ' · ' + f.pivos + ' pivôs' : ''}</span>
+  // quantos talhões cada fazenda já tem desenhado, e quanto dá a soma —
+  // é o número que conta se o desenho virou informação ou só figura
+  let porFazenda = {}
+  if (itens.length) {
+    const { data: tal } = await db.from('lead_talhao').select('fazenda_id,area_ha')
+      .in('fazenda_id', itens.map(f => f.id))
+    ;(tal || []).forEach(t => {
+      const c = porFazenda[t.fazenda_id] || (porFazenda[t.fazenda_id] = { n: 0, ha: 0 })
+      c.n++; c.ha += Number(t.area_ha || 0)
+    })
+  }
+
+  alvoLista.innerHTML = itens.length ? itens.map(f => {
+    const t = porFazenda[f.id]
+    return `<div class="passo" style="align-items:center;gap:8px;">
+      <span style="flex:1;min-width:0;"><b>${esc(f.fazenda)}</b>${f.regiao ? ' — ' + esc(f.regiao) : ''}${f.area_ha != null ? ' · ' + fmtNum(f.area_ha) + ' ha' : ''}${f.pivos != null ? ' · ' + f.pivos + ' pivôs' : ''}
+        ${f.lat != null ? `<span class="texto-dim2" style="font-size:11px;"> · 📍 no mapa</span>` : ''}
+        ${t ? `<span class="texto-dim2" style="font-size:11px;"> · ${t.n} talhão(ões), ${fmtNum(t.ha)} ha desenhados</span>` : ''}</span>
+      <button type="button" class="btn-secundario mini" data-mapa-fazenda="${f.id}"
+        style="padding:2px 8px;" title="abrir no mapa de satélite">🛰️ Mapa</button>
       ${editavel ? `<button type="button" class="btn-secundario mini" data-excluir-fazenda="${f.id}" style="padding:2px 8px;">✕</button>` : ''}
-    </div>`).join('') : `<p class="texto-dim2" style="font-size:12px;">Nenhuma fazenda cadastrada ainda.</p>`
+    </div>`
+  }).join('') : `<p class="texto-dim2" style="font-size:12px;">Nenhuma fazenda cadastrada ainda.</p>`
+
+  alvoLista.querySelectorAll('[data-mapa-fazenda]').forEach(btn => {
+    btn.onclick = () => abrirMapaFazenda(
+      itens.find(f => f.id === btn.dataset.mapaFazenda), l, editavel,
+      () => carregarFazendasLead(fundo, l, editavel))
+  })
 
   alvoLista.querySelectorAll('[data-excluir-fazenda]').forEach(btn => {
     btn.onclick = async () => {
@@ -18803,6 +18828,440 @@ async function carregarFazendasLead (fundo, l, editavel) {
     fundo.querySelector('#fz-area').value = ''
     fundo.querySelector('#fz-pivos').value = ''
     carregarFazendasLead(fundo, l, editavel)
+  }
+}
+
+// ===============================================================
+// A FAZENDA NO MAPA
+//
+// Até aqui a fazenda era texto: "Santa Rita, oeste da Bahia". Isso não
+// leva o vendedor até a porteira nem diz o tamanho real do talhão.
+//
+// Base de satélite: Esri World Imagery, que não pede chave nem cartão.
+// A biblioteca do mapa (Leaflet) é carregada só quando alguém abre o
+// mapa — num arquivo de 3 MB, não faz sentido todo mundo baixar mapa no
+// login pra usar a tela de ponto.
+// ===============================================================
+let LEAFLET_PROMESSA = null
+function carregarLeaflet () {
+  if (window.L) return Promise.resolve(window.L)
+  if (LEAFLET_PROMESSA) return LEAFLET_PROMESSA
+  LEAFLET_PROMESSA = new Promise((resolve, reject) => {
+    const css = document.createElement('link')
+    css.rel = 'stylesheet'
+    css.href = 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css'
+    document.head.appendChild(css)
+    const js = document.createElement('script')
+    js.src = 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js'
+    js.onload = () => resolve(window.L)
+    js.onerror = () => { LEAFLET_PROMESSA = null; reject(new Error('Não consegui carregar o mapa. Confira a internet.')) }
+    document.head.appendChild(js)
+  })
+  return LEAFLET_PROMESSA
+}
+
+// Área do polígono na superfície da Terra, em hectares. Não dá pra somar
+// como se o mapa fosse plano: em Arraias, 1 grau de longitude vale menos
+// metros que 1 grau de latitude, e o erro cresce com o tamanho do talhão.
+// Fórmula do excesso esférico, a mesma que o Google usa em computeArea.
+function areaHaDoPoligono (pontos) {
+  if (!pontos || pontos.length < 3) return 0
+  const R = 6378137
+  const rad = g => g * Math.PI / 180
+  let soma = 0
+  for (let i = 0; i < pontos.length; i++) {
+    const a = pontos[i]
+    const b = pontos[(i + 1) % pontos.length]
+    soma += rad(b.lng - a.lng) * (2 + Math.sin(rad(a.lat)) + Math.sin(rad(b.lat)))
+  }
+  return Math.abs(soma * R * R / 2) / 10000
+}
+
+// Perímetro em km, que é o número que vira cerca e carreador
+function perimetroKm (pontos) {
+  if (!pontos || pontos.length < 2) return 0
+  const R = 6371
+  const rad = g => g * Math.PI / 180
+  let total = 0
+  for (let i = 0; i < pontos.length; i++) {
+    const a = pontos[i]
+    const b = pontos[(i + 1) % pontos.length]
+    const dLat = rad(b.lat - a.lat)
+    const dLng = rad(b.lng - a.lng)
+    const h = Math.sin(dLat / 2) ** 2 +
+      Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2
+    total += 2 * R * Math.asin(Math.min(1, Math.sqrt(h)))
+  }
+  return total
+}
+
+const CORES_TALHAO = ['#c8a11a', '#4a90d9', '#5fb54a', '#d9534f', '#9b6bd6', '#e07b39', '#2f8f83']
+
+// O produtor costuma passar a localização como coordenada ("-12.9, -46.4"),
+// não como endereço. Aceitar isso na mesma caixa de busca evita mandar a
+// pessoa procurar onde digita cada coisa.
+function lerCoordenada (texto) {
+  const m = String(texto || '').trim()
+    .match(/^(-?\d{1,3}[.,]\d+)\s*[,; ]\s*(-?\d{1,3}[.,]\d+)$/)
+  if (!m) return null
+  const lat = Number(m[1].replace(',', '.'))
+  const lng = Number(m[2].replace(',', '.'))
+  if (!isFinite(lat) || !isFinite(lng)) return null
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null
+  return { lat, lng }
+}
+
+async function abrirMapaFazenda (fazenda, lead, editavel, aoFechar) {
+  if (!fazenda) return
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal modal-largo">
+    <div class="cabeca-secao">
+      <h3>🛰️ ${esc(fazenda.fazenda)}</h3>
+      <span class="texto-dim2" style="font-size:11.5px;">${esc(fazenda.regiao || lead?.municipio || '')}</span>
+    </div>
+    <p class="texto-dim2">carregando o mapa...</p>
+  </div>`
+  document.body.appendChild(fundo)
+  // clicar fora fecha, mas não no meio de um desenho — perder um talhão
+  // pela metade por um clique torto é o tipo de coisa que faz a pessoa
+  // não usar mais a tela
+  let desenhando = false
+  fundo.onclick = e => {
+    if (e.target !== fundo) return
+    if (desenhando && !confirm('Você está no meio de um desenho. Fechar e perder?')) return
+    fundo.remove()
+  }
+
+  let L
+  try { L = await carregarLeaflet() } catch (e) {
+    fundo.querySelector('.modal').innerHTML =
+      `<p class="vazio">${esc(e.message)}</p>
+       <div class="acoes"><button class="btn-secundario" id="mp-fechar">Fechar</button></div>`
+    fundo.querySelector('#mp-fechar').onclick = () => fundo.remove()
+    return
+  }
+
+  const { data: talhoes0 } = await db.from('lead_talhao')
+    .select('id,nome,cultura,area_ha,poligono,cor').eq('fazenda_id', fazenda.id)
+    .order('criado_em')
+  let talhoes = talhoes0 || []
+
+  fundo.querySelector('.modal').innerHTML = `
+    <div class="cabeca-secao">
+      <h3>🛰️ ${esc(fazenda.fazenda)}</h3>
+      <span class="texto-dim2" style="font-size:11.5px;">${esc(fazenda.regiao || lead?.municipio || '')}</span>
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">
+      <input id="mp-busca" style="flex:1;min-width:180px;"
+        placeholder="nome da fazenda, cidade, ou cole a coordenada (-12.93, -46.41)">
+      <button type="button" class="btn-secundario mini" id="mp-buscar">Buscar</button>
+    </div>
+    <div id="mp-achados" class="oculto" style="margin-bottom:8px;"></div>
+    <div id="mp-mapa" style="height:min(56vh,460px);border-radius:10px;overflow:hidden;
+      border:1px solid var(--line2);background:var(--surface2);"></div>
+    <p class="texto-dim2" style="font-size:11px;margin:6px 0 10px;line-height:1.5;" id="mp-dica">
+      ${editavel ? 'Clique no mapa pra marcar onde fica a sede. Pra desenhar um talhão, use o botão abaixo.'
+                 : 'Você está vendo o mapa, mas não tem permissão pra editar este lead.'}</p>
+    ${editavel ? `<div class="acoes" style="margin-bottom:10px;">
+      <button type="button" class="btn-secundario mini" id="mp-desenhar">✏️ Desenhar talhão</button>
+      <button type="button" class="btn-secundario mini oculto" id="mp-fechar-talhao">✓ Fechar talhão</button>
+      <button type="button" class="btn-secundario mini oculto" id="mp-desfazer">↶ Tirar último ponto</button>
+      <button type="button" class="btn-secundario mini oculto" id="mp-cancelar-desenho">Cancelar desenho</button>
+      <span class="texto-dim2" style="font-size:11.5px;" id="mp-medindo"></span>
+    </div>` : ''}
+    <div class="cabeca-secao" style="margin-bottom:4px;">
+      <h3 style="font-family:var(--serif);font-size:14px;">Talhões</h3>
+      <span class="texto-dim2" style="font-size:11.5px;" id="mp-soma"></span>
+    </div>
+    <div id="mp-talhoes" style="margin-bottom:10px;"></div>
+    <div class="recado oculto" id="mp-erro"></div>
+    <div class="acoes" style="margin-top:6px;">
+      ${editavel ? `<button class="btn" id="mp-salvar-local">Salvar local da fazenda</button>` : ''}
+      <button class="btn-secundario" id="mp-fechar">Fechar</button>
+    </div>`
+
+  const q = sel => fundo.querySelector(sel)
+  const avisar = t => {
+    const e = q('#mp-erro')
+    e.textContent = t
+    e.classList.toggle('oculto', !t)
+  }
+  q('#mp-fechar').onclick = () => {
+    if (desenhando && !confirm('Você está no meio de um desenho. Fechar e perder?')) return
+    fundo.remove()
+    if (aoFechar) aoFechar()
+  }
+
+  // ---------- o mapa ----------
+  const centro = fazenda.lat != null
+    ? [Number(fazenda.lat), Number(fazenda.lng)]
+    : [-12.9256, -46.9375]   // Arraias/TO, que é de onde a empresa fala
+  const mapa = L.map(q('#mp-mapa'), { zoomControl: true })
+    .setView(centro, fazenda.zoom || (fazenda.lat != null ? 15 : 6))
+
+  // Satélite da Esri. maxNativeZoom trava onde a imagem existe de verdade
+  // e deixa o mapa continuar ampliando (borrado, mas sem quadrado cinza).
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    maxNativeZoom: 19, maxZoom: 21,
+    attribution: 'Imagem © Esri, Maxar, Earthstar Geographics'
+  }).addTo(mapa)
+  // camada de nomes por cima: satélite puro é bonito e inútil pra achar
+  // a estrada e a cidade vizinha
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
+    maxNativeZoom: 19, maxZoom: 21, opacity: 0.9
+  }).addTo(mapa)
+
+  // o modal nasce com o mapa escondido; sem isso o Leaflet mede 0 de
+  // altura e desenha um quarto de tela
+  setTimeout(() => mapa.invalidateSize(), 60)
+
+  let marcador = null
+  const porMarcador = ll => {
+    if (marcador) { marcador.setLatLng(ll); return }
+    marcador = L.marker(ll, { draggable: editavel }).addTo(mapa)
+    marcador.bindTooltip(fazenda.fazenda, { permanent: false })
+  }
+  if (fazenda.lat != null) porMarcador([Number(fazenda.lat), Number(fazenda.lng)])
+
+  // ---------- busca ----------
+  const buscar = async () => {
+    const termo = q('#mp-busca').value.trim()
+    if (!termo) return
+    avisar('')
+    const coord = lerCoordenada(termo)
+    if (coord) {
+      mapa.setView([coord.lat, coord.lng], 16)
+      if (editavel) porMarcador([coord.lat, coord.lng])
+      q('#mp-achados').classList.add('oculto')
+      return
+    }
+    const btn = q('#mp-buscar')
+    btn.disabled = true; btn.textContent = 'buscando...'
+    try {
+      const url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&countrycodes=br&q='
+        + encodeURIComponent(termo)
+      const r = await fetch(url, { headers: { 'Accept-Language': 'pt-BR' } })
+      const achados = await r.json()
+      const cx = q('#mp-achados')
+      if (!Array.isArray(achados) || !achados.length) {
+        cx.classList.remove('oculto')
+        cx.innerHTML = `<p class="texto-dim2" style="font-size:12px;margin:0;">
+          Não achei esse lugar. Fazenda muitas vezes não está no mapa público —
+          procure a cidade mais próxima e ande no mapa, ou cole a coordenada do GPS.</p>`
+      } else {
+        cx.classList.remove('oculto')
+        cx.innerHTML = achados.map((a, i) => `
+          <button type="button" class="btn-secundario mini" data-achado="${i}"
+            style="display:block;width:100%;text-align:left;margin-bottom:4px;white-space:normal;">
+            ${esc(a.display_name)}</button>`).join('')
+        cx.querySelectorAll('[data-achado]').forEach(b => {
+          b.onclick = () => {
+            const a = achados[Number(b.dataset.achado)]
+            const ll = [Number(a.lat), Number(a.lon)]
+            mapa.setView(ll, 15)
+            if (editavel) porMarcador(ll)
+            fazenda.endereco = a.display_name
+            cx.classList.add('oculto')
+          }
+        })
+      }
+    } catch (e) {
+      avisar('A busca de endereço não respondeu. Você ainda pode andar no mapa ou colar a coordenada.')
+    }
+    btn.disabled = false; btn.textContent = 'Buscar'
+  }
+  q('#mp-buscar').onclick = buscar
+  q('#mp-busca').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); buscar() }
+  })
+
+  // ---------- talhões já salvos ----------
+  const camadas = {}
+  const desenharTalhoes = () => {
+    Object.values(camadas).forEach(c => mapa.removeLayer(c))
+    talhoes.forEach(t => {
+      const pts = (t.poligono || []).map(p => [p[1], p[0]])   // GeoJSON é [lng,lat]
+      if (pts.length < 3) return
+      const poly = L.polygon(pts, { color: t.cor || '#c8a11a', weight: 2, fillOpacity: 0.28 })
+      poly.bindTooltip(`${t.nome}${t.cultura ? ' · ' + t.cultura : ''} — ${fmtNum(t.area_ha)} ha`,
+        { sticky: true })
+      poly.addTo(mapa)
+      camadas[t.id] = poly
+    })
+
+    const soma = talhoes.reduce((s, t) => s + Number(t.area_ha || 0), 0)
+    q('#mp-soma').textContent = talhoes.length
+      ? `${talhoes.length} talhão(ões) · ${fmtNum(soma)} ha desenhados`
+      : ''
+    q('#mp-talhoes').innerHTML = talhoes.length ? talhoes.map(t => `
+      <div class="passo" style="align-items:center;gap:8px;">
+        <span style="width:12px;height:12px;border-radius:3px;flex:none;
+          background:${esc(t.cor || '#c8a11a')};"></span>
+        <span style="flex:1;min-width:0;"><b>${esc(t.nome)}</b>${t.cultura ? ' · ' + esc(t.cultura) : ''}
+          <span class="texto-dim2"> — ${fmtNum(t.area_ha)} ha</span></span>
+        <button type="button" class="btn-secundario mini" data-ir-talhao="${esc(t.id)}"
+          style="padding:2px 8px;">ver</button>
+        ${editavel ? `<button type="button" class="btn-secundario mini" data-apagar-talhao="${esc(t.id)}"
+          style="padding:2px 8px;">✕</button>` : ''}
+      </div>`).join('')
+      : `<p class="texto-dim2" style="font-size:12px;">Nenhum talhão desenhado ainda.</p>`
+
+    q('#mp-talhoes').querySelectorAll('[data-ir-talhao]').forEach(b => {
+      b.onclick = () => {
+        const c = camadas[b.dataset.irTalhao]
+        if (c) mapa.fitBounds(c.getBounds(), { padding: [20, 20] })
+      }
+    })
+    q('#mp-talhoes').querySelectorAll('[data-apagar-talhao]').forEach(b => {
+      b.onclick = async () => {
+        const t = talhoes.find(x => x.id === b.dataset.apagarTalhao)
+        if (!confirm(`Apagar o talhão "${t.nome}"?`)) return
+        const { error } = await db.from('lead_talhao').delete().eq('id', t.id)
+        if (error) { avisar(error.message); return }
+        if (camadas[t.id]) { mapa.removeLayer(camadas[t.id]); delete camadas[t.id] }
+        talhoes = talhoes.filter(x => x.id !== t.id)
+        desenharTalhoes()
+      }
+    })
+  }
+  desenharTalhoes()
+  // abrir já enquadrando o que existe é melhor que cair num zoom qualquer
+  if (talhoes.length && fazenda.lat == null) {
+    const todos = L.featureGroup(Object.values(camadas))
+    if (Object.values(camadas).length) mapa.fitBounds(todos.getBounds(), { padding: [20, 20] })
+  }
+
+  if (!editavel) return
+
+  // ---------- desenhar ----------
+  let pontos = []
+  let linha = null
+  let bolinhas = []
+
+  const medir = () => {
+    const el = q('#mp-medindo')
+    if (pontos.length < 3) {
+      el.textContent = pontos.length
+        ? `${pontos.length} ponto(s) — precisa de 3 pra fechar`
+        : 'Clique no mapa pra marcar o primeiro ponto.'
+      return
+    }
+    el.textContent = `${fmtNum(areaHaDoPoligono(pontos))} ha · ${fmtNum(perimetroKm(pontos), 2)} km de perímetro`
+  }
+
+  const redesenhar = () => {
+    if (linha) mapa.removeLayer(linha)
+    linha = null
+    if (pontos.length >= 2) {
+      linha = pontos.length >= 3
+        ? L.polygon(pontos.map(p => [p.lat, p.lng]),
+            { color: '#fff', weight: 2, dashArray: '5,5', fillOpacity: 0.18 })
+        : L.polyline(pontos.map(p => [p.lat, p.lng]), { color: '#fff', weight: 2, dashArray: '5,5' })
+      linha.addTo(mapa)
+    }
+    medir()
+  }
+
+  const limparDesenho = () => {
+    bolinhas.forEach(b => mapa.removeLayer(b))
+    bolinhas = []
+    if (linha) mapa.removeLayer(linha)
+    linha = null
+    pontos = []
+  }
+
+  const modoDesenho = ligado => {
+    desenhando = ligado
+    q('#mp-desenhar').classList.toggle('oculto', ligado)
+    q('#mp-fechar-talhao').classList.toggle('oculto', !ligado)
+    q('#mp-desfazer').classList.toggle('oculto', !ligado)
+    q('#mp-cancelar-desenho').classList.toggle('oculto', !ligado)
+    q('#mp-dica').textContent = ligado
+      ? 'Clique em volta do talhão, ponto por ponto. Dá pra arrastar cada bolinha pra ajustar.'
+      : 'Clique no mapa pra marcar onde fica a sede. Pra desenhar um talhão, use o botão abaixo.'
+    q('#mp-medindo').textContent = ''
+    if (!ligado) limparDesenho()
+    else medir()
+  }
+
+  // Bolinha de vértice: é um marker de verdade, não um circleMarker. O
+  // marker arrasta nativamente no Leaflet — inclusive com o dedo, que é
+  // como a Amanda e o pessoal de campo usam, no tablet. circleMarker só
+  // responderia a mousedown/mousemove, e no iPad não arrastaria nada.
+  const ICONE_VERTICE = L.divIcon({
+    className: '',
+    html: '<div style="width:16px;height:16px;border-radius:50%;background:#c8a11a;' +
+          'border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.6);"></div>',
+    iconSize: [16, 16], iconAnchor: [8, 8]
+  })
+  const porPonto = ll => {
+    const i = pontos.length
+    pontos.push({ lat: ll.lat, lng: ll.lng })
+    const b = L.marker([ll.lat, ll.lng], {
+      icon: ICONE_VERTICE, draggable: true, autoPan: true
+    }).addTo(mapa)
+    b.on('drag', ev => {
+      const p = ev.target.getLatLng()
+      pontos[i] = { lat: p.lat, lng: p.lng }
+      redesenhar()
+    })
+    // tocar numa bolinha não pode contar como "novo ponto" no mapa
+    b.on('click', ev => { if (ev.originalEvent) ev.originalEvent.stopPropagation() })
+    bolinhas.push(b)
+    redesenhar()
+  }
+
+  mapa.on('click', e => {
+    if (desenhando) { porPonto(e.latlng); return }
+    porMarcador(e.latlng)
+  })
+
+  q('#mp-desenhar').onclick = () => modoDesenho(true)
+  q('#mp-cancelar-desenho').onclick = () => modoDesenho(false)
+  q('#mp-desfazer').onclick = () => {
+    if (!pontos.length) return
+    pontos.pop()
+    const b = bolinhas.pop()
+    if (b) mapa.removeLayer(b)
+    redesenhar()
+  }
+
+  q('#mp-fechar-talhao').onclick = async () => {
+    if (pontos.length < 3) { avisar('Um talhão precisa de pelo menos 3 pontos.'); return }
+    const ha = areaHaDoPoligono(pontos)
+    const nome = prompt(`Nome do talhão (${fmtNum(ha)} ha):`, `Talhão ${talhoes.length + 1}`)
+    if (!nome) return
+    const cultura = prompt('Cultura (pode deixar em branco):', '') || null
+    avisar('')
+    const { data, error } = await db.from('lead_talhao').insert({
+      fazenda_id: fazenda.id, nome: nome.trim(), cultura: cultura ? cultura.trim() : null,
+      area_ha: Number(ha.toFixed(4)),
+      poligono: pontos.map(p => [Number(p.lng.toFixed(7)), Number(p.lat.toFixed(7))]),
+      cor: CORES_TALHAO[talhoes.length % CORES_TALHAO.length],
+      criado_por: PERFIL.pessoaId
+    }).select('id,nome,cultura,area_ha,poligono,cor').single()
+    if (error) { avisar('Não consegui salvar o talhão: ' + error.message); return }
+    talhoes.push(data)
+    modoDesenho(false)
+    desenharTalhoes()
+  }
+
+  q('#mp-salvar-local').onclick = async () => {
+    if (!marcador) { avisar('Clique no mapa pra marcar onde fica a fazenda.'); return }
+    const btn = q('#mp-salvar-local')
+    btn.disabled = true; btn.textContent = 'salvando...'
+    const ll = marcador.getLatLng()
+    const { error } = await db.from('lead_fazenda').update({
+      lat: Number(ll.lat.toFixed(7)), lng: Number(ll.lng.toFixed(7)),
+      zoom: mapa.getZoom(), endereco: fazenda.endereco || null
+    }).eq('id', fazenda.id)
+    btn.disabled = false; btn.textContent = 'Salvar local da fazenda'
+    if (error) { avisar(error.message); return }
+    fazenda.lat = ll.lat; fazenda.lng = ll.lng
+    avisar('')
+    btn.textContent = '✓ Local salvo'
+    setTimeout(() => { btn.textContent = 'Salvar local da fazenda' }, 1800)
   }
 }
 
