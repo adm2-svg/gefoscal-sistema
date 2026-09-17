@@ -45901,16 +45901,70 @@ const linhaPedidoContratacao = (pd, comSolicitante) => `
           ${pd.decisao_observacao ? ' — ' + esc(pd.decisao_observacao) : ''}
           ${pd.status === 'APROVADO' ? ' · vaga aberta no Kanban' : ''}</div>` : ''}
       </div>
-      ${pd.status === 'PENDENTE' && comSolicitante ? `<div style="display:flex;gap:6px;flex-wrap:wrap;">
-        <button class="btn mini" data-aprovar="${esc(pd.id)}">Aprovar e abrir vaga</button>
-        <button class="btn-secundario mini" data-recusar="${esc(pd.id)}">Não aprovar</button>
-      </div>` : ''}
+      <div style="display:flex;gap:6px;flex-wrap:wrap;">
+        ${pd.status === 'PENDENTE' && comSolicitante ? `
+          <button class="btn mini" data-aprovar="${esc(pd.id)}">Aprovar e abrir vaga</button>
+          <button class="btn-secundario mini" data-recusar="${esc(pd.id)}">Não aprovar</button>` : ''}
+        ${/* editar e cancelar só enquanto ninguém decidiu: depois de
+              decidido o pedido é a prova do que foi combinado, e mudar o
+              texto por baixo da decisão reescreveria a história */ ''}
+        ${pd.status === 'PENDENTE' && pd.podeMexer ? `
+          <button class="btn-secundario mini" data-editar="${esc(pd.id)}">Editar</button>
+          <button class="btn-secundario mini" data-cancelar="${esc(pd.id)}">Cancelar pedido</button>` : ''}
+        ${pd.podeApagar ? `<button class="lnk-crud" data-apagar="${esc(pd.id)}" title="excluir">🗑</button>` : ''}
+      </div>
     </div>
   </div>`
 
 const SEL_PEDIDO = `id,cargo,quantidade,horario,tipo_contratacao,justificativa,requisitos,status,
-  criado_em,decidido_em,decisao_observacao,vaga_id,
+  criado_em,decidido_em,decisao_observacao,vaga_id,solicitante_id,setor_id,
   setor:setor_id(nome), solicitante:solicitante_id(nome), decisor:decidido_por(nome)`
+
+// Espelha no navegador o que a RLS já decide no banco — aqui só evita
+// oferecer botão que o banco vai recusar em silêncio.
+const ehRh = () => podeEditar('desempenho') || ehTotal()
+const marcarPermissoes = lista => (lista || []).map(pd => ({
+  ...pd,
+  podeMexer: ehRh() || (pd.solicitante_id === PERFIL.pessoaId && pd.status === 'PENDENTE'),
+  podeApagar: ehRh() || (pd.solicitante_id === PERFIL.pessoaId && pd.status === 'PENDENTE')
+}))
+
+// Editar, cancelar e excluir valem nas duas telas — quem pede e o RH usam
+// os mesmos botões, e quem pode o quê já veio marcado em marcarPermissoes.
+function ligarCrudContratacao (area, lista, setores, recarregar) {
+  const acha = id => lista.find(x => x.id === id)
+
+  area.querySelectorAll('[data-editar]').forEach(b => {
+    b.onclick = () => formPedidoContratacao(setores, recarregar, acha(b.dataset.editar))
+  })
+
+  // Cancelar é do solicitante e NÃO apaga: o RH pode já ter lido e levado
+  // pra conversa com a diretoria. Sumir o registro deixaria os dois lados
+  // sem saber o que aconteceu.
+  area.querySelectorAll('[data-cancelar]').forEach(b => {
+    b.onclick = async () => {
+      const pd = acha(b.dataset.cancelar)
+      if (!confirm(`Cancelar o pedido de ${pd.cargo}?\n\nEle continua na lista como cancelado, pro RH saber que você desistiu.`)) return
+      const { error } = await db.from('contratacao_pedido')
+        .update({ status: 'CANCELADO' }).eq('id', pd.id)
+      if (error) { alert(error.message); return }
+      recarregar()
+    }
+  })
+
+  area.querySelectorAll('[data-apagar]').forEach(b => {
+    b.onclick = () => {
+      const pd = acha(b.dataset.apagar)
+      if (pd.vaga_id && !confirm('Esse pedido já virou vaga. Excluir o pedido NÃO apaga a vaga — ela continua no Kanban, só perde o registro de quem pediu.\n\nSeguir mesmo assim?')) return
+      excluirComJustificativa({
+        tabela: 'contratacao_pedido', id: pd.id, modulo: 'RH',
+        titulo: 'Excluir pedido de contratação',
+        descricao: `${pd.quantidade > 1 ? pd.quantidade + '× ' : ''}${pd.cargo}${pd.setor?.nome ? ' — ' + pd.setor.nome : ''}`,
+        aoExcluir: recarregar
+      })
+    }
+  })
+}
 
 // ----- lado de quem pede (gestor de setor, sem o módulo de RH) -----
 async function recrContratacaoSolicitante (alvo) {
@@ -45922,7 +45976,7 @@ async function recrContratacaoSolicitante (alvo) {
   ])
   if (faltaMigracao(error)) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
   const setores = meusSetores || []
-  const lista = pedidos || []
+  const lista = marcarPermissoes(pedidos)
 
   alvo.innerHTML = `
     <div class="cabeca-secao">
@@ -45940,40 +45994,42 @@ async function recrContratacaoSolicitante (alvo) {
         || `<p class="vazio">Nenhum pedido seu por enquanto.</p>`}
     </div>`
 
+  const recarregar = () => recrContratacaoSolicitante(alvo)
   const btn = $('#ct-nova')
-  if (btn) btn.onclick = () => formPedidoContratacao(setores, () => recrContratacaoSolicitante(alvo))
+  if (btn) btn.onclick = () => formPedidoContratacao(setores, recarregar)
+  ligarCrudContratacao(alvo, lista, setores, recarregar)
 }
 
 // ----- o formulário -----
-function formPedidoContratacao (setores, aoFechar) {
+function formPedidoContratacao (setores, aoFechar, pd = null) {
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
   fundo.innerHTML = `<div class="modal" style="max-width:560px;">
-    <h3>Solicitar contratação</h3>
+    <h3>${pd ? 'Editar pedido de contratação' : 'Solicitar contratação'}</h3>
     <p class="texto-dim2" style="font-size:12px;margin:-6px 0 14px;">
       Quem lê isso é o RH, pra decidir se abre a vaga. Quanto mais concreto o motivo,
       menos ida e volta.</p>
     <div class="form-grade">
       <div class="campo"><label>Setor *</label>
-        <select id="ct-setor">${setores.map(x => `<option value="${esc(x.id)}">${esc(x.nome)}</option>`).join('')}</select></div>
+        <select id="ct-setor">${setores.map(x => `<option value="${esc(x.id)}" ${pd && pd.setor_id === x.id ? 'selected' : ''}>${esc(x.nome)}</option>`).join('')}</select></div>
       <div class="campo"><label>Cargo *</label>
-        <input id="ct-cargo" placeholder="ex: Operador de moinho"></div>
+        <input id="ct-cargo" value="${pd ? esc(pd.cargo) : ''}" placeholder="ex: Operador de moinho"></div>
       <div class="campo"><label>Quantas pessoas</label>
-        <input type="number" id="ct-qtd" value="1" min="1" max="50"></div>
+        <input type="number" id="ct-qtd" value="${pd ? pd.quantidade : 1}" min="1" max="50"></div>
       <div class="campo"><label>Tipo de contratação</label>
         <select id="ct-tipo"><option value="">a definir com o RH</option>
-          ${TIPOS_CONTRATACAO_PEDIDO.map(t => `<option value="${t}">${t}</option>`).join('')}</select></div>
+          ${TIPOS_CONTRATACAO_PEDIDO.map(t => `<option value="${t}" ${pd && pd.tipo_contratacao === t ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
     </div>
     <div class="campo" style="margin-top:12px;"><label>Horário *</label>
-      <input id="ct-horario" placeholder="ex: turno B, 14h às 22h, de segunda a sábado"></div>
+      <input id="ct-horario" value="${pd ? esc(pd.horario || '') : ''}" placeholder="ex: turno B, 14h às 22h, de segunda a sábado"></div>
     <div class="campo" style="margin-top:12px;"><label>Por que precisa *</label>
       <textarea id="ct-just" rows="3"
-        placeholder="ex: saiu o Jonas em agosto e o terceiro turno está rodando com dois operadores; parada de moinho subiu."></textarea></div>
+        placeholder="ex: saiu o Jonas em agosto e o terceiro turno está rodando com dois operadores; parada de moinho subiu.">${pd ? esc(pd.justificativa) : ''}</textarea></div>
     <div class="campo" style="margin-top:12px;"><label>Requisitos (opcional)</label>
-      <textarea id="ct-req" rows="2" placeholder="ex: experiência com moinho de bolas, NR-33."></textarea></div>
+      <textarea id="ct-req" rows="2" placeholder="ex: experiência com moinho de bolas, NR-33.">${pd ? esc(pd.requisitos || '') : ''}</textarea></div>
     <div class="recado oculto" id="ct-erro"></div>
     <div class="acoes" style="margin-top:14px;">
-      <button class="btn" id="ct-enviar">Enviar pro RH</button>
+      <button class="btn" id="ct-enviar">${pd ? 'Salvar alterações' : 'Enviar pro RH'}</button>
       <button class="btn-secundario" id="ct-cancelar">Cancelar</button>
     </div>
   </div>`
@@ -45995,8 +46051,24 @@ function formPedidoContratacao (setores, aoFechar) {
     if (!horario) return avisa('O horário é o que o RH usa pra saber se é turno, escala ou comercial.')
     if (!just) return avisa('A justificativa é o que o RH lê pra decidir — sem ela o pedido volta.')
 
-    btn.disabled = true; btn.textContent = 'enviando...'
+    btn.disabled = true; btn.textContent = 'salvando...'
     erro.classList.add('oculto')
+
+    // Editar é UPDATE direto: a RLS já limita a quem pode (quem pediu
+    // enquanto está pendente, ou o RH). Não passa pela RPC porque a RPC
+    // existe pra notificar o RH — e o RH não precisa de um aviso novo a
+    // cada vírgula corrigida num pedido que ele já viu.
+    if (pd) {
+      const { error: eU } = await db.from('contratacao_pedido').update({
+        setor_id: q('#ct-setor').value || null,
+        cargo, quantidade: Number(q('#ct-qtd').value) || 1,
+        horario, tipo_contratacao: q('#ct-tipo').value || null,
+        justificativa: just, requisitos: q('#ct-req').value.trim() || null
+      }).eq('id', pd.id)
+      if (eU) { btn.disabled = false; btn.textContent = 'Salvar alterações'; avisa(eU.message); return }
+      fechar(); aoFechar(); return
+    }
+
     const { data, error } = await db.rpc('rh_pedir_contratacao', {
       p_setor_id: q('#ct-setor').value || null,
       p_cargo: cargo,
@@ -46018,10 +46090,14 @@ function formPedidoContratacao (setores, aoFechar) {
 // ----- lado do RH -----
 async function recrPedidosContratacao (area) {
   area.innerHTML = `<p class="texto-dim2">carregando...</p>`
-  const { data, error } = await db.from('contratacao_pedido').select(SEL_PEDIDO)
-    .order('criado_em', { ascending: false }).limit(200)
+  // o RH pode corrigir o setor de um pedido, então leva a lista inteira —
+  // diferente do gestor, que só enxerga os setores dele
+  const [{ data, error }, { data: setores }] = await Promise.all([
+    db.from('contratacao_pedido').select(SEL_PEDIDO).order('criado_em', { ascending: false }).limit(200),
+    db.from('setor').select('id,nome').order('nome')
+  ])
   if (faltaMigracao(error) || error) { area.innerHTML = `<p class="vazio">${esc(error?.message ?? '')}</p>`; return }
-  const lista = data || []
+  const lista = marcarPermissoes(data)
   const pendentes = lista.filter(p => p.status === 'PENDENTE')
   const resto = lista.filter(p => p.status !== 'PENDENTE')
   const recarregar = () => recrPedidosContratacao(area)
@@ -46065,6 +46141,7 @@ async function recrPedidosContratacao (area) {
   }
   area.querySelectorAll('[data-aprovar]').forEach(b => { b.onclick = () => decidir(b.dataset.aprovar, true) })
   area.querySelectorAll('[data-recusar]').forEach(b => { b.onclick = () => decidir(b.dataset.recusar, false) })
+  ligarCrudContratacao(area, lista, setores || [], recarregar)
 }
 
 // ----- Kanban de vagas -----
