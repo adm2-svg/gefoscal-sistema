@@ -2632,6 +2632,14 @@ function ligarChecagemPeriodicaNotificacoes () {
 // apontar; hoje só existe 'solicitacao_interna', mas é só acrescentar
 // uma linha nova quando outro módulo passar a gerar notificação.
 const ABRIR_ENTIDADE_NOTIFICACAO = {
+  // lead da originação esperando consultor, ou lead recém-atribuído: os
+  // dois avisos apontam pra ficha. Sem isso o aviso vira um bilhete que
+  // manda a pessoa procurar o nome no CRM na mão.
+  lead: async (id) => {
+    const { data: l } = await db.from('lead').select(selLead).eq('id', id).maybeSingle()
+    if (!l) { alert('Esse lead não está mais disponível pra você.'); return }
+    formLead(l, podeEditar('crm'), ehGestorComercial(), () => {})
+  },
   // reunião marcada pelo SDR de WhatsApp: abre a ficha do lead com o
   // relatório da conversa, sem precisar do módulo SDR nem passar pelo CRM
   sdr_lead: async (id) => { await abrirRelatorioSdrDoLead(id) },
@@ -2860,7 +2868,7 @@ async function abrirNotificacoes () {
   }
 }
 
-const ICONE_NOTIF = { solicitacao_interna: '📋', solicitacao_compra: '🛒', sdr_lead: '📅' }
+const ICONE_NOTIF = { solicitacao_interna: '📋', solicitacao_compra: '🛒', sdr_lead: '📅', lead: '🌱' }
 
 const esperaConfirmacao = n => !!(n.exige_confirmacao && !n.confirmada_em)
 
@@ -17184,7 +17192,7 @@ function abrirCrm (sub, editavel, gerencia) {
   if (sub === 'pedidos') crmMeusPedidos(alvo, editavel, gerencia)
   if (sub === 'objecoes') crmPainelObjecoes(alvo)
   if (sub === 'originacao') crmOriginacao(alvo, editavel, gerencia)
-  if (sub === 'atribuir') crmAtribuir(alvo)
+  if (sub === 'atribuir') crmAtribuir(alvo, { podeAtribuir: false })
   if (sub === 'gestao') crmGestaoTab(alvo, editavel).then(() => {
     const comparativo = document.createElement('div')
     comparativo.style.marginTop = '26px'
@@ -17204,6 +17212,7 @@ function abrirCrm (sub, editavel, gerencia) {
 const selLead = `
   id, nome, cliente_id, vendedor_id, origem, uf, municipio, telefone, email,
   etapa, valor_estimado, observacoes, criado_em, atualizado_em, atribuido_por_id, atribuido_em, arquivado,
+  situacao_originacao,
   bom_dia_ativo, bom_dia_origem_data, bom_dia_turno_origem, bom_dia_aviso_data, bom_dia_turno_aviso, bom_dia_criado_por,
   bloqueio_lgpd, bloqueio_lgpd_em, bloqueio_lgpd_motivo, bloqueio_lgpd_por,
   vendedor:vendedor_id ( nome ), cliente:cliente_id ( razao_social, nome_fantasia ),
@@ -18279,15 +18288,24 @@ function renderCrmProgresso (alvo, editavel, gerencia) {
   buscar()
 }
 
-// ----- Atribuir (só gerência): importa planilha e distribui pro vendedor -----
-async function crmAtribuir (alvo) {
+// ----- Importar planilha e ver o pool -----
+//
+// Duas portas entram aqui: a aba Prospecção da pré-vendas e o painel
+// embutido na Gestão. A diferença é só uma — quem pode DEFINIR o
+// consultor. Pré-vendas importa, trabalha e envia pela originação;
+// escolher quem atende é decisão da gestão, e o botão só existe pra ela.
+async function crmAtribuir (alvo, { podeAtribuir = ehGestorComercial() } = {}) {
   alvo.innerHTML = `
     <div class="panel" style="padding:20px;margin-bottom:16px;">
       <h3 style="font-family:var(--serif);font-size:16px;margin:0 0 6px;">Importar planilha de clientes</h3>
       <p class="texto-dim2" style="font-size:12px;margin:0 0 12px;">
         Aceita .xlsx, .xls ou .csv. Reconhece colunas como nome/razão social, telefone, e-mail,
         município, UF, origem, valor estimado e observação (não precisa bater o nome exato).
-        Os leads entram sem vendedor — atribua abaixo pra quem for tocar cada um.</p>
+        Os leads entram sem vendedor e caem na sua fila da Originação.</p>
+      ${podeAtribuir ? '' : `<p class="texto-dim2" style="font-size:12px;margin:-6px 0 12px;line-height:1.55;">
+        Quem define o consultor é a gestão. Quando o lead estiver qualificado,
+        use <b>📤 Enviar pra gestão</b> no card, na aba Originação — o que você
+        levantou e a reunião marcada vão junto.</p>`}
       <div class="campo" style="margin-bottom:10px;"><input type="file" id="crm-arquivo" accept=".xlsx,.xls,.csv"></div>
       <div class="acoes"><button class="btn-secundario" id="crm-ler">Ler planilha</button></div>
       <div id="crm-preview" style="margin-top:14px;"></div>
@@ -18375,14 +18393,16 @@ async function crmAtribuir (alvo) {
     const lista = data || []
     $('#crm-pool').innerHTML = lista.length ? `
       <div class="panel" style="padding:0;"><div class="tabela-scroll">
-        <table><thead><tr><th>Lead</th><th>Local</th><th>Contato</th><th>Origem</th><th>Observações</th><th></th></tr></thead><tbody>
+        <table><thead><tr><th>Lead</th><th>Local</th><th>Contato</th><th>Origem</th><th>Observações</th><th>${podeAtribuir ? '' : 'Originação'}</th></tr></thead><tbody>
           ${lista.map(l => `<tr>
             <td><b>${esc(l.nome)}</b></td>
             <td class="texto-dim2">${esc([l.municipio, l.uf].filter(Boolean).join(' / ') || '—')}</td>
             <td class="texto-dim2">${esc([l.telefone, l.email].filter(Boolean).join(' · ') || '—')}</td>
             <td class="texto-dim2">${esc(l.origem ?? '—')}</td>
             <td class="texto-dim2" style="max-width:220px;">${esc(l.observacoes ?? '—')}</td>
-            <td><button class="btn-secundario mini" data-atribuir="${l.id}">Atribuir</button></td>
+            <td>${podeAtribuir
+              ? `<button class="btn-secundario mini" data-atribuir="${l.id}">Definir consultor</button>`
+              : `<span class="texto-dim2" style="font-size:11px;">${esc(ROTULO_ORIGINACAO[l.situacao_originacao] || 'A contatar')}</span>`}</td>
           </tr>`).join('')}
         </tbody></table>
       </div></div>` : `<p class="vazio">Nenhum lead esperando atribuição — importe uma planilha ou aguarde novas entradas.</p>`
@@ -18394,18 +18414,36 @@ async function crmAtribuir (alvo) {
   carregarPool()
 }
 
-function formAtribuirLead (l, aoFechar) {
+// ----- Definir o consultor -----
+//
+// É aqui que a entrega acontece de verdade. Escrever vendedor_id faz três
+// coisas sozinho, sem código nenhum a mais: o lead entra no funil do
+// consultor (a listagem dele filtra por vendedor_id), a reunião aparece
+// no Meu Dia dele (lead_compromisso é presa ao lead, e o Meu Dia busca
+// por lead.vendedor_id) e o lead some do quadro da originação (a RLS de
+// pré-vendas só alcança lead sem dono).
+//
+// ORDEM IMPORTA: a reunião é mexida ANTES de gravar o vendedor. Enquanto
+// o lead não tem dono, a policy de lead_compromisso libera "qualquer
+// gestor"; depois de gravado, ela passa a exigir ser o próprio vendedor
+// ou gestor dele — e um CRM_TOTAL que não gerencia aquela equipe perderia
+// a permissão no meio da própria operação que acabou de fazer.
+async function formAtribuirLead (l, aoFechar) {
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
-  fundo.innerHTML = `<div class="modal">
-    <h3>Atribuir "${esc(l.nome)}" a um vendedor</h3>
+  fundo.innerHTML = `<div class="modal" style="max-width:540px;">
+    <h3>Definir consultor de "${esc(l.nome)}"</h3>
     <p class="texto-dim2" style="font-size:12px;margin:-6px 0 12px;">
-      As informações já levantadas (contato, observações) vão junto pro vendedor.</p>
-    <div class="campo"><label>Vendedor *</label>
+      O que já foi levantado (contato, observações, ligações) vai junto. O lead
+      entra no funil do consultor assim que você confirmar.</p>
+    <div class="campo"><label>Consultor *</label>
       <select id="at-vendedor"><option value="">selecione...</option>
         ${CRM_CACHE.vendedores.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')}</select></div>
+
+    <div id="at-reuniao" style="margin-top:4px;"></div>
+
     <div class="acoes" style="margin-top:14px;">
-      <button class="btn" id="at-confirmar">Enviar pro vendedor</button>
+      <button class="btn" id="at-confirmar">Enviar pro consultor</button>
       <button class="btn-secundario" id="at-cancelar">Cancelar</button>
     </div>
     <div class="recado oculto" id="at-recado"></div>
@@ -18415,18 +18453,102 @@ function formAtribuirLead (l, aoFechar) {
   fundo.querySelector('#at-cancelar').onclick = fechar
   fundo.onclick = e => { if (e.target === fundo) fechar() }
 
+  // a reunião pré-agendada pela originação: confirmar ou remarcar aqui,
+  // antes de qualquer aviso sair, é o que evita o consultor descobrir o
+  // conflito de agenda já com o cliente esperando
+  const cx = fundo.querySelector('#at-reuniao')
+  const { data: compromissos } = await db.from('lead_compromisso')
+    .select('id,data_hora,titulo,confirmado_em').eq('lead_id', l.id).eq('concluido', false)
+    .order('data_hora', { ascending: true }).limit(1)
+  const reuniao = (compromissos || [])[0]
+
+  if (reuniao) {
+    const dt = new Date(new Date(reuniao.data_hora).getTime()
+      - new Date(reuniao.data_hora).getTimezoneOffset() * 60000).toISOString()
+    cx.innerHTML = `
+      <div style="padding:11px 13px;border:1px solid var(--line);border-radius:9px;background:var(--surface2);">
+        <div style="font-size:12.5px;">📅 <b>${esc(fmtReuniao(reuniao.data_hora) || fmtQuando(reuniao.data_hora) || '')}</b>
+          ${reuniao.titulo ? ' — ' + esc(reuniao.titulo) : ''}
+          <span class="texto-dim2">${reuniao.confirmado_em ? '(já confirmada)' : '(pré-agendada pela originação)'}</span></div>
+        <label style="display:flex;gap:7px;align-items:center;font-size:12px;font-weight:400;margin-top:9px;cursor:pointer;">
+          <input type="radio" name="at-reu" value="confirmar" checked>
+          <span>Confirmar essa data pro consultor</span></label>
+        <label style="display:flex;gap:7px;align-items:center;font-size:12px;font-weight:400;margin-top:5px;cursor:pointer;">
+          <input type="radio" name="at-reu" value="remarcar">
+          <span>Remarcar — o consultor não pode nessa data</span></label>
+        <div id="at-remarcar" class="form-grade oculto" style="margin-top:9px;grid-template-columns:1fr 1fr;">
+          <div class="campo"><label>Nova data</label><input type="date" id="at-data" value="${dt.slice(0, 10)}"></div>
+          <div class="campo"><label>Hora</label><input type="time" id="at-hora" value="${dt.slice(11, 16)}"></div>
+        </div>
+      </div>`
+    const caixaRemarcar = fundo.querySelector('#at-remarcar')
+    fundo.querySelectorAll('input[name="at-reu"]').forEach(r => {
+      r.onchange = () => caixaRemarcar.classList.toggle('oculto', r.value !== 'remarcar' || !r.checked)
+    })
+  } else {
+    cx.innerHTML = `<p class="texto-dim2" style="font-size:12px;margin:0;">
+      Sem reunião marcada — o consultor recebe o lead e agenda por conta.</p>`
+  }
+
   fundo.querySelector('#at-confirmar').onclick = async () => {
+    const btn = fundo.querySelector('#at-confirmar')
     const vendedorId = fundo.querySelector('#at-vendedor').value
     const el = fundo.querySelector('#at-recado')
-    if (!vendedorId) { el.textContent = 'Escolha o vendedor.'; el.classList.remove('oculto'); return }
+    if (!vendedorId) { el.textContent = 'Escolha o consultor.'; el.classList.remove('oculto'); return }
+    btn.disabled = true; btn.textContent = 'enviando...'
+    el.classList.add('oculto')
+
+    const nomeVendedor = CRM_CACHE.vendedores.find(p => p.id === vendedorId)?.nome ?? 'consultor'
+    const agora = new Date().toISOString()
+    let notaReuniao = ''
+
+    // 1) a reunião primeiro, enquanto o lead ainda está sem dono
+    if (reuniao) {
+      const escolha = fundo.querySelector('input[name="at-reu"]:checked')?.value
+      const mudanca = { confirmado_em: agora, confirmado_por: PERFIL.pessoaId }
+      if (escolha === 'remarcar') {
+        const d = fundo.querySelector('#at-data').value
+        const h = fundo.querySelector('#at-hora').value || '09:00'
+        if (!d) { el.textContent = 'Escolha a nova data.'; el.classList.remove('oculto'); btn.disabled = false; btn.textContent = 'Enviar pro consultor'; return }
+        mudanca.data_hora = new Date(`${d}T${h}:00`).toISOString()
+        notaReuniao = ` Reunião remarcada para ${fmtReuniao(mudanca.data_hora) || fmtQuando(mudanca.data_hora) || ''}.`
+      } else {
+        notaReuniao = ` Reunião confirmada para ${fmtReuniao(reuniao.data_hora) || fmtQuando(reuniao.data_hora) || ''}.`
+      }
+      const { error: eR } = await db.from('lead_compromisso').update(mudanca).eq('id', reuniao.id)
+      if (eR) {
+        btn.disabled = false; btn.textContent = 'Enviar pro consultor'
+        el.textContent = 'A reunião não pôde ser atualizada: ' + eR.message
+        el.classList.remove('oculto'); return
+      }
+    }
+
+    // 2) o dono. "entregue" sai daqui e não da mão de ninguém: atribuir É
+    // sair da originação, e depender de alguém lembrar de arrastar o card
+    // era o que deixava lead sem coluna certa.
     const { error } = await db.from('lead').update({
-      vendedor_id: vendedorId, atribuido_por_id: PERFIL.pessoaId, atribuido_em: new Date().toISOString()
+      vendedor_id: vendedorId, atribuido_por_id: PERFIL.pessoaId, atribuido_em: agora,
+      situacao_originacao: 'entregue'
     }).eq('id', l.id)
-    if (error) { el.textContent = error.message; el.classList.remove('oculto'); return }
+    if (error) {
+      btn.disabled = false; btn.textContent = 'Enviar pro consultor'
+      el.textContent = error.message; el.classList.remove('oculto'); return
+    }
+
     await db.from('lead_historico').insert({
       lead_id: l.id, etapa_de: l.etapa, etapa_para: l.etapa, pessoa_id: PERFIL.pessoaId,
-      observacao: `Atribuído a ${CRM_CACHE.vendedores.find(p => p.id === vendedorId)?.nome ?? 'vendedor'}`
+      observacao: `Atribuído a ${nomeVendedor}.${notaReuniao}`
     })
+
+    // 3) o consultor precisa saber; ele não fica olhando o funil esperando
+    await db.from('notificacao_pessoal').insert({
+      destinatario_id: vendedorId,
+      titulo: 'Lead novo pra você',
+      mensagem: `"${l.nome}" veio da originação e é seu.${notaReuniao}`
+        + ` Atribuído por ${PERFIL.nome || 'a gestão'}.`,
+      entidade: 'lead', entidade_id: l.id
+    })
+
     fechar(); aoFechar()
   }
 }
@@ -19983,11 +20105,22 @@ const COLUNAS_ORIGINACAO = [
   { chave: 'em_conversa',     nome: 'Em conversa',     dica: 'atendeu, está conversando' },
   { chave: 'qualificando',    nome: 'Qualificando',    dica: 'levantando cultura, área, momento' },
   { chave: 'reuniao_marcada', nome: 'Reunião marcada', dica: 'tem compromisso agendado' },
-  { chave: 'entregue',        nome: 'Entregue',        dica: 'foi pro consultor', saida: true },
+  { chave: 'na_gestao',       nome: 'Na gestão',       dica: 'esperando definirem o consultor', saida: true },
+  { chave: 'entregue',        nome: 'Entregue',        dica: 'consultor definido', saida: true },
   { chave: 'no_eduardo',      nome: 'Com o Eduardo',   dica: 'o bot assumiu o primeiro contato', saida: true },
   { chave: 'descartado',      nome: 'Descartado',      dica: 'não vale seguir', saida: true }
 ]
 const ROTULO_ORIGINACAO = Object.fromEntries(COLUNAS_ORIGINACAO.map(c => [c.chave, c.nome]))
+
+// Colunas que NÃO aceitam arrastar nem aparecem no "Mover para": entrar
+// nelas tem consequência fora do quadro (o bot assume a conversa; a gestão
+// é notificada), então exige o botão, que é onde a consequência é
+// explicada. Arrastar mudaria só o rótulo e o outro lado nunca saberia.
+//
+// 'entregue' fica de fora da lista por um motivo diferente: ninguém o
+// escolhe. Ele é escrito pela atribuição, quando a gestão define o
+// consultor — ver formAtribuirLead.
+const COLUNAS_SO_BOTAO = ['no_eduardo', 'na_gestao', 'entregue']
 
 // 'fila' | 'quadro'
 let ORIG_VISTA = 'fila'
@@ -20028,11 +20161,13 @@ function quadroOriginacaoHtml (itens) {
           fica embaixo dela ninguém lê */ ''}
     <p class="texto-dim2" style="font-size:11px;line-height:1.55;margin:0 2px 10px;">
       <b>Clique no card</b> pra abrir a ficha. O <b>⋯</b> no canto do card é onde
-      ficam <b>mover de coluna</b> e <b>🤖 Passar pro Eduardo</b> — arrastar o card
-      também move. <b>Com o Eduardo</b> não está na lista de mover de propósito:
-      entrar ali é pelo botão, porque é nele que você escolhe a abordagem e o
-      contato entra de verdade na fila do bot; mudar só o rótulo deixaria o
-      Eduardo sem saber.
+      ficam <b>mover de coluna</b>, <b>🤖 Passar pro Eduardo</b> e
+      <b>📤 Enviar pra gestão</b> — arrastar o card também move.
+      <b>Com o Eduardo</b>, <b>Na gestão</b> e <b>Entregue</b> não estão na lista
+      de mover de propósito: as duas primeiras entram pelo botão, porque é ali
+      que o outro lado é avisado de verdade — mudar só o rótulo deixaria o
+      Eduardo ou a gestão sem saber. <b>Entregue</b> ninguém escolhe: é a
+      gestão definindo o consultor que escreve essa coluna.
     </p>
     <div class="qo-faixa">
       ${COLUNAS_ORIGINACAO.map(col => {
@@ -20069,13 +20204,24 @@ function quadroOriginacaoHtml (itens) {
 
               <div class="qo-editor" hidden>
                 <label class="qo-rot">Mover para</label>
+                ${/* card que já está numa coluna de saída: o estado atual não é
+                      um destino válido, então ele não aparece na lista. Sem um
+                      rótulo honesto no topo, o select mostraria "A contatar"
+                      selecionado num lead que está com a gestão — e mexer ali
+                      viraria um puxão de volta sem querer. */ ''}
                 <select class="qo-mudar" data-sem-busca>
-                  ${COLUNAS_ORIGINACAO.filter(c => c.chave !== 'no_eduardo').map(c =>
+                  ${COLUNAS_SO_BOTAO.includes(i.situacao_originacao)
+                    ? `<option value="" selected>${esc(ROTULO_ORIGINACAO[i.situacao_originacao])} — trazer de volta pra:</option>`
+                    : ''}
+                  ${COLUNAS_ORIGINACAO.filter(c => !COLUNAS_SO_BOTAO.includes(c.chave)).map(c =>
                     `<option value="${c.chave}" ${((i.situacao_originacao || 'a_contatar') === c.chave) ? 'selected' : ''}>${esc(c.nome)}</option>`).join('')}
                 </select>
                 <div class="qo-botoes">
                   ${i.no_sdr ? `<span class="texto-dim2" style="font-size:10px;">já está com o Eduardo</span>`
                     : `<button type="button" class="btn mini qo-eduardo">🤖 Passar pro Eduardo</button>`}
+                  ${i.situacao_originacao === 'na_gestao'
+                    ? `<span class="texto-dim2" style="font-size:10px;">já está com a gestão</span>`
+                    : `<button type="button" class="btn mini qo-gestao">📤 Enviar pra gestão</button>`}
                 </div>
               </div>
             </div>`).join('') || `<p class="texto-dim2" style="font-size:11px;margin:4px 2px;">vazio</p>`}
@@ -20085,9 +20231,10 @@ function quadroOriginacaoHtml (itens) {
     `
 }
 
-// Arrastar e soltar. "Com o Eduardo" é a única coluna que não aceita
-// solta: entrar nela exige a transferência de verdade, com escolha de
-// abordagem — arrastar só mudaria o rótulo e o bot nunca saberia.
+// Arrastar e soltar. As colunas de COLUNAS_SO_BOTAO não aceitam solta:
+// entrar nelas exige a transferência de verdade (escolher a abordagem do
+// bot, avisar a gestão) — arrastar só mudaria o rótulo e o outro lado
+// nunca saberia.
 function ligarQuadroOriginacao (editavel, recarregar, aoAbrirFicha) {
   // quem não edita continua podendo clicar no card e ler a ficha — só não
   // arrasta, não move e não passa pro Eduardo
@@ -20154,6 +20301,7 @@ function ligarQuadroOriginacao (editavel, recarregar, aoAbrirFicha) {
 
     const sel = c.querySelector('.qo-mudar')
     if (sel) sel.onchange = async () => {
+      if (!sel.value) return // é o rótulo do estado atual, não um destino
       if (await mover(id, sel.value)) recarregar()
     }
 
@@ -20163,19 +20311,26 @@ function ligarQuadroOriginacao (editavel, recarregar, aoAbrirFicha) {
       const nome = c.querySelector('h6')?.textContent || ''
       abrirPassarProEduardo([id], [nome], recarregar)
     }
+
+    const btnGestao = c.querySelector('.qo-gestao')
+    if (btnGestao) btnGestao.onclick = e => {
+      e.stopPropagation()
+      const nome = c.querySelector('h6')?.textContent || ''
+      abrirEnviarProGestao(id, nome, recarregar)
+    }
   })
 
   document.querySelectorAll('.qo-col').forEach(col => {
     const destino = col.dataset.col
     col.ondragover = e => {
-      if (destino === 'no_eduardo') return
+      if (COLUNAS_SO_BOTAO.includes(destino)) return
       e.preventDefault(); col.classList.add('alvo')
     }
     col.ondragleave = () => col.classList.remove('alvo')
     col.ondrop = async e => {
       e.preventDefault(); col.classList.remove('alvo')
       const id = arrastado || (() => { try { return e.dataTransfer.getData('text/plain') } catch { return null } })()
-      if (!id || destino === 'no_eduardo') return
+      if (!id || COLUNAS_SO_BOTAO.includes(destino)) return
       if (await mover(id, destino)) recarregar()
     }
   })
@@ -20265,6 +20420,94 @@ function abrirPassarProEduardo (ids, nomes, aoTerminar) {
     if (falhas.length) {
       alert([`Passaram ${feitos} de ${ids.length}.`, '', 'Não foram:', ...falhas].join('\n'))
     }
+    if (aoTerminar) aoTerminar()
+  }
+}
+
+// ---------------------------------------------------------------
+// Enviar pra gestão — o fim da originação para quem virou reunião.
+//
+// Por que existe: "Entregue" sempre foi só rótulo. Quem qualificava
+// arrastava o card e torcia pra alguém reparar no pool, porque a escolha
+// do consultor mora em outra tela e ninguém era avisado. Um lead
+// qualificado e um lead que ninguém ligou ficavam idênticos na lista da
+// gestão.
+//
+// Aqui o envio é um ato: muda a coluna, escreve no histórico e notifica
+// quem decide — as três coisas numa RPC só, pra não existir lead que
+// mudou de coluna sem ninguém saber.
+//
+// A reunião NÃO é refeita na gestão. Ela já existe, presa ao lead, e a
+// gestão confirma ou remarca na hora de escolher o consultor. Quem está
+// no telefone com o produtor é quem consegue marcar; adiar isso pro dia
+// seguinte é onde lead esfria.
+// ---------------------------------------------------------------
+async function abrirEnviarProGestao (id, nome, aoTerminar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:520px;">
+    <div class="cabeca-secao"><h3 style="margin:0;">Enviar pra gestão</h3></div>
+    <p class="texto-dim2" style="font-size:12px;margin:-4px 0 12px;line-height:1.55;">
+      <b>${esc(nome)}</b> sai da sua fila e entra na lista da gestão, que escolhe
+      o consultor. A reunião que você marcou vai junto e aparece na agenda dele
+      assim que for definido.</p>
+
+    <div id="eg-reuniao" class="texto-dim2" style="font-size:12px;">verificando a agenda...</div>
+
+    <div class="campo" style="margin-top:12px;"><label>O que a gestão precisa saber</label>
+      <textarea id="eg-obs" rows="3"
+        placeholder="Ex: 400 ha de soja, já compra da concorrência, quer falar de barter. Prefere quem conheça a região."></textarea>
+      <span class="texto-dim2" style="font-size:11px;">
+        Isso vai no aviso e no histórico do lead — é o que a gestão lê pra escolher quem atende.</span></div>
+
+    <div class="recado oculto" id="eg-erro"></div>
+    <div class="acoes" style="margin-top:12px;">
+      <button class="btn" id="eg-ok">Enviar pra gestão</button>
+      <button class="btn-secundario" id="eg-cancelar">Cancelar</button>
+    </div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#eg-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  // a reunião não é obrigatória, mas mandar sem ela é o caso em que o
+  // consultor recebe um nome e nenhuma data — vale dizer isso antes
+  const cxReuniao = fundo.querySelector('#eg-reuniao')
+  const { data: compromissos } = await db.from('lead_compromisso')
+    .select('id,data_hora,titulo').eq('lead_id', id).eq('concluido', false)
+    .gte('data_hora', new Date().toISOString())
+    .order('data_hora', { ascending: true }).limit(1)
+  const reuniao = (compromissos || [])[0]
+  cxReuniao.innerHTML = reuniao
+    ? `<div style="padding:9px 11px;border:1px solid var(--line);border-radius:9px;
+         background:var(--surface2);font-size:12px;line-height:1.5;">
+         📅 <b>${esc(fmtReuniao(reuniao.data_hora) || fmtQuando(reuniao.data_hora) || '')}</b>
+         ${reuniao.titulo ? ' — ' + esc(reuniao.titulo) : ''}<br>
+         <span class="texto-dim2">Vai como pré-agendada. A gestão confirma ou remarca
+         junto com a escolha do consultor.</span></div>`
+    : `<div style="padding:9px 11px;border:1px solid var(--warn-text);border-radius:9px;
+         font-size:12px;line-height:1.5;">
+         <b style="color:var(--warn-text);">Sem reunião marcada.</b>
+         <span class="texto-dim2">Pode enviar assim mesmo, mas o consultor recebe o
+         lead sem data — e quem consegue marcar é você, que acabou de falar com ele.</span></div>`
+
+  fundo.querySelector('#eg-ok').onclick = async () => {
+    const btn = fundo.querySelector('#eg-ok')
+    const erro = fundo.querySelector('#eg-erro')
+    btn.disabled = true; btn.textContent = 'enviando...'
+    erro.classList.add('oculto')
+
+    const { data, error } = await db.rpc('crm_enviar_para_gestao',
+      { p_lead_id: id, p_observacao: fundo.querySelector('#eg-obs').value.trim() || null })
+
+    if (error || !data?.ok) {
+      btn.disabled = false; btn.textContent = 'Enviar pra gestão'
+      erro.textContent = error?.message || data?.erro || 'Não deu certo.'
+      erro.classList.remove('oculto')
+      return
+    }
+    fechar()
     if (aoTerminar) aoTerminar()
   }
 }
@@ -22186,6 +22429,83 @@ function renderCrmMesEquipe (alvo) {
   $('#cge-fechar-mes').onclick = () => { CRM_CAL_EQ_MES = null; renderCrmCalendarioEquipe(alvo) }
 }
 
+// ---------------------------------------------------------------
+// Da originação — a caixa de entrada da gestão.
+//
+// Antes, um lead que a Bianca qualificou e agendou reunião ficava na
+// mesma lista do lead que saiu de uma planilha ontem, contado no mesmo
+// número. Aqui eles sobem pro topo com o que foi levantado junto: as
+// ligações que já rolaram, o que ela escreveu e a reunião pré-agendada.
+// É esse conjunto que responde "quem eu mando atender".
+// ---------------------------------------------------------------
+async function blocoDaOriginacao (alvo, leads, recarregar) {
+  if (!alvo) return
+  if (!leads.length) { alvo.innerHTML = ''; return }
+  alvo.innerHTML = `<p class="texto-dim2" style="font-size:12px;">carregando a fila da originação...</p>`
+
+  const ids = leads.map(l => l.id)
+
+  // as duas coisas que a gestão precisa e não estão no lead: a reunião
+  // que foi marcada e o tanto de esforço que já foi gasto nesse contato
+  const [{ data: compromissos }, { data: ligacoes }] = await Promise.all([
+    db.from('lead_compromisso').select('lead_id,data_hora,titulo,confirmado_em')
+      .in('lead_id', ids).eq('concluido', false).order('data_hora', { ascending: true }),
+    db.from('lead_ligacao').select('lead_id,resultado').in('lead_id', ids)
+  ])
+
+  const reuniaoDe = {}
+  ;(compromissos || []).forEach(c => { if (!reuniaoDe[c.lead_id]) reuniaoDe[c.lead_id] = c })
+  const placar = {}
+  ;(ligacoes || []).forEach(g => {
+    const v = placar[g.lead_id] || (placar[g.lead_id] = { total: 0, atendidas: 0 })
+    v.total++
+    if (g.resultado === 'ATENDEU') v.atendidas++
+  })
+
+  alvo.innerHTML = `
+    <div class="cabeca-secao" style="margin-bottom:8px;">
+      <h3 style="font-family:var(--serif);font-size:16px;">Da originação — esperando consultor</h3>
+      <span class="chip" style="font-size:10.5px;">${leads.length}</span>
+    </div>
+    <p class="texto-dim2" style="font-size:11.5px;margin:-4px 0 10px;line-height:1.5;">
+      Leads já qualificados que voltaram pra você escolher quem atende. Ao definir o
+      consultor, o lead entra no funil dele e a reunião cai na agenda dele — nessa
+      mesma tela você confirma ou remarca a data.</p>
+    <div style="display:grid;gap:10px;">
+      ${leads.map(l => {
+        const r = reuniaoDe[l.id]
+        const pl = placar[l.id]
+        return `<div class="panel" style="padding:14px 16px;">
+          <div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+            <div style="flex:1;min-width:220px;">
+              <b style="font-size:14px;">${esc(l.nome)}</b>
+              <div class="texto-dim2" style="font-size:11.5px;margin-top:2px;">
+                ${esc([l.municipio, l.uf].filter(Boolean).join(' / ') || 'local não informado')}
+                ${l.telefone ? ' · ' + esc(l.telefone) : ''}
+                ${pl ? ` · ${pl.total} ligação(ões)${pl.atendidas ? `, ${pl.atendidas} atendida(s)` : ''}` : ''}
+              </div>
+              ${r
+                ? `<div style="font-size:12px;margin-top:6px;color:var(--good-text);">
+                     📅 ${esc(fmtReuniao(r.data_hora) || fmtQuando(r.data_hora) || '')}
+                     ${r.titulo ? ' — ' + esc(r.titulo) : ''}
+                     <span class="texto-dim2">${r.confirmado_em ? '(confirmada)' : '(pré-agendada)'}</span>
+                   </div>`
+                : `<div style="font-size:12px;margin-top:6px;color:var(--warn-text);">
+                     sem reunião marcada</div>`}
+              ${l.observacoes ? `<p class="texto-dim" style="font-size:12px;line-height:1.55;margin:6px 0 0;max-width:70ch;">
+                ${esc(l.observacoes)}</p>` : ''}
+            </div>
+            <button class="btn mini" data-definir="${esc(l.id)}" style="flex:none;">Definir consultor</button>
+          </div>
+        </div>`
+      }).join('')}
+    </div>`
+
+  alvo.querySelectorAll('[data-definir]').forEach(b => {
+    b.onclick = () => formAtribuirLead(leads.find(l => l.id === b.dataset.definir), recarregar)
+  })
+}
+
 async function crmGestaoTab (alvo, editavel) {
   const { data, error } = await db.from('lead').select(selLead)
     .eq('arquivado', false).order('atualizado_em', { ascending: false }).limit(1500)
@@ -22194,7 +22514,12 @@ async function crmGestaoTab (alvo, editavel) {
   const lista = data || []
   CRM_CACHE.leads = lista
   const atribuidos = lista.filter(l => l.vendedor_id)
-  const poolSemVendedor = lista.filter(l => !l.vendedor_id).length
+  // o pool cru (planilha importada, prospecção sem tratamento) e o que a
+  // originação trabalhou e devolveu são filas diferentes: a segunda tem
+  // gente qualificada esperando decisão, e misturar as duas no mesmo
+  // contador era o que fazia lead bom dormir no meio de lead frio
+  const daOriginacao = lista.filter(l => !l.vendedor_id && l.situacao_originacao === 'na_gestao')
+  const poolSemVendedor = lista.filter(l => !l.vendedor_id && l.situacao_originacao !== 'na_gestao').length
   const emAberto = atribuidos.filter(l => ETAPAS_LEAD_ABERTAS.includes(l.etapa))
   const ganhos = atribuidos.filter(l => l.etapa === 'GANHO')
   const perdidos = atribuidos.filter(l => l.etapa === 'PERDIDO')
@@ -22260,9 +22585,12 @@ async function crmGestaoTab (alvo, editavel) {
     <div class="resumo-topo" style="margin-bottom:16px;">
       ${[['Leads em aberto (equipe)', emAberto.length, ''], ['Valor em funil (equipe)', 'R$ ' + fmtNum(valorPipeline), ''],
          ['Taxa de conversão', taxaConversao != null ? taxaConversao + '%' : '—', ''],
-         ['Sem vendedor (pool)', poolSemVendedor, poolSemVendedor ? 'alerta' : '']]
+         ['Da originação (esperando consultor)', daOriginacao.length, daOriginacao.length ? 'destaque' : ''],
+         ['Pool cru (sem vendedor)', poolSemVendedor, poolSemVendedor ? 'alerta' : '']]
         .map(([rot, val, cl]) => `<div class="bloco ${cl}"><div class="rot">${rot}</div><div class="val">${val}</div></div>`).join('')}
     </div>
+
+    <div id="cg-originacao" style="margin-bottom:16px;"></div>
 
     ${poolSemVendedor ? `<div class="panel" style="padding:16px 18px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
       <p class="texto-dim" style="margin:0;font-size:13px;">${poolSemVendedor} lead(s) esperando atribuição a um vendedor.</p>
@@ -22398,6 +22726,8 @@ async function crmGestaoTab (alvo, editavel) {
       crmCompartilharBanco(painelBanco)
     } else painelBanco.classList.add('oculto')
   }
+
+  blocoDaOriginacao($('#cg-originacao'), daOriginacao, () => crmGestaoTab(alvo, editavel))
 
   const painelAtribuir = $('#cg-atribuir-painel')
   const abrirPainelAtribuir = () => {
