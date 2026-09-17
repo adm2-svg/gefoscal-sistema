@@ -823,6 +823,19 @@ tbody tr:hover { background: var(--hover-bg); }
 .tag-filtro.ativo .conta { opacity:.8; }
 .tag-filtro.zerado { opacity:.42; }
 
+/* Catálogo de termos do Jurídico: um card por tipo de termo. auto-fit com
+   minmax(min(...)) porque abaixo de 260px o card tem que poder encolher em
+   vez de estourar a tela. */
+.grade-termos { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(260px,100%),1fr));
+  gap:12px; align-items:stretch; }
+.termo-card { padding:16px; display:flex; flex-direction:column; gap:8px; min-width:0; }
+.termo-card.termo-off { opacity:.62; }
+.termo-cabeca { display:flex; gap:10px; align-items:flex-start; min-width:0; }
+.termo-icone { font-size:24px; line-height:1; flex:none; }
+.termo-desc { font-size:11.5px; line-height:1.55; margin:0; }
+.termo-numeros { display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+  font-size:11.5px; padding-top:4px; border-top:1px solid var(--line2); margin-top:2px; }
+
 /* barra de filtros dos Itens: um bloco só, sem moldura pesada */
 .fr-barra { background:var(--surface2); border:1px solid var(--line2); border-radius:12px;
   padding:10px 12px; margin-bottom:14px; display:flex; flex-direction:column; gap:8px; }
@@ -2692,6 +2705,8 @@ const ABRIR_ENTIDADE_NOTIFICACAO = {
   // termo de compensação: pro funcionário, leva pro RH dele, que é onde
   // ele assina. Pro DP que emitiu, o aviso é só "voltou assinado".
   ponto_compensacao: async () => { irPara('desempenho') },
+  // qualquer termo do catálogo do Jurídico: o funcionário assina no RH dele
+  termo_emitido: async () => { irPara('desempenho') },
   // pedido de contratação: leva pro RH já na aba certa. Pro RH cai na fila
   // de decisão; pra quem pediu, na lista dos pedidos dele.
   contratacao_pedido: async () => { RECR_SUBABA = 'pedidos'; irPara('desempenho') },
@@ -2968,7 +2983,7 @@ async function abrirNotificacoes () {
   }
 }
 
-const ICONE_NOTIF = { solicitacao_interna: '📋', solicitacao_compra: '🛒', sdr_lead: '📅', lead: '🌱', contratacao_pedido: '🧑‍🏭', ponto_compensacao: '📝' }
+const ICONE_NOTIF = { solicitacao_interna: '📋', solicitacao_compra: '🛒', sdr_lead: '📅', lead: '🌱', contratacao_pedido: '🧑‍🏭', ponto_compensacao: '📝', termo_emitido: '📜' }
 
 const esperaConfirmacao = n => !!(n.exige_confirmacao && !n.confirmada_em)
 
@@ -41720,7 +41735,7 @@ async function paginaJuridico () {
 
   const abas = [['painel', 'Painel'], ['contratos', 'Contratos'], ['licencas', 'Licenças e certidões'],
     ['processos', 'Processos'], ['notificacoes', 'Notificações e autuações'], ['documentos', 'Documentos'],
-    ['termos', 'Termos de compensação']]
+    ['termos', 'Termos']]
   area.innerHTML = `
     <div style="background:linear-gradient(120deg,#1a1410 0%,#2b2018 55%,#1a1410 100%);border-radius:14px;padding:22px 26px;margin-bottom:18px;position:relative;overflow:hidden;border:1px solid #3a2e20;">
       <div style="position:absolute;right:-20px;top:-24px;font-size:120px;opacity:.08;line-height:1;">⚖️</div>
@@ -41752,10 +41767,9 @@ function abrirJuridico (sub, editavel) {
   if (sub === 'processos') juridicoProcessos(alvo, editavel)
   if (sub === 'notificacoes') juridicoNotificacoes(alvo, editavel)
   if (sub === 'documentos') juridicoDocumentos(alvo, editavel)
-  // O termo é redigido pelo Jurídico e emitido pelo DP. Aqui eles veem
-  // como está saindo na prática e mexem no modelo; emitir continua sendo
-  // do DP, então `editavel` entra como false de propósito.
-  if (sub === 'termos') pontoTermosCompensacao(alvo, false, () => abrirJuridico('termos', editavel), { podeModelo: editavel })
+  // Hub de todos os termos da empresa: o Jurídico escreve os modelos e
+  // emite; o DP/RH também emite. Cada tipo de termo é um card.
+  if (sub === 'termos') juridicoTermos(alvo, editavel)
 }
 
 function diasParaVencer (data) {
@@ -42677,6 +42691,7 @@ async function paginaDesempenho () {
   const abas = [
     ['painel', '📊', 'Painel'], ['especialista', '🎯', 'Especialista RH'],
     ['disc', '🧭', 'Perfis DISC'], ['motivadores', '💡', 'Motivadores'],
+    ['termos-emitir', '📋', 'Termos'],
     ['termos', '📜', 'Termo de uso'],
     ['agilidade', '⚡', 'Agilidade e prazos'],
     ['individual', '👤', 'Acompanhamento Individual'], ['prestadores', '🏢', 'Prestadores Atrelados'], ['recrutamento', '🗂️', 'Recrutamento e Seleção'],
@@ -42723,6 +42738,9 @@ function abrirDesempenho (sub, editavel) {
   if (sub === 'disc') desempPerfisDisc(alvo)
   if (sub === 'motivadores') desempPerfisMotivador(alvo)
   if (sub === 'termos') desempTermos(alvo)
+  // o RH também despacha termo: o Jurídico escreve o modelo, o RH entrega.
+  // É o mesmo hub do Jurídico, com a permissão do RH.
+  if (sub === 'termos-emitir') juridicoTermos(alvo, editavel)
   if (sub === 'meu') desempMeu(alvo)
 }
 
@@ -47680,9 +47698,28 @@ async function desempMeu (alvo) {
 
   // termos de compensação esperando a assinatura dele. Vêm antes de tudo
   // na tela: é a única coisa aqui que trava alguém do outro lado.
-  const { data: termosComp } = await db.from('ponto_compensacao').select(SEL_COMP)
-    .eq('pessoa_id', PERFIL.pessoaId).order('criado_em', { ascending: false }).limit(30)
+  const [{ data: termosComp }, { data: termosGer }] = await Promise.all([
+    db.from('ponto_compensacao').select(SEL_COMP)
+      .eq('pessoa_id', PERFIL.pessoaId).order('criado_em', { ascending: false }).limit(30),
+    // todo termo que o Jurídico/RH emitiu no nome dela — responsabilidade
+    // por carro, notebook, celular e o que mais o Jurídico cadastrar
+    db.from('termo_emitido').select(SEL_TERMO_EMITIDO)
+      .eq('pessoa_id', PERFIL.pessoaId).order('criado_em', { ascending: false }).limit(60)
+  ])
   const compPendentes = (termosComp || []).filter(t => t.status === 'AGUARDANDO_ASSINATURA')
+  const gerPendentes = (termosGer || []).filter(t => t.status === 'AGUARDANDO_ASSINATURA')
+  // "meus termos": o que já está resolvido, pra ela achar depois o papel
+  // que assinou sem pedir pro RH
+  const meusTermosFeitos = [
+    ...(termosGer || []).filter(t => t.status !== 'AGUARDANDO_ASSINATURA')
+      .map(t => ({ tipo: 'ger', id: t.id, titulo: t.titulo,
+        detalhe: [t.bem_descricao, t.bem_identificador].filter(Boolean).join(' · '),
+        status: t.status, quando: t.assinado_em || t.criado_em, via_papel: t.via_papel })),
+    ...(termosComp || []).filter(t => t.status !== 'AGUARDANDO_ASSINATURA')
+      .map(t => ({ tipo: 'comp', id: t.id, titulo: 'Termo de compensação de horas',
+        detalhe: `${fmtHoras(t.horas)} de ${fmtData(t.data_extra)} · folga em ${fmtData(t.data_folga)}`,
+        status: t.status, quando: t.assinado_em || t.criado_em, via_papel: t.via_papel }))
+  ].sort((a, b) => String(b.quando || '').localeCompare(String(a.quando || '')))
 
   const media = arr => arr.length ? (arr.reduce((s, n) => s + n, 0) / arr.length).toFixed(1) : '—'
   const notasConduta = (conduta || []).flatMap(c => [c.nota_prazos, c.nota_demandas, c.nota_postura].filter(n => n != null))
@@ -47723,9 +47760,28 @@ async function desempMeu (alvo) {
           <span class="r">${r}</span></div>`).join('')}
     </div>
 
-    ${compPendentes.length ? `
-      ${secaoMeuRh("📝", "Termos esperando sua assinatura", compPendentes.length)}
+    ${(compPendentes.length + gerPendentes.length) ? `
+      ${secaoMeuRh("📝", "Termos esperando sua assinatura", compPendentes.length + gerPendentes.length)}
       <div style="display:grid;gap:10px;margin-bottom:18px;">
+        ${gerPendentes.map(t => `<div class="panel" style="padding:14px 16px;border-left:4px solid var(--warn-text);">
+          <b style="font-size:14px;">${esc(t.titulo)}</b>
+          <div class="texto-dim2" style="font-size:12px;margin-top:3px;">
+            ${t.bem_descricao ? esc(t.bem_descricao) : ''}
+            ${t.bem_identificador ? ' · ' + esc(t.bem_identificador) : ''}
+            ${t.data_entrega ? ' · entregue em ' + fmtData(t.data_entrega) : ''}
+            ${t.empresa?.nome ? ' · ' + esc(t.empresa.nome) : ''}
+            · emitido por ${esc(t.emissor?.nome ?? 'RH')}</div>
+          <p class="texto-dim2" style="font-size:12px;line-height:1.6;margin:10px 0 6px;max-width:75ch;">
+            Leia o documento inteiro antes de assinar — o botão abaixo abre ele.</p>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;">
+            <button class="btn-secundario mini" data-ver-ger="${esc(t.id)}">Ler o termo</button>
+          </div>
+          <label class="texto-dim2" style="font-size:11px;">Assine aqui, com o dedo ou o mouse</label>
+          <div data-ass-ger="${esc(t.id)}" style="max-width:420px;"></div>
+          <div class="acoes" style="margin-top:8px;">
+            <button class="btn mini" data-assinar-ger="${esc(t.id)}">Assinar termo</button>
+          </div>
+        </div>`).join('')}
         ${compPendentes.map(t => `<div class="panel" style="padding:14px 16px;border-left:4px solid var(--warn-text);">
           <b style="font-size:14px;">Compensação de ${fmtHoras(t.horas)}</b>
           <div class="texto-dim2" style="font-size:12px;margin-top:3px;">
@@ -47746,6 +47802,22 @@ async function desempMeu (alvo) {
           </div>
         </div>`).join('')}
       </div>` : ''}
+
+    ${meusTermosFeitos.length ? `
+      ${secaoMeuRh("📁", "Meus termos assinados", meusTermosFeitos.length)}
+      <div class="panel" style="padding:0;margin-bottom:18px;"><div class="tabela-scroll">
+        <table><thead><tr><th>Termo</th><th>Do quê</th><th>Situação</th><th></th></tr></thead><tbody>
+        ${meusTermosFeitos.map(t => `<tr>
+          <td><b>${esc(t.titulo)}</b></td>
+          <td class="texto-dim">${esc(t.detalhe || '—')}</td>
+          <td><span class="${t.status === 'ASSINADO' ? 'badge-bom' : 'chip'}" style="font-size:10.5px;">
+            ${esc(ROTULO_STATUS_TERMO[t.status] || t.status)}</span>
+            <div class="texto-dim2" style="font-size:10.5px;margin-top:2px;">
+              ${fmtQuando(t.quando) || ''}${t.via_papel ? ' · papel' : ''}</div></td>
+          <td><button class="btn-secundario mini" data-meu-termo="${esc(t.tipo)}:${esc(t.id)}">Ver / imprimir</button></td>
+        </tr>`).join('')}
+        </tbody></table>
+      </div></div>` : ''}
 
     ${secaoMeuRh("🎓", "Minhas trilhas de treinamento", listaAtribs.length)}
     <div class="mrh-cartoes" style="margin-bottom:18px;">
@@ -47849,6 +47921,41 @@ async function desempMeu (alvo) {
         alert(error?.message || r?.erro || 'Não deu certo.'); return
       }
       desempMeu(alvo)
+    }
+  })
+
+  // mesmo componente, mesma regra, outra tabela: os termos que o Jurídico
+  // ou o RH emitiram a partir de um modelo do catálogo
+  const assinaturasGer = {}
+  alvo.querySelectorAll('[data-ass-ger]').forEach(cx => {
+    assinaturasGer[cx.dataset.assGer] = montarAssinatura(cx)
+  })
+
+  alvo.querySelectorAll('[data-ver-ger]').forEach(b => {
+    b.onclick = () => pdfTermoGenerico((termosGer || []).find(t => t.id === b.dataset.verGer))
+  })
+
+  alvo.querySelectorAll('[data-assinar-ger]').forEach(b => {
+    b.onclick = async () => {
+      const id = b.dataset.assinarGer
+      const ass = assinaturasGer[id]
+      if (!ass || !ass.temAssinatura()) { alert('Faça sua assinatura no quadro antes de confirmar.'); return }
+      b.disabled = true; b.textContent = 'assinando...'
+      const { data: r, error } = await db.rpc('termo_emitido_assinar',
+        { p_id: id, p_assinatura: ass.pegarImagem() })
+      if (error || !r?.ok) {
+        b.disabled = false; b.textContent = 'Assinar termo'
+        alert(error?.message || r?.erro || 'Não deu certo.'); return
+      }
+      desempMeu(alvo)
+    }
+  })
+
+  alvo.querySelectorAll('[data-meu-termo]').forEach(b => {
+    b.onclick = () => {
+      const [tipo, id] = b.dataset.meuTermo.split(':')
+      if (tipo === 'ger') pdfTermoGenerico((termosGer || []).find(t => t.id === id))
+      else pdfTermoCompensacao((termosComp || []).find(t => t.id === id))
     }
   })
 
@@ -52016,6 +52123,16 @@ const MARCADORES_TERMO = [
   ['{{hoje}}', 'data de hoje']
 ]
 
+// Marcadores dos termos que falam de um bem da empresa (carro, notebook,
+// celular). Ficam separados porque só aparecem no modelo que pede bem —
+// oferecer {{bem}} no termo de compensação de horas só confunde.
+const MARCADORES_BEM = [
+  ['{{bem}}', 'o que está sendo entregue (ex: notebook Dell Latitude)'],
+  ['{{bem_id}}', 'nº de série, patrimônio, placa ou IMEI'],
+  ['{{data_entrega}}', 'data da entrega do bem']
+]
+const TODOS_MARCADORES = [...MARCADORES_TERMO, ...MARCADORES_BEM]
+
 const DIAS_SEMANA = ['domingo', 'segunda-feira', 'terça-feira', 'quarta-feira',
   'quinta-feira', 'sexta-feira', 'sábado']
 const diaDaSemana = iso => iso
@@ -52077,28 +52194,52 @@ function aplicarMarcadores (texto, d) {
     '{{data_folga}}': d.data_folga ? (fmtData(d.data_folga) || '') : '',
     '{{dia_semana_folga}}': diaDaSemana(d.data_folga),
     '{{mes}}': d.data_extra ? d.data_extra.slice(5, 7) + '/' + d.data_extra.slice(0, 4) : '',
-    '{{hoje}}': fmtData(hojeISO()) || ''
+    '{{hoje}}': fmtData(hojeISO()) || '',
+    '{{bem}}': d.bem || '', '{{bem_id}}': d.bem_id || '',
+    '{{data_entrega}}': d.data_entrega ? (fmtData(d.data_entrega) || '') : ''
   }
-  return MARCADORES_TERMO.reduce((t, [m]) => t.split(m).join(valores[m]), converterLacunas(texto))
+  return TODOS_MARCADORES.reduce((t, [m]) => t.split(m).join(valores[m]), converterLacunas(texto))
 }
 
+// chave === null abre em branco pra criar um modelo novo. É o que
+// transforma "termo" em coisa que o Jurídico cadastra sozinho, sem
+// esperar código: modelo novo é linha nova, não tela nova.
 async function abrirModeloTermo (chave, aoFechar) {
-  const { data: mod, error } = await db.from('documento_modelo').select('*').eq('chave', chave).maybeSingle()
-  if (error) { alert(error.message); return }
-  const m = mod || { chave, nome: 'Modelo', texto: '' }
+  const novo = !chave
+  let m = { chave: '', nome: '', texto: '', icone: '📄', descricao: '', pede_bem: false, ativo: true }
+  if (!novo) {
+    const { data: mod, error } = await db.from('documento_modelo').select('*').eq('chave', chave).maybeSingle()
+    if (error) { alert(error.message); return }
+    m = mod || { ...m, chave, nome: 'Modelo' }
+  }
 
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
   fundo.innerHTML = `<div class="modal" style="max-width:720px;">
-    <h3>Modelo — ${esc(m.nome)}</h3>
+    <h3>${novo ? 'Novo modelo de termo' : 'Modelo — ' + esc(m.nome)}</h3>
     <p class="texto-dim2" style="font-size:12px;margin:-6px 0 12px;line-height:1.6;">
       Escreva o texto uma vez. Onde entrar dado do termo, use um marcador da lista abaixo —
       o sistema troca sozinho na hora de emitir. Clique no marcador pra inserir onde o cursor está.</p>
 
-    <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px;">
-      ${MARCADORES_TERMO.map(([mk, dica]) => `<button type="button" class="btn-secundario mini mod-mk"
-        data-mk="${esc(mk)}" title="${esc(dica)}">${esc(mk)}</button>`).join('')}
+    <div class="form-grade" style="margin-bottom:12px;">
+      <div class="campo"><label>Nome do termo *</label>
+        <input id="mod-nome" value="${esc(m.nome || '')}" placeholder="Termo de responsabilidade — crachá"></div>
+      <div class="campo"><label>Ícone do card</label>
+        <input id="mod-icone" value="${esc(m.icone || '📄')}" maxlength="4" placeholder="📄"></div>
+      <div class="campo"><label>Para que serve</label>
+        <input id="mod-descricao" value="${esc(m.descricao || '')}"
+          placeholder="uma linha — aparece no card do Jurídico"></div>
     </div>
+    <label style="display:flex;gap:7px;align-items:flex-start;font-size:12.5px;margin-bottom:4px;">
+      <input type="checkbox" id="mod-pede-bem" ${m.pede_bem ? 'checked' : ''} style="margin-top:2px;">
+      <span>O termo é sobre um bem da empresa (carro, notebook, celular)
+        <span class="texto-dim2" style="display:block;font-size:11px;">
+          marcando isso, a emissão pede a descrição do bem e o nº de série/placa</span></span></label>
+    <label style="display:flex;gap:7px;align-items:center;font-size:12.5px;margin-bottom:12px;">
+      <input type="checkbox" id="mod-ativo" ${m.ativo === false ? '' : 'checked'}>
+      <span>Ativo — aparece pra emissão</span></label>
+
+    <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px;" id="mod-marcadores"></div>
 
     <div class="campo"><label>Texto do termo</label>
       <textarea id="mod-texto" rows="12" style="font-family:ui-monospace,monospace;font-size:12.5px;"
@@ -52135,17 +52276,26 @@ async function abrirModeloTermo (chave, aoFechar) {
   if (abrir) abrir.onclick = e => { e.preventDefault(); abrirArquivo(m.arquivo_caminho) }
 
   // insere o marcador onde o cursor está, em vez de mandar a pessoa digitar
-  // as chaves duplas na mão e errar
-  fundo.querySelectorAll('.mod-mk').forEach(b => {
-    b.onclick = () => {
-      const ta = q('#mod-texto')
-      const i = ta.selectionStart ?? ta.value.length
-      const f = ta.selectionEnd ?? i
-      ta.value = ta.value.slice(0, i) + b.dataset.mk + ta.value.slice(f)
-      ta.focus()
-      ta.selectionStart = ta.selectionEnd = i + b.dataset.mk.length
-    }
-  })
+  // as chaves duplas na mão e errar. A lista muda conforme o modelo fala
+  // ou não de um bem — marcador que não serve pra este termo não aparece.
+  const desenharMarcadores = () => {
+    const lista = q('#mod-pede-bem').checked ? TODOS_MARCADORES : MARCADORES_TERMO
+    q('#mod-marcadores').innerHTML = lista.map(([mk, dica]) =>
+      `<button type="button" class="btn-secundario mini mod-mk"
+        data-mk="${esc(mk)}" title="${esc(dica)}">${esc(mk)}</button>`).join('')
+    q('#mod-marcadores').querySelectorAll('.mod-mk').forEach(b => {
+      b.onclick = () => {
+        const ta = q('#mod-texto')
+        const i = ta.selectionStart ?? ta.value.length
+        const f = ta.selectionEnd ?? i
+        ta.value = ta.value.slice(0, i) + b.dataset.mk + ta.value.slice(f)
+        ta.focus()
+        ta.selectionStart = ta.selectionEnd = i + b.dataset.mk.length
+      }
+    })
+  }
+  q('#mod-pede-bem').onchange = desenharMarcadores
+  desenharMarcadores()
 
   // Ler o arquivo é o que a pessoa realmente quer: subir o termo do
   // Jurídico e não digitar nada. A IA devolve o corpo do documento já com
@@ -52193,12 +52343,21 @@ async function abrirModeloTermo (chave, aoFechar) {
     const avisa = t => { erro.textContent = t; erro.classList.remove('oculto')
       btn.disabled = false; btn.textContent = 'Salvar modelo' }
     const texto = q('#mod-texto').value.trim()
+    const nome = q('#mod-nome').value.trim()
+    if (!nome) return avisa('Dê um nome ao termo — é o que vai no card e no documento.')
     if (!texto) return avisa('O texto do modelo não pode ficar vazio.')
 
     btn.disabled = true; btn.textContent = 'salvando...'
     erro.classList.add('oculto')
 
-    const mudanca = { texto, atualizado_por: PERFIL.pessoaId, atualizado_em: new Date().toISOString() }
+    const mudanca = {
+      texto, nome,
+      icone: q('#mod-icone').value.trim() || '📄',
+      descricao: q('#mod-descricao').value.trim() || null,
+      pede_bem: q('#mod-pede-bem').checked,
+      ativo: q('#mod-ativo').checked,
+      atualizado_por: PERFIL.pessoaId, atualizado_em: new Date().toISOString()
+    }
     const arq = q('#mod-arquivo').files?.[0]
     if (arq) {
       try {
@@ -52208,8 +52367,19 @@ async function abrirModeloTermo (chave, aoFechar) {
       } catch (e) { return avisa(e.message) }
     }
 
-    const { error: e2 } = await db.from('documento_modelo').update(mudanca).eq('chave', chave)
-    if (e2) return avisa(e2.message)
+    if (novo) {
+      // a chave é derivada do nome: quem cadastra pensa no nome do termo,
+      // não num identificador. Sufixo de tempo evita colisão silenciosa.
+      const base = nome.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+        .replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 40) || 'termo'
+      mudanca.chave = `${base}_${Date.now().toString(36).slice(-4)}`
+      mudanca.ordem = 200
+      const { error: e3 } = await db.from('documento_modelo').insert(mudanca)
+      if (e3) return avisa(e3.message)
+    } else {
+      const { error: e2 } = await db.from('documento_modelo').update(mudanca).eq('chave', chave)
+      if (e2) return avisa(e2.message)
+    }
     fechar()
     if (aoFechar) aoFechar()
   }
@@ -52588,6 +52758,497 @@ function pdfTermoCompensacao (t) {
   fundo.querySelector('#tcp-fechar').onclick = () => fundo.remove()
   fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
   fundo.querySelector('#tcp-imprimir').onclick = () => window.print()
+}
+
+// ===============================================================
+// TERMOS — o hub do Jurídico
+//
+// Um card por tipo de termo. Os que já existiam ficam onde estavam
+// (compensação é do DP, termo de uso do sistema é do RH) e aparecem aqui
+// como card também, porque a pergunta "que termos a empresa tem?" tem
+// que ter uma resposta só. Os termos novos — responsabilidade por carro,
+// notebook, celular — nascem de um modelo cadastrado, então criar um
+// termo novo não pede código: pede uma linha em documento_modelo.
+//
+// Quem emite: RH/DP ou o próprio Jurídico. Os dois, de propósito — o
+// Jurídico redige e às vezes já despacha; o RH despacha o resto.
+// ===============================================================
+const SEL_TERMO_EMITIDO = `id,modelo_chave,titulo,texto,status,tem_login,via_papel,
+  assinado_em,criado_em,bem_descricao,bem_identificador,data_entrega,devolvido_em,
+  pessoa_id,empresa_id,
+  pessoa:pessoa_id ( nome, cargo ), emissor:emitido_por ( nome ),
+  empresa:empresa_id ( nome, cnpj )`
+
+const ROTULO_STATUS_TERMO = {
+  AGUARDANDO_ASSINATURA: 'Aguardando assinatura', ASSINADO: 'Assinado',
+  DEVOLVIDO: 'Bem devolvido', CANCELADO: 'Cancelado'
+}
+const corStatusTermo = s => s === 'ASSINADO' ? 'var(--good-text)'
+  : s === 'DEVOLVIDO' ? '#4a90d9' : s === 'CANCELADO' ? 'var(--dim2)' : 'var(--warn-text)'
+
+async function juridicoTermos (corpo, editavel) {
+  corpo.innerHTML = `<p class="texto-dim2">carregando os termos...</p>`
+  await garantirDpPessoas()
+  const [{ data: modelos, error }, { data: emitidos }, { data: comps }, { data: aceites }] =
+    await Promise.all([
+      db.from('documento_modelo').select('*').order('ordem').order('nome'),
+      db.from('termo_emitido').select('modelo_chave,status').limit(3000),
+      db.from('ponto_compensacao').select('id,status').limit(1000),
+      db.from('termo_aceite').select('id').limit(2000)
+    ])
+  if (faltaMigracao(error) || error) { corpo.innerHTML = `<p class="vazio">${esc(error?.message ?? '')}</p>`; return }
+
+  const recarregar = () => juridicoTermos(corpo, editavel)
+  const lista = modelos || []
+  const porModelo = {}
+  ;(emitidos || []).forEach(e => {
+    const c = porModelo[e.modelo_chave] || (porModelo[e.modelo_chave] = { total: 0, pendentes: 0 })
+    c.total++
+    if (e.status === 'AGUARDANDO_ASSINATURA') c.pendentes++
+  })
+  const compTotal = (comps || []).length
+  const compPend = (comps || []).filter(c => c.status === 'AGUARDANDO_ASSINATURA').length
+  // o termo de uso do sistema mora no RH: quem não enxerga o módulo RH só
+  // recebe da RLS a própria assinatura, e mostrar "1 assinatura" seria
+  // mentira. Nesse caso o card conta o que é, sem número.
+  const veTermoDeUso = podeVer('desempenho')
+
+  // o termo de compensação tem tabela própria (é anterior a este catálogo),
+  // então a contagem dele vem de lá, não de termo_emitido
+  const contagem = m => m.chave === 'ponto_compensacao'
+    ? { total: compTotal, pendentes: compPend }
+    : (porModelo[m.chave] || { total: 0, pendentes: 0 })
+
+  const card = m => {
+    const c = contagem(m)
+    const proprio = m.chave !== 'ponto_compensacao'
+    return `<div class="panel termo-card${m.ativo === false ? ' termo-off' : ''}">
+      <div class="termo-cabeca">
+        <span class="termo-icone">${esc(m.icone || '📄')}</span>
+        <div style="flex:1;min-width:0;">
+          <b style="font-size:14px;display:block;line-height:1.35;">${esc(m.nome)}</b>
+          ${m.ativo === false ? `<span class="chip" style="font-size:10px;">desativado</span>` : ''}
+        </div>
+      </div>
+      <p class="texto-dim2 termo-desc">${esc(m.descricao || 'Sem descrição.')}</p>
+      <div class="termo-numeros">
+        <span><b>${c.total}</b> emitido${c.total === 1 ? '' : 's'}</span>
+        ${c.pendentes ? `<span class="badge-alerta" style="font-size:10.5px;">
+          ${c.pendentes} aguardando assinatura</span>` : `<span class="texto-dim2">nada pendente</span>`}
+      </div>
+      <div class="acoes" style="margin-top:auto;padding-top:10px;">
+        ${editavel && proprio && m.ativo !== false
+          ? `<button class="btn mini" data-emitir="${esc(m.chave)}">Emitir</button>` : ''}
+        <button class="btn-secundario mini" data-emitidos="${esc(m.chave)}">Ver emitidos</button>
+        ${editavel ? `<button class="btn-secundario mini" data-modelo="${esc(m.chave)}">Modelo</button>` : ''}
+        ${editavel && proprio && !c.total
+          ? `<button class="lnk-crud" data-apagar-modelo="${esc(m.chave)}" title="excluir modelo">🗑</button>` : ''}
+      </div>
+    </div>`
+  }
+
+  corpo.innerHTML = `
+    <p class="texto-dim2" style="font-size:12px;line-height:1.6;margin:-4px 0 14px;max-width:84ch;">
+      Todo termo da empresa fica aqui. O Jurídico escreve o modelo uma vez, com marcadores no lugar
+      dos dados; na hora de emitir o sistema preenche sozinho e manda pra pessoa assinar.
+      Quem tem login assina na tela, no RH dele; quem não tem, assina no papel — o documento é o mesmo.
+      Todo termo assinado aparece no RH da pessoa.</p>
+
+    ${editavel ? `<div class="acoes" style="margin-bottom:16px;">
+      <button class="btn" id="tj-novo-modelo">+ Novo modelo de termo</button></div>` : ''}
+
+    <div class="grade-termos">
+      ${lista.map(card).join('')}
+
+      ${/* Card fixo: o termo de uso do sistema não é emitido caso a caso —
+            é publicado numa versão e todo mundo assina a mesma. Mora no RH,
+            mas precisa aparecer aqui, senão "quais termos temos?" fica sem
+            resposta completa. */ ''}
+      <div class="panel termo-card">
+        <div class="termo-cabeca">
+          <span class="termo-icone">🔐</span>
+          <div style="flex:1;min-width:0;">
+            <b style="font-size:14px;display:block;line-height:1.35;">Termo de uso do sistema</b>
+            <span class="chip" style="font-size:10px;">versão única, todo mundo assina</span>
+          </div>
+        </div>
+        <p class="texto-dim2 termo-desc">Acesso ao sistema, sigilo e uso dos dados.
+          Publicado numa versão só — quem entra assina antes de usar.</p>
+        <div class="termo-numeros">
+          ${veTermoDeUso
+            ? `<span><b>${(aceites || []).length}</b> assinatura${(aceites || []).length === 1 ? '' : 's'}</span>` : ''}
+          <span class="texto-dim2">gerido no RH</span>
+        </div>
+        <div class="acoes" style="margin-top:auto;padding-top:10px;">
+          ${veTermoDeUso ? `<button class="btn-secundario mini" id="tj-termo-uso">Ver quem assinou</button>` : ''}
+        </div>
+      </div>
+    </div>
+
+    <div id="tj-detalhe" style="margin-top:18px;"></div>`
+
+  const detalhe = corpo.querySelector('#tj-detalhe')
+
+  const btnNovoModelo = corpo.querySelector('#tj-novo-modelo')
+  if (btnNovoModelo) btnNovoModelo.onclick = () => abrirModeloTermo(null, recarregar)
+
+  corpo.querySelectorAll('[data-modelo]').forEach(b => {
+    b.onclick = () => abrirModeloTermo(b.dataset.modelo, recarregar)
+  })
+
+  corpo.querySelectorAll('[data-emitir]').forEach(b => {
+    b.onclick = async () => {
+      const m = lista.find(x => x.chave === b.dataset.emitir)
+      const { data: empresas } = await db.from('empresa')
+        .select('id,nome,cnpj,endereco').eq('status', 'ATIVO').order('nome')
+      formTermoGenerico(m, empresas || [], null, () => {
+        recarregar()
+      })
+    }
+  })
+
+  corpo.querySelectorAll('[data-emitidos]').forEach(b => {
+    b.onclick = () => {
+      const chave = b.dataset.emitidos
+      if (chave === 'ponto_compensacao') {
+        // a lista da compensação já existe e sabe editar/imprimir/cancelar;
+        // reescrever uma segunda seria duas verdades sobre o mesmo dado
+        detalhe.innerHTML = ''
+        pontoTermosCompensacao(detalhe, false, () => b.onclick(), { podeModelo: false })
+      } else {
+        listaTermosEmitidos(detalhe, lista.find(x => x.chave === chave), editavel, () => b.onclick())
+      }
+      detalhe.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  })
+
+  const btnTermoUso = corpo.querySelector('#tj-termo-uso')
+  if (btnTermoUso) btnTermoUso.onclick = () => {
+    detalhe.innerHTML = ''
+    desempTermos(detalhe)
+    detalhe.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  corpo.querySelectorAll('[data-apagar-modelo]').forEach(b => {
+    b.onclick = async () => {
+      const m = lista.find(x => x.chave === b.dataset.apagarModelo)
+      if (!confirm(`Excluir o modelo "${m.nome}"?\n\nNenhum termo foi emitido por ele, então nada assinado se perde.`)) return
+      const { error: e } = await db.from('documento_modelo').delete().eq('chave', m.chave)
+      if (e) { alert(e.message); return }
+      recarregar()
+    }
+  })
+}
+
+// ----- os termos já emitidos de um modelo -----
+async function listaTermosEmitidos (corpo, modelo, editavel, recarregar) {
+  if (!modelo) return
+  corpo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  const { data, error } = await db.from('termo_emitido').select(SEL_TERMO_EMITIDO)
+    .eq('modelo_chave', modelo.chave).order('criado_em', { ascending: false }).limit(300)
+  if (error) { corpo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  const lista = data || []
+
+  corpo.innerHTML = `
+    <div class="cabeca-secao" style="margin-bottom:12px;">
+      <h3 style="font-family:var(--serif);font-size:16px;">
+        ${esc(modelo.icone || '📄')} ${esc(modelo.nome)} — emitidos</h3>
+      <button class="btn-secundario mini" id="te-fechar">Fechar</button>
+    </div>
+    <div style="display:grid;gap:10px;">
+      ${lista.map(t => `<div class="panel" style="padding:14px 16px;
+        border-left:4px solid ${corStatusTermo(t.status)};">
+        <div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+          <div style="flex:1;min-width:150px;">
+            <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;">
+              <b style="font-size:14px;">${esc(t.pessoa?.nome ?? '—')}</b>
+              <span class="chip" style="font-size:10.5px;">${esc(ROTULO_STATUS_TERMO[t.status] || t.status)}</span>
+              ${!t.tem_login && t.status === 'AGUARDANDO_ASSINATURA'
+                ? `<span class="texto-dim2" style="font-size:10.5px;">sem login — assina no papel</span>` : ''}
+            </div>
+            ${t.bem_descricao ? `<div class="texto-dim2" style="font-size:11.5px;margin-top:3px;">
+              <b style="color:var(--txt);">${esc(t.bem_descricao)}</b>
+              ${t.bem_identificador ? ` · ${esc(t.bem_identificador)}` : ''}
+              ${t.data_entrega ? ` · entregue em ${fmtData(t.data_entrega)}` : ''}</div>` : ''}
+            <div class="texto-dim2" style="font-size:11px;margin-top:6px;">
+              ${t.empresa?.nome ? esc(t.empresa.nome) + ' · ' : ''}emitido por ${esc(t.emissor?.nome ?? '—')}
+              em ${fmtData((t.criado_em || '').slice(0, 10))}
+              ${t.assinado_em ? ` · assinado em ${fmtQuando(t.assinado_em)}` : ''}
+              ${t.via_papel ? ' · assinatura no papel' : ''}
+              ${t.devolvido_em ? ` · devolvido em ${fmtData(t.devolvido_em)}` : ''}
+            </div>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <button class="btn-secundario mini" data-pdf-t="${esc(t.id)}">Ver / imprimir</button>
+            ${editavel && t.status === 'AGUARDANDO_ASSINATURA' ? `
+              <button class="btn-secundario mini" data-papel-t="${esc(t.id)}"
+                title="marcar que a assinatura foi colhida no papel">Assinado no papel</button>` : ''}
+            ${editavel && t.status === 'ASSINADO' && modelo.pede_bem ? `
+              <button class="btn-secundario mini" data-devolver-t="${esc(t.id)}"
+                title="o bem voltou pra empresa">Baixa por devolução</button>` : ''}
+            ${editavel ? `<button class="lnk-crud" data-apagar-t="${esc(t.id)}" title="excluir">🗑</button>` : ''}
+          </div>
+        </div>
+      </div>`).join('') || `<p class="vazio">Nenhum termo desse tipo emitido ainda.</p>`}
+    </div>`
+
+  corpo.querySelector('#te-fechar').onclick = () => { corpo.innerHTML = '' }
+
+  corpo.querySelectorAll('[data-pdf-t]').forEach(b => {
+    b.onclick = () => pdfTermoGenerico(lista.find(t => t.id === b.dataset.pdfT))
+  })
+
+  corpo.querySelectorAll('[data-papel-t]').forEach(b => {
+    b.onclick = async () => {
+      if (!confirm('Confirmar que a assinatura foi colhida no papel?\n\nO termo sai da fila de pendentes.')) return
+      const { error: e } = await db.from('termo_emitido')
+        .update({ status: 'ASSINADO', via_papel: true, assinado_em: new Date().toISOString() })
+        .eq('id', b.dataset.papelT)
+      if (e) { alert(e.message); return }
+      recarregar()
+    }
+  })
+
+  corpo.querySelectorAll('[data-devolver-t]').forEach(b => {
+    b.onclick = async () => {
+      const quando = prompt('Data da devolução (AAAA-MM-DD):', hojeISO())
+      if (!quando) return
+      const { error: e } = await db.from('termo_emitido')
+        .update({ status: 'DEVOLVIDO', devolvido_em: quando }).eq('id', b.dataset.devolverT)
+      if (e) { alert(e.message); return }
+      recarregar()
+    }
+  })
+
+  corpo.querySelectorAll('[data-apagar-t]').forEach(b => {
+    b.onclick = () => {
+      const t = lista.find(x => x.id === b.dataset.apagarT)
+      excluirComJustificativa({
+        tabela: 'termo_emitido', id: t.id, modulo: 'Jurídico',
+        titulo: 'Excluir termo emitido',
+        descricao: `${t.titulo} — ${t.pessoa?.nome ?? ''}`,
+        aoExcluir: recarregar
+      })
+    }
+  })
+}
+
+// ----- emitir um termo a partir do modelo -----
+function formTermoGenerico (modelo, empresas = [], termo = null, aoFechar = () => {}) {
+  const pessoas = window.__DP_PESSOAS || []
+  const textoModelo = modelo?.texto || ''
+  const pedeBem = !!modelo?.pede_bem
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:680px;">
+    <h3>${esc(modelo?.icone || '📄')} ${esc(modelo?.nome || 'Novo termo')}</h3>
+    <p class="texto-dim2" style="font-size:12px;margin:-6px 0 14px;line-height:1.55;">
+      O sistema preenche os dados; o texto é o que o Jurídico escreveu no modelo.
+      Quem tem login recebe pra assinar no RH dele; quem não tem, assina no papel.</p>
+    <div class="form-grade">
+      <div class="campo"><label>Empresa *</label>
+        <select id="tg-empresa"><option value="">selecione...</option>
+          ${empresas.map(e => `<option value="${esc(e.id)}">${esc(e.nome)}</option>`).join('')}</select></div>
+      <div class="campo"><label>Funcionário *</label>
+        <select id="tg-pessoa"><option value="">selecione...</option>
+          ${pessoas.map(p => `<option value="${esc(p.id)}">${esc(p.nome)}</option>`).join('')}</select></div>
+      ${pedeBem ? `
+      <div class="campo"><label>O que está sendo entregue *</label>
+        <input id="tg-bem" placeholder="ex: notebook Dell Latitude 3420"></div>
+      <div class="campo"><label>Nº de série / patrimônio / placa</label>
+        <input id="tg-bem-id" placeholder="ex: BR9K2LM3 ou QAB1C23"></div>
+      <div class="campo"><label>Data da entrega</label>
+        <input type="date" id="tg-entrega" value="${hojeISO()}"></div>` : ''}
+    </div>
+    <div class="campo oculto" id="tg-end-wrap" style="margin-top:12px;">
+      <label>Endereço da empresa</label>
+      <input id="tg-endereco" placeholder="rua, número, bairro — Arraias/TO">
+      <span class="texto-dim2" style="font-size:11px;">
+        Essa empresa ainda não tem endereço cadastrado. O que você escrever aqui fica salvo nela.</span></div>
+    <div class="campo" style="margin-top:12px;"><label>Texto do termo *</label>
+      <textarea id="tg-texto" rows="10"
+        placeholder="Preencha os campos acima — o texto vem do modelo, já com os dados no lugar."></textarea>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px;">
+        <button type="button" class="btn-secundario mini" id="tg-remodelo">Preencher pelo modelo</button>
+        <span class="texto-dim2" style="font-size:11px;">
+          É o corpo do documento — sai no PDF exatamente como estiver aqui.</span></div></div>
+    <div id="tg-lacunas" class="oculto" style="margin-top:12px;"></div>
+    <div class="recado oculto" id="tg-erro"></div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="tg-emitir">Emitir e enviar</button>
+      <button class="btn-secundario" id="tg-cancelar">Cancelar</button>
+    </div>
+  </div>`
+  document.body.appendChild(fundo)
+  const q = sel => fundo.querySelector(sel)
+  const v = sel => { const el = q(sel); return el ? el.value : '' }
+  const fechar = () => fundo.remove()
+  q('#tg-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  let textoTocado = false
+  const achaPessoa = id => pessoas.find(p => p.id === id) || {}
+  const achaEmpresa = () => empresas.find(e => e.id === v('#tg-empresa')) || {}
+
+  const mostrarEndereco = () => {
+    const emp = achaEmpresa()
+    const falta = !!emp.id && !String(emp.endereco || '').trim()
+    q('#tg-end-wrap').classList.toggle('oculto', !falta)
+    if (!falta) q('#tg-endereco').value = ''
+  }
+
+  const aplicarModelo = (forcar = false) => {
+    if (!textoModelo) return
+    if (textoTocado && !forcar) return
+    const emp = achaEmpresa()
+    const pes = achaPessoa(v('#tg-pessoa'))
+    q('#tg-texto').value = aplicarMarcadores(textoModelo, {
+      funcionario: pes.nome, cpf: pes.cpf, cargo: pes.cargo, setor: pes.setor?.nome,
+      empresa: emp.nome, cnpj: emp.cnpj,
+      endereco: String(emp.endereco || '').trim() || v('#tg-endereco').trim(),
+      bem: v('#tg-bem').trim(), bem_id: v('#tg-bem-id').trim(),
+      data_entrega: v('#tg-entrega')
+    })
+  }
+
+  const rotuloLacuna = g => g.replace(/^\[|\]$/g, '').trim()
+  const atualizarLacunas = () => {
+    const cx = q('#tg-lacunas')
+    const achadas = [...new Set((q('#tg-texto').value.match(/\[[^\]\n]{1,80}\]/g) || []))]
+    if (!achadas.length) { cx.classList.add('oculto'); cx.innerHTML = ''; return }
+    cx.classList.remove('oculto')
+    cx.innerHTML = `
+      <div class="panel" style="padding:12px 14px;border-left:4px solid var(--warn-text);">
+        <b style="font-size:13px;">Falta preencher ${achadas.length} ${achadas.length === 1 ? 'lacuna' : 'lacunas'} do texto</b>
+        <p class="texto-dim2" style="font-size:11.5px;margin:3px 0 10px;line-height:1.5;">
+          São os colchetes que o Jurídico deixou em aberto. Escreva o valor e ele entra no texto.</p>
+        <div class="form-grade">
+          ${achadas.map((g, i) => `<div class="campo">
+            <label>${esc(rotuloLacuna(g)).slice(0, 48)}</label>
+            <input data-lacuna="${esc(g)}" data-i="${i}" placeholder="o que entra aqui">
+          </div>`).join('')}
+        </div>
+      </div>`
+    cx.querySelectorAll('[data-lacuna]').forEach(inp => {
+      const aplicar = () => {
+        const val = inp.value.trim()
+        if (!val) return
+        q('#tg-texto').value = q('#tg-texto').value.split(inp.dataset.lacuna).join(val)
+        textoTocado = true
+        atualizarLacunas()
+      }
+      inp.addEventListener('change', aplicar)
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); aplicar() } })
+    })
+  }
+
+  ;['#tg-empresa', '#tg-pessoa', '#tg-bem', '#tg-bem-id', '#tg-entrega', '#tg-endereco']
+    .forEach(sel => {
+      const el = q(sel)
+      if (!el) return
+      el.addEventListener('change', () => { mostrarEndereco(); aplicarModelo(); atualizarLacunas() })
+      el.addEventListener('input', () => { aplicarModelo(); atualizarLacunas() })
+    })
+  q('#tg-texto').addEventListener('input', () => { textoTocado = true; atualizarLacunas() })
+  q('#tg-remodelo').onclick = () => {
+    if (!textoModelo) { alert('Esse modelo ainda está sem texto. Abra "Modelo" e escreva o termo uma vez.'); return }
+    aplicarModelo(true); textoTocado = false; atualizarLacunas()
+  }
+  mostrarEndereco(); aplicarModelo(); atualizarLacunas()
+
+  q('#tg-emitir').onclick = async () => {
+    const btn = q('#tg-emitir'); const erro = q('#tg-erro')
+    const avisa = t => { erro.textContent = t; erro.classList.remove('oculto')
+      btn.disabled = false; btn.textContent = 'Emitir e enviar' }
+    const empresa = v('#tg-empresa')
+    const pessoa = v('#tg-pessoa')
+    const texto = q('#tg-texto').value.trim()
+
+    if (!empresa) return avisa('Escolha a empresa que assina o termo.')
+    if (!pessoa) return avisa('Escolha o funcionário.')
+    if (pedeBem && !v('#tg-bem').trim()) return avisa('Diga qual é o bem entregue — o termo é sobre ele.')
+    if (!texto) return avisa('O texto do termo não pode ficar vazio.')
+    if (texto.includes('{{')) {
+      return avisa('O texto ainda tem marcador do sistema sem preencher. Clique em "Preencher pelo modelo".')
+    }
+    const lacunas = texto.match(/\[[^\]\n]{1,80}\]/g)
+    if (lacunas) {
+      atualizarLacunas()
+      q('#tg-lacunas').scrollIntoView({ behavior: 'smooth', block: 'center' })
+      return avisa('Preencha as lacunas logo abaixo do texto — são '
+        + [...new Set(lacunas)].length + ' e estão marcadas em amarelo.')
+    }
+
+    btn.disabled = true; btn.textContent = 'emitindo...'
+    erro.classList.add('oculto')
+
+    const endNovo = v('#tg-endereco').trim()
+    if (endNovo && !q('#tg-end-wrap').classList.contains('oculto')) {
+      const { error: eE } = await db.from('empresa').update({ endereco: endNovo }).eq('id', empresa)
+      if (eE) return avisa('Não consegui salvar o endereço da empresa: ' + eE.message)
+      const alvo = empresas.find(x => x.id === empresa)
+      if (alvo) alvo.endereco = endNovo
+    }
+
+    const { data: r, error } = await db.rpc('termo_emitido_emitir', {
+      p_modelo_chave: modelo.chave, p_pessoa_id: pessoa, p_texto: texto,
+      p_empresa_id: empresa,
+      p_bem_descricao: pedeBem ? v('#tg-bem').trim() : null,
+      p_bem_identificador: pedeBem ? (v('#tg-bem-id').trim() || null) : null,
+      p_data_entrega: pedeBem ? (v('#tg-entrega') || null) : null
+    })
+    if (error || !r?.ok) return avisa(error?.message || r?.erro || 'Não deu certo.')
+    fechar()
+    if (!r.tem_login) {
+      alert('Termo emitido.\n\nEssa pessoa não tem acesso ao sistema, então não dá pra assinar na tela — imprima o PDF e colha a assinatura no papel.')
+    }
+    aoFechar()
+  }
+}
+
+function pdfTermoGenerico (t) {
+  if (!t) return
+  const corpo = `
+    <div class="grade-doc" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;">
+      ${docLinha('Empresa', t.empresa?.nome ?? '—')}${docLinha('CNPJ', t.empresa?.cnpj ?? '—')}
+      ${docLinha('Funcionário', t.pessoa?.nome ?? '—')}${docLinha('Cargo', t.pessoa?.cargo ?? '—')}
+      ${t.bem_descricao ? docLinha('Bem', t.bem_descricao) : ''}
+      ${t.bem_identificador ? docLinha('Identificação', t.bem_identificador) : ''}
+      ${t.data_entrega ? docLinha('Entrega', fmtData(t.data_entrega)) : ''}
+      ${docLinha('Emitido em', fmtData((t.criado_em || '').slice(0, 10)))}
+    </div>
+
+    <p style="font-size:13.5px;line-height:1.8;text-align:justify;margin:0 0 16px;white-space:pre-wrap;">${esc(t.texto ?? '')}</p>
+
+    <p style="font-size:11.5px;color:#5b6b60;margin:0 0 4px;">
+      Declaro ter recebido a via deste documento e estar ciente do seu conteúdo.</p>
+
+    <div class="assinaturas" style="grid-template-columns:1fr 1fr;gap:50px;margin-top:6px;">
+      <div>
+        ${t.assinatura && !t.via_papel
+          ? `<img src="${esc(t.assinatura)}" alt="" style="display:block;height:52px;margin:0 auto -6px;">`
+          : ''}
+        <div class="risco"></div>Funcionário<br><b>${esc(t.pessoa?.nome ?? '')}</b>
+        ${t.assinado_em ? `<br><span style="font-size:10px;color:#5b6b60;">
+          assinado em ${fmtQuando(t.assinado_em) || ''}${t.via_papel ? ' (papel)' : ' (no sistema)'}</span>` : ''}
+      </div>
+      <div><div class="risco"></div>Responsável pela emissão<br><b>${esc(t.emissor?.nome ?? '')}</b></div>
+    </div>`
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = documentoPDF({
+    titulo: (t.titulo || 'TERMO').toUpperCase(),
+    subtitulo: t.pessoa?.nome ?? '',
+    empresa: t.empresa?.nome ?? null,
+    corpo,
+    acoes: `<button class="btn" id="tgp-imprimir">Baixar / imprimir</button>
+      <button class="btn-secundario" id="tgp-fechar">Fechar</button>`
+  })
+  document.body.appendChild(fundo)
+  fundo.querySelector('#tgp-fechar').onclick = () => fundo.remove()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+  fundo.querySelector('#tgp-imprimir').onclick = () => window.print()
 }
 
 function pdfPontoFalta (f) {
