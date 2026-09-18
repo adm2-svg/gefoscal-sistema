@@ -2786,16 +2786,20 @@ function estilosNotificacoesUmaVez () {
        estava no lugar certo e já significava a coisa certa. Em repouso é a
        mesma bolinha de antes; no hover/foco vira um ✓ pra deixar claro que
        clica. Alvo de 24px pra funcionar no dedo, no celular. */
-    .notif-lida { flex:none;width:24px;height:24px;border-radius:50%;padding:0;margin:-3px -3px 0 0;
-      border:1px solid transparent;background:none;cursor:pointer;display:flex;
-      align-items:center;justify-content:center;color:transparent;font-size:13px;
-      line-height:1;transition:background .15s ease, color .15s ease, border-color .15s ease; }
-    .notif-lida::after { content:'';width:8px;height:8px;border-radius:50%;background:var(--gold); }
+    .notif-acoes-item { flex:none;display:flex;gap:4px;margin:-3px -3px 0 0; }
+    .notif-lida, .notif-apagar { flex:none;width:26px;height:26px;border-radius:8px;padding:0;
+      border:1px solid var(--line2);background:var(--panel);cursor:pointer;display:flex;
+      align-items:center;justify-content:center;font-size:13px;line-height:1;
+      transition:background .15s ease, color .15s ease, border-color .15s ease; }
+    .notif-lida { color:var(--rust); }
+    .notif-lida::after { content:'✓'; font-weight:700; }
     .notif-lida:hover, .notif-lida:focus-visible {
       background:rgba(var(--rust-rgb),.16);border-color:var(--rust);outline:none; }
-    .notif-lida:hover::after, .notif-lida:focus-visible::after {
-      content:'✓';width:auto;height:auto;background:none;color:var(--rust);font-weight:700; }
-    .notif-lida:disabled { opacity:.5;cursor:default; }
+    .notif-apagar { color:var(--critico-text, #b23b3b); }
+    .notif-apagar::after { content:'🗑'; font-size:11px; }
+    .notif-apagar:hover, .notif-apagar:focus-visible {
+      background:rgba(178,59,59,.14);border-color:var(--critico-text, #b23b3b);outline:none; }
+    .notif-lida:disabled, .notif-apagar:disabled { opacity:.5;cursor:default; }
   `
   document.head.appendChild(s)
 }
@@ -2949,6 +2953,20 @@ async function abrirNotificacoes () {
       }
     })
 
+    // Apagar só esta notificação -- some da lista e do banco, não volta.
+    painel.querySelectorAll('[data-apagar-notif]').forEach(botao => {
+      botao.onclick = async (ev) => {
+        ev.stopPropagation()   // apagar não é o mesmo que abrir
+        const id = botao.dataset.apagarNotif
+        botao.disabled = true
+        const { error } = await db.from('notificacao_pessoal')
+          .delete().eq('id', id).eq('destinatario_id', PERFIL.pessoaId)
+        if (error) { botao.disabled = false; alert(error.message); return }
+        atualizarBadgeNotificacoes()
+        removerItem(id)
+      }
+    })
+
     painel.querySelectorAll('[data-assumir-notif]').forEach(botao => {
       botao.onclick = async (ev) => {
         ev.stopPropagation()   // assumir não é o mesmo que abrir
@@ -3000,9 +3018,13 @@ function itemNotifHtml (n) {
     <div style="flex:1;min-width:0;">
       <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">
         <span style="font-weight:700;font-size:13px;color:var(--txt);line-height:1.35;">${esc(n.titulo)}</span>
-        <button type="button" class="notif-lida" data-lida-notif="${n.id}"
-          title="${pendente ? 'Marcar como lida (o aviso continua até você assumir)' : 'Marcar como lida'}"
-          aria-label="Marcar esta notificação como lida"></button>
+        <span class="notif-acoes-item">
+          <button type="button" class="notif-lida" data-lida-notif="${n.id}"
+            title="${pendente ? 'Marcar só esta como vista (o aviso continua até você assumir)' : 'Marcar só esta como vista'}"
+            aria-label="Marcar esta notificação como vista"></button>
+          <button type="button" class="notif-apagar" data-apagar-notif="${n.id}"
+            title="Apagar só esta notificação" aria-label="Apagar esta notificação"></button>
+        </span>
       </div>
       ${quandoReuniao ? `<div style="font-size:13.5px;font-weight:700;color:var(--rust);margin-top:5px;">${esc(quandoReuniao)}</div>` : ''}
       ${n.mensagem ? `<div class="texto-dim2" style="font-size:12.5px;margin-top:4px;line-height:1.4;">${esc(n.mensagem)}</div>` : ''}
@@ -21430,6 +21452,8 @@ let ORIG_FILTRO = 'todos'
 // Quem a gestão está olhando. '' = todo mundo. Um vendedor comum nunca
 // mexe nisso: ele já só enxerga o que é dele, por RLS.
 let ORIG_PESSOA = ''
+// Região (UF) selecionada no filtro. '' = todas.
+let ORIG_UF = ''
 let ORIG_BUSCA = ''
 // Busca: a pessoa escreve à vontade, a tela NÃO pisca. Quem digita manda
 // no campo; o resultado chega por baixo quando o banco responde. Por isso
@@ -21464,7 +21488,7 @@ async function crmOriginacao (alvo, editavel, gerencia) {
   const [{ data, error }, cat] = await Promise.all([
     db.rpc('crm_fila_originacao', { p_limite: 120, p_arquivados: false,
       p_pessoa_id: (gerencia && ORIG_PESSOA) ? ORIG_PESSOA : null,
-      p_busca: ORIG_BUSCA || null }),
+      p_busca: ORIG_BUSCA || null, p_uf: ORIG_UF || null }),
     catalogosNegociacao()
   ])
   if (meuTurno !== ORIG_SEQ) return   // chegou tarde: já tem busca mais nova
@@ -21623,6 +21647,17 @@ async function crmOriginacao (alvo, editavel, gerencia) {
         filtrado — os contadores acima são só dessa pessoa.</span>` : ''}
     </div>` : ''}
 
+    ${(d.regioes || []).length > 1 ? `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 10px;">
+      <label style="font-size:12px;font-weight:600;">Região</label>
+      <select id="org-regiao" style="max-width:220px;">
+        <option value="">todas as regiões</option>
+        ${d.regioes.map(r => `<option value="${esc(r.uf)}" ${
+          r.uf === ORIG_UF ? 'selected' : ''}>${esc(r.uf)} (${r.quantos})</option>`).join('')}
+      </select>
+      ${ORIG_UF ? `<span class="texto-dim2" style="font-size:11.5px;">
+        filtrado — os contadores acima são só dessa região.</span>` : ''}
+    </div>` : ''}
+
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 10px;">
       <div style="position:relative;flex:1;min-width:230px;max-width:420px;">
         <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);
@@ -21701,6 +21736,9 @@ async function crmOriginacao (alvo, editavel, gerencia) {
 
   const selPessoa = alvo.querySelector('#org-pessoa')
   if (selPessoa) selPessoa.onchange = () => { ORIG_PESSOA = selPessoa.value; recarregar() }
+
+  const selRegiao = alvo.querySelector('#org-regiao')
+  if (selRegiao) selRegiao.onchange = () => { ORIG_UF = selRegiao.value; recarregar() }
 
   const campoBusca = alvo.querySelector('#org-busca')
   if (campoBusca) {
