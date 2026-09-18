@@ -35165,13 +35165,17 @@ function calcEquiparacaoEnxofre (c) {
 }
 
 async function estEnxofre (alvo, editavel) {
-  const [{ data: compras, error }, { data: saldos }] = await Promise.all([
+  const [{ data: compras, error }, { data: saldos }, { data: custoView }, { data: parametroRows }] = await Promise.all([
     db.from('enxofre_compra').select('*').order('data_emissao', { ascending: true }),
     db.from('saldo_estoque').select('produto_id,nome,unidade,saldo').in('produto_id', [
       '6a35832f-1b8d-4877-9679-118aa65d49d0', '8260ada7-00f8-491c-b5c4-a7811d423615'
-    ])
+    ]),
+    db.from('visao_custo_tonelada_gefoscal').select('*').maybeSingle(),
+    db.from('parametro_custo_gefoscal').select('*').order('criado_em', { ascending: false }).limit(1)
   ])
   if (faltaMigracao(error)) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  const parametroAtual = parametroRows?.[0] || null
 
   let lista = compras || []
   const saldo99 = saldos?.find(s => s.produto_id === '6a35832f-1b8d-4877-9679-118aa65d49d0')?.saldo ?? 0
@@ -35214,6 +35218,32 @@ async function estEnxofre (alvo, editavel) {
           100% estoque parado — nenhuma compra nova em 2026. Saldo atual: <b>${fmtNum(Number(saldo99) / 1000)} t</b> (${fmtNum(saldo99)} kg).
           Movimentação normal (entradas/saídas de produção) continua sendo lançada em "Lançar", como qualquer outro produto.</p>
       </div>
+
+      ${custoView ? `
+      <div class="cabeca-secao" style="margin-bottom:8px;"><h3 style="font-family:var(--serif);font-size:16px;">💰 Custo por tonelada de Gefoscal</h3></div>
+      <div class="panel" style="padding:16px 18px;margin-bottom:18px;border-left:3px solid var(--gold,#c8a11a);">
+        <div class="resumo-topo" style="margin-bottom:14px;">
+          ${kpi('Produção estimada no período', fmtNum(custoView.producao_estimada_t) + ' t', 'desde ' + fmtData(custoView.periodo_desde))}
+          ${kpi('Custo total por tonelada', 'R$ ' + fmtNum(custoView.total_rs_t_min) + (custoView.total_rs_t_min !== custoView.total_rs_t_max ? ' a R$ ' + fmtNum(custoView.total_rs_t_max) : ''), `consumo ${custoView.consumo_enxofre_kg_min}-${custoView.consumo_enxofre_kg_max}kg/t`)}
+          ${kpi('Com impostos em atraso', 'R$ ' + fmtNum(custoView.total_com_impostos_atrasados_rs_t_min) + ' a R$ ' + fmtNum(custoView.total_com_impostos_atrasados_rs_t_max))}
+        </div>
+        <div class="tabela-scroll">
+          <table><tbody>
+            <tr><td>Matéria-prima (enxofre)</td><td class="num">R$ ${fmtNum(custoView.materia_prima_rs_t_min)} a R$ ${fmtNum(custoView.materia_prima_rs_t_max)}</td></tr>
+            <tr><td>Indústria (com serviços de terceiros)</td><td class="num">R$ ${fmtNum(custoView.industria_rs_t)}</td></tr>
+            <tr><td>Administrativo</td><td class="num">R$ ${fmtNum(custoView.administrativo_rs_t)}</td></tr>
+            <tr><td>Impostos</td><td class="num">R$ ${fmtNum(custoView.impostos_rs_t)}</td></tr>
+            <tr><td>Folha CLT + encargos sociais</td><td class="num">R$ ${fmtNum(custoView.folha_rs_t)}</td></tr>
+            <tr><td>Sócios, pró-labore e outras despesas</td><td class="num">R$ ${fmtNum(custoView.socios_outras_rs_t)}</td></tr>
+            <tr><td>Impostos atrasados (adicional)</td><td class="num">R$ ${fmtNum(custoView.impostos_atrasados_rs_t)}</td></tr>
+          </tbody></table>
+        </div>
+        <p class="texto-dim2" style="font-size:11.5px;margin:10px 0 0;">
+          Preço de enxofre usado: R$ ${fmtNum(custoView.preco_enxofre_usado)}/t ${parametroAtual?.preco_enxofre_manual ? '(travado manualmente)' : '(média das compras confirmadas)'}.
+          Estoque inicial considerado: ${fmtNum(custoView.estoque_inicial_gefoscal_t)} t em ${fmtData(custoView.periodo_desde)}.
+          Saiu do pátio: ${fmtNum(custoView.saido_patio_t)} t &middot; em estoque hoje: ${fmtNum(custoView.estoque_atual_t)} t.</p>
+        ${editavel ? `<div class="acoes" style="margin-top:12px;"><button class="btn-secundario" id="ex-ajustar-parametros">✏️ Ajustar parâmetros do cálculo</button></div>` : ''}
+      </div>` : ''}
 
       ${confirmadas.length ? `
       <div class="cabeca-secao" style="margin-bottom:8px;"><h3 style="font-family:var(--serif);font-size:16px;">📊 Indicadores da equiparação (compras confirmadas)</h3></div>
@@ -35279,6 +35309,9 @@ async function estEnxofre (alvo, editavel) {
       if (!arquivo) return
       await processarNfEnxofre(arquivo, () => desenhar())
       e.target.value = ''
+    }
+    if ($('#ex-ajustar-parametros')) {
+      $('#ex-ajustar-parametros').onclick = () => formParametroCustoGefoscal(parametroAtual, () => estEnxofre(alvo, editavel))
     }
   }
 
@@ -35449,6 +35482,63 @@ function formCompraEnxofreManual (mae, aoSalvar) {
       registrado_por: PERFIL.pessoaId
     })
     if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Salvar'; return }
+    fundo.remove()
+    aoSalvar()
+  }
+}
+
+// Parâmetros manuais do cálculo de custo por tonelada de Gefoscal (tabela
+// parametro_custo_gefoscal). Nunca faz update -- cada ajuste insere uma
+// linha nova e a view visao_custo_tonelada_gefoscal sempre lê a mais
+// recente, então o histórico de ajustes fica preservado.
+function formParametroCustoGefoscal (atual, aoSalvar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>Ajustar parâmetros — custo por tonelada de Gefoscal</h3>
+    <p class="texto-dim2" style="font-size:12px;margin:-6px 0 12px;">
+      Isso não apaga o histórico -- cada ajuste salva uma linha nova, e o cálculo sempre usa a mais recente.</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      <div class="campo"><label>Estoque inicial de Gefoscal (t)</label><input type="number" step="0.01" id="pcg-estoque" value="${atual?.estoque_inicial_gefoscal_t ?? ''}"></div>
+      <div class="campo"><label>Data de referência</label><input type="date" id="pcg-data" value="${atual?.data_referencia || hojeISO()}"></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      <div class="campo"><label>Consumo de enxofre mín. (kg/t)</label><input type="number" step="0.1" id="pcg-kgmin" value="${atual?.consumo_enxofre_kg_min ?? 58}"></div>
+      <div class="campo"><label>Consumo de enxofre máx. (kg/t)</label><input type="number" step="0.1" id="pcg-kgmax" value="${atual?.consumo_enxofre_kg_max ?? 60}"></div>
+    </div>
+    <div class="campo"><label>Preço do enxofre travado (R$/t) — deixe em branco pra usar a média das compras confirmadas</label>
+      <input type="number" step="0.01" id="pcg-preco" value="${atual?.preco_enxofre_manual ?? ''}"></div>
+    <div class="campo"><label>Observações</label><input id="pcg-obs" placeholder="ex: estoque físico contado em 1º/jan"></div>
+    <div class="acoes" style="margin-top:14px;">
+      <button class="btn" id="pcg-salvar">Salvar</button>
+      <button class="btn-secundario" id="pcg-cancelar">Cancelar</button>
+    </div>
+    <div class="recado oculto" id="pcg-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+  fundo.querySelector('#pcg-cancelar').onclick = () => fundo.remove()
+
+  fundo.querySelector('#pcg-salvar').onclick = async () => {
+    const el = fundo.querySelector('#pcg-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto') }
+    const estoqueInicial = Number(fundo.querySelector('#pcg-estoque').value)
+    const dataReferencia = fundo.querySelector('#pcg-data').value
+    const kgMin = Number(fundo.querySelector('#pcg-kgmin').value)
+    const kgMax = Number(fundo.querySelector('#pcg-kgmax').value)
+    if (!Number.isFinite(estoqueInicial) || !dataReferencia || !kgMin || !kgMax) { aviso('Preenche estoque inicial, data e a faixa de consumo.'); return }
+    const precoManualStr = fundo.querySelector('#pcg-preco').value.trim()
+    const btn = fundo.querySelector('#pcg-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const { error: erroParametro } = await db.from('parametro_custo_gefoscal').insert({
+      estoque_inicial_gefoscal_t: estoqueInicial,
+      data_referencia: dataReferencia,
+      consumo_enxofre_kg_min: kgMin,
+      consumo_enxofre_kg_max: kgMax,
+      preco_enxofre_manual: precoManualStr ? Number(precoManualStr) : null,
+      observacoes: fundo.querySelector('#pcg-obs').value.trim() || null,
+      atualizado_por: PERFIL.pessoaId
+    })
+    if (erroParametro) { aviso(erroParametro.message); btn.disabled = false; btn.textContent = 'Salvar'; return }
     fundo.remove()
     aoSalvar()
   }
