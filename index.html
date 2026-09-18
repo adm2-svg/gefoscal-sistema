@@ -29733,6 +29733,27 @@ function diasAging (venc) {
   return Math.round((new Date(hojeISO()) - new Date(venc)) / 86400000)
 }
 
+// Máscara de valor em R$ pros campos de baixa/pagamento -- digita só números
+// e o campo já mostra "1.300.000,00" formatado, pra ficar claro na hora se
+// faltou ou sobrou um dígito (foi assim que uma baixa de R$ 1.300.000 virou
+// R$ 130.000 sem ninguém perceber).
+function ligarMascaraMoeda (input, valorInicial) {
+  const formatar = centavos => (centavos / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  let centavos = Math.round((Number(valorInicial) || 0) * 100)
+  input.type = 'text'
+  input.inputMode = 'decimal'
+  input.value = centavos ? formatar(centavos) : ''
+  const atualizar = () => {
+    const digitos = input.value.replace(/\D/g, '')
+    centavos = digitos ? parseInt(digitos, 10) : 0
+    input.value = centavos ? formatar(centavos) : ''
+    input.setSelectionRange(input.value.length, input.value.length)
+  }
+  input.addEventListener('input', atualizar)
+  input.addEventListener('focus', () => input.setSelectionRange(input.value.length, input.value.length))
+  input.valorEmReais = () => centavos / 100
+}
+
 const PAG_FORMAS = { DINHEIRO: 'dinheiro', TRANSFERENCIA: 'transferência', BEM: 'bem (troca)', OUTRO: 'outro' }
 
 // Condições de pagamento. `meses` diz em quantos meses depois da data do
@@ -30250,7 +30271,7 @@ function abrirBaixa (p) {
     ${p.situacao_pagamento === 'PARCIAL' ? `<p class="texto-dim2" style="font-size:12.5px;">
       já recebido R$ ${fmtNum(p.valor_recebido)} · falta R$ ${fmtNum(restante)}</p>` : ''}
     <div class="form-grade">
-      <div class="campo"><label>Valor recebido</label><input id="bx-valor" type="number" step="0.01" value="${restante}"></div>
+      <div class="campo"><label>Valor recebido</label><input id="bx-valor"></div>
       <div class="campo"><label>Forma</label><select id="bx-forma">
         ${Object.entries(PAG_FORMAS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div>
       <div class="campo"><label>Data do recebimento</label><input id="bx-data" type="date" value="${new Date().toISOString().slice(0, 10)}"></div>
@@ -30261,6 +30282,8 @@ function abrirBaixa (p) {
     <div class="recado oculto" id="bx-recado"></div>
   </div>`
   document.body.appendChild(fundo)
+  const campoValor = fundo.querySelector('#bx-valor')
+  ligarMascaraMoeda(campoValor, restante)
   const fechar = () => fundo.remove()
   fundo.querySelector('#bx-cancelar').onclick = fechar
   fundo.onclick = e => { if (e.target === fundo) fechar() }
@@ -30269,7 +30292,7 @@ function abrirBaixa (p) {
     const el = fundo.querySelector('#bx-recado')
     const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
     const botao = fundo.querySelector('#bx-salvar')
-    const valor = Number(fundo.querySelector('#bx-valor').value) || restante
+    const valor = campoValor.valorEmReais() || restante
     if (valor <= 0) { aviso('Informe um valor maior que zero.'); return }
     botao.disabled = true
 
@@ -30308,7 +30331,7 @@ async function formPagamentoParcial (p) {
       </label>`).join('')}
     </div>
     <div class="form-grade">
-      <div class="campo"><label>Valor recebido *</label><input id="pp-valor" type="number" step="0.01"></div>
+      <div class="campo"><label>Valor recebido *</label><input id="pp-valor"></div>
       <div class="campo"><label>Forma</label><select id="pp-forma">
         ${Object.entries(PAG_FORMAS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div>
       <div class="campo"><label>Data</label><input id="pp-data" type="date" value="${new Date().toISOString().slice(0, 10)}"></div>
@@ -30321,6 +30344,8 @@ async function formPagamentoParcial (p) {
     <div class="recado oculto" id="pp-recado"></div>
   </div>`
   document.body.appendChild(fundo)
+  const campoValorPP = fundo.querySelector('#pp-valor')
+  ligarMascaraMoeda(campoValorPP, '')
   const fechar = () => fundo.remove()
   fundo.querySelector('#pp-cancelar').onclick = fechar
   fundo.onclick = e => { if (e.target === fundo) fechar() }
@@ -30328,7 +30353,7 @@ async function formPagamentoParcial (p) {
   fundo.querySelector('#pp-salvar').onclick = async () => {
     const el = fundo.querySelector('#pp-recado')
     const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
-    const valor = Number(fundo.querySelector('#pp-valor').value)
+    const valor = campoValorPP.valorEmReais()
     const forma = fundo.querySelector('#pp-forma').value
     const descricao = fundo.querySelector('#pp-desc').value.trim()
     if (!valor || valor <= 0) { aviso('Informe o valor recebido.'); return }
@@ -30370,8 +30395,9 @@ async function formPagamentoParcial (p) {
 
 async function verHistoricoPagamentos (p) {
   if (!p) return
+  const editavel = podeEditar('cobranca')
   const { data: hist } = await db.from('pedido_pagamento')
-    .select('valor, pagamento:pagamento_id ( data, forma, descricao, registrado_por:registrado_por ( nome ) )')
+    .select('id, valor, pagamento:pagamento_id ( data, forma, descricao, registrado_por:registrado_por ( nome ) )')
     .eq('pedido_id', p.id).order('criado_em', { ascending: false })
 
   const fundo = document.createElement('div')
@@ -30384,7 +30410,10 @@ async function verHistoricoPagamentos (p) {
         <span>${fmtData(h.pagamento?.data)} · ${PAG_FORMAS[h.pagamento?.forma] || h.pagamento?.forma || '—'}
           ${h.pagamento?.descricao ? ' · ' + esc(h.pagamento.descricao) : ''}
           <span class="texto-dim2"> — ${esc(h.pagamento?.registrado_por?.nome || '')}</span></span>
-        <b>R$ ${fmtNum(h.valor)}</b>
+        <span style="display:flex;align-items:center;gap:10px;">
+          <b>R$ ${fmtNum(h.valor)}</b>
+          ${editavel ? `<button class="btn-secundario mini" data-corrigir="${h.id}" title="Corrigir esta baixa">✏️ Corrigir</button>` : ''}
+        </span>
       </div>`).join('') || '<div class="vazio">Nenhum pagamento registrado ainda.</div>'}
     </div>
     <div class="acoes" style="margin-top:14px;"><button class="btn-secundario" id="hp-fechar">Fechar</button></div>
@@ -30392,6 +30421,66 @@ async function verHistoricoPagamentos (p) {
   document.body.appendChild(fundo)
   fundo.querySelector('#hp-fechar').onclick = () => fundo.remove()
   fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+  fundo.querySelectorAll('[data-corrigir]').forEach(b => {
+    b.onclick = () => {
+      const h = (hist || []).find(x => x.id === b.dataset.corrigir)
+      if (h) abrirCorrecaoBaixa(h, p)
+    }
+  })
+}
+
+// Corrige uma baixa já registrada (valor, forma ou data), com motivo
+// obrigatório. Ajusta pedido_pagamento + pagamento + o pedido junto, via
+// cobranca_corrigir_baixa (RPC no banco, com trilha completa em
+// pagamento_historico) -- não edita nada direto pelo cliente.
+function abrirCorrecaoBaixa (h, p) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>Corrigir baixa — ${esc(nomeCliente(p.cliente))}</h3>
+    <p class="texto-dim2" style="font-size:12.5px;">
+      PD ${esc(p.numero || '—')} · registrado em ${fmtData(h.pagamento?.data)}, valor atual R$ ${fmtNum(h.valor)}</p>
+    <div class="form-grade">
+      <div class="campo"><label>Valor correto</label><input id="cx-valor"></div>
+      <div class="campo"><label>Forma</label><select id="cx-forma">
+        ${Object.entries(PAG_FORMAS).map(([k, v]) => `<option value="${k}" ${k === h.pagamento?.forma ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+      <div class="campo"><label>Data do recebimento</label><input id="cx-data" type="date" value="${h.pagamento?.data ?? ''}"></div>
+    </div>
+    <div class="campo" style="margin-top:10px;"><label>Motivo da correção *</label>
+      <input id="cx-motivo" placeholder="ex: digitei 130.000 em vez de 1.300.000"></div>
+    <div class="acoes"><button class="btn" id="cx-salvar">Salvar correção</button><button class="btn-secundario" id="cx-cancelar">Cancelar</button></div>
+    <div class="recado oculto" id="cx-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const campoValor = fundo.querySelector('#cx-valor')
+  ligarMascaraMoeda(campoValor, h.valor)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#cx-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  fundo.querySelector('#cx-salvar').onclick = async () => {
+    const el = fundo.querySelector('#cx-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const botao = fundo.querySelector('#cx-salvar')
+    const valor = campoValor.valorEmReais()
+    const motivo = fundo.querySelector('#cx-motivo').value.trim()
+    if (valor <= 0) { aviso('Informe um valor maior que zero.'); return }
+    if (motivo.length < 3) { aviso('Descreva o motivo da correção.'); return }
+    botao.disabled = true
+
+    const { error } = await db.rpc('cobranca_corrigir_baixa', {
+      p_pedido_pagamento_id: h.id,
+      p_novo_valor: valor,
+      p_motivo: motivo,
+      p_nova_forma: fundo.querySelector('#cx-forma').value,
+      p_nova_data: fundo.querySelector('#cx-data').value || null
+    })
+    if (error) { aviso(error.message); botao.disabled = false; return }
+
+    fechar()
+    document.querySelectorAll('.modal-fundo').forEach(m => m.remove())
+    paginaCobranca()
+  }
 }
 
 async function imprimirPedido (p) {
