@@ -32006,10 +32006,14 @@ async function finLancamentos (alvo, editavel) {
   // apagar, e apagar o errado devolve a compra pra fila de pagamento.
   const ids = (data || []).map(l => l.id)
   const daCompra = new Map()
+  const doJuridico = new Map()
   if (ids.length) {
-    const { data: ligadas } = await db.from('solicitacao_compra')
-      .select('numero,lancamento_id').in('lancamento_id', ids)
+    const [{ data: ligadas }, { data: ligadosJur }] = await Promise.all([
+      db.from('solicitacao_compra').select('numero,lancamento_id').in('lancamento_id', ids),
+      db.from('juridico_contrato').select('titulo,lancamento_financeiro_id').in('lancamento_financeiro_id', ids)
+    ])
     for (const c of ligadas || []) daCompra.set(c.lancamento_id, c.numero)
+    for (const c of ligadosJur || []) doJuridico.set(c.lancamento_financeiro_id, c.titulo)
   }
   // um lançamento que se chama "Compra: ..." e não tem compra apontando pra
   // ele é órfão: a baixa não completou, e a despesa está contada sem dono
@@ -32079,10 +32083,13 @@ async function finLancamentos (alvo, editavel) {
           ${daCompra.has(l.id)
             ? `<div class="texto-dim2" style="font-size:10.5px;margin-top:2px;">
                  ligado à compra ${esc(daCompra.get(l.id))}</div>`
-            : orfaoDeCompra(l)
-              ? `<div class="badge-alerta" style="font-size:10.5px;margin-top:2px;display:inline-block;">
-                   sem compra ligada — sobra de baixa que não gravou</div>`
-              : ''}</td>
+            : doJuridico.has(l.id)
+              ? `<div class="texto-dim2" style="font-size:10.5px;margin-top:2px;">
+                   ⚖️ contrato jurídico: ${esc(doJuridico.get(l.id))}</div>`
+              : orfaoDeCompra(l)
+                ? `<div class="badge-alerta" style="font-size:10.5px;margin-top:2px;display:inline-block;">
+                     sem compra ligada — sobra de baixa que não gravou</div>`
+                : ''}</td>
         <td class="texto-dim">${esc(l.conta?.nome ?? '—')}</td>
         <td class="texto-dim">${esc(l.categoria?.nome ?? '—')}</td>
         <td class="texto-dim">${esc(l.centro?.nome ?? '—')}</td>
@@ -43141,6 +43148,7 @@ async function juridicoPainel (alvo, editavel) {
 async function juridicoContratos (alvo, editavel) {
   const { data, error } = await db.from('juridico_contrato')
     .select(`id,titulo,contraparte,categoria,tipo_pj,recorrente,valor,data_inicio,data_fim,renovacao,status,anexo_link,observacoes,
+      tipo_financeiro,lancamento_financeiro_id,
       responsavel:responsavel_id ( nome )`)
     .order('data_fim', { ascending: true, nullsFirst: false })
 
@@ -43155,7 +43163,14 @@ async function juridicoContratos (alvo, editavel) {
         <th>Vigência</th><th>Renovação</th><th>Vencimento</th><th>Responsável</th>${editavel ? '<th></th>' : ''}
       </tr></thead><tbody>
       ${lista.map(c => `<tr>
-        <td><b>${esc(c.titulo)}</b>${c.anexo_link ? ` · <a href="${esc(c.anexo_link)}" target="_blank" rel="noopener">anexo</a>` : ''}</td>
+        <td><b>${esc(c.titulo)}</b>${c.anexo_link ? ` · <a href="${esc(c.anexo_link)}" target="_blank" rel="noopener">anexo</a>` : ''}
+          ${c.lancamento_financeiro_id
+            ? `<div class="texto-dim2" style="font-size:10.5px;margin-top:2px;color:var(--good-text);">
+                 💰 ${c.tipo_financeiro === 'PAGAR' ? 'a pagar' : 'a receber'} — já apareceu no financeiro</div>`
+            : c.tipo_financeiro
+              ? `<div class="texto-dim2" style="font-size:10.5px;margin-top:2px;">
+                   ${c.tipo_financeiro === 'PAGAR' ? 'a pagar' : 'a receber'}${c.valor == null ? ' — falta valor' : !c.anexo_link ? ' — falta anexo' : ''} pra ir pro financeiro</div>`
+              : ''}</td>
         <td class="texto-dim">${esc(c.contraparte || '—')}</td>
         <td><span class="chip">${esc(c.categoria || '—')}</span>${c.tipo_pj ? `<br><span class="texto-dim2" style="font-size:10.5px;">${esc(ROTULO_TIPO_PJ[c.tipo_pj])}${c.recorrente ? ' · recorrente' : ''}</span>` : ''}</td>
         <td class="num">${c.valor != null ? 'R$ ' + fmtNum(c.valor) : '<span class="texto-dim2">—</span>'}</td>
@@ -43197,6 +43212,12 @@ function formContrato (c) {
           <label class="linha-modulo"><input type="checkbox" id="ct-recorrente" ${c?.recorrente ? 'checked' : ''}>
           <span class="nome">Recorrente (tem entregáveis periódicos)</span></label></div>
         <div class="campo"><label>Valor</label><input id="ct-valor" type="number" step="0.01" value="${c?.valor ?? ''}"></div>
+        <div class="campo"><label>Vai pro financeiro?</label>
+          <select id="ct-tipofin">
+            <option value="">não gerar lançamento</option>
+            <option value="PAGAR" ${c?.tipo_financeiro === 'PAGAR' ? 'selected' : ''}>a pagar</option>
+            <option value="RECEBER" ${c?.tipo_financeiro === 'RECEBER' ? 'selected' : ''}>a receber</option>
+          </select></div>
         <div class="campo"><label>Início da vigência</label><input id="ct-inicio" type="date" value="${c?.data_inicio ?? ''}"></div>
         <div class="campo"><label>Fim da vigência</label><input id="ct-fim" type="date" value="${c?.data_fim ?? ''}"></div>
         <div class="campo"><label>Renovação</label>
@@ -43221,6 +43242,11 @@ function formContrato (c) {
         <div class="campo" style="grid-column:1/-1;"><label>Ou link do anexo (opcional)</label>
           <input id="ct-anexo" value="${v('anexo_link')}" placeholder="link do Drive, se preferir"></div>
       </div>
+      <p class="texto-dim2" style="font-size:11px;margin:4px 2px 0;line-height:1.5;">
+        ${c?.lancamento_financeiro_id
+          ? '💰 Esse contrato já gerou um lançamento pendente no financeiro — mudar o valor agora não atualiza esse lançamento, é preciso ajustar direto no financeiro.'
+          : 'Marcando "a pagar" ou "a receber" com valor e anexo preenchidos, o financeiro já recebe um lançamento pendente assim que salvar.'}
+      </p>
       <div class="campo" style="margin-top:12px;"><label>Observações</label>
         <textarea id="ct-obs" style="min-height:64px;">${v('observacoes')}</textarea></div>
       <div class="acoes">
@@ -43283,6 +43309,7 @@ function formContrato (c) {
       tipo_pj: categoria === 'PJ' ? (q('#ct-tipo-pj').value || null) : null,
       recorrente: categoria === 'PJ' ? q('#ct-recorrente').checked : false,
       valor: q('#ct-valor').value ? Number(q('#ct-valor').value) : null,
+      tipo_financeiro: q('#ct-tipofin').value || null,
       data_inicio: q('#ct-inicio').value || null,
       data_fim: q('#ct-fim').value || null,
       renovacao: q('#ct-renov').value,
