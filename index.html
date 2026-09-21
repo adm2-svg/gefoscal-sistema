@@ -31919,7 +31919,7 @@ async function paginaFinanceiro () {
     : 'Somente leitura — você pode consultar, mas não alterar'
 
   const area = areaLivre()
-  const abas = [['lancamentos', 'Lançamentos'], ['compras', 'Compras'], ['pagar', 'A pagar'], ['fechamento', 'Fechamento'], ['gastos', 'Gastos por setor'],
+  const abas = [['lancamentos', 'Lançamentos'], ['compras', 'Compras'], ['pagar', 'A pagar'], ['fechamento', 'Fechamento'], ['movimentacao', 'Movimentação bancária'], ['gastos', 'Gastos por setor'],
     ['orcamento', 'Orçamento'], ['contas', 'Saldo e contas'], ['planos', 'Planos e metas'],
     ['investimentos', 'Investimentos'], ['relatorios', 'Relatórios'], ['onfly', 'Onfly'], ['cadastros', 'Cadastros']]
   area.innerHTML = `
@@ -31953,6 +31953,7 @@ function abrirFinanceiro (sub, editavel) {
   if (sub === 'compras') finCompras(alvo, editavel)
   if (sub === 'gastos') finGastos(alvo)
   if (sub === 'fechamento') finFechamento(alvo, editavel)
+  if (sub === 'movimentacao') finMovimentacaoBancaria(alvo, editavel)
   if (sub === 'cadastros') finCadastros(alvo, editavel)
   if (sub === 'orcamento') finOrcamento(alvo, editavel)
   if (sub === 'contas') finContas(alvo, editavel)
@@ -32507,7 +32508,7 @@ async function comprasPagar (alvo) {
 
   const aPagar = (data || []).filter(s => s.status === 'APROVADA')
   const pagas = (data || []).filter(s => s.status === 'PAGA')
-  const total = aPagar.reduce((t, s) => t + Number(s.valor_estimado || 0), 0)
+  const total = aPagar.reduce((t, s) => t + Number(s.valor_aprovado ?? s.valor_estimado ?? 0), 0)
 
   alvo.innerHTML = `
     <div class="cabeca-secao">
@@ -32531,8 +32532,9 @@ async function comprasPagar (alvo) {
         ${s.urgencia === 'URGENTE_4H' && !feito ? '<span class="urgente">● urgente</span>' : ''}
         ${feito ? selo('PAGA') : ''}
         <div class="botoes">
-          ${!feito ? `<span class="texto-dim2" style="font-size:13px;font-weight:600;align-self:center;">R$ ${fmtNum(s.valor_estimado)}</span>` : ''}
+          ${!feito ? `<span class="texto-dim2" style="font-size:13px;font-weight:600;align-self:center;">R$ ${fmtNum(s.valor_aprovado ?? s.valor_estimado)}</span>` : ''}
           <button class="btn-secundario mini" data-ordem="${s.id}">ordem</button>
+          ${feito ? '' : `<button class="btn-secundario mini" data-editar-valor="${s.id}">editar</button>`}
           ${feito ? '' : `<button class="btn mini" data-baixa="${s.id}">dar baixa</button>`}
         </div>
       </div>
@@ -32554,10 +32556,74 @@ async function comprasPagar (alvo) {
   alvo.querySelectorAll('[data-ordem]').forEach(b => {
     b.onclick = () => ordemPagamento((data || []).find(x => x.id === b.dataset.ordem))
   })
+  alvo.querySelectorAll('[data-editar-valor]').forEach(b => {
+    b.onclick = () => telaAjustarValor((data || []).find(x => x.id === b.dataset.editarValor))
+  })
   alvo.querySelectorAll('[data-baixa]').forEach(b => {
     b.onclick = () => telaBaixa((data || []).find(x => x.id === b.dataset.baixa),
                                 contas || [], categorias || [], centros || [])
   })
+}
+
+// ----- Ajusta o valor aprovado antes da baixa -----
+// Uso típico: negociou desconto com o fornecedor depois da aprovação e
+// precisa que a ordem de pagamento (e a baixa) saiam com o valor certo.
+function telaAjustarValor (s) {
+  if (!s) return
+  const valorAtual = Number(s.valor_aprovado ?? s.valor_estimado ?? 0)
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal">
+      <h3>Ajustar valor aprovado</h3>
+      <div class="ficha" style="margin-bottom:16px;">
+        <div class="item"><div class="rot">Item</div><div class="val">${esc(s.produto_servico)}</div></div>
+        <div class="item"><div class="rot">Fornecedor</div>
+          <div class="val">${esc(s.fornecedor?.nome ?? '—')}</div></div>
+        <div class="item"><div class="rot">Valor aprovado atual</div>
+          <div class="val">R$ ${fmtNum(valorAtual)}</div></div>
+      </div>
+      <div class="campo"><label>Novo valor (R$) *</label>
+        <input id="av-valor" inputmode="decimal" value="${valorAtual || ''}"></div>
+      <div class="campo" style="margin-top:10px;"><label>Motivo do ajuste *</label>
+        <textarea id="av-motivo" placeholder="ex: fornecedor deu desconto de R$ 500 na negociação final"></textarea></div>
+      <p class="aviso" style="margin-top:10px;">
+        Muda o valor da ordem de pagamento e o que a baixa vem preenchida por padrão.
+        Fica registrado no histórico da solicitação.</p>
+      <div class="acoes">
+        <button class="btn" id="av-confirmar">Salvar novo valor</button>
+        <button class="btn-secundario" id="av-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="av-recado"></div>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#av-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const aviso = t => {
+    const el = q('#av-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  q('#av-confirmar').onclick = async () => {
+    const valor = numeroBR(q('#av-valor').value)
+    const motivo = q('#av-motivo').value.trim()
+    if (valor === null || valor <= 0) { aviso('Informe o novo valor.'); return }
+    if (motivo.length < 5) { aviso('Escreva o motivo do ajuste — pelo menos uma frase.'); return }
+
+    const btn = q('#av-confirmar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const { error } = await db.rpc('compra_ajustar_valor_aprovado', {
+      p_id: s.id, p_valor: valor, p_motivo: motivo
+    })
+    if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Salvar novo valor'; return }
+
+    fechar()
+    abrirFinanceiro('compras', true)
+  }
 }
 
 // ----- Ordem de pagamento, para imprimir -----
@@ -32640,7 +32706,7 @@ function telaBaixa (s, contas, categorias, centros) {
 
       <div class="form-grade">
         <div class="campo"><label>Valor pago (R$) *</label>
-          <input id="b-valor" inputmode="decimal" value="${s.valor_estimado ?? ''}"></div>
+          <input id="b-valor" inputmode="decimal" value="${s.valor_aprovado ?? s.valor_estimado ?? ''}"></div>
         <div class="campo"><label>Data do pagamento</label>
           <input type="date" id="b-data" value="${new Date().toISOString().slice(0, 10)}"></div>
         <div class="campo"><label>Conta</label>
@@ -34291,6 +34357,338 @@ function capaFechamento (mes, lista, completos, soBoleto, soComprovante) {
   fundo.querySelector('#cf-fechar').onclick = () => fundo.remove()
   fundo.querySelector('#cf-imprimir').onclick = () => window.print()
   fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+}
+
+// ----- Financeiro › Movimentação bancária -----
+// Antes disso, todo mês alguém baixava o extrato (OFX/PDF) de cada banco na
+// mão, juntava numa pasta do Drive e mandava o link por e-mail pra
+// contabilidade. Aqui o mesmo material fica organizado dentro do sistema,
+// por empresa e competência, e o envio sai com um clique -- reaproveitando
+// o mesmo Apps Script que já manda o e-mail do Pedido Comercial.
+let MOV_BANC_EMPRESAS = null
+
+const movBancIdentificarBanco = nome => {
+  const n = (nome || '').toLowerCase()
+  if (/sicredi/.test(n)) return 'Sicredi'
+  if (/nubank|^nu[_-]|\bnu\b/.test(n)) return 'Nubank'
+  if (/c6/.test(n)) return 'C6 Bank'
+  if (/banco.?brasil|\bbb\b/.test(n)) return 'Brasil'
+  if (/inter\b/.test(n)) return 'Inter'
+  if (/sicoob/.test(n)) return 'Sicoob'
+  if (/bradesco/.test(n)) return 'Bradesco'
+  if (/ita[uú]/.test(n)) return 'Itaú'
+  if (/santander/.test(n)) return 'Santander'
+  if (/caixa/.test(n)) return 'Caixa'
+  return null
+}
+const movBancIdentificarTipo = nome => {
+  const n = (nome || '').toLowerCase()
+  if (n.endsWith('.ofx')) return 'OFX'
+  if (/comprovante/.test(n)) return 'COMPROVANTE'
+  if (n.endsWith('.pdf')) return 'PDF'
+  return 'OUTRO'
+}
+
+async function finMovimentacaoBancaria (alvo, editavel) {
+  if (!MOV_BANC_EMPRESAS) {
+    const { data } = await db.from('empresa').select('id,nome,cnpj').eq('status', 'ATIVO').order('nome')
+    MOV_BANC_EMPRESAS = data || []
+  }
+  if (!MOV_BANC_EMPRESAS.length) { alvo.innerHTML = `<p class="vazio">Nenhuma empresa cadastrada.</p>`; return }
+
+  const hoje = new Date()
+  const competenciaAtual = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}`
+  const estado = window.MOV_BANC_ESTADO || { empresaId: MOV_BANC_EMPRESAS[0].id, competencia: competenciaAtual }
+  window.MOV_BANC_ESTADO = estado
+
+  alvo.innerHTML = `
+    <div class="filtros" style="margin-bottom:14px;">
+      <div class="campo"><label>Empresa</label>
+        <select id="mb-empresa">${MOV_BANC_EMPRESAS.map(e =>
+          `<option value="${e.id}" ${e.id === estado.empresaId ? 'selected' : ''}>${esc(e.nome)}</option>`).join('')}</select></div>
+      <div class="campo"><label>Competência</label>
+        <input type="month" id="mb-competencia" value="${estado.competencia}"></div>
+    </div>
+    <div id="mb-corpo"><p class="texto-dim2">carregando...</p></div>`
+
+  const carregar = async () => {
+    estado.empresaId = $('#mb-empresa').value
+    estado.competencia = $('#mb-competencia').value || competenciaAtual
+    await renderCorpo()
+  }
+  $('#mb-empresa').onchange = carregar
+  $('#mb-competencia').onchange = carregar
+
+  const renderCorpo = async () => {
+    const corpo = $('#mb-corpo')
+    corpo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+    const empresa = MOV_BANC_EMPRESAS.find(e => e.id === estado.empresaId)
+
+    const [{ data: contas }, { data: lote }, { data: anteriores }] = await Promise.all([
+      db.from('conta_financeira').select('id,nome,instituicao').eq('empresa_id', estado.empresaId).order('nome'),
+      db.from('movimentacao_bancaria_lote').select('*')
+        .eq('empresa_id', estado.empresaId).eq('competencia', estado.competencia).maybeSingle(),
+      db.from('movimentacao_bancaria_lote').select('competencia,status,enviado_em,destinatarios')
+        .eq('empresa_id', estado.empresaId).neq('competencia', estado.competencia)
+        .order('competencia', { ascending: false }).limit(12)
+    ])
+
+    let arquivos = []
+    if (lote) {
+      const { data } = await db.from('movimentacao_bancaria_arquivo')
+        .select('id,banco,tipo,arquivo_nome,arquivo_caminho,tamanho_bytes,criado_em,conta_financeira_id')
+        .eq('lote_id', lote.id).order('criado_em')
+      arquivos = data || []
+    }
+
+    // sugere os destinatários do último envio dessa empresa, se ainda não tiver os dessa competência
+    let destinatariosSugeridos = []
+    if (!lote?.destinatarios?.length) {
+      const { data: ultimo } = await db.from('movimentacao_bancaria_lote')
+        .select('destinatarios').eq('empresa_id', estado.empresaId).eq('status', 'ENVIADO')
+        .order('enviado_em', { ascending: false }).limit(1).maybeSingle()
+      destinatariosSugeridos = ultimo?.destinatarios || []
+    }
+    const destinatariosAtuais = lote?.destinatarios?.length ? lote.destinatarios : destinatariosSugeridos
+
+    const badgeStatus = lote?.status === 'ENVIADO'
+      ? `<span class="status aprovada">enviado em ${fmtQuando(lote.enviado_em)}${lote.destinatarios?.length ? ' para ' + esc(lote.destinatarios.join(', ')) : ''}</span>`
+      : `<span class="texto-dim2">ainda não enviado</span>`
+
+    const linhaArquivo = a => `
+      <tr>
+        <td>${esc(a.banco || '—')}</td>
+        <td><span class="chip">${esc(a.tipo)}</span></td>
+        <td class="texto-dim2">${esc(a.arquivo_nome)}</td>
+        <td class="texto-dim2">${a.tamanho_bytes ? (a.tamanho_bytes / 1024).toFixed(0) + ' KB' : '—'}</td>
+        <td style="text-align:right;white-space:nowrap;">
+          <button class="btn-secundario mini" data-ver-mb="${esc(a.arquivo_caminho)}">abrir</button>
+          ${editavel ? `<button class="btn-secundario mini" data-del-mb="${a.id}">×</button>` : ''}
+        </td>
+      </tr>`
+
+    corpo.innerHTML = `
+      <div class="cabeca-secao">
+        <h3 style="font-family:var(--serif);font-size:17px;">${esc(empresa?.nome ?? '')} · ${esc(estado.competencia)}</h3>
+        ${badgeStatus}
+      </div>
+
+      <div class="panel" style="padding:0;margin-bottom:16px;"><div class="tabela-scroll">
+        <table><thead><tr>
+          <th>Banco</th><th>Tipo</th><th>Arquivo</th><th class="num">Tamanho</th><th></th>
+        </tr></thead><tbody>
+          ${arquivos.map(linhaArquivo).join('') || `<tr><td colspan="5" class="vazio">Nenhum arquivo enviado ainda pra essa competência.</td></tr>`}
+        </tbody></table>
+      </div></div>
+
+      ${editavel ? `
+      <div class="panel" style="padding:18px;margin-bottom:16px;">
+        <h3>Subir extratos</h3>
+        <p class="aviso" style="margin-top:0;">
+          Selecione os arquivos baixados do internet banking (OFX e/ou PDF). O sistema tenta
+          reconhecer o banco pelo nome do arquivo -- confira antes de confirmar.</p>
+        <input type="file" id="mb-arquivos" multiple accept=".ofx,.pdf,.jpg,.jpeg,.png">
+        <div id="mb-pendentes" style="margin-top:12px;"></div>
+        <div class="acoes" id="mb-acoes-upload" style="display:none;">
+          <button class="btn" id="mb-confirmar-upload">Adicionar arquivo(s)</button>
+        </div>
+        <div class="recado oculto" id="mb-recado-upload"></div>
+      </div>
+
+      <div class="panel" style="padding:18px;margin-bottom:16px;">
+        <h3>Gerar pacote e enviar pra contabilidade</h3>
+        <div class="campo">
+          <label>Destinatários (e-mails separados por vírgula) *</label>
+          <input id="mb-destinatarios" value="${esc(destinatariosAtuais.join(', '))}" placeholder="contabilidade@escritorio.com.br">
+        </div>
+        <div class="acoes">
+          <button class="btn" id="mb-enviar" ${!arquivos.length ? 'disabled' : ''}>Gerar pacote e enviar e-mail</button>
+        </div>
+        <div class="recado oculto" id="mb-recado-envio"></div>
+      </div>` : ''}
+
+      ${anteriores?.length ? `
+      <div class="cabeca-secao" style="margin-top:22px;">
+        <h3 style="font-family:var(--serif);font-size:15px;">Competências anteriores</h3></div>
+      <div class="panel" style="padding:0;"><table><tbody>
+        ${anteriores.map(l => `<tr>
+          <td>${esc(l.competencia)}</td>
+          <td>${l.status === 'ENVIADO'
+            ? `<span class="status aprovada">enviado ${fmtQuando(l.enviado_em) ?? ''}</span>`
+            : '<span class="texto-dim2">não enviado</span>'}</td>
+          <td class="texto-dim2">${l.destinatarios?.length ? esc(l.destinatarios.join(', ')) : '—'}</td>
+        </tr>`).join('')}
+      </tbody></table></div>` : ''}`
+
+    corpo.querySelectorAll('[data-ver-mb]').forEach(b => { b.onclick = () => abrirArquivo(b.dataset.verMb) })
+
+    if (!editavel) return
+
+    corpo.querySelectorAll('[data-del-mb]').forEach(b => {
+      const a = arquivos.find(x => x.id === b.dataset.delMb)
+      b.onclick = () => excluirComJustificativa({
+        tabela: 'movimentacao_bancaria_arquivo', id: b.dataset.delMb, modulo: 'Financeiro',
+        titulo: 'Remover arquivo da movimentação', descricao: a?.arquivo_nome || 'arquivo de movimentação bancária',
+        aoExcluir: async () => {
+          if (a?.arquivo_caminho) { try { await db.storage.from('documentos').remove([a.arquivo_caminho]) } catch (e) { console.warn(e) } }
+          renderCorpo()
+        }
+      })
+    })
+
+    // ---- upload ----
+    let pendentes = []
+    const pintarPendentes = () => {
+      $('#mb-pendentes').innerHTML = pendentes.length ? `
+        <table><thead><tr><th>Arquivo</th><th>Banco</th><th>Tipo</th><th></th></tr></thead><tbody>
+        ${pendentes.map((p, i) => `<tr>
+          <td class="texto-dim2">${esc(p.file.name)}</td>
+          <td><select data-pend-banco="${i}">
+            <option value="">— identificar —</option>
+            ${contas.map(c => `<option value="${esc(c.nome)}" ${p.banco === c.nome ? 'selected' : ''}>${esc(c.nome)}</option>`).join('')}
+            <option value="__outro__" ${p.banco && !contas.some(c => c.nome === p.banco) ? 'selected' : ''}>outro...</option>
+          </select></td>
+          <td><select data-pend-tipo="${i}">
+            ${['OFX', 'PDF', 'COMPROVANTE', 'OUTRO'].map(t => `<option value="${t}" ${p.tipo === t ? 'selected' : ''}>${t}</option>`).join('')}
+          </select></td>
+          <td><button class="btn-secundario mini" data-pend-remover="${i}">×</button></td>
+        </tr>`).join('')}
+        </tbody></table>` : ''
+      $('#mb-acoes-upload').style.display = pendentes.length ? '' : 'none'
+
+      $('#mb-pendentes').querySelectorAll('[data-pend-banco]').forEach(s => {
+        s.onchange = () => {
+          const i = Number(s.dataset.pendBanco)
+          if (s.value === '__outro__') {
+            const nome = prompt('Nome do banco:')
+            pendentes[i].banco = nome || pendentes[i].banco
+            pintarPendentes()
+          } else pendentes[i].banco = s.value
+        }
+      })
+      $('#mb-pendentes').querySelectorAll('[data-pend-tipo]').forEach(s => {
+        s.onchange = () => { pendentes[Number(s.dataset.pendTipo)].tipo = s.value }
+      })
+      $('#mb-pendentes').querySelectorAll('[data-pend-remover]').forEach(b => {
+        b.onclick = () => { pendentes.splice(Number(b.dataset.pendRemover), 1); pintarPendentes() }
+      })
+    }
+
+    $('#mb-arquivos').onchange = () => {
+      const novos = Array.from($('#mb-arquivos').files).map(file => ({
+        file, banco: movBancIdentificarBanco(file.name), tipo: movBancIdentificarTipo(file.name)
+      }))
+      pendentes = pendentes.concat(novos)
+      $('#mb-arquivos').value = ''
+      pintarPendentes()
+    }
+
+    $('#mb-confirmar-upload').onclick = async () => {
+      const el = $('#mb-recado-upload')
+      const btn = $('#mb-confirmar-upload')
+      btn.disabled = true; btn.textContent = 'Enviando...'
+      try {
+        let loteId = lote?.id
+        if (!loteId) {
+          const { data: novoLote, error } = await db.from('movimentacao_bancaria_lote')
+            .insert({ empresa_id: estado.empresaId, competencia: estado.competencia, criado_por: PERFIL.pessoaId })
+            .select('id').single()
+          if (error) throw new Error(error.message)
+          loteId = novoLote.id
+        }
+        for (const p of pendentes) {
+          const conta = contas.find(c => c.nome === p.banco)
+          const enviado = await enviarArquivo(p.file, `movimentacao-bancaria/${estado.empresaId}/${estado.competencia}`)
+          await db.from('movimentacao_bancaria_arquivo').insert({
+            lote_id: loteId, conta_financeira_id: conta?.id || null, banco: p.banco || null,
+            tipo: p.tipo, arquivo_nome: enviado.nome, arquivo_caminho: enviado.caminho,
+            tamanho_bytes: p.file.size, criado_por: PERFIL.pessoaId
+          })
+        }
+        pendentes = []
+        renderCorpo()
+      } catch (e) {
+        el.textContent = String(e.message ?? e); el.classList.remove('oculto')
+        el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+        btn.disabled = false; btn.textContent = 'Adicionar arquivo(s)'
+      }
+    }
+
+    // ---- gerar pacote + enviar e-mail ----
+    if ($('#mb-enviar')) $('#mb-enviar').onclick = async () => {
+      const el = $('#mb-recado-envio')
+      const aviso = (t, erro = true) => {
+        el.innerHTML = t; el.classList.remove('oculto')
+        el.style.borderColor = erro ? 'var(--warn-text)' : 'var(--line2)'
+        el.style.color = erro ? 'var(--warn-text)' : 'var(--dim)'
+      }
+      const destinatarios = $('#mb-destinatarios').value.split(',').map(s => s.trim()).filter(Boolean)
+      if (!destinatarios.length) { aviso('Informe pelo menos um e-mail de destino.'); return }
+      const invalido = destinatarios.find(d => !d.includes('@'))
+      if (invalido) { aviso('Tem um e-mail que não parece válido: ' + esc(invalido)); return }
+      if (!arquivos.length) { aviso('Não tem nenhum arquivo pra mandar ainda.'); return }
+
+      const btn = $('#mb-enviar'); btn.disabled = true; btn.textContent = 'Montando pacote...'
+      try {
+        const { default: JSZip } = await import('https://esm.sh/jszip@3.10.1')
+        const zip = new JSZip()
+        for (const a of arquivos) {
+          const { data, error } = await db.storage.from('documentos').download(a.arquivo_caminho)
+          if (error) continue
+          zip.file(a.arquivo_nome, data)
+        }
+        zip.file('indice.txt',
+          `GRUPO GEFOSCAL — movimentação bancária de ${empresa?.nome ?? ''} · ${estado.competencia}\n` +
+          `Gerado em ${new Date().toLocaleString('pt-BR')} por ${PERFIL.nome}\n\n` +
+          arquivos.map(a => `[${a.banco || '?'}] ${a.tipo} — ${a.arquivo_nome}`).join('\n'))
+
+        const blob = await zip.generateAsync({ type: 'blob' })
+        const caminhoZip = `movimentacao-bancaria/${estado.empresaId}/${estado.competencia}/pacote_${estado.competencia}.zip`
+        const { error: eUp } = await db.storage.from('documentos')
+          .upload(caminhoZip, blob, { upsert: true, contentType: 'application/zip' })
+        if (eUp) throw new Error('Não deu pra salvar o pacote: ' + eUp.message)
+
+        btn.textContent = 'Gerando link...'
+        const { data: assinado, error: eSign } = await db.storage.from('documentos')
+          .createSignedUrl(caminhoZip, 60 * 60 * 24 * 30) // 30 dias
+        if (eSign) throw new Error('Não deu pra gerar o link: ' + eSign.message)
+
+        btn.textContent = 'Enviando e-mail...'
+        const corpoHtml = `
+          <div style="font-family:Arial,sans-serif;color:#20302a;max-width:560px;">
+            <p>Bom dia,</p>
+            <p>Segue movimentação bancária referente a <b>${esc(estado.competencia)}</b> — <b>${esc(empresa?.nome ?? '')}</b>.</p>
+            <p><a href="${assinado.signedUrl}" style="color:#1c5632;font-weight:600;">Baixar pacote (.zip)</a></p>
+            <p style="font-size:12px;color:#6d7c72;">
+              ${arquivos.map(a => `${esc(a.banco || '?')} — ${esc(a.tipo)}`).join('<br>')}
+            </p>
+            <p style="font-size:11px;color:#9aa79f;">O link vale por 30 dias.</p>
+          </div>`
+
+        const { data: envio, error: eEnvio } = await db.functions.invoke('enviar-pedido-email', {
+          body: {
+            para: destinatarios,
+            assunto: `Movimentação ${estado.competencia} — ${empresa?.nome ?? ''}`,
+            corpoHtml
+          }
+        })
+        if (eEnvio || !envio?.ok) throw new Error(envio?.error || eEnvio?.message || 'Falha ao enviar o e-mail.')
+
+        await db.from('movimentacao_bancaria_lote').update({
+          status: 'ENVIADO', enviado_em: new Date().toISOString(),
+          enviado_por: PERFIL.pessoaId, destinatarios
+        }).eq('id', lote.id)
+
+        aviso('Pacote enviado com sucesso para ' + esc(destinatarios.join(', ')) + '.', false)
+        renderCorpo()
+      } catch (e) {
+        aviso(String(e.message ?? e))
+        btn.disabled = false; btn.textContent = 'Gerar pacote e enviar e-mail'
+      }
+    }
+  }
+
+  await renderCorpo()
 }
 
 // ----- Financeiro › Categorias, centros e preços -----
