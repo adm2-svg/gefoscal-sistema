@@ -22026,6 +22026,7 @@ function formResultadoLigacao (card, item, cat, recarregar) {
     btn.disabled = true; btn.textContent = 'salvando...'
     const dataRetorno = cx.querySelector('.rl-data').value
     const obs = cx.querySelector('.rl-obs').value.trim()
+    const tipoEscolhido = cx.querySelector('.rl-tipo').value
 
     const { error } = await db.rpc('crm_registrar_ligacao', {
       p_lead_id: item.id,
@@ -22035,7 +22036,7 @@ function formResultadoLigacao (card, item, cat, recarregar) {
       p_proximo_em: dataRetorno ? new Date(dataRetorno + 'T09:00:00').toISOString() : null,
       p_proximo_titulo: cx.querySelector('.rl-titulo').value.trim() || null,
       p_ligacao_id: item.ligacao_aberta_id || null,
-      p_proximo_tipo: cx.querySelector('.rl-tipo').value
+      p_proximo_tipo: tipoEscolhido
     })
     if (error) { alert(error.message); btn.disabled = false; btn.textContent = 'Salvar'; return }
 
@@ -22046,6 +22047,25 @@ function formResultadoLigacao (card, item, cat, recarregar) {
       })
       if (e2) alert('A ligação foi salva, mas a objeção não: ' + e2.message)
     }
+
+    // Marcou reunião agora mesmo: o card já foi pra coluna "Reunião marcada"
+    // sozinho (a RPC cuida disso), mas o próximo passo de verdade é a
+    // gestão saber e escolher o consultor — sem esse empurrão, o lead fica
+    // parado na coluna até alguém lembrar de abrir o "⋯" depois.
+    if (tipoEscolhido === 'reuniao' && dataRetorno) {
+      cx.innerHTML = `
+        <div class="recado" style="margin-top:10px;">
+          Reunião marcada. Já quer <b>enviar pra gestão</b> escolher o consultor?
+          <div class="acoes" style="margin-top:8px;">
+            <button type="button" class="btn mini rl-ir-gestao">📤 Enviar pra gestão</button>
+            <button type="button" class="btn-secundario mini rl-agora-nao">Agora não</button>
+          </div>
+        </div>`
+      cx.querySelector('.rl-ir-gestao').onclick = () => abrirEnviarProGestao(item.id, item.nome, recarregar)
+      cx.querySelector('.rl-agora-nao').onclick = recarregar
+      return
+    }
+
     recarregar()
   }
 }
