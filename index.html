@@ -10261,9 +10261,10 @@ async function painelFinanceiro (area) {
 //   solicitacao_compra · recebimento_mercadoria · fornecedor
 // ---------------------------------------------------------------
 const STATUS_COMPRA = {
-  AGUARDANDO_COORD:     { rotulo: 'Aguardando coordenação', classe: 'aguardando' },
-  AGUARDANDO_COTACAO:   { rotulo: 'Em cotação',             classe: 'aguardando' },
-  AGUARDANDO_APROVACAO: { rotulo: 'Aguardando aprovação',   classe: 'aguardando' },
+  AGUARDANDO_COORD:               { rotulo: 'Aguardando coordenação',      classe: 'aguardando' },
+  AGUARDANDO_AUTORIZACAO_ORCAMENTO: { rotulo: 'Aguardando autorização p/ orçar (Adão)', classe: 'aguardando' },
+  AGUARDANDO_COTACAO:             { rotulo: 'Em cotação',                  classe: 'aguardando' },
+  AGUARDANDO_APROVACAO:           { rotulo: 'Aguardando aprovação',        classe: 'aguardando' },
   DEVOLVIDA:            { rotulo: 'Devolvida',              classe: 'reprovada' },
   APROVADA:             { rotulo: 'Aprovada — a pagar',    classe: 'aprovada' },
   PAGA:                 { rotulo: 'Paga',                  classe: 'aprovada' },
@@ -10312,7 +10313,7 @@ function podeEditarSolicitacao (s) {
   return false
 }
 
-let COMPRAS_CACHE = { fornecedores: [], setores: [], pessoas: [], meusSetores: [], veiculos: [], empresas: [] }
+let COMPRAS_CACHE = { fornecedores: [], setores: [], pessoas: [], meusSetores: [], veiculos: [], empresas: [], equipamentos: [] }
 
 async function paginaCompras () {
   const editavel = podeEditar('compras')
@@ -10326,12 +10327,13 @@ async function paginaCompras () {
   area.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
   // carrega antes de montar as abas: quem coordena depende dos setores
-  const [{ data: forn }, { data: setores }, { data: pessoas }, { data: veiculos }, { data: empresas }] = await Promise.all([
+  const [{ data: forn }, { data: setores }, { data: pessoas }, { data: veiculos }, { data: empresas }, { data: equipamentos }] = await Promise.all([
     db.from('fornecedor').select('id,nome,cnpj_cpf,contato,status').order('nome'),
     db.from('setor').select('id,nome,gestor_id').order('nome'),
     db.from('pessoa').select('id,nome').order('nome'),
     db.from('veiculo').select('id,placa,descricao').order('placa'),
-    db.from('empresa').select('id,nome').eq('status', 'ATIVO').order('nome')
+    db.from('empresa').select('id,nome').eq('status', 'ATIVO').order('nome'),
+    podeVer('servico_industria') ? db.from('equipamento').select('id,tag,descricao').order('tag') : Promise.resolve({ data: [] })
   ])
   COMPRAS_CACHE = {
     fornecedores: forn || [],
@@ -10339,7 +10341,8 @@ async function paginaCompras () {
     pessoas: pessoas || [],
     meusSetores: (setores || []).filter(s => s.gestor_id && s.gestor_id === PERFIL.pessoaId),
     veiculos: veiculos || [],
-    empresas: empresas || []
+    empresas: empresas || [],
+    equipamentos: equipamentos || []
   }
 
   const abas = [
@@ -10388,13 +10391,15 @@ const selSolicitacao = `
   parcelas, vencimento, dados_pagamento, orcamento_escolhido_id,
   retorno_texto, retorno_anexo_url, retorno_anexo_nome, retorno_dado_em,
   anexo_url, nome_anexo,
+  eh_servico_industria, modalidade_custo, variavel_descricao, equipamento_id, ordem_servico_gerada_id,
   solicitante:solicitante_id ( nome ),
   gestor:gestor_id ( nome ),
   analista:analista_id ( nome ),
   aprovador:aprovador_id ( nome ),
   setor:setor_id ( nome ),
   fornecedor:fornecedor_id ( nome ),
-  veiculo:veiculo_id ( placa, descricao )`
+  veiculo:veiculo_id ( placa, descricao ),
+  equipamento:equipamento_id ( tag, descricao )`
 
 // ----- Compras › Solicitações -----
 function abrirListaAnexosCompra (anexos) {
@@ -10428,7 +10433,7 @@ async function comprasSolicitacoes (alvo, editavel, apenasProprio) {
 
   // Em análise é o que ainda anda. Encerrada é o que já teve desfecho —
   // fica guardado numa gaveta, para não competir com o que precisa de ação.
-  const ANDANDO = ['AGUARDANDO_COORD', 'AGUARDANDO_COTACAO', 'AGUARDANDO_APROVACAO']
+  const ANDANDO = ['AGUARDANDO_COORD', 'AGUARDANDO_AUTORIZACAO_ORCAMENTO', 'AGUARDANDO_COTACAO', 'AGUARDANDO_APROVACAO']
   const ENCERRADA = ['APROVADA', 'REPROVADA', 'DEVOLVIDA', 'PAGA', 'RECEBIDA', 'CANCELADA']
 
   const todas = data || []
@@ -10452,6 +10457,7 @@ async function comprasSolicitacoes (alvo, editavel, apenasProprio) {
   alvo.innerHTML = `
     <div class="acoes" style="margin:0 0 16px;">
       <button class="btn" id="c-nova">Nova solicitação</button>
+      ${podeVer('servico_industria') ? '<button class="btn-secundario" id="c-nova-servico">🔧 Solicitação de Serviço</button>' : ''}
     </div>
     ${apenasProprio ? `<p class="texto-dim2" style="font-size:12px;margin:-10px 0 14px;">
       Mostrando só as suas solicitações. Quem coordena, cota ou aprova compras enxerga o restante.</p>` : ''}
@@ -10620,6 +10626,8 @@ async function comprasSolicitacoes (alvo, editavel, apenasProprio) {
   desenhar()
 
   $('#c-nova').onclick = () => formSolicitacao()
+  const btnNovoServico = $('#c-nova-servico')
+  if (btnNovoServico) btnNovoServico.onclick = () => formSolicitacaoServicoIndustria()
 }
 
 
@@ -11687,6 +11695,160 @@ function formSolicitacao (s = null) {
 }
 
 // ---------------------------------------------------------------
+// Solicitação de Serviço (indústria) — acesso restrito (Amanda, Paulo,
+// Lúcio, Fabiano, Júlio). Pula Coordenação: vai direto pra Cotação e,
+// depois de escolhido o orçamento, a aprovação é só do Adão Umpierre
+// pelo link de WhatsApp — não passa pela fila normal de DIRETORIA/ADMIN.
+// Quando vinculada a veículo/máquina, o custo aprovado vira Ordem de
+// Serviço automaticamente em Manutenção (servico_industria_gerar_os).
+// ---------------------------------------------------------------
+function formSolicitacaoServicoIndustria () {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal">
+      <h3>🔧 Solicitação de Serviço (indústria)</h3>
+      <p class="texto-dim2" style="font-size:12.5px;margin-top:-6px;">
+        Vai direto pra cotação e, depois de escolhido o orçamento, a aprovação é do Adão Umpierre pelo WhatsApp.</p>
+
+      <div class="campo" style="margin-top:6px;display:flex;align-items:flex-start;gap:8px;">
+        <input type="checkbox" id="ss-precisa-autorizacao" style="margin-top:3px;width:auto;">
+        <label for="ss-precisa-autorizacao" style="font-weight:400;font-size:12.5px;line-height:1.5;">
+          Precisa perguntar pro Adão antes de pedir orçamento?<br>
+          <span class="texto-dim2" style="font-size:11px;">Marque quando só ir lá orçar já tem custo/trabalho — o Adão decide primeiro se autoriza pedir o orçamento; depois disso a cotação segue normal e ele aprova o valor no final também.</span>
+        </label></div>
+
+      <div class="form-grade">
+        <div class="campo" style="grid-column:1/-1;"><label>Urgência</label>
+          <select id="ss-urg">
+            <option value="NAO_URGENTE_5D">Normal — entra no resumo das 17:30 pro Adão</option>
+            <option value="URGENTE_4H">Urgente — vai direto pro WhatsApp do Adão agora</option>
+          </select></div>
+        <div class="campo"><label>Setor</label>
+          <select id="ss-setor">${['<option value="">—</option>'].concat(
+            COMPRAS_CACHE.setores.map(s => `<option value="${s.id}">${esc(s.nome)}</option>`)
+          ).join('')}</select></div>
+        <div class="campo"><label>Valor estimado (R$)</label>
+          <input id="ss-valor" inputmode="decimal" placeholder="0,00"></div>
+      </div>
+
+      <div class="campo" style="margin-top:10px;"><label>Serviço *</label>
+        <input id="ss-produto" placeholder="Ex: manutenção do compressor, revisão do caminhão..."></div>
+
+      <div class="campo" style="margin-top:10px;"><label>Modalidade de custo</label>
+        <select id="ss-modalidade">
+          <option value="">—</option>
+          <option value="FIXO">Só custo fixo</option>
+          <option value="VARIAVEL">Só custo variável</option>
+          <option value="FIXO_E_VARIAVEL">Custo fixo + variável</option>
+        </select></div>
+      <div class="campo oculto" id="ss-linha-variavel" style="margin-top:8px;">
+        <label>Descreva a parte variável (o que depende do orçamento)</label>
+        <textarea id="ss-variavel-desc" style="min-height:60px;"></textarea></div>
+
+      <div class="campo" style="margin-top:10px;"><label>Vinculado a</label>
+        <select id="ss-ativo-tipo">
+          <option value="">Nenhum (serviço avulso)</option>
+          <option value="VEICULO">Veículo</option>
+          <option value="EQUIPAMENTO">Máquina / equipamento</option>
+        </select></div>
+      <div class="campo oculto" id="ss-linha-veiculo" style="margin-top:8px;">
+        <label>Veículo *</label>
+        <select id="ss-veiculo"><option value="">—</option>${COMPRAS_CACHE.veiculos.map(v =>
+          `<option value="${v.id}">${esc(v.placa)}${v.descricao ? ' — ' + esc(v.descricao) : ''}</option>`).join('')}</select></div>
+      <div class="campo oculto" id="ss-linha-equipamento" style="margin-top:8px;">
+        <label>Máquina / equipamento *</label>
+        <select id="ss-equipamento"><option value="">—</option>${COMPRAS_CACHE.equipamentos.map(e =>
+          `<option value="${e.id}">${esc(e.tag)}${e.descricao ? ' — ' + esc(e.descricao) : ''}</option>`).join('')}</select></div>
+      <p class="texto-dim2" style="font-size:11.5px;margin-top:6px;" id="ss-explica-vinculo">
+        Quando vinculado, o custo aprovado entra automaticamente na manutenção deste veículo/máquina — pra previsibilidade.</p>
+
+      <div class="campo" style="margin-top:10px;"><label>Motivo / justificativa</label>
+        <textarea id="ss-justificativa" style="min-height:60px;"></textarea></div>
+      <div class="campo" style="margin-top:10px;"><label>Detalhes (opcional)</label>
+        <textarea id="ss-especificacoes" style="min-height:60px;"></textarea></div>
+
+      <div class="acoes" style="margin-top:14px;">
+        <button class="btn" id="ss-salvar">Enviar solicitação</button>
+        <button class="btn-secundario" id="ss-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="ss-recado"></div>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#ss-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  const q = id => fundo.querySelector(id)
+
+  q('#ss-modalidade').onchange = () => q('#ss-linha-variavel').classList.toggle('oculto', !['VARIAVEL', 'FIXO_E_VARIAVEL'].includes(q('#ss-modalidade').value))
+  q('#ss-ativo-tipo').onchange = () => {
+    const t = q('#ss-ativo-tipo').value
+    q('#ss-linha-veiculo').classList.toggle('oculto', t !== 'VEICULO')
+    q('#ss-linha-equipamento').classList.toggle('oculto', t !== 'EQUIPAMENTO')
+  }
+
+  const aviso = (t, alerta = false) => {
+    const el = q('#ss-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = alerta ? 'var(--warn-text)' : 'var(--line2)'
+    el.style.color = alerta ? 'var(--warn-text)' : 'var(--dim)'
+  }
+
+  q('#ss-salvar').onclick = async () => {
+    const produto = q('#ss-produto').value.trim()
+    if (!produto) { aviso('Descreva o serviço antes de enviar.', true); return }
+    const ativoTipo = q('#ss-ativo-tipo').value
+    if (ativoTipo === 'VEICULO' && !q('#ss-veiculo').value) { aviso('Escolha o veículo.', true); return }
+    if (ativoTipo === 'EQUIPAMENTO' && !q('#ss-equipamento').value) { aviso('Escolha a máquina/equipamento.', true); return }
+
+    const btn = q('#ss-salvar'); btn.disabled = true; btn.textContent = 'Enviando...'
+
+    const corpo = {
+      produto_servico: produto.slice(0, 500),
+      tipo_solicitacao: 'Serviço',
+      urgencia: q('#ss-urg').value,
+      setor_id: q('#ss-setor').value || null,
+      valor_estimado: (() => {
+        let b = q('#ss-valor').value.trim()
+        if (!b) return null
+        if (b.includes(',')) b = b.replace(/\./g, '').replace(',', '.')
+        else if (/^\d{1,3}(\.\d{3})+$/.test(b)) b = b.replace(/\./g, '')
+        const n = Number(b)
+        return Number.isNaN(n) ? null : n
+      })(),
+      modalidade_custo: q('#ss-modalidade').value || null,
+      variavel_descricao: q('#ss-variavel-desc').value.trim() || null,
+      veiculo_id: ativoTipo === 'VEICULO' ? q('#ss-veiculo').value : null,
+      equipamento_id: ativoTipo === 'EQUIPAMENTO' ? q('#ss-equipamento').value : null,
+      justificativa: q('#ss-justificativa').value.trim() || null,
+      especificacoes: q('#ss-especificacoes').value.trim() || null,
+      eh_servico_industria: true,
+      solicitante_id: PERFIL.pessoaId,
+      data_solicitacao: new Date().toISOString(),
+      precisa_autorizacao_orcamento: q('#ss-precisa-autorizacao').checked,
+      // pula Coordenação sempre, mesmo pra Indústria — se precisa autorização
+      // prévia do Adão pra orçar, fica esperando ele antes de ir pra cotação
+      status: q('#ss-precisa-autorizacao').checked ? 'AGUARDANDO_AUTORIZACAO_ORCAMENTO' : 'AGUARDANDO_COTACAO'
+    }
+
+    const { data: inserida, error } = await db.from('solicitacao_compra').insert(corpo).select('id').single()
+    if (error) { btn.disabled = false; btn.textContent = 'Enviar solicitação'; aviso(error.message, true); return }
+
+    if (corpo.precisa_autorizacao_orcamento) {
+      try {
+        await db.functions.invoke('servico-industria-whatsapp', {
+          body: { acao: 'notificar', solicitacao_id: inserida.id }
+        })
+      } catch (_e) { /* não trava o envio por causa do aviso do WhatsApp */ }
+    }
+
+    btn.disabled = false; btn.textContent = 'Enviar solicitação'
+    fechar()
+    abrirCompras('solicitacoes', true)
+  }
+}
+
+// ---------------------------------------------------------------
 // Aprovação por WhatsApp — o painel de quem administra.
 //
 // Fica na própria tela de Aprovação, porque quem olha essa fila é quem
@@ -11899,6 +12061,13 @@ async function comprasDecidir (alvo, nomeEtapa) {
   // coordenação só enxerga o que é do setor que a pessoa gerencia
   if (nomeEtapa === 'coordenacao' && !ehAdminSistema()) {
     consulta = consulta.in('setor_id', COMPRAS_CACHE.meusSetores.map(s => s.id))
+  }
+
+  // Solicitação de Serviço (indústria) não passa por aqui: a aprovação é
+  // só do Adão Umpierre, pelo link de WhatsApp -- não aparece nesta fila
+  // pra ninguém da diretoria decidir por engano em paralelo.
+  if (nomeEtapa === 'aprovacao') {
+    consulta = consulta.eq('eh_servico_industria', false)
   }
 
   const { data, error } = await consulta.order('urgencia').order('data_solicitacao')
@@ -12400,17 +12569,28 @@ async function telaCotacao (s) {
 
       if (error) { aviso(error.message); return }
 
-      // avisa todo mundo que pode aprovar (papel DIRETORIA/ADMIN) — mesmo
-      // sino de notificações, clique já leva direto pra ficha da solicitação
-      const { data: aprovadores } = await db.rpc('pessoas_aprovadoras_compras')
-      const destinatarios = (aprovadores || []).map(a => a.pessoa_id).filter(id => id !== PERFIL.pessoaId)
-      if (destinatarios.length) {
-        await db.from('notificacao_pessoal').insert(destinatarios.map(pessoaId => ({
-          destinatario_id: pessoaId,
-          titulo: 'Solicitação aguardando sua aprovação',
-          mensagem: `"${s.produto_servico}" — cotada por ${PERFIL.nome} — está esperando sua aprovação.`,
-          entidade: 'solicitacao_compra', entidade_id: s.id
-        })))
+      if (s.eh_servico_industria) {
+        // Solicitação de Serviço (indústria): não notifica a diretoria toda --
+        // vai direto pro link de aprovação do Adão Umpierre no WhatsApp.
+        // Urgente manda na hora; não urgente entra no resumo das 17:30.
+        try {
+          await db.functions.invoke('servico-industria-whatsapp', {
+            body: { acao: 'notificar', solicitacao_id: s.id }
+          })
+        } catch (_e) { /* não trava a tela de cotação por causa do aviso do WhatsApp */ }
+      } else {
+        // avisa todo mundo que pode aprovar (papel DIRETORIA/ADMIN) — mesmo
+        // sino de notificações, clique já leva direto pra ficha da solicitação
+        const { data: aprovadores } = await db.rpc('pessoas_aprovadoras_compras')
+        const destinatarios = (aprovadores || []).map(a => a.pessoa_id).filter(id => id !== PERFIL.pessoaId)
+        if (destinatarios.length) {
+          await db.from('notificacao_pessoal').insert(destinatarios.map(pessoaId => ({
+            destinatario_id: pessoaId,
+            titulo: 'Solicitação aguardando sua aprovação',
+            mensagem: `"${s.produto_servico}" — cotada por ${PERFIL.nome} — está esperando sua aprovação.`,
+            entidade: 'solicitacao_compra', entidade_id: s.id
+          })))
+        }
       }
 
       fechar()
