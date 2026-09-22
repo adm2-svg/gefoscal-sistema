@@ -54366,6 +54366,62 @@ async function abrirModeloTermo (chave, aoFechar) {
   }
 }
 
+// Histórico de observações por termo -- um log que cresce (cada anotação
+// fica guardada com quem escreveu e quando), não um campo único que se
+// sobrescreve. Fica dentro do próprio cardzinho do termo, atrás do "+ obs".
+async function renderObservacoesComp (container, compensacaoId, editavel) {
+  container.innerHTML = `<p class="texto-dim2" style="font-size:11px;">carregando observações...</p>`
+  const { data, error } = await db.from('ponto_compensacao_observacao')
+    .select('id,texto,criado_em,autor:criado_por(nome)')
+    .eq('compensacao_id', compensacaoId).order('criado_em', { ascending: false })
+  if (error) { container.innerHTML = `<p class="vazio" style="font-size:11px;">${esc(error.message)}</p>`; return }
+  const lista = data || []
+
+  container.innerHTML = `
+    <div style="border-top:1px solid var(--line2);padding-top:10px;margin-top:10px;">
+      <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Observações</div>
+      <div style="display:grid;gap:6px;margin-bottom:8px;">
+        ${lista.map(o => `
+          <div style="font-size:12px;background:var(--panel);border:1px solid var(--line2);border-radius:8px;padding:7px 10px;">
+            <div style="white-space:pre-wrap;">${esc(o.texto)}</div>
+            <div class="texto-dim2" style="font-size:10px;margin-top:4px;display:flex;justify-content:space-between;gap:8px;">
+              <span>${esc(o.autor?.nome || '—')} · ${fmtQuando(o.criado_em)}</span>
+              ${editavel ? `<button class="lnk-crud" data-apagar-obs-comp="${o.id}" title="excluir" style="font-size:11px;">🗑</button>` : ''}
+            </div>
+          </div>`).join('') || `<p class="texto-dim2" style="font-size:11px;">Nenhuma observação ainda.</p>`}
+      </div>
+      ${editavel ? `
+        <div style="display:flex;gap:6px;">
+          <textarea id="obs-novo-${compensacaoId}" rows="2" style="flex:1;font-size:12px;"
+            placeholder="Ex.: vai trabalhar 2 sábados pra folgar 1 dia..."></textarea>
+          <button class="btn-secundario mini" id="obs-salvar-${compensacaoId}" style="align-self:flex-end;">salvar</button>
+        </div>` : ''}
+    </div>`
+
+  container.querySelectorAll('[data-apagar-obs-comp]').forEach(b => {
+    b.onclick = async () => {
+      if (!confirm('Excluir esta observação?')) return
+      const { error: e } = await db.from('ponto_compensacao_observacao').delete().eq('id', b.dataset.apagarObsComp)
+      if (e) { alert(e.message); return }
+      renderObservacoesComp(container, compensacaoId, editavel)
+    }
+  })
+
+  const btnSalvar = container.querySelector(`#obs-salvar-${compensacaoId}`)
+  if (btnSalvar) btnSalvar.onclick = async () => {
+    const campo = container.querySelector(`#obs-novo-${compensacaoId}`)
+    const texto = campo.value.trim()
+    if (!texto) return
+    btnSalvar.disabled = true; btnSalvar.textContent = 'salvando...'
+    const { error: e } = await db.from('ponto_compensacao_observacao').insert({
+      compensacao_id: compensacaoId, texto, criado_por: PERFIL.pessoaId
+    })
+    btnSalvar.disabled = false; btnSalvar.textContent = 'salvar'
+    if (e) { alert(e.message); return }
+    renderObservacoesComp(container, compensacaoId, editavel)
+  }
+}
+
 async function pontoTermosCompensacao (corpo, editavel, recarregar, opcoes = {}) {
   const podeModelo = opcoes.podeModelo ?? editavel
   corpo.innerHTML = `<p class="texto-dim2">carregando os termos...</p>`
@@ -54429,9 +54485,11 @@ async function pontoTermosCompensacao (corpo, editavel, recarregar, opcoes = {})
               <button class="btn-secundario mini" data-editar-comp="${esc(t.id)}">Editar</button>
               <button class="btn-secundario mini" data-papel-comp="${esc(t.id)}"
                 title="marcar que a assinatura foi colhida no papel">Assinado no papel</button>` : ''}
+            <button class="btn-secundario mini" data-toggle-obs-comp="${esc(t.id)}" title="observações">+ obs</button>
             ${editavel ? `<button class="lnk-crud" data-apagar-comp="${esc(t.id)}" title="excluir">🗑</button>` : ''}
           </div>
         </div>
+        <div id="obs-comp-${esc(t.id)}" class="oculto"></div>
       </div>`).join('') || `<p class="vazio">Nenhum termo emitido ainda.</p>`}
     </div>`
 
@@ -54452,6 +54510,16 @@ async function pontoTermosCompensacao (corpo, editavel, recarregar, opcoes = {})
 
   corpo.querySelectorAll('[data-pdf-comp]').forEach(b => {
     b.onclick = () => pdfTermoCompensacao(lista.find(t => t.id === b.dataset.pdfComp))
+  })
+
+  corpo.querySelectorAll('[data-toggle-obs-comp]').forEach(b => {
+    b.onclick = () => {
+      const id = b.dataset.toggleObsComp
+      const container = corpo.querySelector(`#obs-comp-${id}`)
+      if (!container.classList.contains('oculto')) { container.classList.add('oculto'); container.innerHTML = ''; return }
+      container.classList.remove('oculto')
+      renderObservacoesComp(container, id, editavel)
+    }
   })
 
   corpo.querySelectorAll('[data-papel-comp]').forEach(b => {
