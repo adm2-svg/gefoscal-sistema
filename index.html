@@ -42928,7 +42928,7 @@ async function paginaJuridico () {
 
   const abas = [['painel', 'Painel'], ['contratos', 'Contratos'], ['licencas', 'Licenças e certidões'],
     ['processos', 'Processos'], ['notificacoes', 'Notificações e autuações'], ['documentos', 'Documentos'],
-    ['termos', 'Termos']]
+    ['termos', 'Termos'], ['certificados', 'Certificados digitais']]
   area.innerHTML = `
     <div style="background:linear-gradient(120deg,#1a1410 0%,#2b2018 55%,#1a1410 100%);border-radius:14px;padding:22px 26px;margin-bottom:18px;position:relative;overflow:hidden;border:1px solid #3a2e20;">
       <div style="position:absolute;right:-20px;top:-24px;font-size:120px;opacity:.08;line-height:1;">⚖️</div>
@@ -42963,6 +42963,7 @@ function abrirJuridico (sub, editavel) {
   // Hub de todos os termos da empresa: o Jurídico escreve os modelos e
   // emite; o DP/RH também emite. Cada tipo de termo é um card.
   if (sub === 'termos') juridicoTermos(alvo, editavel)
+  if (sub === 'certificados') juridicoCertificados(alvo, editavel)
 }
 
 function diasParaVencer (data) {
@@ -43412,6 +43413,378 @@ function formLicenca (l) {
     if (error) { aviso(error.message); return }
     fechar(); abrirJuridico('licencas', true)
   }
+}
+
+// ---------------------------------------------------------------
+// Jurídico › Certificados digitais.
+// O arquivo do certificado (.pfx/.p12) fica num bucket privado — nada
+// de link assinado de 5 anos como em "documentos": só quem assina o
+// termo, pelo link gerado aqui, consegue baixar (e só dentro da janela
+// de validade do link, no máximo 24h). O link também serve pra gente
+// sem login no sistema — contador, advogado externo — porque quem
+// autoriza é o token do link, não uma sessão.
+// A senha do certificado não é guardada aqui: fica de fora de propósito,
+// dado o quanto é sensível — combina com quem recebe por outro canal.
+// ---------------------------------------------------------------
+const TIPOS_CERTIFICADO = ['e-CNPJ A1', 'e-CNPJ A3', 'e-CPF A1', 'e-CPF A3', 'e-CNPJ A1 (nuvem)', 'Outro']
+const ROTULO_STATUS_CERTIFICADO = { ATIVO: 'ativo', REVOGADO: 'revogado', SUBSTITUIDO: 'substituído' }
+const ROTULO_STATUS_LIBERACAO = { AGUARDANDO_ASSINATURA: 'aguardando assinatura', ASSINADO: 'assinado', EXPIRADO: 'expirado', REVOGADO: 'revogado' }
+const COR_STATUS_LIBERACAO = { AGUARDANDO_ASSINATURA: '#a67c00', ASSINADO: '#2c6e3f', EXPIRADO: '#8a8a8a', REVOGADO: '#a02a1e' }
+
+async function juridicoCertificados (alvo, editavel) {
+  const { data, error } = await db.from('certificado_digital')
+    .select(`id,tipo,titular_nome,titular_documento,emissor,numero_serie,validade_inicio,validade_fim,
+      arquivo_caminho,arquivo_nome,observacoes,status,responsavel:responsavel_id(nome)`)
+    .order('validade_fim', { ascending: true, nullsFirst: false })
+
+  if (faltaMigracao(error)) { alvo.innerHTML = `<p class="vazio">Recurso ainda não disponível — fale com o suporte.</p>`; return }
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  const lista = data || []
+  const recarregar = () => juridicoCertificados(alvo, editavel)
+
+  alvo.innerHTML = `
+    <p class="texto-dim2" style="font-size:12px;line-height:1.6;margin:-4px 0 14px;max-width:84ch;">
+      Certificados digitais da empresa (e-CNPJ/e-CPF). Pra compartilhar um com alguém — inclusive terceiro sem
+      login no sistema, como contador ou advogado externo — gere um link: a pessoa assina o termo de
+      responsabilidade na tela e só depois disso baixa o arquivo. O link expira sozinho em até 24 horas.</p>
+    ${editavel ? `<div class="acoes" style="margin-bottom:14px;"><button class="btn" id="cd-novo">+ Novo certificado</button></div>` : ''}
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>Certificado</th><th>Titular</th><th>Emissor</th><th>Validade</th><th>Situação</th><th>Responsável</th><th></th>
+      </tr></thead><tbody>
+      ${lista.map(c => `<tr>
+        <td><b>${esc(c.tipo)}</b>${c.numero_serie ? `<div class="texto-dim2" style="font-size:11px;">série ${esc(c.numero_serie)}</div>` : ''}</td>
+        <td class="texto-dim">${esc(c.titular_nome)}${c.titular_documento ? `<div class="texto-dim2" style="font-size:11px;">${esc(c.titular_documento)}</div>` : ''}</td>
+        <td class="texto-dim">${esc(c.emissor || '—')}</td>
+        <td class="texto-dim">${fmtData(c.validade_fim)}</td>
+        <td>${c.status !== 'ATIVO' ? `<span class="chip">${esc(ROTULO_STATUS_CERTIFICADO[c.status] || c.status)}</span>` : tagVencimento(c.validade_fim)}</td>
+        <td class="texto-dim">${esc(c.responsavel?.nome || '—')}</td>
+        <td style="text-align:right;white-space:nowrap;">
+          <button class="btn-secundario mini" data-liberar="${c.id}">gerar link</button>
+          <button class="btn-secundario mini" data-liberacoes="${c.id}">links</button>
+          ${editavel ? `<button class="btn-secundario mini" data-editar="${c.id}">editar</button>` : ''}
+        </td>
+      </tr>`).join('') || `<tr><td colspan="7" class="vazio">Nenhum certificado digital cadastrado ainda.</td></tr>`}
+      </tbody></table>
+    </div></div>
+    <div id="cd-detalhe" style="margin-top:16px;"></div>`
+
+  const detalhe = alvo.querySelector('#cd-detalhe')
+
+  if (editavel) {
+    alvo.querySelector('#cd-novo').onclick = () => formCertificado(null, recarregar)
+    alvo.querySelectorAll('[data-editar]').forEach(b => {
+      b.onclick = () => formCertificado(lista.find(x => x.id === b.dataset.editar), recarregar)
+    })
+  }
+  alvo.querySelectorAll('[data-liberar]').forEach(b => {
+    b.onclick = () => {
+      const c = lista.find(x => x.id === b.dataset.liberar)
+      if (!c.arquivo_caminho) { alert('Cadastre o arquivo do certificado antes de gerar um link.'); return }
+      formLiberacaoCertificado(c, () => {
+        listaLiberacoesCertificado(detalhe, c, editavel)
+        detalhe.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      })
+    }
+  })
+  alvo.querySelectorAll('[data-liberacoes]').forEach(b => {
+    b.onclick = () => {
+      const c = lista.find(x => x.id === b.dataset.liberacoes)
+      listaLiberacoesCertificado(detalhe, c, editavel)
+      detalhe.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  })
+}
+
+function formCertificado (c, recarregar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  const v = k => esc(c?.[k] ?? '')
+
+  fundo.innerHTML = `
+    <div class="modal">
+      <h3>${c ? 'Editar certificado digital' : 'Novo certificado digital'}</h3>
+      <div class="form-grade">
+        <div class="campo"><label>Tipo *</label>
+          <select id="cd-tipo">${TIPOS_CERTIFICADO.map(x => `<option ${c?.tipo === x ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
+        <div class="campo"><label>Situação</label>
+          <select id="cd-status">
+            <option value="ATIVO" ${(!c || c.status === 'ATIVO') ? 'selected' : ''}>ativo</option>
+            <option value="SUBSTITUIDO" ${c?.status === 'SUBSTITUIDO' ? 'selected' : ''}>substituído</option>
+            <option value="REVOGADO" ${c?.status === 'REVOGADO' ? 'selected' : ''}>revogado</option>
+          </select></div>
+        <div class="campo" style="grid-column:1/-1;"><label>Titular *</label>
+          <input id="cd-titular" value="${v('titular_nome')}" placeholder="Razão social ou nome do titular do certificado"></div>
+        <div class="campo"><label>CPF/CNPJ do titular</label><input id="cd-doc" value="${v('titular_documento')}"></div>
+        <div class="campo"><label>Emissor (AC)</label><input id="cd-emissor" value="${v('emissor')}" placeholder="Ex.: Serasa, Certisign, Valid"></div>
+        <div class="campo"><label>Número de série</label><input id="cd-serie" value="${v('numero_serie')}"></div>
+        <div class="campo"><label>Início da validade</label><input id="cd-inicio" type="date" value="${c?.validade_inicio ?? ''}"></div>
+        <div class="campo"><label>Fim da validade</label><input id="cd-fim" type="date" value="${c?.validade_fim ?? ''}"></div>
+        <div class="campo"><label>Responsável interno</label>
+          <select id="cd-resp">${opcoesFin(JUR_CACHE.pessoas, 'sem responsável', c?.responsavel_id)}</select></div>
+        <div class="campo" style="grid-column:1/-1;"><label>Arquivo do certificado (.pfx/.p12)</label>
+          <input type="file" id="cd-arquivo" accept=".pfx,.p12,application/x-pkcs12,application/octet-stream">
+          <span class="texto-dim2" style="font-size:11px;">
+            ${c?.arquivo_nome ? `já tem o arquivo <b>${esc(c.arquivo_nome)}</b> cadastrado — escolher outro substitui` : 'fica num bucket privado, sem link público; só quem assina o termo consegue baixar'}</span></div>
+      </div>
+      <div class="campo" style="margin-top:12px;"><label>Observações</label>
+        <textarea id="cd-obs" style="min-height:64px;">${v('observacoes')}</textarea></div>
+      <p class="texto-dim2" style="font-size:11px;margin-top:6px;">
+        A senha do certificado não é guardada no sistema — combine a senha com quem for usar por outro canal.</p>
+      <div class="acoes">
+        <button class="btn" id="cd-salvar">Salvar</button>
+        ${c ? '<button class="btn-secundario" id="cd-excluir">Excluir</button>' : ''}
+        <button class="btn-secundario" id="cd-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="cd-recado"></div>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#cd-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  const aviso = t => {
+    const el = q('#cd-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  q('#cd-salvar').onclick = async () => {
+    const titular = q('#cd-titular').value.trim()
+    if (!titular) { aviso('Escreva o titular do certificado.'); return }
+    const btnSalvar = q('#cd-salvar'); btnSalvar.disabled = true; btnSalvar.textContent = 'Salvando...'
+
+    let arquivoCaminho = c?.arquivo_caminho ?? null
+    let arquivoNome = c?.arquivo_nome ?? null
+    const arquivo = q('#cd-arquivo').files[0]
+    if (arquivo) {
+      try {
+        const limpo = arquivo.name.replace(/[^\w.\-]/g, '_').slice(-80)
+        const caminho = `${c?.id ?? 'novo-' + Date.now()}/${Date.now()}_${limpo}`
+        const { error: eUp } = await db.storage.from('certificados-digitais').upload(caminho, arquivo, { upsert: false })
+        if (eUp) throw new Error(eUp.message)
+        arquivoCaminho = caminho
+        arquivoNome = arquivo.name
+      } catch (e) { aviso('Não deu pra enviar o arquivo: ' + e.message); btnSalvar.disabled = false; btnSalvar.textContent = 'Salvar'; return }
+    }
+
+    const corpo = {
+      tipo: q('#cd-tipo').value,
+      status: q('#cd-status').value,
+      titular_nome: titular,
+      titular_documento: q('#cd-doc').value.trim() || null,
+      emissor: q('#cd-emissor').value.trim() || null,
+      numero_serie: q('#cd-serie').value.trim() || null,
+      validade_inicio: q('#cd-inicio').value || null,
+      validade_fim: q('#cd-fim').value || null,
+      responsavel_id: q('#cd-resp').value || null,
+      arquivo_caminho: arquivoCaminho,
+      arquivo_nome: arquivoNome,
+      observacoes: q('#cd-obs').value.trim() || null
+    }
+    let error
+    if (c) {
+      corpo.editado_por = PERFIL.pessoaId; corpo.editado_em = new Date().toISOString()
+      ;({ error } = await db.from('certificado_digital').update(corpo).eq('id', c.id))
+    } else {
+      corpo.criado_por = PERFIL.pessoaId
+      ;({ error } = await db.from('certificado_digital').insert(corpo))
+    }
+    btnSalvar.disabled = false; btnSalvar.textContent = 'Salvar'
+    if (error) { aviso(error.message); return }
+    fechar(); recarregar()
+  }
+
+  const bx = q('#cd-excluir')
+  if (bx) bx.onclick = async () => {
+    if (!confirm('Excluir este certificado em definitivo?\n\nOs links já gerados pra ele deixam de funcionar.')) return
+    const { error } = await db.from('certificado_digital').delete().eq('id', c.id)
+    if (error) { aviso(error.message); return }
+    fechar(); recarregar()
+  }
+}
+
+// texto espelhado do gerado pela edge function certificado-acesso — a pessoa
+// vê exatamente este texto (congelado em termo_texto) quando assina o link
+function textoTermoPadraoCertificado (c, nome, doc, finalidade, expiraEm) {
+  return [
+    'TERMO DE RESPONSABILIDADE — CERTIFICADO DIGITAL',
+    '',
+    `Destinatário: ${nome}${doc ? `, CPF/CNPJ ${doc}` : ''}.`,
+    `Certificado: ${c.tipo} — titular ${c.titular_nome}${c.titular_documento ? `, ${c.titular_documento}` : ''}.`,
+    `Finalidade: ${finalidade || 'não informada'}.`,
+    `Acesso liberado até: ${fmtQuando(expiraEm)}.`,
+    '',
+    '1 — DO RECEBIMENTO',
+    'O destinatário acima identificado declara ter solicitado acesso ao certificado digital descrito neste termo e está ciente de que se trata de documento de uso restrito e de responsabilidade legal, exclusivo para a finalidade aqui declarada.',
+    '',
+    '2 — DA GUARDA E DO SIGILO',
+    'O destinatário se compromete a manter o certificado e sua senha em sigilo, utilizá-lo apenas para a finalidade declarada, e não repassá-lo a terceiros sem autorização expressa do Grupo Gefoscal.',
+    '',
+    '3 — DA RESPONSABILIDADE',
+    'Qualquer uso indevido do certificado, no período em que estiver de posse do destinatário, é de sua exclusiva responsabilidade, inclusive civil e criminalmente.',
+    '',
+    '4 — DA VIGÊNCIA DESTE ACESSO',
+    `Este link de acesso expira automaticamente em ${fmtQuando(expiraEm)}, após o que o download deixa de estar disponível.`,
+    '',
+    'Ao assinar abaixo, o destinatário declara ter lido e concordado com o acima exposto.'
+  ].join('\n')
+}
+
+function formLiberacaoCertificado (c, aoGerar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal">
+      <h3>Gerar link — ${esc(c.tipo)}</h3>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 12px;line-height:1.5;">
+        Vale pra qualquer pessoa, inclusive quem não tem login no sistema (contador, advogado externo).
+        A pessoa assina o termo na tela do link e só depois disso consegue baixar o arquivo.
+        Depois de gerado, copie o link e mande pra pessoa por onde preferir (WhatsApp, e-mail) — o envio não é automático.</p>
+      <div class="form-grade" id="fl-campos">
+        <div class="campo" style="grid-column:1/-1;"><label>Nome de quem vai receber *</label>
+          <input id="fl-nome" placeholder="nome completo"></div>
+        <div class="campo"><label>CPF/CNPJ de quem recebe</label><input id="fl-doc"></div>
+        <div class="campo"><label>Contato (e-mail/telefone)</label><input id="fl-contato" placeholder="opcional, só de registro"></div>
+        <div class="campo" style="grid-column:1/-1;"><label>Finalidade</label>
+          <input id="fl-finalidade" placeholder="Ex.: emissão de nota fiscal, declaração de imposto de renda"></div>
+        <div class="campo"><label>Link expira em</label>
+          <select id="fl-validade">
+            <option value="1">1 hora</option>
+            <option value="6">6 horas</option>
+            <option value="12" selected>12 horas</option>
+            <option value="24">24 horas (máximo)</option>
+          </select></div>
+      </div>
+      <div class="acoes" id="fl-acoes">
+        <button class="btn" id="fl-gerar">Gerar link</button>
+        <button class="btn-secundario" id="fl-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="fl-recado"></div>
+      <div id="fl-resultado" style="margin-top:14px;"></div>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#fl-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  const aviso = t => {
+    const el = q('#fl-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  q('#fl-gerar').onclick = async () => {
+    const nome = q('#fl-nome').value.trim()
+    if (!nome) { aviso('Escreva o nome de quem vai receber o link.'); return }
+    const horas = Number(q('#fl-validade').value)
+    const expiraEm = new Date(Date.now() + horas * 3600 * 1000).toISOString()
+    const doc = q('#fl-doc').value.trim() || null
+    const finalidade = q('#fl-finalidade').value.trim() || null
+
+    const btn = q('#fl-gerar'); btn.disabled = true; btn.textContent = 'gerando...'
+    const corpo = {
+      certificado_id: c.id,
+      destinatario_nome: nome,
+      destinatario_documento: doc,
+      destinatario_contato: q('#fl-contato').value.trim() || null,
+      finalidade,
+      expira_em: expiraEm,
+      termo_texto: textoTermoPadraoCertificado(c, nome, doc, finalidade, expiraEm),
+      criado_por: PERFIL.pessoaId
+    }
+    const { data: salvo, error } = await db.from('certificado_liberacao').insert(corpo).select('id,token').single()
+    btn.disabled = false; btn.textContent = 'Gerar link'
+    if (error) { aviso(error.message); return }
+
+    const link = `${SUPABASE_URL}/functions/v1/certificado-acesso?token=${salvo.token}`
+    q('#fl-campos').remove()
+    q('#fl-acoes').remove()
+    q('#fl-resultado').innerHTML = `
+      <div class="texto-dim2" style="font-size:12.5px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;">
+        Link gerado — válido até ${esc(fmtQuando(expiraEm))}:</div>
+      <div style="display:flex;gap:8px;margin-top:8px;">
+        <input id="fl-link" readonly value="${esc(link)}" style="flex:1;font-size:11.5px;">
+        <button class="btn-secundario mini" id="fl-copiar">copiar</button>
+      </div>
+      <div class="acoes" style="margin-top:14px;"><button class="btn-secundario" id="fl-fechar-fim">Fechar</button></div>`
+    q('#fl-copiar').onclick = () => {
+      navigator.clipboard.writeText(link).then(() => { q('#fl-copiar').textContent = 'copiado!' })
+    }
+    q('#fl-fechar-fim').onclick = fechar
+    if (aoGerar) aoGerar()
+  }
+}
+
+function statusLiberacaoAtual (l) {
+  if (l.status === 'REVOGADO') return 'REVOGADO'
+  if (new Date(l.expira_em).getTime() < Date.now()) return 'EXPIRADO'
+  return l.status
+}
+
+async function listaLiberacoesCertificado (corpo, c, editavel) {
+  corpo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  const { data, error } = await db.from('certificado_liberacao')
+    .select('id,token,destinatario_nome,destinatario_documento,finalidade,status,criado_em,expira_em,assinado_em,assinatura')
+    .eq('certificado_id', c.id).order('criado_em', { ascending: false }).limit(200)
+  if (error) { corpo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  const lista = data || []
+
+  corpo.innerHTML = `
+    <div class="cabeca-secao" style="margin-bottom:12px;">
+      <h3 style="font-family:var(--serif);font-size:16px;">${esc(c.tipo)} — links gerados</h3>
+      <button class="btn-secundario mini" id="lb-fechar">Fechar</button>
+    </div>
+    <div style="display:grid;gap:10px;">
+      ${lista.map(l => {
+        const st = statusLiberacaoAtual(l)
+        return `<div class="panel" style="padding:14px 16px;border-left:4px solid ${COR_STATUS_LIBERACAO[st]};">
+          <div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+            <div style="flex:1;min-width:150px;">
+              <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;">
+                <b style="font-size:14px;">${esc(l.destinatario_nome)}</b>
+                <span class="chip" style="font-size:10.5px;">${esc(ROTULO_STATUS_LIBERACAO[st] || st)}</span>
+              </div>
+              ${l.finalidade ? `<div class="texto-dim2" style="font-size:11.5px;margin-top:3px;">${esc(l.finalidade)}</div>` : ''}
+              <div class="texto-dim2" style="font-size:11px;margin-top:6px;">
+                gerado em ${fmtData((l.criado_em || '').slice(0, 10))} · expira ${fmtQuando(l.expira_em)}
+                ${l.assinado_em ? ` · assinado em ${fmtQuando(l.assinado_em)}` : ''}
+              </div>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+              ${st !== 'EXPIRADO' && st !== 'REVOGADO' ? `<button class="btn-secundario mini" data-copiar="${esc(l.token)}">copiar link</button>` : ''}
+              ${l.assinatura ? `<button class="btn-secundario mini" data-ver-assinatura="${l.id}">ver assinatura</button>` : ''}
+              ${editavel && (st === 'AGUARDANDO_ASSINATURA' || st === 'ASSINADO') ? `<button class="lnk-crud" data-revogar="${l.id}" title="revogar">🗑</button>` : ''}
+            </div>
+          </div>
+        </div>`
+      }).join('') || `<p class="vazio">Nenhum link gerado pra este certificado ainda.</p>`}
+    </div>`
+
+  corpo.querySelector('#lb-fechar').onclick = () => { corpo.innerHTML = '' }
+  corpo.querySelectorAll('[data-copiar]').forEach(b => {
+    b.onclick = () => {
+      const link = `${SUPABASE_URL}/functions/v1/certificado-acesso?token=${b.dataset.copiar}`
+      navigator.clipboard.writeText(link).then(() => { b.textContent = 'copiado!' })
+    }
+  })
+  corpo.querySelectorAll('[data-ver-assinatura]').forEach(b => {
+    b.onclick = () => {
+      const l = lista.find(x => x.id === b.dataset.verAssinatura)
+      if (l?.assinatura) window.open(l.assinatura, '_blank', 'noopener')
+    }
+  })
+  corpo.querySelectorAll('[data-revogar]').forEach(b => {
+    b.onclick = async () => {
+      if (!confirm('Revogar este link? Quem recebeu não vai mais conseguir assinar nem baixar.')) return
+      const { error: e } = await db.from('certificado_liberacao')
+        .update({ status: 'REVOGADO', revogado_por: PERFIL.pessoaId, revogado_em: new Date().toISOString() })
+        .eq('id', b.dataset.revogar)
+      if (e) { alert(e.message); return }
+      listaLiberacoesCertificado(corpo, c, editavel)
+    }
+  })
 }
 
 // ----- Jurídico › Processos (com filtro por tipo) -----
