@@ -33952,9 +33952,9 @@ async function enviarArquivo (arquivo, pasta) {
   return { caminho, nome: arquivo.name }
 }
 
-async function abrirArquivo (caminho) {
+async function abrirArquivo (caminho, bucket = 'documentos') {
   if (!caminho) return
-  const { data, error } = await db.storage.from('documentos')
+  const { data, error } = await db.storage.from(bucket)
     .createSignedUrl(caminho, 300)          // vale 5 minutos
   if (error) { alert('Não deu para abrir: ' + error.message); return }
   window.open(data.signedUrl, '_blank', 'noopener')
@@ -48221,6 +48221,269 @@ function abrirFormVaga (vaga, setores, area) {
   }
 }
 
+// ---------------------------------------------------------------
+// Documentação para contratação (DP/Jurídico) — mesmo padrão de link
+// self-expiring do Certificados Digitais, mas sem assinatura: a pessoa
+// só anexa cada documento da lista, direto pelo link (sem login).
+// ---------------------------------------------------------------
+const DOCUMENTOS_COLETA_URL = 'https://gefoscal-relatorio-render.vercel.app/documentos.html'
+
+// Levantamento padrão -- só o ponto de partida: o DP/Jurídico ajusta a
+// lista (adiciona, remove, renomeia) na hora de gerar cada link.
+const CHECKLIST_PADRAO_CLT = [
+  'RG e CPF (ou CNH)', 'Comprovante de residência atualizado', 'Carteira de Trabalho Digital (número e série)',
+  'PIS/PASEP', 'Certidão de nascimento ou casamento', 'Certidão de nascimento dos filhos (se houver dependentes)',
+  'Título de eleitor', 'Certificado de reservista (se aplicável)', 'Comprovante de escolaridade',
+  'Foto 3x4 recente', 'Exame admissional (ASO)', 'Dados bancários (conta para depósito do salário)'
+]
+const CHECKLIST_PADRAO_PJ = [
+  'Contrato social (ou requerimento de empresário/MEI)', 'Cartão CNPJ', 'RG e CPF do responsável pela empresa',
+  'Comprovante de endereço da empresa', 'Comprovante de endereço do responsável', 'Certidão negativa de débitos (opcional)',
+  'Dados bancários da pessoa jurídica'
+]
+
+const ROTULO_STATUS_DOC_SOLICITACAO = { ABERTO: 'aguardando documentos', COMPLETO: 'completo', EXPIRADO: 'expirado', CANCELADO: 'cancelado' }
+const COR_STATUS_DOC_SOLICITACAO = { ABERTO: '#a67c00', COMPLETO: '#2c6e3f', EXPIRADO: '#8a8a8a', CANCELADO: '#a02a1e' }
+
+function montarEmailDocumentosHtml (nome, cargo, link, expiraEm) {
+  return `
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;border:1px solid #d7e3da;border-radius:10px;overflow:hidden;">
+      <div style="background:#1c5632;color:#fff;padding:18px 22px;border-bottom:4px solid #c8a11a;">
+        <div style="font-size:18px;font-weight:700;">GEFOSCAL &bull; Documentação de admissão</div>
+        <div style="font-size:12px;opacity:.85;margin-top:3px;">${esc(cargo)}</div>
+      </div>
+      <div style="padding:20px;color:#1b1b1b;font-size:13.5px;line-height:1.6;">
+        <p>Ol&aacute;, ${esc(nome)},</p>
+        <p>Pra seguir com a sua contrata&ccedil;&atilde;o pra vaga de <b>${esc(cargo)}</b>, precisamos que voc&ecirc; envie alguns documentos.</p>
+        <p>Abra o link abaixo, confira a lista e anexe cada documento &mdash; leva poucos minutos:</p>
+        <p style="text-align:center;margin:22px 0;">
+          <a href="${esc(link)}" style="background:#1c5632;color:#fff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:600;display:inline-block;">Enviar meus documentos</a>
+        </p>
+        <p style="font-size:11.5px;color:#6d7c72;word-break:break-all;">Ou copie e cole no navegador: ${esc(link)}</p>
+        <p style="font-size:12px;color:#6d7c72;">Este link expira em <b>${esc(fmtQuando(expiraEm))}</b> &mdash; depois disso deixa de funcionar.</p>
+      </div>
+      <div style="background:#1c5632;color:#fff;padding:12px 22px;font-size:11px;">
+        (62) 99232-8743 &middot; R. Pernambuco, 55, Sala 16 - Centro, Lu&iacute;s Eduardo Magalh&atilde;es - BA &middot; www.gefoscal.com.br
+      </div>
+    </div>`
+}
+
+// reaproveita o mesmo relé de e-mail já usado pelo Pedido Comercial e pelos
+// Certificados Digitais (edge function enviar-pedido-email → Apps Script)
+async function enviarEmailSolicitacaoDocumentos (nome, email, cargo, link, expiraEm) {
+  try {
+    const { data, error } = await db.functions.invoke('enviar-pedido-email', {
+      body: {
+        para: [email],
+        assunto: `Documentação para contratação — ${cargo}`,
+        corpoHtml: montarEmailDocumentosHtml(nome, cargo, link, expiraEm)
+      }
+    })
+    if (error || !data?.ok) return { ok: false, erro: data?.error || error?.message || 'falha ao enviar' }
+    return { ok: true }
+  } catch (e) { return { ok: false, erro: e.message } }
+}
+
+function formSolicitacaoDocumentos (vaga, candidato, aoGerar) {
+  const padrao = vaga.tipo_contratacao === 'PJ' ? CHECKLIST_PADRAO_PJ : CHECKLIST_PADRAO_CLT
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal" style="max-width:580px;">
+      <h3>Pedir documentos — ${esc(candidato.nome)}</h3>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 12px;line-height:1.5;">
+        A pessoa recebe um link (sem precisar de login) com essa lista e anexa cada documento.
+        Ajuste a lista abaixo antes de gerar — já vem com o levantamento padrão de ${vaga.tipo_contratacao === 'PJ' ? 'PJ' : 'CLT'}.
+        Se o contato abaixo for um e-mail, o link já é enviado automaticamente.</p>
+      <div id="sd-campos">
+        <div class="campo"><label>Nome de quem vai receber *</label>
+          <input id="sd-nome" value="${esc(candidato.nome || '')}"></div>
+        <div class="campo"><label>Contato (e-mail/telefone)</label>
+          <input id="sd-contato" value="${esc(candidato.email || candidato.telefone || '')}" placeholder="e-mail envia sozinho; telefone é só registro"></div>
+
+        <div class="campo" style="margin-top:10px;margin-bottom:0;"><label>Documentos pedidos</label></div>
+        <div id="sd-itens" style="display:grid;gap:6px;margin:6px 0 8px;"></div>
+        <button class="btn-secundario mini" id="sd-add-item" type="button">+ adicionar documento</button>
+
+        <div class="campo" style="margin-top:12px;"><label>Link expira em</label>
+          <select id="sd-validade">
+            <option value="1">1 hora</option>
+            <option value="6">6 horas</option>
+            <option value="12">12 horas</option>
+            <option value="24" selected>24 horas (máximo)</option>
+          </select></div>
+      </div>
+      <div class="acoes" id="sd-acoes">
+        <button class="btn" id="sd-gerar">Gerar link</button>
+        <button class="btn-secundario" id="sd-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="sd-recado"></div>
+      <div id="sd-resultado" style="margin-top:14px;"></div>
+    </div>`
+  document.body.appendChild(fundo)
+  const q = sel => fundo.querySelector(sel)
+  const fechar = () => fundo.remove()
+  q('#sd-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const listaItens = q('#sd-itens')
+  const linhaItem = (nome = '', obrigatorio = true) => {
+    const linha = document.createElement('div')
+    linha.className = 'sd-item-linha'
+    linha.style.cssText = 'display:flex;gap:6px;align-items:center;'
+    linha.innerHTML = `
+      <input class="sd-item-nome" value="${esc(nome)}" placeholder="nome do documento" style="flex:1;">
+      <label style="font-size:11px;display:flex;gap:4px;align-items:center;white-space:nowrap;">
+        <input type="checkbox" class="sd-item-obrig" ${obrigatorio ? 'checked' : ''}> obrigatório</label>
+      <button type="button" class="lnk-crud" title="remover">🗑</button>`
+    linha.querySelector('.lnk-crud').onclick = () => linha.remove()
+    listaItens.appendChild(linha)
+  }
+  padrao.forEach(nome => linhaItem(nome, true))
+  q('#sd-add-item').onclick = () => linhaItem('', true)
+
+  const aviso = t => {
+    const el = q('#sd-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  q('#sd-gerar').onclick = async () => {
+    const nome = q('#sd-nome').value.trim()
+    if (!nome) { aviso('Escreva o nome de quem vai receber o link.'); return }
+    const itens = [...listaItens.querySelectorAll('.sd-item-linha')].map((linha, i) => ({
+      nome: linha.querySelector('.sd-item-nome').value.trim(),
+      obrigatorio: linha.querySelector('.sd-item-obrig').checked,
+      ordem: i
+    })).filter(it => it.nome)
+    if (!itens.length) { aviso('Adicione pelo menos um documento à lista.'); return }
+
+    const horas = Number(q('#sd-validade').value)
+    const expiraEm = new Date(Date.now() + horas * 3600 * 1000).toISOString()
+    const contato = q('#sd-contato').value.trim() || null
+    const ehEmail = contato && REGEX_EMAIL_SIMPLES.test(contato)
+
+    const btn = q('#sd-gerar'); btn.disabled = true; btn.textContent = 'gerando...'
+    const { data: salvo, error } = await db.from('documento_solicitacao').insert({
+      vaga_id: vaga.id,
+      candidato_id: candidato.id,
+      tipo_contratacao: vaga.tipo_contratacao,
+      destinatario_nome: nome,
+      destinatario_contato: contato,
+      expira_em: expiraEm,
+      criado_por: PERFIL.pessoaId
+    }).select('id,token').single()
+    if (error) { btn.disabled = false; btn.textContent = 'Gerar link'; aviso(error.message); return }
+
+    const { error: eItens } = await db.from('documento_solicitacao_item').insert(
+      itens.map(it => ({ solicitacao_id: salvo.id, nome: it.nome, obrigatorio: it.obrigatorio, ordem: it.ordem }))
+    )
+    if (eItens) { btn.disabled = false; btn.textContent = 'Gerar link'; aviso(eItens.message); return }
+
+    const link = `${DOCUMENTOS_COLETA_URL}?token=${salvo.token}`
+
+    let statusEnvio = ''
+    if (ehEmail) {
+      btn.textContent = 'enviando e-mail...'
+      const r = await enviarEmailSolicitacaoDocumentos(nome, contato, vaga.cargo, link, expiraEm)
+      statusEnvio = r.ok
+        ? `<div class="ok" style="font-size:12.5px;">✓ E-mail enviado pra ${esc(contato)}.</div>`
+        : `<div class="recado erro" style="font-size:12.5px;">Não deu pra mandar o e-mail automaticamente (${esc(r.erro || '')}) — copie o link e mande você mesmo.</div>`
+    }
+    btn.disabled = false; btn.textContent = 'Gerar link'
+
+    q('#sd-campos').remove()
+    q('#sd-acoes').remove()
+    q('#sd-resultado').innerHTML = `
+      ${statusEnvio}
+      <div class="texto-dim2" style="font-size:12.5px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-top:${statusEnvio ? '8px' : '0'};">
+        Link gerado — válido até ${esc(fmtQuando(expiraEm))}:</div>
+      <div style="display:flex;gap:8px;margin-top:8px;">
+        <input id="sd-link" readonly value="${esc(link)}" style="flex:1;font-size:11.5px;">
+        <button class="btn-secundario mini" id="sd-copiar">copiar</button>
+      </div>
+      <div class="acoes" style="margin-top:14px;"><button class="btn-secundario" id="sd-fechar-fim">Fechar</button></div>`
+    q('#sd-copiar').onclick = () => {
+      navigator.clipboard.writeText(link).then(() => { q('#sd-copiar').textContent = 'copiado!' })
+    }
+    q('#sd-fechar-fim').onclick = fechar
+    if (aoGerar) aoGerar()
+  }
+}
+
+function statusDocSolicitacaoAtual (s) {
+  if (s.status === 'CANCELADO') return 'CANCELADO'
+  if (s.status !== 'COMPLETO' && new Date(s.expira_em).getTime() < Date.now()) return 'EXPIRADO'
+  return s.status
+}
+
+async function listaSolicitacoesDocumentos (corpo, vaga, editavel) {
+  corpo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  const { data, error } = await db.from('documento_solicitacao')
+    .select('id,token,destinatario_nome,status,criado_em,expira_em,itens:documento_solicitacao_item(id,nome,obrigatorio,arquivo_caminho,arquivo_nome)')
+    .eq('vaga_id', vaga.id).order('criado_em', { ascending: false })
+  if (error) { corpo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  const lista = data || []
+
+  corpo.innerHTML = `
+    <div class="cabeca-secao" style="margin-bottom:12px;">
+      <h3 style="font-family:var(--serif);font-size:15px;">Pedidos de documentos</h3>
+      <button class="btn-secundario mini" id="sl-fechar">fechar</button>
+    </div>
+    <div style="display:grid;gap:10px;">
+      ${lista.map(s => {
+        const st = statusDocSolicitacaoAtual(s)
+        const total = (s.itens || []).length
+        const recebidos = (s.itens || []).filter(i => i.arquivo_caminho).length
+        return `<div class="panel" style="padding:12px 14px;border-left:4px solid ${COR_STATUS_DOC_SOLICITACAO[st]};">
+          <div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+            <div style="flex:1;min-width:150px;">
+              <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;">
+                <b style="font-size:13.5px;">${esc(s.destinatario_nome)}</b>
+                <span class="chip" style="font-size:10.5px;">${esc(ROTULO_STATUS_DOC_SOLICITACAO[st] || st)}</span>
+                <span class="texto-dim2" style="font-size:11px;">${recebidos}/${total} documentos</span>
+              </div>
+              <div class="texto-dim2" style="font-size:11px;margin-top:5px;">
+                gerado em ${fmtData((s.criado_em || '').slice(0, 10))} · expira ${fmtQuando(s.expira_em)}</div>
+              <div style="margin-top:7px;display:grid;gap:3px;">
+                ${(s.itens || []).sort((a, b) => (a.arquivo_caminho ? 1 : 0) - (b.arquivo_caminho ? 1 : 0)).map(it => `
+                  <div style="font-size:11.5px;display:flex;gap:6px;align-items:center;">
+                    <span>${it.arquivo_caminho ? '✅' : (it.obrigatorio ? '⬜' : '➖')}</span>
+                    <span class="${it.arquivo_caminho ? '' : 'texto-dim2'}">${esc(it.nome)}${!it.obrigatorio ? ' (opcional)' : ''}</span>
+                    ${it.arquivo_caminho ? `<button class="btn-secundario mini" data-baixar-item="${esc(it.arquivo_caminho)}">abrir</button>` : ''}
+                  </div>`).join('')}
+              </div>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+              ${st !== 'EXPIRADO' && st !== 'CANCELADO' ? `<button class="btn-secundario mini" data-copiar-sol="${esc(s.token)}">copiar link</button>` : ''}
+              ${editavel && st === 'ABERTO' ? `<button class="lnk-crud" data-cancelar-sol="${s.id}" title="cancelar">🗑</button>` : ''}
+            </div>
+          </div>
+        </div>`
+      }).join('') || `<p class="vazio">Nenhum pedido de documentos gerado ainda.</p>`}
+    </div>`
+
+  corpo.querySelector('#sl-fechar').onclick = () => { corpo.innerHTML = '' }
+  corpo.querySelectorAll('[data-copiar-sol]').forEach(b => {
+    b.onclick = () => {
+      const link = `${DOCUMENTOS_COLETA_URL}?token=${b.dataset.copiarSol}`
+      navigator.clipboard.writeText(link).then(() => { b.textContent = 'copiado!' })
+    }
+  })
+  corpo.querySelectorAll('[data-baixar-item]').forEach(b => {
+    b.onclick = () => abrirArquivo(b.dataset.baixarItem, 'documentos-rh')
+  })
+  corpo.querySelectorAll('[data-cancelar-sol]').forEach(b => {
+    b.onclick = async () => {
+      if (!confirm('Cancelar este pedido de documentos? Quem recebeu não vai mais conseguir enviar.')) return
+      const { error: e } = await db.from('documento_solicitacao')
+        .update({ status: 'CANCELADO', cancelado_por: PERFIL.pessoaId, cancelado_em: new Date().toISOString() })
+        .eq('id', b.dataset.cancelarSol)
+      if (e) { alert(e.message); return }
+      listaSolicitacoesDocumentos(corpo, vaga, editavel)
+    }
+  })
+}
+
 async function abrirDetalheVaga (vaga, setoresPorId, area) {
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
@@ -48238,6 +48501,7 @@ async function abrirDetalheVaga (vaga, setoresPorId, area) {
     const idsJaCandidatos = new Set((candidaturas || []).map(c => c.candidato.id))
     const sugestoesFiltradas = (sugestoes || []).filter(s => !idsJaCandidatos.has(s.id))
     const proxima = proximaEtapaVaga(vaga)
+    const candidatoSelecionado = (candidaturas || []).find(c => c.candidato.id === vaga.candidato_selecionado_id)?.candidato || null
 
     const modalNovo = document.createElement('div')
     modalNovo.className = 'modal'
@@ -48262,16 +48526,37 @@ async function abrirDetalheVaga (vaga, setoresPorId, area) {
 
       <h4 style="font-family:var(--serif);font-size:14px;margin:0 0 8px;">Candidatos inscritos (${(candidaturas || []).length})</h4>
       <div class="tabela-scroll" style="max-height:160px;margin-bottom:14px;">
-        <table><thead><tr><th>Nome</th><th>Contato</th><th>Etapa</th><th></th></tr></thead><tbody>
+        <table><thead><tr><th>Nome</th><th>Contato</th><th>Etapa</th><th></th><th></th></tr></thead><tbody>
           ${(candidaturas || []).map(c => `<tr>
             <td>${esc(c.candidato.nome)}</td>
             <td class="texto-dim2" style="font-size:11px;">${esc(c.candidato.telefone || c.candidato.email || '—')}</td>
             <td><span class="chip" style="font-size:10px;">${esc(c.etapa)}</span></td>
             <td>${c.candidato.cv_caminho ? `<button class="btn-secundario mini" data-ver-cv="${c.candidato.cv_caminho}">CV</button>` : ''}</td>
-          </tr>`).join('') || `<tr><td colspan="4" class="vazio">Nenhum candidato inscrito ainda.</td></tr>`}
+            <td>${vaga.candidato_selecionado_id === c.candidato.id
+              ? `<span class="chip" style="font-size:10px;">★ selecionado</span>`
+              : `<button class="btn-secundario mini" data-selecionar-candidato="${c.candidato.id}">selecionar</button>`}</td>
+          </tr>`).join('') || `<tr><td colspan="5" class="vazio">Nenhum candidato inscrito ainda.</td></tr>`}
         </tbody></table>
       </div>
       <button class="btn-secundario mini" id="vg-cadastrar-candidato" style="margin-bottom:14px;">+ Cadastrar novo candidato pra essa vaga</button>
+
+      ${vaga.tipo_contratacao ? `
+      <div class="panel" style="padding:12px 14px;margin-bottom:14px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+          <div>
+            <div style="font-size:12.5px;font-weight:600;">📎 Documentação para contratação</div>
+            <div class="texto-dim2" style="font-size:11.5px;margin-top:2px;">
+              ${candidatoSelecionado
+                ? `Candidato selecionado: <b>${esc(candidatoSelecionado.nome)}</b>`
+                : 'Selecione o candidato aprovado na tabela acima pra liberar o pedido de documentos.'}</div>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            ${candidatoSelecionado ? `<button class="btn-secundario mini" id="vg-gerar-doc-link">Gerar link de documentos</button>` : ''}
+            <button class="btn-secundario mini" id="vg-ver-doc-links">Ver pedidos gerados</button>
+          </div>
+        </div>
+        <div id="vg-doc-links" style="margin-top:10px;"></div>
+      </div>` : ''}
 
       ${sugestoesFiltradas.length ? `
         <h4 style="font-family:var(--serif);font-size:14px;margin:0 0 8px;">💡 Sugestões do Banco de Currículos</h4>
@@ -48321,6 +48606,23 @@ async function abrirDetalheVaga (vaga, setoresPorId, area) {
         desenhar()
       }
     })
+    fundo.querySelectorAll('[data-selecionar-candidato]').forEach(b => {
+      b.onclick = async () => {
+        vaga.candidato_selecionado_id = b.dataset.selecionarCandidato
+        await db.from('vaga').update({ candidato_selecionado_id: vaga.candidato_selecionado_id }).eq('id', vaga.id)
+        desenhar()
+      }
+    })
+    const btnGerarDoc = fundo.querySelector('#vg-gerar-doc-link')
+    if (btnGerarDoc) btnGerarDoc.onclick = () => formSolicitacaoDocumentos(vaga, candidatoSelecionado, () => {
+      listaSolicitacoesDocumentos(fundo.querySelector('#vg-doc-links'), vaga, true)
+    })
+    const btnVerDoc = fundo.querySelector('#vg-ver-doc-links')
+    if (btnVerDoc) btnVerDoc.onclick = () => {
+      const alvoDoc = fundo.querySelector('#vg-doc-links')
+      if (alvoDoc.innerHTML.trim()) { alvoDoc.innerHTML = ''; return }
+      listaSolicitacoesDocumentos(alvoDoc, vaga, true)
+    }
   }
   desenhar()
 }
