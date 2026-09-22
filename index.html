@@ -10348,7 +10348,6 @@ async function paginaCompras () {
     { chave: 'cotar',        nome: 'Cotação',      mostrar: podeCotar() },
     { chave: 'aprovar',      nome: 'Aprovação',    mostrar: podeAprovar() },
     { chave: 'fornecedores', nome: 'Fornecedores', mostrar: podeGerenciarFornecedores() },
-    { chave: 'eduardo',      nome: 'Eduardo (IA)',  mostrar: editavel },
     { chave: 'relatorio',    nome: 'Relatório',    mostrar: editavel }
   ].filter(a => a.mostrar)
 
@@ -10376,7 +10375,6 @@ function abrirCompras (sub, editavel, apenasProprio) {
   if (sub === 'cotar') comprasCotar(alvo)
   if (sub === 'aprovar') comprasDecidir(alvo, 'aprovacao')
   if (sub === 'fornecedores') comprasFornecedores(alvo, podeGerenciarFornecedores())
-  if (sub === 'eduardo') comprasEduardo(alvo)
   if (sub === 'relatorio') comprasRelatorio(alvo)
 }
 
@@ -12849,85 +12847,6 @@ function formEditarFornecedor (f) {
     fechar()
     abrirCompras('fornecedores', true)
   }
-}
-
-// ----- Compras › Eduardo (IA) -----
-// Biblioteca de "quando ele mandar isso, responda assim" pro bot que aprova
-// compras pelo WhatsApp — pedido da Amanda em 22/09, depois do caso do
-// "aprova todos" do Adão que travava a conversa. Em vez de pedir alteração
-// de código toda vez que ele responde de um jeito que o robô ainda não sabe
-// tratar, ela cadastra a situação aqui e a function compras-aprovacao-
-// whatsapp já passa a considerar isso no classificador (tabela
-// compra_wa_situacao_treinada, lida por ela a cada 5 minutos).
-async function comprasEduardo (alvo) {
-  const { data, error } = await db.from('compra_wa_situacao_treinada')
-    .select('id,exemplo_mensagem,situacao,resposta_esperada,ativo,criado_em,criado:criado_por(nome)')
-    .order('criado_em', { ascending: false })
-  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-
-  alvo.innerHTML = `
-    <div class="secao panel" style="padding:20px;">
-      <h3>Ensinar uma situação nova</h3>
-      <p class="texto-dim2" style="margin-top:-4px;">
-        Quando o aprovador responder de um jeito que o Eduardo ainda não sabe tratar, cadastre aqui —
-        na próxima vez ele já reconhece e responde do jeito certo, sem precisar mexer em código.</p>
-      <div class="form-grade">
-        <div class="campo" style="grid-column:1/-1;"><label>Exemplo do que ele pode mandar</label>
-          <input id="ed-exemplo" placeholder='ex: "aprovo todos"'></div>
-        <div class="campo" style="grid-column:1/-1;"><label>Situação *</label>
-          <textarea id="ed-situacao" rows="2" placeholder="descreva quando isso acontece, do jeito que você explicaria pra alguém"></textarea></div>
-        <div class="campo" style="grid-column:1/-1;"><label>Como o Eduardo deve responder *</label>
-          <textarea id="ed-resposta" rows="3" placeholder="o texto exato (ou bem próximo) que ele deve mandar de volta"></textarea></div>
-      </div>
-      <div class="acoes"><button class="btn" id="ed-salvar">Adicionar</button></div>
-      <div class="recado oculto" id="ed-recado"></div>
-    </div>
-
-    <div class="panel" style="padding:0;"><div class="tabela-scroll">
-      <table><thead><tr><th>Situação</th><th>Resposta do Eduardo</th><th>Cadastrado por</th><th>Ativa</th><th></th></tr></thead>
-      <tbody>${(data || []).map(r => `<tr>
-        <td>${esc(r.situacao)}${r.exemplo_mensagem ? `<div class="texto-dim2" style="font-size:11.5px;margin-top:3px;">ex: "${esc(r.exemplo_mensagem)}"</div>` : ''}</td>
-        <td class="texto-dim" style="white-space:pre-wrap;">${esc(r.resposta_esperada)}</td>
-        <td class="texto-dim2">${esc(r.criado?.nome ?? '—')}${r.criado_em ? '<br>' + fmtQuando(r.criado_em) : ''}</td>
-        <td><span class="chip">${r.ativo ? 'ativa' : 'desligada'}</span></td>
-        <td style="text-align:right;white-space:nowrap;">
-          <button class="btn-secundario mini" data-tog-ed="${r.id}">${r.ativo ? 'desligar' : 'ligar'}</button>
-          <button class="btn-secundario mini" data-del-ed="${r.id}" title="Excluir"
-            aria-label="Excluir" style="color:var(--warn-text);margin-left:6px;">${icDp('excluir')}</button></td>
-      </tr>`).join('') || `<tr><td colspan="5" class="vazio">Nenhuma situação ensinada ainda.</td></tr>`}
-      </tbody></table>
-    </div></div>`
-
-  $('#ed-salvar').onclick = async () => {
-    const situacao = $('#ed-situacao').value.trim()
-    const resposta = $('#ed-resposta').value.trim()
-    const el = $('#ed-recado')
-    const avisar = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
-    if (!situacao || !resposta) { avisar('Preenche a situação e a resposta.'); return }
-    const { error } = await db.from('compra_wa_situacao_treinada').insert({
-      exemplo_mensagem: $('#ed-exemplo').value.trim() || null,
-      situacao, resposta_esperada: resposta, criado_por: PERFIL.pessoaId
-    })
-    if (error) { avisar(error.message); return }
-    abrirCompras('eduardo', true)
-  }
-
-  alvo.querySelectorAll('[data-tog-ed]').forEach(b => {
-    b.onclick = async () => {
-      const r = (data || []).find(x => x.id === b.dataset.togEd)
-      await db.from('compra_wa_situacao_treinada').update({ ativo: !r.ativo }).eq('id', r.id)
-      abrirCompras('eduardo', true)
-    }
-  })
-
-  alvo.querySelectorAll('[data-del-ed]').forEach(b => {
-    b.onclick = async () => {
-      if (!confirm('Excluir essa situação ensinada? Não afeta conversas já respondidas.')) return
-      const { error } = await db.from('compra_wa_situacao_treinada').delete().eq('id', b.dataset.delEd)
-      if (error) { alert('Não deu pra excluir: ' + error.message); return }
-      abrirCompras('eduardo', true)
-    }
-  })
 }
 
 // ---------------------------------------------------------------
@@ -22107,7 +22026,6 @@ function formResultadoLigacao (card, item, cat, recarregar) {
     btn.disabled = true; btn.textContent = 'salvando...'
     const dataRetorno = cx.querySelector('.rl-data').value
     const obs = cx.querySelector('.rl-obs').value.trim()
-    const tipoEscolhido = cx.querySelector('.rl-tipo').value
 
     const { error } = await db.rpc('crm_registrar_ligacao', {
       p_lead_id: item.id,
@@ -22117,7 +22035,7 @@ function formResultadoLigacao (card, item, cat, recarregar) {
       p_proximo_em: dataRetorno ? new Date(dataRetorno + 'T09:00:00').toISOString() : null,
       p_proximo_titulo: cx.querySelector('.rl-titulo').value.trim() || null,
       p_ligacao_id: item.ligacao_aberta_id || null,
-      p_proximo_tipo: tipoEscolhido
+      p_proximo_tipo: cx.querySelector('.rl-tipo').value
     })
     if (error) { alert(error.message); btn.disabled = false; btn.textContent = 'Salvar'; return }
 
@@ -22128,25 +22046,6 @@ function formResultadoLigacao (card, item, cat, recarregar) {
       })
       if (e2) alert('A ligação foi salva, mas a objeção não: ' + e2.message)
     }
-
-    // Marcou reunião agora mesmo: o card já foi pra coluna "Reunião marcada"
-    // sozinho (a RPC cuida disso), mas o próximo passo de verdade é a
-    // gestão saber e escolher o consultor — sem esse empurrão, o lead fica
-    // parado na coluna até alguém lembrar de abrir o "⋯" depois.
-    if (tipoEscolhido === 'reuniao' && dataRetorno) {
-      cx.innerHTML = `
-        <div class="recado" style="margin-top:10px;">
-          Reunião marcada. Já quer <b>enviar pra gestão</b> escolher o consultor?
-          <div class="acoes" style="margin-top:8px;">
-            <button type="button" class="btn mini rl-ir-gestao">📤 Enviar pra gestão</button>
-            <button type="button" class="btn-secundario mini rl-agora-nao">Agora não</button>
-          </div>
-        </div>`
-      cx.querySelector('.rl-ir-gestao').onclick = () => abrirEnviarProGestao(item.id, item.nome, recarregar)
-      cx.querySelector('.rl-agora-nao').onclick = recarregar
-      return
-    }
-
     recarregar()
   }
 }
@@ -26429,8 +26328,8 @@ function renderDetalheSdr (lead) {
       <div style="display:flex;gap:11px;align-items:center;min-width:0;">
         ${avatarHtml(null, lead.nome || lead.telefone, 40)}
         <div style="min-width:0;">
-          <div style="font-weight:700;font-size:14px;">${esc(lead.nome || lead.telefone)}</div>
-          <div style="font-size:11.5px;color:var(--dim2);">${esc(lead.telefone)}${lead.reuniao_em ? ` · 📅 ${esc(fmtReuniao(lead.reuniao_em) || '')}` : ''}</div>
+          <div style="font-weight:700;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(lead.nome || lead.telefone)}</div>
+          <div style="font-size:11.5px;color:var(--dim2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(lead.telefone)}${lead.reuniao_em ? ` · 📅 ${esc(fmtReuniao(lead.reuniao_em) || '')}` : ''}</div>
         </div>
       </div>
       <div style="display:flex;gap:8px;align-items:center;flex:none;flex-wrap:wrap;justify-content:flex-end;">
@@ -32087,14 +31986,10 @@ async function finLancamentos (alvo, editavel) {
   // apagar, e apagar o errado devolve a compra pra fila de pagamento.
   const ids = (data || []).map(l => l.id)
   const daCompra = new Map()
-  const doJuridico = new Map()
   if (ids.length) {
-    const [{ data: ligadas }, { data: ligadosJur }] = await Promise.all([
-      db.from('solicitacao_compra').select('numero,lancamento_id').in('lancamento_id', ids),
-      db.from('juridico_contrato').select('titulo,lancamento_financeiro_id').in('lancamento_financeiro_id', ids)
-    ])
+    const { data: ligadas } = await db.from('solicitacao_compra')
+      .select('numero,lancamento_id').in('lancamento_id', ids)
     for (const c of ligadas || []) daCompra.set(c.lancamento_id, c.numero)
-    for (const c of ligadosJur || []) doJuridico.set(c.lancamento_financeiro_id, c.titulo)
   }
   // um lançamento que se chama "Compra: ..." e não tem compra apontando pra
   // ele é órfão: a baixa não completou, e a despesa está contada sem dono
@@ -32164,13 +32059,10 @@ async function finLancamentos (alvo, editavel) {
           ${daCompra.has(l.id)
             ? `<div class="texto-dim2" style="font-size:10.5px;margin-top:2px;">
                  ligado à compra ${esc(daCompra.get(l.id))}</div>`
-            : doJuridico.has(l.id)
-              ? `<div class="texto-dim2" style="font-size:10.5px;margin-top:2px;">
-                   ⚖️ contrato jurídico: ${esc(doJuridico.get(l.id))}</div>`
-              : orfaoDeCompra(l)
-                ? `<div class="badge-alerta" style="font-size:10.5px;margin-top:2px;display:inline-block;">
-                     sem compra ligada — sobra de baixa que não gravou</div>`
-                : ''}</td>
+            : orfaoDeCompra(l)
+              ? `<div class="badge-alerta" style="font-size:10.5px;margin-top:2px;display:inline-block;">
+                   sem compra ligada — sobra de baixa que não gravou</div>`
+              : ''}</td>
         <td class="texto-dim">${esc(l.conta?.nome ?? '—')}</td>
         <td class="texto-dim">${esc(l.categoria?.nome ?? '—')}</td>
         <td class="texto-dim">${esc(l.centro?.nome ?? '—')}</td>
@@ -32616,7 +32508,7 @@ async function comprasPagar (alvo) {
 
   const aPagar = (data || []).filter(s => s.status === 'APROVADA')
   const pagas = (data || []).filter(s => s.status === 'PAGA')
-  const total = aPagar.reduce((t, s) => t + Number(s.valor_aprovado ?? s.valor_estimado ?? 0), 0)
+  const total = aPagar.reduce((t, s) => t + Number(s.valor_estimado || 0), 0)
 
   alvo.innerHTML = `
     <div class="cabeca-secao">
@@ -32640,9 +32532,8 @@ async function comprasPagar (alvo) {
         ${s.urgencia === 'URGENTE_4H' && !feito ? '<span class="urgente">● urgente</span>' : ''}
         ${feito ? selo('PAGA') : ''}
         <div class="botoes">
-          ${!feito ? `<span class="texto-dim2" style="font-size:13px;font-weight:600;align-self:center;">R$ ${fmtNum(s.valor_aprovado ?? s.valor_estimado)}</span>` : ''}
+          ${!feito ? `<span class="texto-dim2" style="font-size:13px;font-weight:600;align-self:center;">R$ ${fmtNum(s.valor_estimado)}</span>` : ''}
           <button class="btn-secundario mini" data-ordem="${s.id}">ordem</button>
-          ${feito ? '' : `<button class="btn-secundario mini" data-editar-valor="${s.id}">editar</button>`}
           ${feito ? '' : `<button class="btn mini" data-baixa="${s.id}">dar baixa</button>`}
         </div>
       </div>
@@ -32664,74 +32555,10 @@ async function comprasPagar (alvo) {
   alvo.querySelectorAll('[data-ordem]').forEach(b => {
     b.onclick = () => ordemPagamento((data || []).find(x => x.id === b.dataset.ordem))
   })
-  alvo.querySelectorAll('[data-editar-valor]').forEach(b => {
-    b.onclick = () => telaAjustarValor((data || []).find(x => x.id === b.dataset.editarValor))
-  })
   alvo.querySelectorAll('[data-baixa]').forEach(b => {
     b.onclick = () => telaBaixa((data || []).find(x => x.id === b.dataset.baixa),
                                 contas || [], categorias || [], centros || [])
   })
-}
-
-// ----- Ajusta o valor aprovado antes da baixa -----
-// Uso típico: negociou desconto com o fornecedor depois da aprovação e
-// precisa que a ordem de pagamento (e a baixa) saiam com o valor certo.
-function telaAjustarValor (s) {
-  if (!s) return
-  const valorAtual = Number(s.valor_aprovado ?? s.valor_estimado ?? 0)
-
-  const fundo = document.createElement('div')
-  fundo.className = 'modal-fundo'
-  fundo.innerHTML = `
-    <div class="modal">
-      <h3>Ajustar valor aprovado</h3>
-      <div class="ficha" style="margin-bottom:16px;">
-        <div class="item"><div class="rot">Item</div><div class="val">${esc(s.produto_servico)}</div></div>
-        <div class="item"><div class="rot">Fornecedor</div>
-          <div class="val">${esc(s.fornecedor?.nome ?? '—')}</div></div>
-        <div class="item"><div class="rot">Valor aprovado atual</div>
-          <div class="val">R$ ${fmtNum(valorAtual)}</div></div>
-      </div>
-      <div class="campo"><label>Novo valor (R$) *</label>
-        <input id="av-valor" inputmode="decimal" value="${valorAtual || ''}"></div>
-      <div class="campo" style="margin-top:10px;"><label>Motivo do ajuste *</label>
-        <textarea id="av-motivo" placeholder="ex: fornecedor deu desconto de R$ 500 na negociação final"></textarea></div>
-      <p class="aviso" style="margin-top:10px;">
-        Muda o valor da ordem de pagamento e o que a baixa vem preenchida por padrão.
-        Fica registrado no histórico da solicitação.</p>
-      <div class="acoes">
-        <button class="btn" id="av-confirmar">Salvar novo valor</button>
-        <button class="btn-secundario" id="av-cancelar">Cancelar</button>
-      </div>
-      <div class="recado oculto" id="av-recado"></div>
-    </div>`
-
-  document.body.appendChild(fundo)
-  const q = id => fundo.querySelector(id)
-  const fechar = () => fundo.remove()
-  q('#av-cancelar').onclick = fechar
-  fundo.onclick = e => { if (e.target === fundo) fechar() }
-
-  const aviso = t => {
-    const el = q('#av-recado'); el.textContent = t; el.classList.remove('oculto')
-    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
-  }
-
-  q('#av-confirmar').onclick = async () => {
-    const valor = numeroBR(q('#av-valor').value)
-    const motivo = q('#av-motivo').value.trim()
-    if (valor === null || valor <= 0) { aviso('Informe o novo valor.'); return }
-    if (motivo.length < 5) { aviso('Escreva o motivo do ajuste — pelo menos uma frase.'); return }
-
-    const btn = q('#av-confirmar'); btn.disabled = true; btn.textContent = 'Salvando...'
-    const { error } = await db.rpc('compra_ajustar_valor_aprovado', {
-      p_id: s.id, p_valor: valor, p_motivo: motivo
-    })
-    if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Salvar novo valor'; return }
-
-    fechar()
-    abrirFinanceiro('compras', true)
-  }
 }
 
 // ----- Ordem de pagamento, para imprimir -----
@@ -32814,7 +32641,7 @@ function telaBaixa (s, contas, categorias, centros) {
 
       <div class="form-grade">
         <div class="campo"><label>Valor pago (R$) *</label>
-          <input id="b-valor" inputmode="decimal" value="${s.valor_aprovado ?? s.valor_estimado ?? ''}"></div>
+          <input id="b-valor" inputmode="decimal" value="${s.valor_estimado ?? ''}"></div>
         <div class="campo"><label>Data do pagamento</label>
           <input type="date" id="b-data" value="${new Date().toISOString().slice(0, 10)}"></div>
         <div class="campo"><label>Conta</label>
@@ -43229,7 +43056,6 @@ async function juridicoPainel (alvo, editavel) {
 async function juridicoContratos (alvo, editavel) {
   const { data, error } = await db.from('juridico_contrato')
     .select(`id,titulo,contraparte,categoria,tipo_pj,recorrente,valor,data_inicio,data_fim,renovacao,status,anexo_link,observacoes,
-      tipo_financeiro,lancamento_financeiro_id,
       responsavel:responsavel_id ( nome )`)
     .order('data_fim', { ascending: true, nullsFirst: false })
 
@@ -43244,14 +43070,7 @@ async function juridicoContratos (alvo, editavel) {
         <th>Vigência</th><th>Renovação</th><th>Vencimento</th><th>Responsável</th>${editavel ? '<th></th>' : ''}
       </tr></thead><tbody>
       ${lista.map(c => `<tr>
-        <td><b>${esc(c.titulo)}</b>${c.anexo_link ? ` · <a href="${esc(c.anexo_link)}" target="_blank" rel="noopener">anexo</a>` : ''}
-          ${c.lancamento_financeiro_id
-            ? `<div class="texto-dim2" style="font-size:10.5px;margin-top:2px;color:var(--good-text);">
-                 💰 ${c.tipo_financeiro === 'PAGAR' ? 'a pagar' : 'a receber'} — já apareceu no financeiro</div>`
-            : c.tipo_financeiro
-              ? `<div class="texto-dim2" style="font-size:10.5px;margin-top:2px;">
-                   ${c.tipo_financeiro === 'PAGAR' ? 'a pagar' : 'a receber'}${c.valor == null ? ' — falta valor' : !c.anexo_link ? ' — falta anexo' : ''} pra ir pro financeiro</div>`
-              : ''}</td>
+        <td><b>${esc(c.titulo)}</b>${c.anexo_link ? ` · <a href="${esc(c.anexo_link)}" target="_blank" rel="noopener">anexo</a>` : ''}</td>
         <td class="texto-dim">${esc(c.contraparte || '—')}</td>
         <td><span class="chip">${esc(c.categoria || '—')}</span>${c.tipo_pj ? `<br><span class="texto-dim2" style="font-size:10.5px;">${esc(ROTULO_TIPO_PJ[c.tipo_pj])}${c.recorrente ? ' · recorrente' : ''}</span>` : ''}</td>
         <td class="num">${c.valor != null ? 'R$ ' + fmtNum(c.valor) : '<span class="texto-dim2">—</span>'}</td>
@@ -43293,12 +43112,6 @@ function formContrato (c) {
           <label class="linha-modulo"><input type="checkbox" id="ct-recorrente" ${c?.recorrente ? 'checked' : ''}>
           <span class="nome">Recorrente (tem entregáveis periódicos)</span></label></div>
         <div class="campo"><label>Valor</label><input id="ct-valor" type="number" step="0.01" value="${c?.valor ?? ''}"></div>
-        <div class="campo"><label>Vai pro financeiro?</label>
-          <select id="ct-tipofin">
-            <option value="">não gerar lançamento</option>
-            <option value="PAGAR" ${c?.tipo_financeiro === 'PAGAR' ? 'selected' : ''}>a pagar</option>
-            <option value="RECEBER" ${c?.tipo_financeiro === 'RECEBER' ? 'selected' : ''}>a receber</option>
-          </select></div>
         <div class="campo"><label>Início da vigência</label><input id="ct-inicio" type="date" value="${c?.data_inicio ?? ''}"></div>
         <div class="campo"><label>Fim da vigência</label><input id="ct-fim" type="date" value="${c?.data_fim ?? ''}"></div>
         <div class="campo"><label>Renovação</label>
@@ -43323,11 +43136,6 @@ function formContrato (c) {
         <div class="campo" style="grid-column:1/-1;"><label>Ou link do anexo (opcional)</label>
           <input id="ct-anexo" value="${v('anexo_link')}" placeholder="link do Drive, se preferir"></div>
       </div>
-      <p class="texto-dim2" style="font-size:11px;margin:4px 2px 0;line-height:1.5;">
-        ${c?.lancamento_financeiro_id
-          ? '💰 Esse contrato já gerou um lançamento pendente no financeiro — mudar o valor agora não atualiza esse lançamento, é preciso ajustar direto no financeiro.'
-          : 'Marcando "a pagar" ou "a receber" com valor e anexo preenchidos, o financeiro já recebe um lançamento pendente assim que salvar.'}
-      </p>
       <div class="campo" style="margin-top:12px;"><label>Observações</label>
         <textarea id="ct-obs" style="min-height:64px;">${v('observacoes')}</textarea></div>
       <div class="acoes">
@@ -43390,7 +43198,6 @@ function formContrato (c) {
       tipo_pj: categoria === 'PJ' ? (q('#ct-tipo-pj').value || null) : null,
       recorrente: categoria === 'PJ' ? q('#ct-recorrente').checked : false,
       valor: q('#ct-valor').value ? Number(q('#ct-valor').value) : null,
-      tipo_financeiro: q('#ct-tipofin').value || null,
       data_inicio: q('#ct-inicio').value || null,
       data_fim: q('#ct-fim').value || null,
       renovacao: q('#ct-renov').value,
@@ -55471,94 +55278,6 @@ async function onflyColaboradores (alvo, editavel) {
 // só Solicitações; os próximos setores entram do mesmo jeito, cada
 // um só somando um item nesta lista.
 // ---------------------------------------------------------------
-// ---------------------------------------------------------------
-// Relatório: Relatório Semanal (Adão)
-// Pedido da Amanda em 22/09 — tela pra acompanhar o relatório semanal
-// que o Eduardo manda pro Adão (edge function relatorio-diario-empresa):
-// histórico de semanas geradas + status de cada uma, e onde trocar quem
-// revisa (hoje ela) e quem recebe o final (hoje o Adão) sem precisar
-// mexer direto no banco. Só admin (ehTotal) vê essa tela — é
-// configuração sensível (pra quem vai o relatório da empresa toda semana).
-// Não tem botão de "gerar agora" de propósito: disparar a function
-// exigiria expor o segredo dela no navegador. O envio é sempre automático
-// (toda sexta 17:30) ou testado direto no painel do Supabase.
-// ---------------------------------------------------------------
-const ROTULO_STATUS_REL_SEMANAL = {
-  AGUARDANDO_APROVACAO: 'aguardando revisão',
-  APROVADO: 'aprovado, enviando pro Adão',
-  ENVIADO: 'enviado pro Adão'
-}
-function corStatusRelSemanal (s) {
-  if (s === 'ENVIADO') return 'badge-bom'
-  if (s === 'APROVADO') return 'chip'
-  return 'badge-alerta'
-}
-
-async function relRelatorioSemanalAdao (alvo) {
-  const [{ data: cfg }, { data: pessoas }, { data: historico, error }] = await Promise.all([
-    db.from('relatorio_empresa_config').select('*').eq('id', true).maybeSingle(),
-    db.from('pessoa').select('id,nome').order('nome'),
-    db.from('relatorio_empresa_diario').select('id,data,status,texto,aprovado_em,enviado_em')
-      .order('data', { ascending: false }).limit(30)
-  ])
-  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-
-  const listaPessoas = pessoas || []
-  const opcoesPessoa = selecionadoId => listaPessoas.map(p =>
-    `<option value="${p.id}" ${p.id === selecionadoId ? 'selected' : ''}>${esc(p.nome)}</option>`
-  ).join('')
-
-  alvo.innerHTML = `
-    <div class="secao panel" style="padding:20px;">
-      <h3>Configuração</h3>
-      <p class="texto-dim2" style="margin-top:-4px;">
-        Toda sexta às 17:30 o Eduardo fecha a semana e manda pra quem revisa, abaixo — só depois
-        que essa pessoa responder "ficou bom" no WhatsApp é que segue pra quem recebe o relatório final.</p>
-      <div class="form-grade">
-        <div class="campo"><label>Quem revisa antes de enviar</label>
-          <select id="rs-revisor">${opcoesPessoa(cfg?.revisor_pessoa_id)}</select></div>
-        <div class="campo"><label>Quem recebe o relatório final</label>
-          <select id="rs-final">${opcoesPessoa(cfg?.final_pessoa_id)}</select></div>
-      </div>
-      <div class="acoes" style="align-items:center;gap:14px;">
-        <button class="btn" id="rs-salvar">Salvar</button>
-        <button class="btn-secundario mini" id="rs-toggle-ativo">${cfg?.ativo ? 'Pausar envio automático' : 'Reativar envio automático'}</button>
-        ${cfg && !cfg.ativo ? '<span class="badge-alerta" style="font-size:11px;">envio automático pausado</span>' : ''}
-      </div>
-      <div class="recado oculto" id="rs-recado"></div>
-    </div>
-
-    <div class="panel" style="padding:0;"><div class="tabela-scroll">
-      <table><thead><tr><th>Semana</th><th>Status</th><th>Resumo</th><th>Aprovado em</th><th>Enviado em</th></tr></thead>
-      <tbody>${(historico || []).map(r => `<tr>
-        <td>${fmtData(r.data)}</td>
-        <td><span class="${corStatusRelSemanal(r.status)}">${esc(ROTULO_STATUS_REL_SEMANAL[r.status] ?? r.status)}</span></td>
-        <td class="texto-dim" style="max-width:420px;white-space:pre-wrap;">${esc((r.texto || '').slice(0, 220))}${(r.texto || '').length > 220 ? '…' : ''}</td>
-        <td class="texto-dim2">${fmtQuando(r.aprovado_em) ?? '—'}</td>
-        <td class="texto-dim2">${fmtQuando(r.enviado_em) ?? '—'}</td>
-      </tr>`).join('') || `<tr><td colspan="5" class="vazio">Nenhum relatório gerado ainda.</td></tr>`}
-      </tbody></table>
-    </div></div>`
-
-  $('#rs-salvar').onclick = async () => {
-    const el = $('#rs-recado')
-    const avisar = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
-    const revisor_pessoa_id = $('#rs-revisor').value
-    const final_pessoa_id = $('#rs-final').value
-    if (!revisor_pessoa_id || !final_pessoa_id) { avisar('Escolhe quem revisa e quem recebe.'); return }
-    const { error } = await db.from('relatorio_empresa_config')
-      .update({ revisor_pessoa_id, final_pessoa_id }).eq('id', true)
-    if (error) { avisar(error.message); return }
-    relRelatorioSemanalAdao(alvo)
-  }
-
-  $('#rs-toggle-ativo').onclick = async () => {
-    const { error } = await db.from('relatorio_empresa_config').update({ ativo: !cfg?.ativo }).eq('id', true)
-    if (error) { alert('Não deu pra atualizar: ' + error.message); return }
-    relRelatorioSemanalAdao(alvo)
-  }
-}
-
 const RELATORIOS_DISPONIVEIS = [
   { id: 'solicitacoes', nome: 'Solicitações', podeVer: () => podeVer('desempenho'), render: relSolicitacoes },
   { id: 'compras', nome: 'Compras', podeVer: () => podeVer('compras'), render: relCompras },
@@ -55579,8 +55298,7 @@ const RELATORIOS_DISPONIVEIS = [
   { id: 'dp', nome: 'DP e Segurança', podeVer: () => podeVer('dp'), render: relDP },
   { id: 'laboratorio', nome: 'Laboratório', podeVer: () => podeVer('laboratorio'), render: relLaboratorio },
   { id: 'marketing', nome: 'Marketing', podeVer: () => podeVer('marketing'), render: relMarketing },
-  { id: 'gestao_ti', nome: 'Gestão de TI', podeVer: () => podeVer('gestao_ti'), render: relGestaoTI },
-  { id: 'relatorio_semanal_adao', nome: 'Relatório Semanal (Adão)', podeVer: () => ehTotal(), render: relRelatorioSemanalAdao }
+  { id: 'gestao_ti', nome: 'Gestão de TI', podeVer: () => podeVer('gestao_ti'), render: relGestaoTI }
 ]
 
 // Cada relatório vira uma "página" navegável própria (chave rel__<id>),
