@@ -57250,7 +57250,10 @@ async function relFaturamento (alvo) {
       lista = relFiltrarValor(lista, vminVal, vmaxVal, p => p.valor_total)
       if (!lista.length) { $('#rf-resultado').innerHTML = `<p class="vazio">Nenhum pedido encontrado.</p>`; return }
 
-      $('#rf-resultado').innerHTML = cabecalho(lista.length, `pedido${lista.length > 1 ? 's' : ''}`) + tabela(`
+      const tQtdPed = lista.reduce((s, p) => s + Number(p.quantidade_t || 0), 0)
+      const tValorPed = lista.reduce((s, p) => s + Number(p.valor_total || 0), 0)
+
+      $('#rf-resultado').innerHTML = cabecalho(lista.length, `pedido${lista.length > 1 ? 's' : ''} · ${fmtNum(tQtdPed)} t · R$ ${fmtNum(tValorPed)}`) + tabela(`
         <thead><tr><th>Número</th><th>Cliente</th><th>Vendedor</th><th>Produto</th><th class="num">Quantidade (t)</th><th class="num">Valor total</th><th>Situação pagamento</th><th>Status</th><th>Data pedido</th><th>Vencimento</th></tr></thead>
         <tbody>${lista.map(p => `<tr>
           <td>${esc(p.numero ?? '—')}</td>
@@ -57263,9 +57266,15 @@ async function relFaturamento (alvo) {
           <td>${esc(ROTULO_STATUS_PEDIDO[p.status] ?? p.status ?? '—')}</td>
           <td>${fmtData(p.data_pedido)}</td>
           <td>${p.vencimento ? fmtData(p.vencimento) : '—'}</td>
-        </tr>`).join('')}</tbody>`)
+        </tr>`).join('')}</tbody>
+        <tfoot><tr style="font-weight:700;"><td colspan="4">TOTAL</td>
+          <td class="num">${fmtNum(tQtdPed)} t</td>
+          <td class="num">R$ ${fmtNum(tValorPed)}</td>
+          <td colspan="4"></td></tr></tfoot>`)
       exportar = { arquivo: 'relatorio_faturamento_pedidos', titulo: 'Faturamento por pedido',
-                   colunas: COLUNAS_REL_FATURAMENTO, linhas: lista.map(linhaRelFaturamento) }
+                   colunas: COLUNAS_REL_FATURAMENTO,
+                   linhas: [...lista.map(linhaRelFaturamento),
+                     ['TOTAL', '', '', '', fmtNum(tQtdPed), `R$ ${fmtNum(tValorPed)}`, '', '', '', '']] }
 
     // ---------------------------------------------------------------
     } else {
@@ -57311,9 +57320,15 @@ async function relFaturamento (alvo) {
             <td class="texto-dim">${esc(c.motorista ?? '—')}</td>
             <td>${esc(c.uf_destino ?? '—')}</td>
             <td><span class="chip">${esc(c.status ?? '—')}</span></td>
-          </tr>`).join('')}</tbody>`)
+          </tr>`).join('')}</tbody>
+          <tfoot><tr style="font-weight:700;"><td colspan="6">TOTAL</td>
+            <td class="num">${fmtNum(t)} t</td><td></td>
+            <td class="num">R$ ${fmtNum(v)}</td>
+            <td colspan="4"></td></tr></tfoot>`)
         exportar = { arquivo: 'relatorio_faturamento_lancamentos', titulo: 'Faturamento por lançamento',
-                     colunas: COLUNAS_REL_CARREGAMENTO, linhas: cargas.map(linhaRelCarregamento) }
+                     colunas: COLUNAS_REL_CARREGAMENTO,
+                     linhas: [...cargas.map(linhaRelCarregamento),
+                       ['TOTAL', '', '', '', '', '', fmtNum(t), '', `R$ ${fmtNum(v)}`, '', '', '', '']] }
 
       // ----- uma linha por dia -----
       } else if (m === 'diario') {
@@ -57344,10 +57359,16 @@ async function relFaturamento (alvo) {
             <td class="texto-dim">${esc([...d.clientes].slice(0, 3).join(', '))}${d.clientes.size > 3 ? ` +${d.clientes.size - 3}` : ''}</td>
             <td class="num">${fmtNum(d.t)}</td>
             <td class="num">R$ ${fmtNum(d.v)}</td>
-          </tr>`).join('')}</tbody>`)
+          </tr>`).join('')}</tbody>
+          <tfoot><tr style="font-weight:700;"><td>TOTAL</td>
+            <td class="num">${dias.reduce((s, d) => s + d.n, 0)}</td>
+            <td></td><td></td>
+            <td class="num">${fmtNum(tt)}</td>
+            <td class="num">R$ ${fmtNum(vv)}</td></tr></tfoot>`)
         exportar = { arquivo: 'relatorio_faturamento_diario', titulo: 'Faturamento por dia',
                      colunas: COLUNAS_REL_DIARIO,
-                     linhas: dias.map(d => [fmtData(d.data), d.n, d.pedidos.size, [...d.clientes].join(', '), fmtNum(d.t), `R$ ${fmtNum(d.v)}`]) }
+                     linhas: [...dias.map(d => [fmtData(d.data), d.n, d.pedidos.size, [...d.clientes].join(', '), fmtNum(d.t), `R$ ${fmtNum(d.v)}`]),
+                       ['TOTAL', dias.reduce((s, d) => s + d.n, 0), '', '', fmtNum(tt), `R$ ${fmtNum(vv)}`]] }
 
       // ----- o pedido e o que já saiu contra ele -----
       } else {
@@ -57376,7 +57397,15 @@ async function relFaturamento (alvo) {
           return { cs, t, v, saldo: Number(p.quantidade_t || 0) - t }
         }
 
-        $('#rf-resultado').innerHTML = cabecalho(lista.length, `pedido${lista.length > 1 ? 's' : ''} com o que já saiu`) + tabela(`
+        const resumos = lista.map(p => resumo(p))
+        const tPedT = lista.reduce((s, p) => s + Number(p.quantidade_t || 0), 0)
+        const tCarT = resumos.reduce((s, r) => s + r.t, 0)
+        const tSaldoT = resumos.reduce((s, r) => s + r.saldo, 0)
+        const tLanc = resumos.reduce((s, r) => s + r.cs.length, 0)
+        const tValorPed = lista.reduce((s, p) => s + Number(p.valor_total || 0), 0)
+        const tValorFat = resumos.reduce((s, r) => s + r.v, 0)
+
+        $('#rf-resultado').innerHTML = cabecalho(lista.length, `pedido${lista.length > 1 ? 's' : ''} com o que já saiu · ${fmtNum(tCarT)} t carregadas · R$ ${fmtNum(tValorFat)} faturado`) + tabela(`
           <thead><tr><th>Pedido</th><th>Cliente</th><th>Produto</th><th>Data pedido</th>
             <th class="num">Pedido (t)</th><th class="num">Carregado (t)</th><th class="num">Saldo (t)</th>
             <th class="num">Lanç.</th><th class="num">Valor faturado</th></tr></thead>
@@ -57402,16 +57431,23 @@ async function relFaturamento (alvo) {
               <td></td><td></td>
               <td class="num">${c.valor_nf != null ? fmtNum(c.valor_nf) : '—'}</td>
             </tr>`).join('')
-          }).join('')}</tbody>`)
+          }).join('')}</tbody>
+          <tfoot><tr style="font-weight:700;"><td colspan="4">TOTAL</td>
+            <td class="num">${fmtNum(tPedT)}</td>
+            <td class="num">${fmtNum(tCarT)}</td>
+            <td class="num">${fmtNum(tSaldoT)}</td>
+            <td class="num">${tLanc}</td>
+            <td class="num">R$ ${fmtNum(tValorFat)}</td></tr></tfoot>`)
 
         exportar = { arquivo: 'relatorio_faturamento_pedido_lancamentos', titulo: 'Pedido e lançamentos gerados',
           colunas: COLUNAS_REL_GERADO,
-          linhas: lista.map(p => {
+          linhas: [...lista.map(p => {
             const r = resumo(p)
             return [p.numero ?? '—', nomeCliente_(p.cliente), p.produto?.nome ?? '—', fmtData(p.data_pedido),
               p.quantidade_t ?? '—', fmtNum(r.t), fmtNum(r.saldo), r.cs.length,
               p.valor_total != null ? `R$ ${fmtNum(p.valor_total)}` : '—', `R$ ${fmtNum(r.v)}`]
-          }) }
+          }), ['TOTAL', '', '', '', fmtNum(tPedT), fmtNum(tCarT), fmtNum(tSaldoT), tLanc,
+               `R$ ${fmtNum(tValorPed)}`, `R$ ${fmtNum(tValorFat)}`]] }
       }
     }
 
