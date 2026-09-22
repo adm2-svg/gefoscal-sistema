@@ -10348,6 +10348,7 @@ async function paginaCompras () {
     { chave: 'cotar',        nome: 'Cotação',      mostrar: podeCotar() },
     { chave: 'aprovar',      nome: 'Aprovação',    mostrar: podeAprovar() },
     { chave: 'fornecedores', nome: 'Fornecedores', mostrar: podeGerenciarFornecedores() },
+    { chave: 'eduardo',      nome: 'Eduardo (IA)',  mostrar: editavel },
     { chave: 'relatorio',    nome: 'Relatório',    mostrar: editavel }
   ].filter(a => a.mostrar)
 
@@ -10375,6 +10376,7 @@ function abrirCompras (sub, editavel, apenasProprio) {
   if (sub === 'cotar') comprasCotar(alvo)
   if (sub === 'aprovar') comprasDecidir(alvo, 'aprovacao')
   if (sub === 'fornecedores') comprasFornecedores(alvo, podeGerenciarFornecedores())
+  if (sub === 'eduardo') comprasEduardo(alvo)
   if (sub === 'relatorio') comprasRelatorio(alvo)
 }
 
@@ -12847,6 +12849,85 @@ function formEditarFornecedor (f) {
     fechar()
     abrirCompras('fornecedores', true)
   }
+}
+
+// ----- Compras › Eduardo (IA) -----
+// Biblioteca de "quando ele mandar isso, responda assim" pro bot que aprova
+// compras pelo WhatsApp — pedido da Amanda em 22/09, depois do caso do
+// "aprova todos" do Adão que travava a conversa. Em vez de pedir alteração
+// de código toda vez que ele responde de um jeito que o robô ainda não sabe
+// tratar, ela cadastra a situação aqui e a function compras-aprovacao-
+// whatsapp já passa a considerar isso no classificador (tabela
+// compra_wa_situacao_treinada, lida por ela a cada 5 minutos).
+async function comprasEduardo (alvo) {
+  const { data, error } = await db.from('compra_wa_situacao_treinada')
+    .select('id,exemplo_mensagem,situacao,resposta_esperada,ativo,criado_em,criado:criado_por(nome)')
+    .order('criado_em', { ascending: false })
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  alvo.innerHTML = `
+    <div class="secao panel" style="padding:20px;">
+      <h3>Ensinar uma situação nova</h3>
+      <p class="texto-dim2" style="margin-top:-4px;">
+        Quando o aprovador responder de um jeito que o Eduardo ainda não sabe tratar, cadastre aqui —
+        na próxima vez ele já reconhece e responde do jeito certo, sem precisar mexer em código.</p>
+      <div class="form-grade">
+        <div class="campo" style="grid-column:1/-1;"><label>Exemplo do que ele pode mandar</label>
+          <input id="ed-exemplo" placeholder='ex: "aprovo todos"'></div>
+        <div class="campo" style="grid-column:1/-1;"><label>Situação *</label>
+          <textarea id="ed-situacao" rows="2" placeholder="descreva quando isso acontece, do jeito que você explicaria pra alguém"></textarea></div>
+        <div class="campo" style="grid-column:1/-1;"><label>Como o Eduardo deve responder *</label>
+          <textarea id="ed-resposta" rows="3" placeholder="o texto exato (ou bem próximo) que ele deve mandar de volta"></textarea></div>
+      </div>
+      <div class="acoes"><button class="btn" id="ed-salvar">Adicionar</button></div>
+      <div class="recado oculto" id="ed-recado"></div>
+    </div>
+
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr><th>Situação</th><th>Resposta do Eduardo</th><th>Cadastrado por</th><th>Ativa</th><th></th></tr></thead>
+      <tbody>${(data || []).map(r => `<tr>
+        <td>${esc(r.situacao)}${r.exemplo_mensagem ? `<div class="texto-dim2" style="font-size:11.5px;margin-top:3px;">ex: "${esc(r.exemplo_mensagem)}"</div>` : ''}</td>
+        <td class="texto-dim" style="white-space:pre-wrap;">${esc(r.resposta_esperada)}</td>
+        <td class="texto-dim2">${esc(r.criado?.nome ?? '—')}${r.criado_em ? '<br>' + fmtQuando(r.criado_em) : ''}</td>
+        <td><span class="chip">${r.ativo ? 'ativa' : 'desligada'}</span></td>
+        <td style="text-align:right;white-space:nowrap;">
+          <button class="btn-secundario mini" data-tog-ed="${r.id}">${r.ativo ? 'desligar' : 'ligar'}</button>
+          <button class="btn-secundario mini" data-del-ed="${r.id}" title="Excluir"
+            aria-label="Excluir" style="color:var(--warn-text);margin-left:6px;">${icDp('excluir')}</button></td>
+      </tr>`).join('') || `<tr><td colspan="5" class="vazio">Nenhuma situação ensinada ainda.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+
+  $('#ed-salvar').onclick = async () => {
+    const situacao = $('#ed-situacao').value.trim()
+    const resposta = $('#ed-resposta').value.trim()
+    const el = $('#ed-recado')
+    const avisar = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    if (!situacao || !resposta) { avisar('Preenche a situação e a resposta.'); return }
+    const { error } = await db.from('compra_wa_situacao_treinada').insert({
+      exemplo_mensagem: $('#ed-exemplo').value.trim() || null,
+      situacao, resposta_esperada: resposta, criado_por: PERFIL.pessoaId
+    })
+    if (error) { avisar(error.message); return }
+    abrirCompras('eduardo', true)
+  }
+
+  alvo.querySelectorAll('[data-tog-ed]').forEach(b => {
+    b.onclick = async () => {
+      const r = (data || []).find(x => x.id === b.dataset.togEd)
+      await db.from('compra_wa_situacao_treinada').update({ ativo: !r.ativo }).eq('id', r.id)
+      abrirCompras('eduardo', true)
+    }
+  })
+
+  alvo.querySelectorAll('[data-del-ed]').forEach(b => {
+    b.onclick = async () => {
+      if (!confirm('Excluir essa situação ensinada? Não afeta conversas já respondidas.')) return
+      const { error } = await db.from('compra_wa_situacao_treinada').delete().eq('id', b.dataset.delEd)
+      if (error) { alert('Não deu pra excluir: ' + error.message); return }
+      abrirCompras('eduardo', true)
+    }
+  })
 }
 
 // ---------------------------------------------------------------
