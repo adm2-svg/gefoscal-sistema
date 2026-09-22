@@ -43056,7 +43056,7 @@ async function juridicoPainel (alvo, editavel) {
 // ----- Jurídico › Contratos -----
 async function juridicoContratos (alvo, editavel) {
   const { data, error } = await db.from('juridico_contrato')
-    .select(`id,titulo,contraparte,categoria,tipo_pj,recorrente,valor,data_inicio,data_fim,renovacao,status,anexo_link,observacoes,
+    .select(`id,titulo,contraparte,categoria,tipo_pj,recorrente,valor,data_inicio,data_fim,renovacao,status,anexo_link,observacoes,documento_solicitacao_id,
       responsavel:responsavel_id ( nome )`)
     .order('data_fim', { ascending: true, nullsFirst: false })
 
@@ -43071,13 +43071,14 @@ async function juridicoContratos (alvo, editavel) {
         <th>Vigência</th><th>Renovação</th><th>Vencimento</th><th>Responsável</th>${editavel ? '<th></th>' : ''}
       </tr></thead><tbody>
       ${lista.map(c => `<tr>
-        <td><b>${esc(c.titulo)}</b>${c.anexo_link ? ` · <a href="${esc(c.anexo_link)}" target="_blank" rel="noopener">anexo</a>` : ''}</td>
+        <td><b>${esc(c.titulo)}</b>${c.anexo_link ? ` · <a href="${esc(c.anexo_link)}" target="_blank" rel="noopener">anexo</a>` : ''}
+          ${c.documento_solicitacao_id ? ` · <button class="btn-secundario mini" data-ver-docs-contrato="${c.documento_solicitacao_id}" style="font-size:10px;padding:2px 6px;">📎 ver documentos</button>` : ''}</td>
         <td class="texto-dim">${esc(c.contraparte || '—')}</td>
         <td><span class="chip">${esc(c.categoria || '—')}</span>${c.tipo_pj ? `<br><span class="texto-dim2" style="font-size:10.5px;">${esc(ROTULO_TIPO_PJ[c.tipo_pj])}${c.recorrente ? ' · recorrente' : ''}</span>` : ''}</td>
         <td class="num">${c.valor != null ? 'R$ ' + fmtNum(c.valor) : '<span class="texto-dim2">—</span>'}</td>
         <td class="texto-dim">${fmtData(c.data_inicio)} – ${c.data_fim ? fmtData(c.data_fim) : 'indeterminado'}</td>
         <td class="texto-dim">${{ AUTOMATICA: 'automática', MANUAL: 'manual', NAO_RENOVA: 'não renova' }[c.renovacao] || '—'}</td>
-        <td>${c.status === 'ENCERRADO' ? '<span class="chip">encerrado</span>' : tagVencimento(c.data_fim)}</td>
+        <td>${c.status === 'ENCERRADO' ? '<span class="chip">encerrado</span>' : c.status === 'A_ELABORAR' ? '<span class="badge-alerta">⚠️ a elaborar</span>' : tagVencimento(c.data_fim)}</td>
         <td class="texto-dim">${esc(c.responsavel?.nome || '—')}</td>
         ${editavel ? `<td style="text-align:right;white-space:nowrap;">
           <button class="btn-secundario mini" data-editar="${c.id}">editar</button>
@@ -43086,10 +43087,58 @@ async function juridicoContratos (alvo, editavel) {
       </tbody></table>
     </div></div>`
 
+  alvo.querySelectorAll('[data-ver-docs-contrato]').forEach(b => {
+    b.onclick = e => { e.stopPropagation(); abrirDocumentosDaSolicitacao(b.dataset.verDocsContrato) }
+  })
+
   if (!editavel) return
   $('#ct-novo').onclick = () => formContrato(null)
   alvo.querySelectorAll('[data-editar]').forEach(b => {
     b.onclick = () => formContrato(lista.find(x => x.id === b.dataset.editar))
+  })
+}
+
+// Visão somente-leitura de UMA solicitação de documentos (usada a partir do
+// registro de Contrato que a coleta de PJ gera sozinha) -- reaproveita o
+// mesmo card visual da lista em Recrutamento, sem depender de estar dentro
+// do modal da vaga.
+async function abrirDocumentosDaSolicitacao (solicitacaoId) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:520px;"><p class="texto-dim2">carregando...</p></div>`
+  document.body.appendChild(fundo)
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
+
+  const { data: s, error } = await db.from('documento_solicitacao')
+    .select('id,destinatario_nome,status,criado_em,expira_em,itens:documento_solicitacao_item(id,nome,obrigatorio,arquivo_caminho,arquivo_nome)')
+    .eq('id', solicitacaoId).maybeSingle()
+  if (error || !s) {
+    fundo.querySelector('.modal').innerHTML = `<p class="vazio">${esc(error?.message || 'Solicitação não encontrada.')}</p>
+      <div class="acoes" style="margin-top:14px;"><button class="btn-secundario" id="vd-fechar">Fechar</button></div>`
+    fundo.querySelector('#vd-fechar').onclick = () => fundo.remove()
+    return
+  }
+  const st = statusDocSolicitacaoAtual(s)
+  fundo.querySelector('.modal').innerHTML = `
+    <div class="cabeca-secao" style="margin-bottom:10px;">
+      <h3 style="font-family:var(--serif);font-size:15px;">Documentos — ${esc(s.destinatario_nome)}</h3>
+      <button class="btn-secundario mini" id="vd-fechar">fechar</button>
+    </div>
+    <span class="chip" style="font-size:10.5px;margin-bottom:10px;display:inline-block;">${esc(ROTULO_STATUS_DOC_SOLICITACAO[st] || st)}</span>
+    <div style="display:grid;gap:5px;">
+      ${(s.itens || []).map(it => `
+        <div style="font-size:12.5px;display:flex;gap:6px;align-items:center;">
+          <span>${it.arquivo_caminho ? '✅' : (it.obrigatorio ? '⬜' : '➖')}</span>
+          <span class="${it.arquivo_caminho ? '' : 'texto-dim2'}">${esc(it.nome)}${!it.obrigatorio ? ' (opcional)' : ''}</span>
+          ${it.arquivo_caminho ? `<button class="btn-secundario mini" data-baixar-item="${esc(it.arquivo_caminho)}">abrir</button>` : ''}
+        </div>`).join('') || '<p class="vazio">Sem itens.</p>'}
+    </div>
+    <div class="acoes" style="margin-top:14px;"><button class="btn-secundario" id="vd-fechar2">Fechar</button></div>`
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#vd-fechar').onclick = fechar
+  fundo.querySelector('#vd-fechar2').onclick = fechar
+  fundo.querySelectorAll('[data-baixar-item]').forEach(b => {
+    b.onclick = () => abrirArquivo(b.dataset.baixarItem, 'documentos-rh')
   })
 }
 
@@ -43101,6 +43150,7 @@ function formContrato (c) {
   fundo.innerHTML = `
     <div class="modal" style="max-width:760px;">
       <h3>${c ? 'Editar contrato' : 'Novo contrato'}</h3>
+      ${c?.documento_solicitacao_id ? `<button class="btn-secundario mini" id="ct-ver-docs" style="margin:-6px 0 12px;">📎 ver documentos recebidos</button>` : ''}
       <div class="form-grade">
         <div class="campo" style="grid-column:1/-1;"><label>Título / objeto *</label>
           <input id="ct-titulo" value="${v('titulo')}" placeholder="Ex.: Locação do galpão de LEM"></div>
@@ -43123,6 +43173,7 @@ function formContrato (c) {
           </select></div>
         <div class="campo"><label>Status</label>
           <select id="ct-status">
+            <option value="A_ELABORAR" ${c?.status === 'A_ELABORAR' ? 'selected' : ''}>a elaborar</option>
             <option value="VIGENTE" ${(!c || c.status === 'VIGENTE') ? 'selected' : ''}>vigente</option>
             <option value="EM_RENOVACAO" ${c?.status === 'EM_RENOVACAO' ? 'selected' : ''}>em renovação</option>
             <option value="ENCERRADO" ${c?.status === 'ENCERRADO' ? 'selected' : ''}>encerrado</option>
@@ -43167,6 +43218,8 @@ function formContrato (c) {
     const el = q('#ct-recado'); el.textContent = t; el.classList.remove('oculto')
     el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
   }
+  const btnVerDocs = q('#ct-ver-docs')
+  if (btnVerDocs) btnVerDocs.onclick = () => abrirDocumentosDaSolicitacao(c.documento_solicitacao_id)
 
   const alternarCamposPJ = () => {
     const ehPJ = q('#ct-cat').value === 'PJ'
@@ -48234,7 +48287,7 @@ const CHECKLIST_PADRAO_CLT = [
   'RG e CPF (ou CNH)', 'Comprovante de residência atualizado', 'Carteira de Trabalho Digital (número e série)',
   'PIS/PASEP', 'Certidão de nascimento ou casamento', 'Certidão de nascimento dos filhos (se houver dependentes)',
   'Título de eleitor', 'Certificado de reservista (se aplicável)', 'Comprovante de escolaridade',
-  'Foto 3x4 recente', 'Exame admissional (ASO)', 'Dados bancários (conta para depósito do salário)'
+  'Foto 3x4 recente', 'Dados bancários (conta para depósito do salário)'
 ]
 const CHECKLIST_PADRAO_PJ = [
   'Contrato social (ou requerimento de empresário/MEI)', 'Cartão CNPJ', 'RG e CPF do responsável pela empresa',
