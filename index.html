@@ -43426,6 +43426,12 @@ function formLicenca (l) {
 // A senha do certificado não é guardada aqui: fica de fora de propósito,
 // dado o quanto é sensível — combina com quem recebe por outro canal.
 // ---------------------------------------------------------------
+// a página que a pessoa abre fica no Vercel, não no domínio do Supabase:
+// função pública do Supabase força qualquer resposta HTML pra texto puro
+// (proteção deles contra função pública servir página executável num
+// domínio compartilhado) — por isso a página real mora aqui e só chama a
+// edge function certificado-acesso como API (JSON + download binário).
+const CERTIFICADO_ACESSO_URL = 'https://gefoscal-relatorio-render.vercel.app/certificado.html'
 const TIPOS_CERTIFICADO = ['e-CNPJ A1', 'e-CNPJ A3', 'e-CPF A1', 'e-CPF A3', 'e-CNPJ A1 (nuvem)', 'Outro']
 const ROTULO_STATUS_CERTIFICADO = { ATIVO: 'ativo', REVOGADO: 'revogado', SUBSTITUIDO: 'substituído' }
 const ROTULO_STATUS_LIBERACAO = { AGUARDANDO_ASSINATURA: 'aguardando assinatura', ASSINADO: 'assinado', EXPIRADO: 'expirado', REVOGADO: 'revogado' }
@@ -43698,7 +43704,7 @@ function formLiberacaoCertificado (c, aoGerar) {
     btn.disabled = false; btn.textContent = 'Gerar link'
     if (error) { aviso(error.message); return }
 
-    const link = `${SUPABASE_URL}/functions/v1/certificado-acesso?token=${salvo.token}`
+    const link = `${CERTIFICADO_ACESSO_URL}?token=${salvo.token}`
     q('#fl-campos').remove()
     q('#fl-acoes').remove()
     q('#fl-resultado').innerHTML = `
@@ -43765,7 +43771,7 @@ async function listaLiberacoesCertificado (corpo, c, editavel) {
   corpo.querySelector('#lb-fechar').onclick = () => { corpo.innerHTML = '' }
   corpo.querySelectorAll('[data-copiar]').forEach(b => {
     b.onclick = () => {
-      const link = `${SUPABASE_URL}/functions/v1/certificado-acesso?token=${b.dataset.copiar}`
+      const link = `${CERTIFICADO_ACESSO_URL}?token=${b.dataset.copiar}`
       navigator.clipboard.writeText(link).then(() => { b.textContent = 'copiado!' })
     }
   })
