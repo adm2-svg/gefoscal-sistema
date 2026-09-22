@@ -55471,6 +55471,94 @@ async function onflyColaboradores (alvo, editavel) {
 // só Solicitações; os próximos setores entram do mesmo jeito, cada
 // um só somando um item nesta lista.
 // ---------------------------------------------------------------
+// ---------------------------------------------------------------
+// Relatório: Relatório Semanal (Adão)
+// Pedido da Amanda em 22/09 — tela pra acompanhar o relatório semanal
+// que o Eduardo manda pro Adão (edge function relatorio-diario-empresa):
+// histórico de semanas geradas + status de cada uma, e onde trocar quem
+// revisa (hoje ela) e quem recebe o final (hoje o Adão) sem precisar
+// mexer direto no banco. Só admin (ehTotal) vê essa tela — é
+// configuração sensível (pra quem vai o relatório da empresa toda semana).
+// Não tem botão de "gerar agora" de propósito: disparar a function
+// exigiria expor o segredo dela no navegador. O envio é sempre automático
+// (toda sexta 17:30) ou testado direto no painel do Supabase.
+// ---------------------------------------------------------------
+const ROTULO_STATUS_REL_SEMANAL = {
+  AGUARDANDO_APROVACAO: 'aguardando revisão',
+  APROVADO: 'aprovado, enviando pro Adão',
+  ENVIADO: 'enviado pro Adão'
+}
+function corStatusRelSemanal (s) {
+  if (s === 'ENVIADO') return 'badge-bom'
+  if (s === 'APROVADO') return 'chip'
+  return 'badge-alerta'
+}
+
+async function relRelatorioSemanalAdao (alvo) {
+  const [{ data: cfg }, { data: pessoas }, { data: historico, error }] = await Promise.all([
+    db.from('relatorio_empresa_config').select('*').eq('id', true).maybeSingle(),
+    db.from('pessoa').select('id,nome').order('nome'),
+    db.from('relatorio_empresa_diario').select('id,data,status,texto,aprovado_em,enviado_em')
+      .order('data', { ascending: false }).limit(30)
+  ])
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  const listaPessoas = pessoas || []
+  const opcoesPessoa = selecionadoId => listaPessoas.map(p =>
+    `<option value="${p.id}" ${p.id === selecionadoId ? 'selected' : ''}>${esc(p.nome)}</option>`
+  ).join('')
+
+  alvo.innerHTML = `
+    <div class="secao panel" style="padding:20px;">
+      <h3>Configuração</h3>
+      <p class="texto-dim2" style="margin-top:-4px;">
+        Toda sexta às 17:30 o Eduardo fecha a semana e manda pra quem revisa, abaixo — só depois
+        que essa pessoa responder "ficou bom" no WhatsApp é que segue pra quem recebe o relatório final.</p>
+      <div class="form-grade">
+        <div class="campo"><label>Quem revisa antes de enviar</label>
+          <select id="rs-revisor">${opcoesPessoa(cfg?.revisor_pessoa_id)}</select></div>
+        <div class="campo"><label>Quem recebe o relatório final</label>
+          <select id="rs-final">${opcoesPessoa(cfg?.final_pessoa_id)}</select></div>
+      </div>
+      <div class="acoes" style="align-items:center;gap:14px;">
+        <button class="btn" id="rs-salvar">Salvar</button>
+        <button class="btn-secundario mini" id="rs-toggle-ativo">${cfg?.ativo ? 'Pausar envio automático' : 'Reativar envio automático'}</button>
+        ${cfg && !cfg.ativo ? '<span class="badge-alerta" style="font-size:11px;">envio automático pausado</span>' : ''}
+      </div>
+      <div class="recado oculto" id="rs-recado"></div>
+    </div>
+
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr><th>Semana</th><th>Status</th><th>Resumo</th><th>Aprovado em</th><th>Enviado em</th></tr></thead>
+      <tbody>${(historico || []).map(r => `<tr>
+        <td>${fmtData(r.data)}</td>
+        <td><span class="${corStatusRelSemanal(r.status)}">${esc(ROTULO_STATUS_REL_SEMANAL[r.status] ?? r.status)}</span></td>
+        <td class="texto-dim" style="max-width:420px;white-space:pre-wrap;">${esc((r.texto || '').slice(0, 220))}${(r.texto || '').length > 220 ? '…' : ''}</td>
+        <td class="texto-dim2">${fmtQuando(r.aprovado_em) ?? '—'}</td>
+        <td class="texto-dim2">${fmtQuando(r.enviado_em) ?? '—'}</td>
+      </tr>`).join('') || `<tr><td colspan="5" class="vazio">Nenhum relatório gerado ainda.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+
+  $('#rs-salvar').onclick = async () => {
+    const el = $('#rs-recado')
+    const avisar = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const revisor_pessoa_id = $('#rs-revisor').value
+    const final_pessoa_id = $('#rs-final').value
+    if (!revisor_pessoa_id || !final_pessoa_id) { avisar('Escolhe quem revisa e quem recebe.'); return }
+    const { error } = await db.from('relatorio_empresa_config')
+      .update({ revisor_pessoa_id, final_pessoa_id }).eq('id', true)
+    if (error) { avisar(error.message); return }
+    relRelatorioSemanalAdao(alvo)
+  }
+
+  $('#rs-toggle-ativo').onclick = async () => {
+    const { error } = await db.from('relatorio_empresa_config').update({ ativo: !cfg?.ativo }).eq('id', true)
+    if (error) { alert('Não deu pra atualizar: ' + error.message); return }
+    relRelatorioSemanalAdao(alvo)
+  }
+}
+
 const RELATORIOS_DISPONIVEIS = [
   { id: 'solicitacoes', nome: 'Solicitações', podeVer: () => podeVer('desempenho'), render: relSolicitacoes },
   { id: 'compras', nome: 'Compras', podeVer: () => podeVer('compras'), render: relCompras },
@@ -55491,7 +55579,8 @@ const RELATORIOS_DISPONIVEIS = [
   { id: 'dp', nome: 'DP e Segurança', podeVer: () => podeVer('dp'), render: relDP },
   { id: 'laboratorio', nome: 'Laboratório', podeVer: () => podeVer('laboratorio'), render: relLaboratorio },
   { id: 'marketing', nome: 'Marketing', podeVer: () => podeVer('marketing'), render: relMarketing },
-  { id: 'gestao_ti', nome: 'Gestão de TI', podeVer: () => podeVer('gestao_ti'), render: relGestaoTI }
+  { id: 'gestao_ti', nome: 'Gestão de TI', podeVer: () => podeVer('gestao_ti'), render: relGestaoTI },
+  { id: 'relatorio_semanal_adao', nome: 'Relatório Semanal (Adão)', podeVer: () => ehTotal(), render: relRelatorioSemanalAdao }
 ]
 
 // Cada relatório vira uma "página" navegável própria (chave rel__<id>),
