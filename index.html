@@ -43638,6 +43638,47 @@ function textoTermoPadraoCertificado (c, nome, doc, finalidade, expiraEm) {
   ].join('\n')
 }
 
+const REGEX_EMAIL_SIMPLES = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+function montarEmailCertificadoHtml (c, nome, finalidade, link, expiraEm) {
+  return `
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;border:1px solid #d7e3da;border-radius:10px;overflow:hidden;">
+      <div style="background:#1c5632;color:#fff;padding:18px 22px;border-bottom:4px solid #c8a11a;">
+        <div style="font-size:18px;font-weight:700;">GEFOSCAL &bull; Certificado digital</div>
+        <div style="font-size:12px;opacity:.85;margin-top:3px;">Acesso liberado &mdash; ${esc(c.tipo)}</div>
+      </div>
+      <div style="padding:20px;color:#1b1b1b;font-size:13.5px;line-height:1.6;">
+        <p>Ol&aacute;, ${esc(nome)},</p>
+        <p>Voc&ecirc; recebeu acesso ao certificado digital <b>${esc(c.tipo)}</b>, titular ${esc(c.titular_nome)}${finalidade ? `, para: <b>${esc(finalidade)}</b>` : ''}.</p>
+        <p>Antes de baixar, &eacute; preciso assinar eletronicamente o termo de responsabilidade &mdash; leva menos de um minuto:</p>
+        <p style="text-align:center;margin:22px 0;">
+          <a href="${esc(link)}" style="background:#1c5632;color:#fff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:600;display:inline-block;">Abrir e assinar</a>
+        </p>
+        <p style="font-size:11.5px;color:#6d7c72;word-break:break-all;">Ou copie e cole no navegador: ${esc(link)}</p>
+        <p style="font-size:12px;color:#6d7c72;">Este link expira em <b>${esc(fmtQuando(expiraEm))}</b> &mdash; depois disso deixa de funcionar.</p>
+      </div>
+      <div style="background:#1c5632;color:#fff;padding:12px 22px;font-size:11px;">
+        (62) 99232-8743 &middot; R. Pernambuco, 55, Sala 16 - Centro, Lu&iacute;s Eduardo Magalh&atilde;es - BA &middot; www.gefoscal.com.br
+      </div>
+    </div>`
+}
+
+// reaproveita o mesmo relé de e-mail já usado pelo Pedido Comercial
+// (edge function enviar-pedido-email → Apps Script do Workspace da Gefoscal)
+async function enviarEmailLiberacaoCertificado (c, nome, email, finalidade, link, expiraEm) {
+  try {
+    const { data, error } = await db.functions.invoke('enviar-pedido-email', {
+      body: {
+        para: [email],
+        assunto: `Acesso ao certificado digital — ${c.tipo}`,
+        corpoHtml: montarEmailCertificadoHtml(c, nome, finalidade, link, expiraEm)
+      }
+    })
+    if (error || !data?.ok) return { ok: false, erro: data?.error || error?.message || 'falha ao enviar' }
+    return { ok: true }
+  } catch (e) { return { ok: false, erro: e.message } }
+}
+
 function formLiberacaoCertificado (c, aoGerar) {
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
@@ -43647,12 +43688,12 @@ function formLiberacaoCertificado (c, aoGerar) {
       <p class="texto-dim2" style="font-size:12px;margin:0 0 12px;line-height:1.5;">
         Vale pra qualquer pessoa, inclusive quem não tem login no sistema (contador, advogado externo).
         A pessoa assina o termo na tela do link e só depois disso consegue baixar o arquivo.
-        Depois de gerado, copie o link e mande pra pessoa por onde preferir (WhatsApp, e-mail) — o envio não é automático.</p>
+        Se o contato abaixo for um e-mail, o sistema já manda o link automaticamente — sem e-mail, copie e mande você mesmo (WhatsApp, por exemplo).</p>
       <div class="form-grade" id="fl-campos">
         <div class="campo" style="grid-column:1/-1;"><label>Nome de quem vai receber *</label>
           <input id="fl-nome" placeholder="nome completo"></div>
         <div class="campo"><label>CPF/CNPJ de quem recebe</label><input id="fl-doc"></div>
-        <div class="campo"><label>Contato (e-mail/telefone)</label><input id="fl-contato" placeholder="opcional, só de registro"></div>
+        <div class="campo"><label>Contato (e-mail/telefone)</label><input id="fl-contato" placeholder="e-mail envia sozinho; telefone é só registro"></div>
         <div class="campo" style="grid-column:1/-1;"><label>Finalidade</label>
           <input id="fl-finalidade" placeholder="Ex.: emissão de nota fiscal, declaração de imposto de renda"></div>
         <div class="campo"><label>Link expira em</label>
@@ -43688,27 +43729,40 @@ function formLiberacaoCertificado (c, aoGerar) {
     const expiraEm = new Date(Date.now() + horas * 3600 * 1000).toISOString()
     const doc = q('#fl-doc').value.trim() || null
     const finalidade = q('#fl-finalidade').value.trim() || null
+    const contato = q('#fl-contato').value.trim() || null
+    const ehEmail = contato && REGEX_EMAIL_SIMPLES.test(contato)
 
     const btn = q('#fl-gerar'); btn.disabled = true; btn.textContent = 'gerando...'
     const corpo = {
       certificado_id: c.id,
       destinatario_nome: nome,
       destinatario_documento: doc,
-      destinatario_contato: q('#fl-contato').value.trim() || null,
+      destinatario_contato: contato,
       finalidade,
       expira_em: expiraEm,
       termo_texto: textoTermoPadraoCertificado(c, nome, doc, finalidade, expiraEm),
       criado_por: PERFIL.pessoaId
     }
     const { data: salvo, error } = await db.from('certificado_liberacao').insert(corpo).select('id,token').single()
-    btn.disabled = false; btn.textContent = 'Gerar link'
-    if (error) { aviso(error.message); return }
+    if (error) { btn.disabled = false; btn.textContent = 'Gerar link'; aviso(error.message); return }
 
     const link = `${CERTIFICADO_ACESSO_URL}?token=${salvo.token}`
+
+    let statusEnvio = ''
+    if (ehEmail) {
+      btn.textContent = 'enviando e-mail...'
+      const r = await enviarEmailLiberacaoCertificado(c, nome, contato, finalidade, link, expiraEm)
+      statusEnvio = r.ok
+        ? `<div class="ok" style="font-size:12.5px;">✓ E-mail enviado pra ${esc(contato)}.</div>`
+        : `<div class="recado erro" style="font-size:12.5px;">Não deu pra mandar o e-mail automaticamente (${esc(r.erro || '')}) — copie o link e mande você mesmo.</div>`
+    }
+    btn.disabled = false; btn.textContent = 'Gerar link'
+
     q('#fl-campos').remove()
     q('#fl-acoes').remove()
     q('#fl-resultado').innerHTML = `
-      <div class="texto-dim2" style="font-size:12.5px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;">
+      ${statusEnvio}
+      <div class="texto-dim2" style="font-size:12.5px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-top:${statusEnvio ? '8px' : '0'};">
         Link gerado — válido até ${esc(fmtQuando(expiraEm))}:</div>
       <div style="display:flex;gap:8px;margin-top:8px;">
         <input id="fl-link" readonly value="${esc(link)}" style="flex:1;font-size:11.5px;">
