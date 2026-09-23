@@ -530,6 +530,18 @@ tbody tr:hover { background: var(--hover-bg); }
 .grafico12 .b-desp { background:var(--rust); }
 .grafico12 .mes { font-size:9.5px; color:var(--dim2); margin-top:4px; }
 
+/* ---- Inativação temporária de safra (CRM) ---- */
+.aviso-inativo { border:1px solid var(--warn-text); border-radius:9px; padding:10px 13px;
+                 margin:-4px 0 14px; font-size:12.5px; line-height:1.6;
+                 background:rgba(var(--critico-rgb),.06); }
+.chip-filtro { font-size:12px; padding:5px 13px; border-radius:20px; cursor:pointer;
+               background:none; border:1px solid var(--line2); color:var(--dim); }
+.chip-filtro:hover { color:var(--txt); }
+.chip-filtro.ativo { border-color:var(--rust); color:var(--rust); background:rgba(var(--rust-rgb),.12); }
+.chip-filtro b { font-weight:700; }
+.crm-card .selo-inativo { display:inline-block; font-size:10.5px; padding:2px 8px; border-radius:20px;
+               border:1px solid var(--warn-text); color:var(--warn-text); margin-top:6px; }
+
 /* ---- Baixa de pagamento com parcelas ---- */
 .pag-resumo { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
 .pag-resumo > div { border:1px solid var(--line); border-radius:9px; padding:12px 14px; min-width:0; }
@@ -17584,6 +17596,7 @@ async function paginaCrm () {
 
   const abas = [['painel', 'Painel'], ['funil', 'Funil'], ['progresso', 'Progresso'],
                 ['originacao', 'Originação'], ['objecoes', 'Objeções'],
+                ['recontatos', 'Recontatos'],
                 ['pedidos', 'Meus pedidos'], ['calendario', 'Meu Dia']]
   if (gerencia) abas.push(['gestao', 'Gestão'])
   if (!gerencia && souPreVendas()) abas.push(['atribuir', 'Prospecção'])
@@ -17616,6 +17629,7 @@ function abrirCrm (sub, editavel, gerencia) {
   if (sub === 'calendario') crmMeuDia(alvo, editavel, gerencia)
   if (sub === 'pedidos') crmMeusPedidos(alvo, editavel, gerencia)
   if (sub === 'objecoes') crmPainelObjecoes(alvo)
+  if (sub === 'recontatos') crmRecontatos(alvo, editavel)
   if (sub === 'originacao') crmOriginacao(alvo, editavel, gerencia)
   if (sub === 'atribuir') crmAtribuir(alvo, { podeAtribuir: false })
   if (sub === 'gestao') crmGestaoTab(alvo, editavel).then(() => {
@@ -17637,6 +17651,7 @@ function abrirCrm (sub, editavel, gerencia) {
 const selLead = `
   id, nome, cliente_id, vendedor_id, origem, uf, municipio, telefone, email,
   etapa, valor_estimado, observacoes, criado_em, atualizado_em, atribuido_por_id, atribuido_em, arquivado,
+  inativo_temporario,
   situacao_originacao,
   bom_dia_ativo, bom_dia_origem_data, bom_dia_turno_origem, bom_dia_aviso_data, bom_dia_turno_aviso, bom_dia_criado_por,
   bloqueio_lgpd, bloqueio_lgpd_em, bloqueio_lgpd_motivo, bloqueio_lgpd_por,
@@ -22640,6 +22655,251 @@ async function crmPainelObjecoes (alvo) {
   }
 }
 
+// ----- Inativação temporária de safra -----
+//
+// Vendemos por safra. Cliente que não compra numa safra não é cliente
+// perdido — é cliente fora DESTA safra, que precisa ser procurado de novo
+// na próxima. Antes o CRM só tinha "arquivar", que some com o lead de todas
+// as telas e não guarda por quê; foi assim que os 67 leads migrados do
+// Júlio sumiram do funil sem deixar motivo.
+//
+// Isto vive ao lado do funil, não dentro dele: a etapa do lead não muda, e
+// inativo temporário nunca entra em lead_perda. O banco é quem grava
+// (lead_inativar / lead_reativar), numa transação só com o lembrete da
+// agenda — sem isso dava pra ter cliente inativo sem recontato marcado.
+let CRM_INAT = { motivos: [], safras: [] }
+
+async function carregarInatCache () {
+  if (CRM_INAT.motivos.length) return CRM_INAT
+  const [{ data: m }, { data: s }] = await Promise.all([
+    db.from('motivo_inatividade').select('id,codigo,rotulo,exige_observacao,ordem').eq('ativo', true).order('ordem'),
+    db.from('safra').select('id,nome,inicio,fim').order('inicio')
+  ])
+  CRM_INAT = { motivos: m || [], safras: s || [] }
+  return CRM_INAT
+}
+
+// Sugestão de data: o começo da próxima safra. É o que a pessoa ia digitar
+// na mão, e ela pode trocar.
+function proximaSafraInicio () {
+  const hoje = new Date().toISOString().slice(0, 10)
+  const futura = CRM_INAT.safras.find(s => s.inicio > hoje)
+  if (futura) return futura.inicio
+  const d = new Date(); d.setMonth(d.getMonth() + 6)
+  return d.toISOString().slice(0, 10)
+}
+
+async function formInativarLead (l, aoConcluir) {
+  if (!l) return
+  await carregarInatCache()
+  const amanha = new Date(Date.now() + 864e5).toISOString().slice(0, 10)
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal" style="max-width:640px;">
+      <h3>Inativar temporariamente — ${esc(l.nome)}</h3>
+      <p class="texto-dim" style="font-size:13px;margin-top:-4px;">
+        O cliente sai da rotina desta safra, mas continua na base com data pra voltar a ser procurado.
+        <b>Não é perda</b> — ele não entra nos indicadores de perdido.</p>
+
+      <div class="campo" style="margin-top:12px;"><label>Motivo principal *</label>
+        <select id="in-motivo">
+          <option value="">selecione…</option>
+          ${CRM_INAT.motivos.map(m => `<option value="${m.id}" data-exige="${m.exige_observacao ? '1' : ''}">${esc(m.rotulo)}</option>`).join('')}
+        </select></div>
+
+      <div class="campo" style="margin-top:10px;"><label>Observação <span id="in-obs-obrig" class="oculto">*</span></label>
+        <textarea id="in-obs" rows="2" placeholder="o que aconteceu, com as palavras de quem falou com ele"></textarea></div>
+
+      <div class="form-grade" style="margin-top:10px;">
+        <div class="campo"><label>Data para novo contato *</label>
+          <input type="date" id="in-data" min="${amanha}" value="${proximaSafraInicio()}">
+          <span class="texto-dim2" style="font-size:11px;" id="in-data-dica"></span></div>
+        <div class="campo"><label>Responsável pelo recontato</label>
+          <select id="in-resp">
+            <option value="">—</option>
+            ${CRM_CACHE.pessoas.map(p => `<option value="${p.id}" ${p.id === (l.vendedor_id ?? PERFIL.pessoaId) ? 'selected' : ''}>${esc(p.nome)}</option>`).join('')}
+          </select></div>
+      </div>
+
+      <div class="acoes" style="margin-top:14px;">
+        <button class="btn" id="in-ok" disabled>Confirmar inativação</button>
+        <button class="btn-secundario" id="in-nao">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="in-recado"></div>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const q = s => fundo.querySelector(s)
+  const fechar = () => fundo.remove()
+  q('#in-nao').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  const aviso = t => {
+    const el = q('#in-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  // O botão só acende quando dá pra confirmar. Assim ninguém descobre o que
+  // faltava depois de clicar.
+  const conferir = () => {
+    const opt = q('#in-motivo').selectedOptions[0]
+    const exige = opt?.dataset.exige === '1'
+    q('#in-obs-obrig').classList.toggle('oculto', !exige)
+    const data = q('#in-data').value
+    const dataOk = !!data && data > new Date().toISOString().slice(0, 10)
+    q('#in-data-dica').textContent = !data ? 'obrigatória'
+      : dataOk ? 'o lembrete entra na agenda do CRM nesse dia'
+      : 'tem que ser depois de hoje'
+    q('#in-data-dica').style.color = data && !dataOk ? 'var(--warn-text)' : ''
+    q('#in-ok').disabled = !(q('#in-motivo').value && dataOk &&
+      (!exige || q('#in-obs').value.trim().length >= 3))
+  }
+  ;['#in-motivo', '#in-obs', '#in-data'].forEach(s => {
+    q(s).addEventListener('input', conferir); q(s).addEventListener('change', conferir)
+  })
+  conferir()
+
+  q('#in-ok').onclick = async () => {
+    const btn = q('#in-ok'); btn.disabled = true; btn.textContent = 'Gravando...'
+    const { data, error } = await db.rpc('lead_inativar', {
+      p_lead_id: l.id,
+      p_motivo_id: q('#in-motivo').value,
+      p_recontato_em: q('#in-data').value,
+      p_observacao: q('#in-obs').value.trim() || null,
+      p_responsavel_id: q('#in-resp').value || null,
+      p_desarquivar: true
+    })
+    if (error || !data?.ok) {
+      aviso(error?.message || 'Não deu pra inativar.')
+      btn.disabled = false; btn.textContent = 'Confirmar inativação'; return
+    }
+    fechar()
+    aoConcluir?.()
+  }
+}
+
+// ----- CRM › Recontatos -----
+// Quem está inativo, quando tem que voltar a ser procurado, e o que mais
+// está fazendo cliente não comprar.
+let CRM_RECONT_FILTRO = { faixa: 'todos', motivo: '' }
+
+async function crmRecontatos (alvo, editavel) {
+  await carregarInatCache()
+  const [{ data: fila, error }, { data: resumo }] = await Promise.all([
+    db.from('lead_recontato').select('*').order('recontato_em'),
+    db.from('lead_inatividade_resumo').select('*')
+  ])
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  const tudo = fila || []
+  const conta = f => tudo.filter(x => x.faixa === f).length
+  const atrasados = conta('atrasado'), semana = conta('esta_semana')
+
+  const filtrado = tudo.filter(x =>
+    (CRM_RECONT_FILTRO.faixa === 'todos' || x.faixa === CRM_RECONT_FILTRO.faixa) &&
+    (!CRM_RECONT_FILTRO.motivo || x.motivo_codigo === CRM_RECONT_FILTRO.motivo))
+
+  // ranking de motivos: o que mais tira cliente da safra
+  const porMotivo = {}
+  for (const r of resumo || []) {
+    porMotivo[r.motivo] = (porMotivo[r.motivo] || 0) + r.inativacoes
+  }
+  const ranking = Object.entries(porMotivo).sort((a, b) => b[1] - a[1])
+  const totalInat = ranking.reduce((s, x) => s + x[1], 0)
+  const safras = [...new Set((resumo || []).map(r => r.safra))].sort()
+
+  const chip = (v, txt, n) => `<button class="chip-filtro ${CRM_RECONT_FILTRO.faixa === v ? 'ativo' : ''}"
+    data-faixa="${v}">${txt}${n != null ? ` <b>${n}</b>` : ''}</button>`
+
+  alvo.innerHTML = resumoTopo([
+    { rotulo: 'Inativos agora', valor: String(tudo.length), nota: 'clientes fora desta safra' },
+    atrasados
+      ? { rotulo: 'Recontato atrasado', valor: String(atrasados), nota: 'já passou da data', classe: 'alerta' }
+      : { rotulo: 'Recontato atrasado', valor: 'nenhum', nota: 'em dia', classe: 'bom' },
+    { rotulo: 'Esta semana', valor: String(semana), nota: 'pra procurar nos próximos 7 dias' },
+    { rotulo: 'Próximo mês', valor: String(conta('proximo_mes')), nota: 'entram depois' }
+  ]) + `
+    <div class="filtros" style="margin:16px 0 12px;flex-wrap:wrap;gap:8px;align-items:center;">
+      ${chip('todos', 'todos', tudo.length)}
+      ${chip('atrasado', 'atrasados', atrasados)}
+      ${chip('esta_semana', 'esta semana', semana)}
+      ${chip('proximo_mes', 'próximo mês', conta('proximo_mes'))}
+      ${chip('depois', 'mais pra frente', conta('depois'))}
+      <select id="rc-motivo" style="margin-left:8px;">
+        <option value="">todos os motivos</option>
+        ${CRM_INAT.motivos.map(m => `<option value="${m.codigo}" ${CRM_RECONT_FILTRO.motivo === m.codigo ? 'selected' : ''}>${esc(m.rotulo)}</option>`).join('')}
+      </select>
+    </div>
+
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>Recontato</th><th>Cliente</th><th>Onde</th><th>Motivo</th><th>Responsável</th><th>Safra</th>
+        ${editavel ? '<th></th>' : ''}
+      </tr></thead><tbody>
+      ${filtrado.map(r => `<tr>
+        <td class="${r.faixa === 'atrasado' ? 'badge-alerta' : ''}">${fmtData(r.recontato_em)}
+          ${r.dias_de_atraso > 0 ? `<div class="texto-dim2" style="font-size:11px;">${r.dias_de_atraso}d de atraso</div>` : ''}</td>
+        <td><b>${esc(r.nome)}</b>
+          ${r.telefone ? `<div class="texto-dim2" style="font-size:11px;">${esc(r.telefone)}</div>` : ''}</td>
+        <td class="texto-dim">${esc([r.municipio, r.uf].filter(Boolean).join(' / ') || '—')}</td>
+        <td>${esc(r.motivo)}
+          ${r.observacao ? `<div class="texto-dim2" style="font-size:11px;">${esc(r.observacao)}</div>` : ''}</td>
+        <td class="texto-dim">${esc(r.responsavel ?? '—')}</td>
+        <td class="texto-dim2">${esc(r.safra ?? '—')}</td>
+        ${editavel ? `<td class="num"><button class="btn-secundario mini" data-reativar="${r.lead_id}">reativar</button></td>` : ''}
+      </tr>`).join('') || `<tr><td colspan="${editavel ? 7 : 6}" class="vazio">Ninguém nesse filtro.</td></tr>`}
+      </tbody></table>
+    </div></div>
+
+    <div class="secao panel" style="padding:18px;margin-top:20px;">
+      <div class="cabeca-secao">
+        <h3 style="font-family:var(--serif);font-size:16px;">Por que não compraram</h3>
+        <span class="texto-dim2" style="font-size:12px;">${totalInat} inativação(ões) registrada(s)${
+          safras.length ? ' · ' + safras.join(', ') : ''}</span>
+      </div>
+      ${ranking.length ? `<div class="pnl-rank">
+        ${ranking.map(([nome, n]) => `
+          <div class="pnl-rank-item">
+            <div class="topo"><span class="nome">${esc(nome)}</span>
+              <span class="dir"><b>${n}</b>
+                <span class="texto-dim2">${totalInat ? Math.round(n / totalInat * 100) : 0}%</span></span></div>
+            <div class="trilho"><span style="width:${Math.max(n / ranking[0][1] * 100, 2)}%;background:var(--rust);"></span></div>
+          </div>`).join('')}
+      </div>` : '<p class="vazio">Nenhuma inativação registrada ainda.</p>'}
+      ${safras.length > 1 ? `
+        <div class="tabela-scroll" style="margin-top:16px;">
+          <table><thead><tr><th>Motivo</th>${safras.map(s => `<th class="num">${esc(s)}</th>`).join('')}</tr></thead><tbody>
+          ${CRM_INAT.motivos.map(m => {
+            const linha = safras.map(s => (resumo || []).find(r => r.safra === s && r.motivo_codigo === m.codigo)?.inativacoes ?? 0)
+            return linha.some(v => v) ? `<tr><td>${esc(m.rotulo)}</td>${linha.map(v => `<td class="num">${v || '—'}</td>`).join('')}</tr>` : ''
+          }).join('')}
+          </tbody></table>
+        </div>` : ''}
+    </div>`
+
+  alvo.querySelectorAll('[data-faixa]').forEach(b => {
+    b.onclick = () => { CRM_RECONT_FILTRO.faixa = b.dataset.faixa; crmRecontatos(alvo, editavel) }
+  })
+  const selMotivo = alvo.querySelector('#rc-motivo')
+  if (selMotivo) selMotivo.onchange = () => {
+    CRM_RECONT_FILTRO.motivo = selMotivo.value; crmRecontatos(alvo, editavel)
+  }
+  alvo.querySelectorAll('[data-reativar]').forEach(b => {
+    b.onclick = async () => {
+      const obs = await pedirMotivo({
+        titulo: 'Reativar cliente',
+        texto: 'Ele volta pro funil e o lembrete de recontato é encerrado. O histórico da inativação continua guardado.',
+        rotulo: 'Reativar', minimo: 0
+      })
+      if (obs === null) return
+      const { error } = await db.rpc('lead_reativar', { p_lead_id: b.dataset.reativar, p_observacao: obs || null })
+      if (error) { alert(error.message); return }
+      crmRecontatos(alvo, editavel)
+    }
+  })
+}
+
 function formLead (l, editavel, gerencia, aoFechar) {
   const podeReatribuir = editavel && gerencia // trocar o vendedor é ação de quem gerencia
   const podeExcluir = editavel && gerencia && l
@@ -22652,6 +22912,8 @@ function formLead (l, editavel, gerencia, aoFechar) {
     </div>
     ${l?.atribuido_em ? `<p class="texto-dim2" style="font-size:11px;margin:-8px 0 12px;">
       Atribuído por ${esc(l.atribuidoPor?.nome ?? '—')} em ${fmtQuando(l.atribuido_em) ?? '—'}</p>` : ''}
+    ${l?.inativo_temporario ? `<div class="aviso-inativo" id="ld-faixa-inativa">
+      <b>Inativo nesta safra.</b> <span id="ld-inativo-txt">carregando o motivo…</span></div>` : ''}
     <div class="form-grade">
       <div class="campo"><label>Nome / razão social *</label>
         <input id="ld-nome" list="ld-clientes-lista" autocomplete="off"
@@ -22774,6 +23036,9 @@ function formLead (l, editavel, gerencia, aoFechar) {
       : (editavel && l ? `<div class="acoes" style="margin-top:10px;"><button class="btn-secundario" id="ld-converter" type="button">Converter em cliente</button></div>` : '')}
     <div class="acoes" style="margin-top:14px;">
       ${editavel ? `<button class="btn" id="ld-salvar">Salvar</button>` : ''}
+      ${l && editavel ? (l.inativo_temporario
+        ? `<button class="btn-secundario" id="ld-reativar" type="button">Reativar cliente</button>`
+        : `<button class="btn-secundario" id="ld-inativar" type="button">Inativar temporariamente</button>`) : ''}
       <button class="btn-secundario" id="ld-fechar">Fechar</button>
       ${podeExcluir ? `<button class="btn-secundario" id="ld-excluir" style="margin-left:auto;">Excluir</button>` : ''}
     </div>
@@ -22783,6 +23048,34 @@ function formLead (l, editavel, gerencia, aoFechar) {
   const fechar = () => fundo.remove()
   fundo.querySelector('#ld-fechar').onclick = fechar
   fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  // ---- inativação temporária de safra ----
+  if (l?.inativo_temporario) {
+    ;(async () => {
+      const { data } = await db.from('lead_recontato').select('*').eq('lead_id', l.id).maybeSingle()
+      const txt = fundo.querySelector('#ld-inativo-txt')
+      if (!txt) return
+      txt.innerHTML = data
+        ? `${esc(data.motivo)}${data.observacao ? ' — ' + esc(data.observacao) : ''}.
+           Recontato em <b>${fmtData(data.recontato_em)}</b>${data.responsavel ? ' com ' + esc(data.responsavel) : ''}.
+           ${data.dias_de_atraso > 0 ? `<b style="color:var(--critico-text);">Atrasado ${data.dias_de_atraso} dia(s).</b>` : ''}`
+        : 'motivo não encontrado no histórico.'
+    })()
+  }
+  const btnInativar = fundo.querySelector('#ld-inativar')
+  if (btnInativar) btnInativar.onclick = () => formInativarLead(l, () => { fechar(); aoFechar?.() })
+  const btnReativar = fundo.querySelector('#ld-reativar')
+  if (btnReativar) btnReativar.onclick = async () => {
+    const obs = await pedirMotivo({
+      titulo: 'Reativar cliente',
+      texto: 'Ele volta pro funil e o lembrete de recontato é encerrado. O histórico da inativação continua guardado.',
+      rotulo: 'Reativar', minimo: 0
+    })
+    if (obs === null) return
+    const { error } = await db.rpc('lead_reativar', { p_lead_id: l.id, p_observacao: obs || null })
+    if (error) { alert(error.message); return }
+    fechar(); aoFechar?.()
+  }
 
   // Nome do lead x cadastro de clientes: se já existe cliente com esse
   // nome, mostra os dados dele aqui e usa esse cadastro na hora de emitir
@@ -23136,6 +23429,7 @@ function renderFunilGestao (alvo, lista, editavel, aoMudar, gerencia = true, pod
       <div class="nome">${esc(l.nome)}</div>
       <div class="sub">${esc([ROTULO_ETAPA_LEAD[l.etapa] ?? l.etapa, gerencia ? (l.vendedor?.nome ?? 'sem vendedor') : null].filter(Boolean).join(' · '))}</div>
       ${l.bloqueio_lgpd ? `<div style="margin-top:6px;"><span class="badge-alerta" style="background:rgba(var(--critico-rgb),.18);color:var(--critico-text);">🚫 Bloqueado (LGPD)</span></div>` : ''}
+      ${l.inativo_temporario ? `<div><span class="selo-inativo">⏸ inativo nesta safra</span></div>` : ''}
       <div class="linhas">
         ${l.telefone ? `<div><span class="ic">📞</span>${esc(l.telefone)}</div>` : ''}
         ${l.municipio || l.uf ? `<div><span class="ic">📍</span>${esc([l.municipio, l.uf].filter(Boolean).join(' / '))}</div>` : ''}
@@ -33578,9 +33872,11 @@ function pedirMotivo ({ titulo, texto, rotulo = 'Confirmar', minimo = 10 }) {
       <div class="modal" style="max-width:520px;">
         <h3>${esc(titulo)}</h3>
         <p class="texto-dim" style="font-size:13px;">${texto}</p>
-        <div class="campo" style="margin-top:10px;"><label>Motivo *</label>
+        <div class="campo" style="margin-top:10px;"><label>Motivo${minimo > 0 ? ' *' : ' (opcional)'}</label>
           <textarea id="pm-motivo" rows="3" placeholder="escreva o que aconteceu"></textarea>
-          <span class="texto-dim2" style="font-size:11px;">pelo menos ${minimo} caracteres — fica no histórico</span></div>
+          <span class="texto-dim2" style="font-size:11px;">${minimo > 0
+            ? `pelo menos ${minimo} caracteres — fica no histórico`
+            : 'fica no histórico do cliente'}</span></div>
         <div class="acoes" style="margin-top:12px;">
           <button class="btn" id="pm-ok">${esc(rotulo)}</button>
           <button class="btn-secundario" id="pm-nao">Cancelar</button>
