@@ -49822,16 +49822,34 @@ async function desemp360 (alvo, editavel) {
   if (faltaMigracao(error)) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
   const listaCiclos = ciclos || []
 
-  const { data: respostasTodas } = listaCiclos.length
-    ? await db.from('avaliacao_360_resposta').select('ciclo_id,status,nao_avalia,avaliador_id')
-    : { data: [] }
+  const [{ data: respostasTodas }, { data: lotes }, { data: codigos }] = listaCiclos.length
+    ? await Promise.all([
+        db.from('avaliacao_360_resposta').select('ciclo_id,status,nao_avalia,avaliador_id,codigo_id'),
+        db.from('av360_lote').select('id,ciclo_id,token_master,expira_em,ativo,criado_em'),
+        db.from('av360_codigo').select('id,lote_id,ciclo_id,status')
+      ])
+    : [{ data: [] }, { data: [] }, { data: [] }]
 
   const progressoPorCiclo = {}
   ;(respostasTodas || []).forEach(r => {
-    const p = progressoPorCiclo[r.ciclo_id] = progressoPorCiclo[r.ciclo_id] || { total: 0, respondidas: 0, puladas: 0 }
-    p.total++
-    if (r.status === 'RESPONDIDO') { p.respondidas++; if (r.nao_avalia) p.puladas++ }
+    const p = progressoPorCiclo[r.ciclo_id] = progressoPorCiclo[r.ciclo_id] ||
+      { total: 0, respondidas: 0, puladas: 0, externasTotal: 0, externasFeitas: 0 }
+    // respostas vindas de código entram numa conta separada: elas só
+    // nascem quando alguém pega o código, então misturá-las na taxa
+    // faria o denominador mudar sozinho durante o ciclo
+    if (r.codigo_id) {
+      p.externasTotal++
+      if (r.status === 'RESPONDIDO') p.externasFeitas++
+    } else {
+      p.total++
+      if (r.status === 'RESPONDIDO') p.respondidas++
+    }
+    if (r.status === 'RESPONDIDO' && r.nao_avalia) p.puladas++
   })
+
+  // códigos do ciclo aberto: só o número, nunca quem pegou
+  const codigosDoCiclo = c => (codigos || []).filter(x => x.ciclo_id === c)
+  const loteDoCiclo = c => (lotes || []).find(l => l.ciclo_id === c && l.ativo)
 
   const cicloAberto = listaCiclos.find(c => c.status === 'ABERTO')
   const prog = cicloAberto ? progressoPorCiclo[cicloAberto.id] : null
@@ -49851,9 +49869,10 @@ async function desemp360 (alvo, editavel) {
       ${kpi('Ciclos criados', listaCiclos.length)}
       ${kpi('Ciclo atual', cicloAberto ? cicloAberto.nome : 'nenhum aberto',
         cicloAberto ? `${fmtData(cicloAberto.data_inicio)} a ${fmtData(cicloAberto.data_fim)}` : '')}
-      ${kpi('Avaliações preenchidas', prog ? `${prog.respondidas}/${prog.total}` : '—',
-        prog?.puladas ? `${prog.puladas} marcadas como "não avalio"` : '')}
-      ${kpi('Taxa de resposta', prog?.total ? Math.round(prog.respondidas / prog.total * 100) + '%' : '—')}
+      ${kpi('Pelo sistema', prog ? `${prog.respondidas}/${prog.total}` : '—',
+        prog?.total ? Math.round(prog.respondidas / prog.total * 100) + '% de quem tem login' : '')}
+      ${kpi('Pelo link', prog?.externasTotal ? `${prog.externasFeitas}/${prog.externasTotal}` : '—',
+        cicloAberto ? `${codigosDoCiclo(cicloAberto.id).filter(c => c.status === 'CONCLUIDO').length} pessoa(s) concluíram` : '')}
     </div>
 
     ${minhasTotal ? `
@@ -49869,6 +49888,36 @@ async function desemp360 (alvo, editavel) {
           <p class="texto-dim2" style="font-size:12px;margin:5px 0 0;">
             Obrigada. O resultado aparece pra você quando o ciclo encerrar.</p>`}
       </div>` : ''}
+
+    ${editavel && cicloAberto ? (() => {
+      const cods = codigosDoCiclo(cicloAberto.id)
+      const lote = loteDoCiclo(cicloAberto.id)
+      const usados = cods.filter(c => c.status !== 'LIVRE').length
+      const concluidos = cods.filter(c => c.status === 'CONCLUIDO').length
+      return `<div class="panel" style="padding:16px 18px;margin-bottom:16px;">
+        <div class="cabeca-secao" style="margin:0 0 4px;">
+          <h3 style="margin:0;font-size:14px;">Quem não tem login no sistema</h3>
+          ${lote ? `<span class="chip" style="color:#2c6e3f;">link ativo</span>` : ''}</div>
+        <p class="texto-dim2" style="font-size:12px;margin:0 0 12px;line-height:1.55;max-width:80ch;">
+          Um link só, pra mandar no grupo. Quem abre escolhe um código da cesta e responde por ele —
+          ${cods.length ? '' : 'sem login, sem senha. '}Como a pessoa escolhe o código, o sistema
+          <b>não registra quem respondeu o quê</b>. Daqui sai só o número.</p>
+        ${lote ? `
+          <div class="cards-kpi" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+            ${kpi('Códigos gerados', cods.length)}
+            ${kpi('Em uso ou prontos', usados, cods.length - usados + ' ainda livres')}
+            ${kpi('Concluídos', concluidos, concluidos ? 'avaliaram todo mundo' : 'ninguém terminou ainda')}
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+            <input id="c360-link" readonly value="${esc(AV360_URL_PUBLICA)}?c=${esc(lote.token_master)}"
+              style="flex:1;min-width:220px;font-size:11.5px;">
+            <button class="btn-secundario mini" id="c360-copiar">copiar link</button>
+            <button class="btn-secundario mini" id="c360-mais">+ códigos</button>
+            <button class="btn-secundario mini" id="c360-encerrar-lote" style="color:var(--warn-text);">encerrar link</button>
+          </div>`
+        : `<button class="btn" id="c360-gerar-lote">Gerar o link e os códigos</button>`}
+      </div>`
+    })() : ''}
 
     ${editavel ? `<div class="acoes" style="margin-bottom:16px;">
       <button class="btn" id="c360-novo">+ Novo ciclo</button></div>` : ''}
@@ -49903,9 +49952,103 @@ async function desemp360 (alvo, editavel) {
   if (bResp) bResp.onclick = () => responder360Wizard(cicloAberto, recarregar)
   const bNovo = $('#c360-novo')
   if (bNovo) bNovo.onclick = () => formNovoCiclo360(recarregar)
+
+  const bGerar = $('#c360-gerar-lote')
+  if (bGerar) bGerar.onclick = () => formLoteExterno(cicloAberto, recarregar)
+  const bMais = $('#c360-mais')
+  if (bMais) bMais.onclick = () => formMaisCodigos(loteDoCiclo(cicloAberto.id), recarregar)
+  const bCopiar = $('#c360-copiar')
+  if (bCopiar) bCopiar.onclick = () => {
+    navigator.clipboard.writeText($('#c360-link').value).then(() => { bCopiar.textContent = 'copiado!' })
+  }
+  const bEncerrar = $('#c360-encerrar-lote')
+  if (bEncerrar) bEncerrar.onclick = async () => {
+    if (!confirm('Encerrar o link?\n\nQuem ainda não terminou perde o acesso e o que já respondeu fica salvo pela metade. Só faça isso quando o prazo acabar.')) return
+    await db.from('av360_lote').update({ ativo: false }).eq('id', loteDoCiclo(cicloAberto.id).id)
+    recarregar()
+  }
   alvo.querySelectorAll('[data-abrir-ciclo]').forEach(card => {
     card.onclick = () => detalheCiclo360(listaCiclos.find(c => c.id === card.dataset.abrirCiclo), editavel, recarregar)
   })
+}
+
+// Projeto próprio no Vercel, separado do gefoscal-relatorio-render:
+// a página do 360 não tem nada a ver com a função de gerar PDF, e
+// misturar as duas faria um deploy de uma arriscar a outra.
+// A URL curta ajuda: esse link vai no grupo do WhatsApp.
+const AV360_URL_PUBLICA = 'https://gefoscal-avaliacao360.vercel.app'
+
+// ---------------------------------------------------------------
+// Link externo — o RH gera um link só e uma cesta de códigos.
+// Cada pessoa de fora pega um código e responde por ele. O sistema
+// não guarda quem pegou qual: é isso que torna a resposta anônima,
+// e é por isso que daqui só sai contagem.
+// ---------------------------------------------------------------
+function formLoteExterno (ciclo, aoFechar) {
+  if (!ciclo) return
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  const fim = ciclo.data_fim || new Date().toISOString().slice(0, 10)
+
+  fundo.innerHTML = `
+    <div class="modal">
+      <h3>Link para quem não tem login</h3>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 14px;line-height:1.55;">
+        Vai um link só, o mesmo pra todo mundo — dá pra mandar no grupo do WhatsApp.
+        Quem abre pega um código da cesta e responde. Cada código serve uma vez.</p>
+      <div class="form-grade">
+        <div class="campo"><label>Quantos códigos gerar</label>
+          <input type="number" id="lx-qtd" value="40" min="1" max="500">
+          <span class="texto-dim2" style="font-size:11px;">gere alguns a mais que o número de pessoas — sobra não atrapalha</span></div>
+        <div class="campo"><label>Link vale até</label>
+          <input type="date" id="lx-ate" value="${fim}"></div>
+      </div>
+      <div class="panel" style="padding:11px 13px;margin-top:12px;background:rgba(200,161,26,.08);">
+        <p class="texto-dim2" style="font-size:11.5px;margin:0;line-height:1.55;">
+          Quem tem login <b>não usa este link</b> — responde pelo Meu RH, e ali o sistema sabe quem é.
+          Pelo link, não sabe: se a mesma pessoa pegasse dois códigos, contaria como duas respostas.
+          Por isso gere perto do número real e acompanhe a contagem.</p></div>
+      <div class="acoes" style="margin-top:14px;">
+        <button class="btn" id="lx-criar">Gerar link e códigos</button>
+        <button class="btn-secundario" id="lx-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="lx-recado"></div>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#lx-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  const aviso = t => {
+    const el = q('#lx-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  q('#lx-criar').onclick = async () => {
+    const qtd = Number(q('#lx-qtd').value)
+    if (!qtd || qtd < 1) { aviso('Diga quantos códigos gerar.'); return }
+    const btn = q('#lx-criar'); btn.disabled = true; btn.textContent = 'gerando...'
+
+    const { data: lote, error } = await db.from('av360_lote').insert({
+      ciclo_id: ciclo.id, nome: 'Externos — ' + ciclo.nome,
+      expira_em: new Date(q('#lx-ate').value + 'T23:59:59').toISOString(),
+      criado_por: PERFIL.pessoaId
+    }).select('id,token_master').single()
+    if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Gerar link e códigos'; return }
+
+    const { error: e2 } = await db.rpc('av360_gerar_codigos', { p_lote: lote.id, p_quantidade: qtd })
+    if (e2) { aviso('Link criado, mas falhou ao gerar os códigos: ' + e2.message); btn.disabled = false; return }
+    fechar(); aoFechar()
+  }
+}
+
+function formMaisCodigos (lote, aoFechar) {
+  if (!lote) return
+  const qtd = Number(prompt('Quantos códigos a mais?', '10'))
+  if (!qtd || qtd < 1) return
+  db.rpc('av360_gerar_codigos', { p_lote: lote.id, p_quantidade: qtd })
+    .then(({ error }) => { if (error) alert(error.message); aoFechar() })
 }
 
 // ---------------------------------------------------------------
@@ -50495,6 +50638,11 @@ async function detalheCiclo360 (ciclo, editavel, aoFechar) {
   const respondidas = lista.filter(r => r.status === 'RESPONDIDO').length
   const puladas = lista.filter(r => r.nao_avalia).length
   const taxa = totalRespostas ? Math.round(respondidas / totalRespostas * 100) : 0
+  // quantas vieram de fora do sistema — número, nunca nome: quem
+  // respondeu por código é anônimo por desenho
+  const { data: codsCiclo } = await db.from('av360_codigo').select('status').eq('ciclo_id', ciclo.id)
+  const externosConcluidos = (codsCiclo || []).filter(c => c.status === 'CONCLUIDO').length
+  const externosEmUso = (codsCiclo || []).filter(c => c.status === 'EM_USO').length
 
   const ordenadas = pessoas.slice().sort((a, b) => (b.geral ?? -1) - (a.geral ?? -1))
   const semAmostra = pessoas.filter(p => !p.amostraSuficiente)
@@ -50513,6 +50661,7 @@ async function detalheCiclo360 (ciclo, editavel, aoFechar) {
       ${kpi('Taxa de resposta', taxa + '%', `${respondidas} de ${totalRespostas}`)}
       ${kpi('Participantes', pessoas.length)}
       ${kpi('Média do grupo', fmt360(mediaGrupoGeral), 'só quem tem amostra suficiente')}
+      ${kpi('Vieram pelo link', externosConcluidos, externosEmUso ? `${externosEmUso} ainda respondendo` : 'sem identificação, por desenho')}
       ${kpi('"Não avalio"', puladas, puladas ? 'fora de todas as médias' : '')}
     </div>
 
