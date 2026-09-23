@@ -43192,6 +43192,11 @@ async function juridicoSenhas (alvo, editavel) {
 
   const lista = data || []
   const recarregar = () => juridicoSenhas(alvo, editavel)
+  // ultima_troca só é preenchida pela edge function quando ela cifra e
+  // guarda — então é o sinal de que existe senha do outro lado. O
+  // cliente não consegue (nem deve) consultar senha_cofre_segredo.
+  const temSenha = s => !!s.ultima_troca
+  const faltando = lista.filter(s => !temSenha(s) && s.status === 'ATIVA')
 
   alvo.innerHTML = `
     <div class="panel" style="padding:12px 14px;margin:-4px 0 14px;border-left:3px solid var(--gold,#c8a11a);">
@@ -43200,6 +43205,17 @@ async function juridicoSenhas (alvo, editavel) {
         Toda vez que alguém revela uma senha, o sistema pede o motivo e registra quem foi, quando e de onde.
         <b>Nunca escreva senha no campo de descrição ou de usuário</b>: esses campos não são cifrados.</p>
     </div>
+
+    ${faltando.length ? `
+      <div class="panel" style="padding:13px 15px;margin-bottom:14px;border-left:3px solid var(--warn-text);">
+        <div style="font-weight:600;font-size:13px;">
+          ${faltando.length} ${faltando.length === 1 ? 'cadastro ainda sem senha guardada' : 'cadastros ainda sem senha guardada'}</div>
+        <div class="texto-dim2" style="font-size:11.5px;margin-top:4px;line-height:1.5;">
+          O cadastro existe e já está amarrado ao certificado — falta só digitar a senha, no botão "guardar senha".</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:9px;">
+          ${faltando.map(s => `<button class="btn-secundario mini" data-trocar="${s.id}">${esc(s.titulo.replace(/^Senha do [^—]+— /, ''))}</button>`).join('')}
+        </div>
+      </div>` : ''}
 
     <div class="acoes" style="margin-bottom:14px;"><button class="btn" id="cs-nova">+ Nova senha</button></div>
 
@@ -43214,11 +43230,12 @@ async function juridicoSenhas (alvo, editavel) {
         <td class="texto-dim">${esc(s.usuario || '—')}</td>
         <td class="texto-dim">${esc(s.setor?.nome || s.empresa?.nome || '—')}
           ${s.url ? `<div class="texto-dim2" style="font-size:11px;">${esc(s.url)}</div>` : ''}</td>
-        <td class="texto-dim">${s.ultima_troca ? fmtData(s.ultima_troca) : '<span class="texto-dim2">nunca guardada</span>'}</td>
+        <td class="texto-dim">${temSenha(s) ? fmtData(s.ultima_troca) : '<span class="chip" style="color:var(--warn-text);">falta a senha</span>'}</td>
         <td><span class="chip" style="color:${s.status === 'ATIVA' ? '#2c6e3f' : '#8a8a8a'};">${s.status === 'ATIVA' ? 'ativa' : 'inativa'}</span></td>
         <td style="text-align:right;white-space:nowrap;">
-          <button class="btn-secundario mini" data-revelar="${s.id}">revelar</button>
-          <button class="btn-secundario mini" data-trocar="${s.id}">trocar senha</button>
+          ${temSenha(s) ? `<button class="btn-secundario mini" data-revelar="${s.id}">revelar</button>
+          <button class="btn-secundario mini" data-trocar="${s.id}">trocar senha</button>`
+          : `<button class="btn mini" data-trocar="${s.id}">guardar senha</button>`}
           <button class="btn-secundario mini" data-editar-s="${s.id}">editar</button>
           <button class="btn-secundario mini" data-excluir-s="${s.id}" style="color:var(--warn-text);">excluir</button>
         </td>
@@ -43357,19 +43374,22 @@ function formSenhaCofre (s, recarregar) {
 
 function trocarSenhaCofre (s, recarregar) {
   if (!s) return
+  const primeira = !s.ultima_troca
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
   fundo.innerHTML = `
     <div class="modal">
-      <h3>Trocar senha — ${esc(s.titulo)}</h3>
-      <p class="texto-dim2" style="font-size:12px;margin:0 0 12px;">
-        A senha anterior é substituída e não tem como recuperar. A troca fica registrada no histórico.</p>
-      <div class="campo"><label>Senha nova *</label>
+      <h3>${primeira ? 'Guardar senha' : 'Trocar senha'} — ${esc(s.titulo)}</h3>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 12px;line-height:1.55;">
+        ${primeira
+          ? 'A senha é cifrada antes de sair daqui e não fica legível no banco. Depois de guardada, ver de novo exige escrever o motivo.'
+          : 'A senha anterior é substituída e não tem como recuperar. A troca fica registrada no histórico.'}</p>
+      <div class="campo"><label>${primeira ? 'Senha *' : 'Senha nova *'}</label>
         <input type="password" id="ts-valor" autocomplete="new-password"></div>
-      <div class="campo" style="margin-top:10px;"><label>Por que trocou</label>
-        <input id="ts-motivo" placeholder="Ex.: renovação do certificado"></div>
+      <div class="campo" style="margin-top:10px;"><label>${primeira ? 'Observação' : 'Por que trocou'}</label>
+        <input id="ts-motivo" placeholder="${primeira ? 'opcional' : 'Ex.: renovação do certificado'}"></div>
       <div class="acoes" style="margin-top:14px;">
-        <button class="btn" id="ts-salvar">Guardar nova senha</button>
+        <button class="btn" id="ts-salvar">${primeira ? 'Guardar senha' : 'Guardar nova senha'}</button>
         <button class="btn-secundario" id="ts-cancelar">Cancelar</button>
       </div>
       <div class="recado oculto" id="ts-recado"></div>
@@ -43388,7 +43408,7 @@ function trocarSenhaCofre (s, recarregar) {
       body: { acao: 'guardar', senha_id: s.id, valor, motivo: q('#ts-motivo').value.trim() || null }
     })
     if (error || !data?.ok) {
-      btn.disabled = false; btn.textContent = 'Guardar nova senha'
+      btn.disabled = false; btn.textContent = primeira ? 'Guardar senha' : 'Guardar nova senha'
       const el = q('#ts-recado'); el.textContent = data?.erro || error?.message || 'erro desconhecido'
       el.classList.remove('oculto'); el.style.color = 'var(--warn-text)'; return
     }
