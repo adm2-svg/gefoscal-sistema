@@ -3187,7 +3187,11 @@ const PAGINAS = {
   laboratorio: { nome: 'Laboratório', render: paginaLaboratorio },
   ti:          { nome: 'Configuração Geral', render: paginaAdministracao },
   gestao_ti:   { nome: 'Gestão de TI', render: paginaGestaoTI },
-  ia_treinamento: { nome: 'Treinamento IA', render: paginaTreinamentoIA }
+  ia_treinamento: { nome: 'Treinamento IA', render: paginaTreinamentoIA },
+  // POP fica fixo no topo, como Solicitações: procedimento é pra todo
+  // mundo ler. Quem cria e publica versão é só quem tem o módulo `pop`
+  // com edição — o controle fino acontece dentro da página.
+  pop: { nome: 'POP e Treinamentos', render: paginaPop, sempre: true }
 }
 
 // ---------------------------------------------------------------
@@ -3225,6 +3229,7 @@ const ICONES_MODULO = {
   ia_treinamento: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 0-4 4c0 1.2.5 2 1 2.5C7.5 9.5 6 11 6 13a4 4 0 0 0 4 4v3h4v-3a4 4 0 0 0 4-4c0-2-1.5-3.5-3-4.5.5-.5 1-1.3 1-2.5a4 4 0 0 0-4-4Z"/></svg>',
   laboratorio: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6"/><path d="M10 3v6l-5.5 9.5A1.5 1.5 0 0 0 5.8 21h12.4a1.5 1.5 0 0 0 1.3-2.5L14 9V3"/><path d="M7.5 14.5h9"/></svg>',
   relatorios: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="12" width="3" height="6"/><rect x="12" y="8" width="3" height="10"/><rect x="17" y="5" width="3" height="13"/></svg>',
+  pop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6a1 1 0 0 1 1 1v1H8V4a1 1 0 0 1 1-1z"/><path d="M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2"/><path d="M8.5 12.5l1.5 1.5 3-3.5"/><path d="M8.5 17.5h7"/></svg>',
   _padrao: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/></svg>'
 }
 
@@ -50241,6 +50246,648 @@ function abrirModuloParaFazer (modulo, atribuicao, jaFeito, aoFechar) {
     fundo2.remove()
     aoFechar()
   }
+}
+
+// ---------------------------------------------------------------
+// Página: POP e Treinamentos
+// ---------------------------------------------------------------
+// POP é procedimento — precisa de três coisas que um documento solto
+// não tem: versão, vigência e prova de que a pessoa leu. Por isso o
+// texto não mora no `pop` e sim em `pop_versao` (uma linha por versão,
+// só uma vigente), e o aceite em `pop_leitura` amarrado à VERSÃO:
+// publicar versão nova reabre a leitura de todo mundo sozinho, que é
+// exatamente o que se espera de um treinamento reciclado.
+// Quem enxerga: todo mundo logado (procedimento escondido não
+// padroniza nada). Quem cria e publica: módulo `pop` com edição.
+// ---------------------------------------------------------------
+const POP_CACHE = { setores: [], pessoas: [], comLogin: new Set() }
+const ROTULO_STATUS_POP = { RASCUNHO: 'rascunho', VIGENTE: 'vigente', OBSOLETO: 'obsoleto' }
+const COR_STATUS_POP = { RASCUNHO: '#8a8a8a', VIGENTE: '#2c6e3f', OBSOLETO: '#a02a1e' }
+
+const popVersaoVigente = p => (p.versoes || []).find(v => v.vigente) || null
+const popUltimoNumero = p => (p.versoes || []).reduce((n, v) => Math.max(n, v.numero), 0)
+
+// monta o código sugerido (POP-COM-003) a partir do setor, só como
+// sugestão no formulário — a pessoa pode trocar por outro padrão
+function popCodigoSugerido (setorNome, usados) {
+  const sigla = String(setorNome || 'GER').normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^A-Za-z]/g, '').toUpperCase().slice(0, 3) || 'GER'
+  let n = 1
+  while (usados.has(`POP-${sigla}-${String(n).padStart(3, '0')}`)) n++
+  return `POP-${sigla}-${String(n).padStart(3, '0')}`
+}
+
+// YouTube e Vimeo viram player na própria tela; qualquer outro link
+// vira botão que abre em aba nova (Drive, Loom, arquivo solto)
+function popEmbedVideo (url) {
+  if (!url) return ''
+  const yt = url.match(/(?:youtube\.com\/(?:watch\?v=|embed\/|shorts\/)|youtu\.be\/)([\w-]{6,})/)
+  const vm = url.match(/vimeo\.com\/(?:video\/)?(\d+)/)
+  const src = yt ? `https://www.youtube.com/embed/${yt[1]}` : vm ? `https://player.vimeo.com/video/${vm[1]}` : null
+  if (!src) {
+    return `<p style="margin:10px 0;"><a class="btn-secundario mini" href="${esc(url)}" target="_blank" rel="noopener">▶️ Abrir vídeo em nova aba</a></p>`
+  }
+  return `<div style="position:relative;padding-top:56.25%;border-radius:10px;overflow:hidden;margin:10px 0;border:1px solid var(--line);">
+    <iframe src="${esc(src)}" style="position:absolute;inset:0;width:100%;height:100%;border:0;"
+      allow="accelerometer;autoplay;clipboard-write;encrypted-media;picture-in-picture" allowfullscreen loading="lazy"></iframe>
+  </div>`
+}
+
+async function paginaPop () {
+  const editavel = podeEditar('pop')
+  $('#subtitulo-pagina').textContent = 'Procedimentos por setor, com vídeo, documento e registro de leitura'
+  const area = areaLivre()
+  area.innerHTML = `<p class="texto-dim2">carregando...</p>`
+
+  const [{ data: setores }, { data: pessoas }, { data: logins }] = await Promise.all([
+    db.from('setor').select('id,nome,gestor_id').order('nome'),
+    db.from('pessoa').select('id,nome,setor_id').eq('status', 'ATIVO').order('nome'),
+    db.from('usuario_perfil').select('pessoa_id').eq('ativo', true)
+  ])
+  POP_CACHE.setores = setores || []
+  POP_CACHE.pessoas = pessoas || []
+  POP_CACHE.comLogin = new Set((logins || []).map(l => l.pessoa_id))
+
+  const abas = [['setores', 'Por setor'], ['meus', 'Pra ler']]
+  if (editavel || souGestor()) abas.push(['acompanhamento', 'Quem leu'])
+
+  area.innerHTML = `
+    <div style="background:linear-gradient(120deg,#062d1a 0%,#005229 55%,#062d1a 100%);border-radius:14px;padding:22px 26px;margin-bottom:18px;position:relative;overflow:hidden;border:1px solid #0c4a2c;">
+      <div style="position:absolute;right:-14px;top:-20px;font-size:116px;opacity:.09;line-height:1;">📋</div>
+      <div style="position:relative;">
+        <div style="color:#D19C1D;font-size:11px;text-transform:uppercase;letter-spacing:.14em;font-weight:700;">Procedimento Operacional Padrão</div>
+        <div style="color:#f2ece0;font-family:var(--serif);font-size:23px;margin-top:3px;">Como cada coisa é feita aqui</div>
+        <div style="color:#bcd4c5;font-size:12px;margin-top:6px;max-width:72ch;line-height:1.55;">
+          Cada POP tem versão, vídeo e documento. Quando sai versão nova, a leitura de todo mundo reabre —
+          é assim que o treinamento fica valendo de verdade.</div>
+      </div>
+    </div>
+    <div class="subabas">
+      ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
+    </div>
+    <div id="sub-pop"></div>`
+
+  area.querySelectorAll('.subabas button').forEach(b => {
+    b.onclick = () => {
+      area.querySelectorAll('.subabas button').forEach(x => x.classList.toggle('ativo', x === b))
+      abrirPop(b.dataset.sub, editavel)
+    }
+  })
+  abrirPop('setores', editavel)
+}
+
+function abrirPop (sub, editavel) {
+  const alvo = $('#sub-pop')
+  if (!alvo) return
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  if (sub === 'setores') return popPorSetor(alvo, editavel)
+  if (sub === 'meus') return popParaLer(alvo)
+  return popAcompanhamento(alvo, editavel)
+}
+
+// carrega os POPs com as versões aninhadas e o que a pessoa já leu.
+// Rascunho e obsoleto só aparecem pra quem edita — pra quem só lê, o
+// módulo mostra exclusivamente o que está valendo hoje.
+async function popCarregar (editavel) {
+  const [{ data, error }, { data: lidos }] = await Promise.all([
+    db.from('pop').select(`id,codigo,titulo,objetivo,status,obrigatorio,proxima_revisao,setor_id,
+      setor:setor_id(nome),responsavel:responsavel_id(nome),
+      versoes:pop_versao(id,numero,conteudo,video_url,arquivo_caminho,arquivo_nome,nota_revisao,vigente,vigente_desde,criado_em)`)
+      .order('codigo', { ascending: true, nullsFirst: false }),
+    db.from('pop_leitura').select('pop_id,versao_id,lido_em').eq('pessoa_id', PERFIL.pessoaId)
+  ])
+  if (error) return { erro: error, lista: [], lidos: new Set() }
+  const lista = (data || [])
+    .map(p => ({ ...p, versoes: (p.versoes || []).sort((a, b) => b.numero - a.numero) }))
+    .filter(p => editavel || p.status === 'VIGENTE')
+  return { erro: null, lista, lidos: new Set((lidos || []).map(l => l.versao_id)) }
+}
+
+function cartaoPop (p, lidos) {
+  const vig = popVersaoVigente(p)
+  const leu = vig && lidos.has(vig.id)
+  const marca = p.status !== 'VIGENTE'
+    ? `<span class="chip" style="color:${COR_STATUS_POP[p.status]};">${ROTULO_STATUS_POP[p.status] || p.status}</span>`
+    : leu ? '<span class="chip" style="color:#2c6e3f;">✓ lido</span>'
+    : vig ? '<span class="chip" style="color:#a67c00;">falta ler</span>'
+    : '<span class="chip" style="color:#a02a1e;">sem versão publicada</span>'
+  return `<div class="panel" style="padding:13px 15px;margin-bottom:8px;display:flex;gap:12px;align-items:center;cursor:pointer;" data-abrir-pop="${p.id}">
+    <div style="flex:1;min-width:0;">
+      <div style="font-weight:600;font-size:13.5px;">
+        ${p.codigo ? `<span class="texto-dim2" style="font-family:var(--mono,monospace);font-size:11.5px;">${esc(p.codigo)}</span> · ` : ''}${esc(p.titulo)}</div>
+      <div class="texto-dim2" style="font-size:11.5px;margin-top:3px;">
+        ${esc(p.setor?.nome || 'sem setor')}${vig ? ` · versão ${vig.numero}` : ''}${p.responsavel?.nome ? ` · ${esc(p.responsavel.nome)}` : ''}
+        ${vig?.video_url ? ' · 🎬 vídeo' : ''}${vig?.arquivo_caminho ? ' · 📎 documento' : ''}</div>
+    </div>
+    <div style="flex:none;">${marca}</div>
+  </div>`
+}
+
+async function popPorSetor (alvo, editavel) {
+  const { erro, lista, lidos } = await popCarregar(editavel)
+  if (faltaMigracao(erro)) { alvo.innerHTML = `<p class="vazio">Recurso ainda não disponível — a migração do POP não rodou neste banco.</p>`; return }
+  if (erro) { alvo.innerHTML = `<p class="vazio">${esc(erro.message)}</p>`; return }
+
+  const recarregar = () => popPorSetor(alvo, editavel)
+  const setoresComPop = POP_CACHE.setores.filter(s => lista.some(p => p.setor_id === s.id))
+  const semSetor = lista.some(p => !p.setor_id)
+
+  alvo.innerHTML = `
+    ${editavel ? `<div class="acoes" style="margin-bottom:12px;"><button class="btn" id="pop-novo">+ Novo POP</button></div>` : ''}
+    <div class="filtros-linha" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
+      <input id="pop-busca" placeholder="buscar por código, título ou objetivo..." style="flex:1;min-width:230px;">
+      <select id="pop-filtro-setor" style="min-width:190px;">
+        <option value="">todos os setores</option>
+        ${setoresComPop.map(s => `<option value="${s.id}">${esc(s.nome)}</option>`).join('')}
+        ${semSetor ? '<option value="__sem__">sem setor</option>' : ''}
+      </select>
+      <label class="texto-dim2" style="font-size:12px;display:flex;align-items:center;gap:6px;">
+        <input type="checkbox" id="pop-so-pendente"> só os que eu não li</label>
+    </div>
+    <div id="pop-lista"></div>`
+
+  const desenhar = () => {
+    const termo = alvo.querySelector('#pop-busca').value.trim().toLowerCase()
+    const setorEscolhido = alvo.querySelector('#pop-filtro-setor').value
+    const soPendente = alvo.querySelector('#pop-so-pendente').checked
+
+    // busca em qualquer parte do texto, não só no começo
+    const filtrada = lista.filter(p => {
+      if (setorEscolhido === '__sem__' && p.setor_id) return false
+      if (setorEscolhido && setorEscolhido !== '__sem__' && p.setor_id !== setorEscolhido) return false
+      if (soPendente) {
+        const vig = popVersaoVigente(p)
+        if (!vig || lidos.has(vig.id)) return false
+      }
+      if (!termo) return true
+      return [p.codigo, p.titulo, p.objetivo, p.setor?.nome, p.responsavel?.nome]
+        .some(c => String(c || '').toLowerCase().includes(termo))
+    })
+
+    const grupos = new Map()
+    filtrada.forEach(p => {
+      const chave = p.setor?.nome || 'Sem setor'
+      if (!grupos.has(chave)) grupos.set(chave, [])
+      grupos.get(chave).push(p)
+    })
+
+    alvo.querySelector('#pop-lista').innerHTML = filtrada.length
+      ? [...grupos.entries()].map(([setorNome, itens]) => `
+          <div class="cabeca-secao" style="margin:16px 0 8px;">
+            <h3 style="margin:0;font-size:14px;">${esc(setorNome)}</h3>
+            <span class="texto-dim2" style="font-size:11.5px;">${itens.length} ${itens.length === 1 ? 'procedimento' : 'procedimentos'}</span>
+          </div>
+          ${itens.map(p => cartaoPop(p, lidos)).join('')}`).join('')
+      : `<p class="vazio">${lista.length ? 'Nada bate com esse filtro.' : 'Nenhum POP cadastrado ainda.'}</p>`
+
+    alvo.querySelectorAll('[data-abrir-pop]').forEach(c => {
+      c.onclick = () => abrirPopLeitura(lista.find(p => p.id === c.dataset.abrirPop), editavel, recarregar)
+    })
+  }
+
+  alvo.querySelector('#pop-busca').oninput = desenhar
+  alvo.querySelector('#pop-filtro-setor').onchange = desenhar
+  alvo.querySelector('#pop-so-pendente').onchange = desenhar
+  if (editavel) alvo.querySelector('#pop-novo').onclick = () => formPop(null, recarregar)
+  desenhar()
+}
+
+// "Pra ler": o que está vigente e ainda não foi lido, do setor da
+// pessoa primeiro. Obrigatório vem antes, e depois o resto — a ideia
+// é abrir essa aba e saber em dois segundos o que falta.
+async function popParaLer (alvo) {
+  const { erro, lista, lidos } = await popCarregar(false)
+  if (faltaMigracao(erro)) { alvo.innerHTML = `<p class="vazio">Recurso ainda não disponível — a migração do POP não rodou neste banco.</p>`; return }
+  if (erro) { alvo.innerHTML = `<p class="vazio">${esc(erro.message)}</p>`; return }
+
+  const recarregar = () => popParaLer(alvo)
+  const comVersao = lista.filter(p => popVersaoVigente(p))
+  const pendentes = comVersao.filter(p => !lidos.has(popVersaoVigente(p).id))
+  const meuSetor = pendentes.filter(p => p.setor_id && p.setor_id === PERFIL.setorId)
+  const outros = pendentes.filter(p => !meuSetor.includes(p))
+  const ordenar = arr => arr.slice().sort((a, b) => (b.obrigatorio ? 1 : 0) - (a.obrigatorio ? 1 : 0))
+
+  alvo.innerHTML = `
+    <div class="cards-kpi" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+      ${kpi('Pendentes pra você', pendentes.length, pendentes.length ? 'clique pra ler e confirmar' : 'nada pendente')}
+      ${kpi('Já lidos', comVersao.length - pendentes.length, `de ${comVersao.length} vigentes`)}
+      ${kpi('Do seu setor', meuSetor.length, PERFIL.setorNome || 'sem setor definido')}
+    </div>
+    ${!pendentes.length ? `<div class="panel" style="padding:26px;text-align:center;">
+        <div style="font-size:34px;">✅</div>
+        <p style="font-family:var(--serif);font-size:16px;margin:8px 0 2px;">Tudo em dia</p>
+        <p class="texto-dim2" style="font-size:12px;margin:0;">Você leu todos os procedimentos vigentes. Quando sair versão nova, ela aparece aqui.</p>
+      </div>` : `
+      ${meuSetor.length ? `<div class="cabeca-secao" style="margin:4px 0 8px;">
+          <h3 style="margin:0;font-size:14px;">${esc(PERFIL.setorNome || 'Seu setor')}</h3></div>
+        ${ordenar(meuSetor).map(p => cartaoPop(p, lidos)).join('')}` : ''}
+      ${outros.length ? `<div class="cabeca-secao" style="margin:16px 0 8px;">
+          <h3 style="margin:0;font-size:14px;">Outros setores</h3>
+          <span class="texto-dim2" style="font-size:11.5px;">valem pra todo mundo</span></div>
+        ${ordenar(outros).map(p => cartaoPop(p, lidos)).join('')}` : ''}`}`
+
+  alvo.querySelectorAll('[data-abrir-pop]').forEach(c => {
+    c.onclick = () => abrirPopLeitura(lista.find(p => p.id === c.dataset.abrirPop), false, recarregar)
+  })
+}
+
+// ---------------------------------------------------------------
+// Leitura do POP — é aqui que a pessoa lê, assiste e confirma.
+// O botão "Li e entendi" grava em pop_leitura amarrado à versão que
+// ela está vendo, nunca ao POP: se amanhã sair versão 3, a leitura
+// da versão 2 continua registrada como o que ela de fato leu.
+// ---------------------------------------------------------------
+async function abrirPopLeitura (p, editavel, recarregar) {
+  if (!p) return
+  const vig = popVersaoVigente(p)
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  document.body.appendChild(fundo)
+
+  const desenhar = async () => {
+    const { data: minha } = vig
+      ? await db.from('pop_leitura').select('lido_em').eq('versao_id', vig.id).eq('pessoa_id', PERFIL.pessoaId).maybeSingle()
+      : { data: null }
+
+    const modal = document.createElement('div')
+    modal.className = 'modal'
+    modal.style.maxWidth = '760px'
+    modal.innerHTML = `
+      <div class="cabeca-secao" style="align-items:flex-start;">
+        <div>
+          <h3 style="margin:0;">${esc(p.titulo)}</h3>
+          <div class="texto-dim2" style="font-size:11.5px;margin-top:4px;">
+            ${p.codigo ? `${esc(p.codigo)} · ` : ''}${esc(p.setor?.nome || 'sem setor')}
+            ${vig ? ` · versão ${vig.numero}${vig.vigente_desde ? ` desde ${fmtQuando(vig.vigente_desde)}` : ''}` : ''}
+            ${p.responsavel?.nome ? ` · responsável: ${esc(p.responsavel.nome)}` : ''}</div>
+        </div>
+        <span class="chip" style="color:${COR_STATUS_POP[p.status]};">${ROTULO_STATUS_POP[p.status] || p.status}</span>
+      </div>
+
+      ${p.objetivo ? `<div class="panel" style="padding:12px 14px;margin:12px 0;background:rgba(0,82,41,.06);">
+        <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.1em;font-weight:700;">Objetivo</div>
+        <div style="font-size:13px;margin-top:4px;white-space:pre-wrap;">${esc(p.objetivo)}</div></div>` : ''}
+
+      ${!vig ? `<p class="vazio">Esse POP ainda não tem versão publicada.</p>` : `
+        ${popEmbedVideo(vig.video_url)}
+        ${vig.arquivo_caminho ? `<p style="margin:10px 0;"><button class="btn-secundario mini" id="pl-anexo">📎 Abrir ${esc(vig.arquivo_nome || 'documento')}</button></p>` : ''}
+        <div class="caixa-texto" style="white-space:pre-wrap;max-height:420px;overflow:auto;line-height:1.65;font-size:13px;">${esc(vig.conteudo || 'Sem texto nesta versão — veja o vídeo ou o documento anexo.')}</div>
+        ${vig.nota_revisao ? `<p class="texto-dim2" style="font-size:11.5px;margin-top:8px;">O que mudou nesta versão: ${esc(vig.nota_revisao)}</p>` : ''}`}
+
+      <div class="acoes" style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        ${vig ? (minha
+          ? `<span class="chip" style="color:#2c6e3f;">✅ você confirmou a leitura em ${fmtQuando(minha.lido_em)}</span>`
+          : `<button class="btn" id="pl-confirmar">Li e entendi</button>`) : ''}
+        ${editavel ? `<button class="btn-secundario" id="pl-nova-versao">Publicar nova versão</button>
+          <button class="btn-secundario" id="pl-editar">Editar capa</button>
+          <button class="btn-secundario" id="pl-historico">Histórico (${(p.versoes || []).length})</button>` : ''}
+        <button class="btn-secundario" id="pl-fechar" style="margin-left:auto;">Fechar</button>
+      </div>
+      <div id="pl-historico-area" style="margin-top:14px;"></div>
+      <div class="recado oculto" id="pl-recado"></div>`
+
+    fundo.innerHTML = ''
+    fundo.appendChild(modal)
+
+    const q = id => fundo.querySelector(id)
+    const fechar = () => { fundo.remove(); if (recarregar) recarregar() }
+    q('#pl-fechar').onclick = fechar
+    fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+    const bAnexo = q('#pl-anexo')
+    if (bAnexo) bAnexo.onclick = () => abrirArquivo(vig.arquivo_caminho)
+
+    const bConf = q('#pl-confirmar')
+    if (bConf) bConf.onclick = async () => {
+      bConf.disabled = true; bConf.textContent = 'registrando...'
+      const { error } = await db.from('pop_leitura').insert({
+        pop_id: p.id, versao_id: vig.id, pessoa_id: PERFIL.pessoaId
+      })
+      if (error && !/duplicate key/i.test(error.message)) {
+        const el = q('#pl-recado'); el.textContent = error.message; el.classList.remove('oculto')
+        bConf.disabled = false; bConf.textContent = 'Li e entendi'; return
+      }
+      desenhar()
+    }
+
+    if (editavel) {
+      q('#pl-editar').onclick = () => formPop(p, () => { fundo.remove(); if (recarregar) recarregar() })
+      q('#pl-nova-versao').onclick = () => formPopVersao(p, () => { fundo.remove(); if (recarregar) recarregar() })
+      q('#pl-historico').onclick = () => popHistoricoVersoes(q('#pl-historico-area'), p)
+    }
+  }
+  desenhar()
+}
+
+function popHistoricoVersoes (area, p) {
+  const versoes = (p.versoes || []).slice().sort((a, b) => b.numero - a.numero)
+  area.innerHTML = `
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr><th>Versão</th><th>Publicada</th><th>O que mudou</th><th>Conteúdo</th></tr></thead><tbody>
+      ${versoes.map(v => `<tr>
+        <td><b>${v.numero}</b>${v.vigente ? ' <span class="chip" style="color:#2c6e3f;">vigente</span>' : ''}</td>
+        <td class="texto-dim">${v.vigente_desde ? fmtQuando(v.vigente_desde) : fmtQuando(v.criado_em)}</td>
+        <td class="texto-dim">${esc(v.nota_revisao || '—')}</td>
+        <td class="texto-dim">${v.video_url ? '🎬 ' : ''}${v.arquivo_caminho ? '📎 ' : ''}${v.conteudo ? `${String(v.conteudo).length} caracteres` : 'sem texto'}</td>
+      </tr>`).join('') || '<tr><td colspan="4" class="vazio">Nenhuma versão ainda.</td></tr>'}
+      </tbody></table>
+    </div></div>`
+}
+
+// ---------------------------------------------------------------
+// Cadastro da capa do POP (sem conteúdo — conteúdo é versão)
+// ---------------------------------------------------------------
+function formPop (p, recarregar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  const v = k => esc(p?.[k] ?? '')
+
+  fundo.innerHTML = `
+    <div class="modal">
+      <h3>${p ? 'Editar POP' : 'Novo POP'}</h3>
+      <p class="texto-dim2" style="font-size:11.5px;margin:0 0 12px;line-height:1.5;">
+        Aqui fica só a capa. O texto, o vídeo e o documento entram depois, em "Publicar nova versão" —
+        é isso que deixa o histórico rastreável.</p>
+      <div class="form-grade">
+        <div class="campo" style="grid-column:1/-1;"><label>Título *</label>
+          <input id="pp-titulo" value="${v('titulo')}" placeholder="Ex.: Adicionar certificado digital no sistema"></div>
+        <div class="campo"><label>Setor</label>
+          <select id="pp-setor">
+            <option value="">sem setor (vale pra todos)</option>
+            ${POP_CACHE.setores.map(s => `<option value="${s.id}" ${p?.setor_id === s.id ? 'selected' : ''}>${esc(s.nome)}</option>`).join('')}
+          </select></div>
+        <div class="campo"><label>Código</label>
+          <input id="pp-codigo" value="${v('codigo')}" placeholder="gerado pelo setor se ficar vazio"></div>
+        <div class="campo"><label>Responsável</label>
+          <select id="pp-resp">${opcoesFin(POP_CACHE.pessoas, 'sem responsável', p?.responsavel_id)}</select></div>
+        <div class="campo"><label>Situação</label>
+          <select id="pp-status">
+            <option value="RASCUNHO" ${(!p || p.status === 'RASCUNHO') ? 'selected' : ''}>rascunho (só quem gere vê)</option>
+            <option value="VIGENTE" ${p?.status === 'VIGENTE' ? 'selected' : ''}>vigente (todo mundo vê)</option>
+            <option value="OBSOLETO" ${p?.status === 'OBSOLETO' ? 'selected' : ''}>obsoleto (sai de circulação)</option>
+          </select></div>
+        <div class="campo"><label>Próxima revisão</label>
+          <input id="pp-revisao" type="date" value="${p?.proxima_revisao ?? ''}"></div>
+        <div class="campo" style="grid-column:1/-1;display:flex;align-items:center;gap:8px;">
+          <input type="checkbox" id="pp-obrigatorio" ${(!p || p.obrigatorio) ? 'checked' : ''} style="width:auto;">
+          <label for="pp-obrigatorio" style="margin:0;">leitura obrigatória (aparece em "Pra ler" e conta no acompanhamento)</label></div>
+      </div>
+      <div class="campo" style="margin-top:12px;"><label>Objetivo</label>
+        <textarea id="pp-objetivo" style="min-height:70px;" placeholder="Em uma ou duas linhas: pra que serve esse procedimento e quando usar.">${v('objetivo')}</textarea></div>
+      <div class="acoes" style="margin-top:14px;">
+        <button class="btn" id="pp-salvar">Salvar</button>
+        ${p ? '<button class="btn-secundario" id="pp-excluir" style="color:var(--warn-text);">Excluir</button>' : ''}
+        <button class="btn-secundario" id="pp-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="pp-recado"></div>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#pp-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  const aviso = t => {
+    const el = q('#pp-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  q('#pp-salvar').onclick = async () => {
+    const titulo = q('#pp-titulo').value.trim()
+    if (!titulo) { aviso('Escreva o título do procedimento.'); return }
+    const btn = q('#pp-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+
+    let codigo = q('#pp-codigo').value.trim()
+    if (!codigo) {
+      const { data: existentes } = await db.from('pop').select('codigo')
+      const setorNome = POP_CACHE.setores.find(s => s.id === q('#pp-setor').value)?.nome
+      codigo = popCodigoSugerido(setorNome, new Set((existentes || []).map(x => x.codigo).filter(Boolean)))
+    }
+
+    const corpo = {
+      titulo,
+      codigo,
+      setor_id: q('#pp-setor').value || null,
+      responsavel_id: q('#pp-resp').value || null,
+      status: q('#pp-status').value,
+      obrigatorio: q('#pp-obrigatorio').checked,
+      proxima_revisao: q('#pp-revisao').value || null,
+      objetivo: q('#pp-objetivo').value.trim() || null
+    }
+
+    let error, novoId = p?.id
+    if (p) {
+      corpo.editado_por = PERFIL.pessoaId; corpo.editado_em = new Date().toISOString()
+      ;({ error } = await db.from('pop').update(corpo).eq('id', p.id))
+    } else {
+      corpo.criado_por = PERFIL.pessoaId
+      const r = await db.from('pop').insert(corpo).select('id').single()
+      error = r.error; novoId = r.data?.id
+    }
+    btn.disabled = false; btn.textContent = 'Salvar'
+    if (error) { aviso(error.message); return }
+    fechar()
+    // POP novo já abre a tela de escrever a primeira versão — sem isso
+    // ele nasce vazio e some no meio da lista
+    if (!p && novoId) formPopVersao({ id: novoId, titulo, versoes: [] }, recarregar)
+    else recarregar()
+  }
+
+  const bx = q('#pp-excluir')
+  if (bx) bx.onclick = async () => {
+    if (!confirm('Excluir este POP em definitivo?\n\nAs versões e os registros de leitura vão junto.')) return
+    const { error } = await db.from('pop').delete().eq('id', p.id)
+    if (error) { aviso(error.message); return }
+    fechar(); recarregar()
+  }
+}
+
+// ---------------------------------------------------------------
+// Nova versão — publica o conteúdo e reabre a leitura de todo mundo
+// ---------------------------------------------------------------
+function formPopVersao (p, recarregar) {
+  const anterior = popVersaoVigente(p) || (p.versoes || [])[0] || null
+  const proximo = popUltimoNumero(p) + 1
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+
+  fundo.innerHTML = `
+    <div class="modal" style="max-width:760px;">
+      <h3>${proximo === 1 ? 'Primeira versão' : `Versão ${proximo}`} — ${esc(p.titulo)}</h3>
+      <p class="texto-dim2" style="font-size:11.5px;margin:0 0 12px;line-height:1.5;">
+        ${proximo === 1
+          ? 'Escreva o passo a passo. Vídeo e documento são opcionais e aparecem junto com o texto.'
+          : 'Publicar esta versão tira a anterior de circulação e reabre o "Li e entendi" de todo mundo. A versão antiga continua guardada no histórico.'}</p>
+      <div class="campo"><label>Passo a passo</label>
+        <textarea id="pv-conteudo" style="min-height:280px;font-family:var(--mono,ui-monospace,monospace);font-size:12.5px;line-height:1.6;">${esc(anterior?.conteudo ?? '')}</textarea>
+        <span class="texto-dim2" style="font-size:11px;">O texto aparece exatamente como for escrito aqui — quebras de linha e recuos são preservados.</span></div>
+      <div class="form-grade" style="margin-top:12px;">
+        <div class="campo" style="grid-column:1/-1;"><label>Link do vídeo (opcional)</label>
+          <input id="pv-video" value="${esc(anterior?.video_url ?? '')}" placeholder="YouTube, Vimeo, Drive, Loom...">
+          <span class="texto-dim2" style="font-size:11px;">YouTube e Vimeo tocam dentro da própria tela; outros links abrem em aba nova.</span></div>
+        <div class="campo" style="grid-column:1/-1;"><label>Documento (opcional)</label>
+          <input type="file" id="pv-arquivo">
+          <span class="texto-dim2" style="font-size:11px;">
+            ${anterior?.arquivo_nome ? `a versão anterior tem <b>${esc(anterior.arquivo_nome)}</b> — sem escolher outro, ele é mantido` : 'PDF, imagem, planilha — o que ajudar a explicar'}</span></div>
+        <div class="campo" style="grid-column:1/-1;"><label>O que mudou nesta versão</label>
+          <input id="pv-nota" placeholder="Ex.: incluída a etapa de gerar link com prazo de 12h"></div>
+      </div>
+      <div class="acoes" style="margin-top:14px;">
+        <button class="btn" id="pv-publicar">${proximo === 1 ? 'Publicar' : 'Publicar versão ' + proximo}</button>
+        <button class="btn-secundario" id="pv-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="pv-recado"></div>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#pv-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  const aviso = t => {
+    const el = q('#pv-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  q('#pv-publicar').onclick = async () => {
+    const conteudo = q('#pv-conteudo').value.trim()
+    const video = q('#pv-video').value.trim()
+    const arquivo = q('#pv-arquivo').files[0]
+    if (!conteudo && !video && !arquivo && !anterior?.arquivo_caminho) {
+      aviso('Coloque pelo menos o texto, um vídeo ou um documento.'); return
+    }
+    const btn = q('#pv-publicar'); btn.disabled = true; btn.textContent = 'Publicando...'
+
+    let caminho = anterior?.arquivo_caminho ?? null
+    let nome = anterior?.arquivo_nome ?? null
+    if (arquivo) {
+      try {
+        const limpo = arquivo.name.replace(/[^\w.\-]/g, '_').slice(-80)
+        const destino = `pop/${p.id}/${Date.now()}_${limpo}`
+        const { error: eUp } = await db.storage.from('documentos').upload(destino, arquivo, { upsert: false })
+        if (eUp) throw new Error(eUp.message)
+        caminho = destino; nome = arquivo.name
+      } catch (e) {
+        aviso('Não deu pra enviar o documento: ' + e.message)
+        btn.disabled = false; btn.textContent = 'Publicar'; return
+      }
+    }
+
+    // tira a vigência da anterior antes de marcar a nova — o índice
+    // pop_versao_uma_vigente não deixa duas vigentes ao mesmo tempo
+    if (anterior) await db.from('pop_versao').update({ vigente: false }).eq('pop_id', p.id).eq('vigente', true)
+
+    const { error } = await db.from('pop_versao').insert({
+      pop_id: p.id,
+      numero: proximo,
+      conteudo: conteudo || null,
+      video_url: video || null,
+      arquivo_caminho: caminho,
+      arquivo_nome: nome,
+      nota_revisao: q('#pv-nota').value.trim() || null,
+      vigente: true,
+      vigente_desde: new Date().toISOString(),
+      aprovado_por: PERFIL.pessoaId,
+      criado_por: PERFIL.pessoaId
+    })
+    if (error) {
+      if (anterior) await db.from('pop_versao').update({ vigente: true }).eq('id', anterior.id)
+      btn.disabled = false; btn.textContent = 'Publicar'; aviso(error.message); return
+    }
+    // publicar versão já coloca o POP em circulação — não faz sentido
+    // ter conteúdo publicado e o POP preso em rascunho
+    await db.from('pop').update({ status: 'VIGENTE', editado_por: PERFIL.pessoaId, editado_em: new Date().toISOString() })
+      .eq('id', p.id).eq('status', 'RASCUNHO')
+    fechar(); recarregar()
+  }
+}
+
+// ---------------------------------------------------------------
+// Quem leu — o painel que transforma POP em treinamento cobrável.
+// Só conta gente com login ativo: quem não entra no sistema não tem
+// como confirmar leitura, e deixar essas pessoas na conta faria o
+// número parecer ruim pra sempre.
+// ---------------------------------------------------------------
+async function popAcompanhamento (alvo, editavel) {
+  const { erro, lista } = await popCarregar(editavel)
+  if (faltaMigracao(erro)) { alvo.innerHTML = `<p class="vazio">Recurso ainda não disponível — a migração do POP não rodou neste banco.</p>`; return }
+  if (erro) { alvo.innerHTML = `<p class="vazio">${esc(erro.message)}</p>`; return }
+
+  const vigentes = lista.filter(p => p.status === 'VIGENTE' && popVersaoVigente(p))
+  if (!vigentes.length) { alvo.innerHTML = `<p class="vazio">Nenhum POP vigente pra acompanhar ainda.</p>`; return }
+
+  const { data: leituras } = await db.from('pop_leitura')
+    .select('versao_id,pessoa_id,lido_em')
+    .in('versao_id', vigentes.map(p => popVersaoVigente(p).id))
+
+  const porVersao = new Map()
+  ;(leituras || []).forEach(l => {
+    if (!porVersao.has(l.versao_id)) porVersao.set(l.versao_id, new Map())
+    porVersao.get(l.versao_id).set(l.pessoa_id, l.lido_em)
+  })
+
+  // quem precisa ler: gente ativa, com login, do setor do POP
+  // (POP sem setor vale pra empresa inteira)
+  const elegiveis = p => POP_CACHE.pessoas.filter(x =>
+    POP_CACHE.comLogin.has(x.id) && (!p.setor_id || x.setor_id === p.setor_id))
+
+  const linhas = vigentes.map(p => {
+    const vig = popVersaoVigente(p)
+    const feitos = porVersao.get(vig.id) || new Map()
+    const gente = elegiveis(p)
+    const leram = gente.filter(x => feitos.has(x.id))
+    const faltam = gente.filter(x => !feitos.has(x.id))
+    return { p, vig, gente, leram, faltam, pct: gente.length ? Math.round(leram.length * 100 / gente.length) : 0 }
+  }).sort((a, b) => a.pct - b.pct)
+
+  const totalGente = linhas.reduce((s, l) => s + l.gente.length, 0)
+  const totalLeram = linhas.reduce((s, l) => s + l.leram.length, 0)
+
+  alvo.innerHTML = `
+    <div class="cards-kpi" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+      ${kpi('POPs vigentes', vigentes.length)}
+      ${kpi('Leitura confirmada', totalGente ? Math.round(totalLeram * 100 / totalGente) + '%' : '—', `${totalLeram} de ${totalGente} confirmações`)}
+      ${kpi('Abaixo de 50%', linhas.filter(l => l.pct < 50).length, 'precisam de cobrança')}
+    </div>
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>POP</th><th>Setor</th><th>Versão</th><th style="min-width:150px;">Leitura</th><th>Faltam</th><th></th>
+      </tr></thead><tbody>
+      ${linhas.map(l => `<tr>
+        <td><b>${esc(l.p.titulo)}</b>${l.p.codigo ? `<div class="texto-dim2" style="font-size:11px;">${esc(l.p.codigo)}</div>` : ''}</td>
+        <td class="texto-dim">${esc(l.p.setor?.nome || 'todos')}</td>
+        <td class="texto-dim">v${l.vig.numero}</td>
+        <td>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div style="flex:1;height:7px;border-radius:4px;background:var(--line);overflow:hidden;min-width:70px;">
+              <div style="width:${l.pct}%;height:100%;background:${l.pct >= 80 ? '#2c6e3f' : l.pct >= 50 ? '#D19C1D' : '#a02a1e'};"></div>
+            </div>
+            <span class="texto-dim2" style="font-size:11.5px;white-space:nowrap;">${l.leram.length}/${l.gente.length}</span>
+          </div>
+        </td>
+        <td class="texto-dim">${l.faltam.length || '—'}</td>
+        <td style="text-align:right;">${l.faltam.length ? `<button class="btn-secundario mini" data-faltam="${l.p.id}">ver quem</button>` : ''}</td>
+      </tr>`).join('')}
+      </tbody></table>
+    </div></div>
+    <div id="pop-faltam" style="margin-top:14px;"></div>`
+
+  alvo.querySelectorAll('[data-faltam]').forEach(b => {
+    b.onclick = () => {
+      const l = linhas.find(x => x.p.id === b.dataset.faltam)
+      alvo.querySelector('#pop-faltam').innerHTML = `
+        <div class="panel" style="padding:14px 16px;">
+          <div class="cabeca-secao" style="margin:0 0 8px;">
+            <h3 style="margin:0;font-size:13.5px;">Ainda não leram — ${esc(l.p.titulo)}</h3>
+            <span class="texto-dim2" style="font-size:11.5px;">${l.faltam.length} ${l.faltam.length === 1 ? 'pessoa' : 'pessoas'}</span>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            ${l.faltam.map(x => `<span class="chip">${esc(x.nome)}</span>`).join('')}
+          </div>
+        </div>`
+      alvo.querySelector('#pop-faltam').scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }
+  })
 }
 
 // ---------------------------------------------------------------
