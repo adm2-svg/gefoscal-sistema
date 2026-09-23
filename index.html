@@ -50060,7 +50060,11 @@ function formMaisCodigos (lote, aoFechar) {
 async function formNovoCiclo360 (aoFechar) {
   const { data: logins } = await db.from('usuario_perfil').select('pessoa_id').eq('ativo', true)
   const idsComLogin = new Set((logins || []).map(l => l.pessoa_id))
-  const elegiveis = (DESEMP_CACHE.pessoas || []).filter(p => idsComLogin.has(p.id))
+  // entra todo mundo do cadastro ativo, com login ou sem: quem tem
+  // login responde pelo sistema, quem não tem responde pelo link.
+  // Antes a lista era só de quem tinha login, e isso deixava o grupo
+  // inteiro da produção de fora da avaliação.
+  const elegiveis = (DESEMP_CACHE.pessoas || [])
 
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
@@ -50076,17 +50080,31 @@ async function formNovoCiclo360 (aoFechar) {
         <div class="campo"><label>Fecha em</label><input type="date" id="nc-fim" value="${hoje}"></div>
       </div>
 
+      <div class="campo" style="margin-top:14px;"><label>Quantos colegas cada pessoa avalia</label>
+        <select id="nc-quantos">
+          <option value="0" selected>todos — cada um avalia todo mundo</option>
+          <option value="20">20 sorteados</option>
+          <option value="12">12 sorteados</option>
+          <option value="8">8 sorteados</option>
+        </select>
+        <span class="texto-dim2" style="font-size:11px;line-height:1.5;display:block;margin-top:4px;">
+          Com a lista inteira, quem a pessoa convive está garantidamente nela — e ela marca
+          "não consigo avaliar" no resto, que é um clique. No sorteio o esforço cai, mas pode
+          sair um sorteio só de gente que ela não conhece.</span></div>
+
       <div class="cabeca-secao" style="margin:16px 0 6px;">
         <h3 style="margin:0;font-size:13.5px;">Quem participa</h3>
         <span class="texto-dim2" style="font-size:11.5px;">
           <button class="btn-secundario mini" id="nc-todos" type="button">marcar todos</button></span></div>
       <p class="texto-dim2" style="font-size:11.5px;margin:0 0 8px;line-height:1.5;">
-        Cada participante avalia todos os outros. Só aparece quem tem login ativo —
-        sem login não tem como responder.</p>
+        Todo mundo do cadastro ativo, CLT e PJ. Quem tem login responde pelo sistema;
+        quem não tem responde pelo link — e precisa do link gerado pra conseguir participar.</p>
       <div class="panel" style="padding:10px 12px;max-height:220px;overflow:auto;">
         ${elegiveis.map(p => `<label style="display:flex;align-items:center;gap:7px;font-size:12.5px;padding:2px 0;">
-          <input type="checkbox" class="nc-participante" value="${p.id}" checked style="width:auto;"> ${esc(p.nome)}</label>`).join('')
-          || '<p class="vazio">Ninguém com login ativo no cadastro.</p>'}
+          <input type="checkbox" class="nc-participante" value="${p.id}" checked style="width:auto;">
+          <span style="flex:1;">${esc(p.nome)}</span>
+          ${idsComLogin.has(p.id) ? '' : '<span class="texto-dim2" style="font-size:10.5px;">pelo link</span>'}</label>`).join('')
+          || '<p class="vazio">Ninguém ativo no cadastro.</p>'}
       </div>
 
       <div class="panel" style="padding:11px 13px;margin-top:12px;background:rgba(200,161,26,.08);">
@@ -50113,17 +50131,23 @@ async function formNovoCiclo360 (aoFechar) {
   // "todo mundo avalia todo mundo" cresce ao quadrado e vira um
   // questionário longo demais sem ninguém perceber
   const recalcular = () => {
-    const n = fundo.querySelectorAll('.nc-participante:checked').length
-    const porPessoa = Math.max(0, n - 1)
+    const marcados = [...fundo.querySelectorAll('.nc-participante:checked')]
+    const n = marcados.length
+    const semLogin = marcados.filter(c => !idsComLogin.has(c.value)).length
+    const escolhido = Number(q('#nc-quantos').value)
+    const porPessoa = escolhido === 0 ? Math.max(0, n - 1) : Math.min(escolhido, Math.max(0, n - 1))
     const totalPerguntas = porPessoa * AV360_CACHE.perguntas.length
     q('#nc-conta').innerHTML = n < 2
       ? 'Marque pelo menos duas pessoas.'
-      : `Com <b>${n} participantes</b>, cada um avalia <b>${porPessoa} colegas</b> —
-         ${AV360_CACHE.perguntas.length} perguntas por colega, <b>${totalPerguntas} respostas</b> por pessoa.
-         Ao todo o ciclo gera ${n * porPessoa} avaliações.
-         ${totalPerguntas > 150 ? '<br><b>É bastante coisa.</b> Vale avisar a equipe que dá pra responder em várias sessões, e que o botão de "não consigo avaliar" existe pra quem não tem convivência.' : ''}`
+      : `<b>${n} participantes</b> — ${n - semLogin} pelo sistema, ${semLogin} pelo link.<br>
+         Cada um avalia <b>${porPessoa} colegas</b> e recebe ${escolhido === 0 ? porPessoa : porPessoa} avaliações:
+         <b>${totalPerguntas} respostas</b> por pessoa.
+         ${totalPerguntas > 250
+           ? '<br><b style="color:var(--warn-text);">É muita coisa pra responder com atenção.</b> Acima de umas 200 respostas a tendência é a pessoa clicar no automático — vale diminuir quantos cada um avalia.'
+           : '<br>Volume que dá pra responder com calma em uma ou duas sentadas.'}`
   }
   fundo.querySelectorAll('.nc-participante').forEach(c => { c.onchange = recalcular })
+  q('#nc-quantos').onchange = recalcular
   q('#nc-todos').onclick = () => {
     const todosMarcados = [...fundo.querySelectorAll('.nc-participante')].every(c => c.checked)
     fundo.querySelectorAll('.nc-participante').forEach(c => { c.checked = !todosMarcados })
@@ -50145,24 +50169,25 @@ async function formNovoCiclo360 (aoFechar) {
     }).select('id').single()
     if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Criar e abrir ciclo'; return }
 
-    // cada par ordenado (avaliador, avaliado), sem a própria pessoa
-    const linhas = []
-    participantes.forEach(avaliador => {
-      participantes.forEach(avaliado => {
-        if (avaliador !== avaliado) {
-          linhas.push({ ciclo_id: ciclo.id, avaliado_id: avaliado, avaliador_id: avaliador, tipo: 'PARES' })
-        }
-      })
-    })
+    // a lista de participantes é gravada explicitamente: quem responde
+    // pelo link é anônimo e não deixa rastro de avaliador, então não
+    // daria pra deduzir o grupo a partir das respostas
+    for (let i = 0; i < participantes.length; i += 200) {
+      const { error: eP } = await db.from('av360_participante')
+        .insert(participantes.slice(i, i + 200).map(pessoa_id => ({ ciclo_id: ciclo.id, pessoa_id })))
+      if (eP) { aviso('Ciclo criado, mas falhou ao gravar os participantes: ' + eP.message); btn.disabled = false; return }
+    }
 
-    // em lotes: 20 pessoas já dão 380 linhas, e um insert gigante
-    // costuma esbarrar no limite da requisição
-    for (let i = 0; i < linhas.length; i += 200) {
-      const { error: e2 } = await db.from('avaliacao_360_resposta').insert(linhas.slice(i, i + 200))
-      if (e2) {
-        aviso('Ciclo criado, mas falhou ao gerar as avaliações: ' + e2.message)
-        btn.disabled = false; btn.textContent = 'Criar e abrir ciclo'; return
-      }
+    // o sorteio circular roda no banco: é ele que garante que cada
+    // pessoa avalie N e seja avaliada por N, exatamente
+    const quantos = Number(q('#nc-quantos').value) || participantes.length
+    btn.textContent = 'sorteando...'
+    const { error: e2 } = await db.rpc('av360_sortear_avaliacoes', {
+      p_ciclo: ciclo.id, p_quantos: quantos
+    })
+    if (e2) {
+      aviso('Ciclo criado, mas falhou ao sortear as avaliações: ' + e2.message)
+      btn.disabled = false; btn.textContent = 'Criar e abrir ciclo'; return
     }
     fechar(); aoFechar()
   }
@@ -50183,8 +50208,15 @@ async function responder360Wizard (ciclo, aoFechar) {
     .eq('ciclo_id', ciclo.id).eq('avaliador_id', PERFIL.pessoaId)
   if (error) { alert(error.message); return }
 
+  // ordem pensada pra quem tem 40 pessoas pra passar: primeiro o que
+  // falta, e dentro disso o pessoal do próprio setor -- que é de quem
+  // a pessoa tem o que dizer. O resto vem depois e vira clique de
+  // "não consigo avaliar", que é o esperado e está tudo bem.
+  const meuSetor = PERFIL.setorNome || null
   const itens = (minhas || []).sort((a, b) =>
     (a.status === 'RESPONDIDO' ? 1 : 0) - (b.status === 'RESPONDIDO' ? 1 : 0) ||
+    ((b.avaliado?.setor?.nome === meuSetor ? 1 : 0) - (a.avaliado?.setor?.nome === meuSetor ? 1 : 0)) ||
+    String(a.avaliado?.setor?.nome || 'zz').localeCompare(String(b.avaliado?.setor?.nome || 'zz')) ||
     String(a.avaliado?.nome || '').localeCompare(String(b.avaliado?.nome || '')))
   if (!itens.length) { alert('Você não tem ninguém pra avaliar neste ciclo.'); return }
 
@@ -50231,6 +50263,12 @@ async function responder360Wizard (ciclo, aoFechar) {
         </div>
         ${item.status === 'RESPONDIDO' ? `<span class="chip" style="color:#2c6e3f;">já respondida</span>` : ''}
       </div>
+
+      ${indice === 0 && feitas === 0 ? `
+        <div class="panel" style="padding:11px 13px;margin:10px 0;background:rgba(200,161,26,.08);">
+          <p class="texto-dim2" style="font-size:11.5px;margin:0;line-height:1.55;">
+            A lista tem todo mundo do grupo, começando pelo seu setor. <b>Você não precisa avaliar
+            quem não conhece</b> — marque a caixa abaixo e siga. Um clique por pessoa, e acabou.</p></div>` : ''}
 
       <label class="panel" style="display:flex;align-items:flex-start;gap:9px;padding:12px 14px;margin:12px 0;cursor:pointer;border-left:3px solid var(--warn-text);">
         <input type="checkbox" id="w-nao-avalia" ${item.nao_avalia ? 'checked' : ''} style="width:auto;margin-top:2px;">
