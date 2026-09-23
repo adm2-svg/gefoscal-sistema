@@ -49928,16 +49928,25 @@ async function desemp360 (alvo, editavel) {
         ${listaCiclos.map(c => {
           const p = progressoPorCiclo[c.id]
           const pct = p?.total ? Math.round(p.respondidas / p.total * 100) : 0
-          return `<div class="panel" style="padding:16px;cursor:pointer;" data-abrir-ciclo="${c.id}">
-            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
-              <div style="font-weight:600;font-size:14px;">${esc(c.nome)}</div>
-              <span class="${corStatus360(c.status)}" style="font-size:10px;">${esc(ROTULO_STATUS_360_CICLO[c.status])}</span>
+          return `<div class="panel" style="padding:16px;">
+            <div style="cursor:pointer;" data-abrir-ciclo="${c.id}">
+              <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
+                <div style="font-weight:600;font-size:14px;">${esc(c.nome)}</div>
+                <span class="${corStatus360(c.status)}" style="font-size:10px;">${esc(ROTULO_STATUS_360_CICLO[c.status])}</span>
+              </div>
+              <div class="texto-dim2" style="font-size:11.5px;margin-bottom:10px;">${fmtData(c.data_inicio)} – ${fmtData(c.data_fim)}</div>
+              <div style="background:var(--surface2);border-radius:5px;height:8px;overflow:hidden;margin-bottom:6px;">
+                <div style="width:${pct}%;height:100%;background:var(--rust);"></div>
+              </div>
+              <div class="texto-dim2" style="font-size:11px;">${p ? `${p.respondidas} de ${p.total} respostas (${pct}%)` : 'sem participantes ainda'}</div>
             </div>
-            <div class="texto-dim2" style="font-size:11.5px;margin-bottom:10px;">${fmtData(c.data_inicio)} – ${fmtData(c.data_fim)}</div>
-            <div style="background:var(--surface2);border-radius:5px;height:8px;overflow:hidden;margin-bottom:6px;">
-              <div style="width:${pct}%;height:100%;background:var(--rust);"></div>
-            </div>
-            <div class="texto-dim2" style="font-size:11px;">${p ? `${p.respondidas} de ${p.total} respostas (${pct}%)` : 'sem participantes ainda'}</div>
+            ${editavel ? `<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:11px;padding-top:9px;border-top:1px solid var(--line2);">
+              <button class="btn-secundario mini" data-editar-ciclo="${c.id}">editar</button>
+              ${c.status === 'ABERTO'
+                ? `<button class="btn-secundario mini" data-encerrar-ciclo="${c.id}">encerrar</button>`
+                : `<button class="btn-secundario mini" data-reabrir-ciclo="${c.id}">reabrir</button>`}
+              <button class="btn-secundario mini" data-excluir-ciclo="${c.id}" style="color:var(--warn-text);">excluir</button>
+            </div>` : ''}
           </div>`
         }).join('')}
       </div>` : `
@@ -49970,6 +49979,107 @@ async function desemp360 (alvo, editavel) {
   alvo.querySelectorAll('[data-abrir-ciclo]').forEach(card => {
     card.onclick = () => detalheCiclo360(listaCiclos.find(c => c.id === card.dataset.abrirCiclo), editavel, recarregar)
   })
+
+  const acharCiclo = id => listaCiclos.find(c => c.id === id)
+
+  alvo.querySelectorAll('[data-editar-ciclo]').forEach(b => {
+    b.onclick = () => formEditarCiclo360(acharCiclo(b.dataset.editarCiclo), recarregar)
+  })
+
+  alvo.querySelectorAll('[data-encerrar-ciclo]').forEach(b => {
+    b.onclick = async () => {
+      const c = acharCiclo(b.dataset.encerrarCiclo)
+      if (!confirm(`Encerrar "${c.nome}"?\n\nQuem não respondeu fica registrado como não respondido, e cada pessoa passa a ver o resultado dela no Meu RH.`)) return
+      const { error } = await db.from('avaliacao_360_ciclo').update({ status: 'ENCERRADO' }).eq('id', c.id)
+      if (error) { alert(error.message); return }
+      recarregar()
+    }
+  })
+
+  alvo.querySelectorAll('[data-reabrir-ciclo]').forEach(b => {
+    b.onclick = async () => {
+      const c = acharCiclo(b.dataset.reabrirCiclo)
+      // reabrir esconde de novo o resultado de quem já tinha visto --
+      // melhor dizer isso antes que a pessoa descubra sozinha
+      if (!confirm(`Reabrir "${c.nome}"?\n\nQuem já viu o próprio resultado deixa de ver até o ciclo fechar de novo, e quem não respondeu volta a poder responder.`)) return
+      const { error } = await db.from('avaliacao_360_ciclo').update({ status: 'ABERTO' }).eq('id', c.id)
+      if (error) { alert(error.message); return }
+      recarregar()
+    }
+  })
+
+  alvo.querySelectorAll('[data-excluir-ciclo]').forEach(b => {
+    b.onclick = () => {
+      const c = acharCiclo(b.dataset.excluirCiclo)
+      const p = progressoPorCiclo[c.id]
+      excluirComJustificativa({
+        tabela: 'avaliacao_360_ciclo', id: c.id, modulo: 'RH — Avaliação 360',
+        titulo: 'Excluir ciclo de avaliação',
+        descricao: `${c.nome} — ${p?.respondidas || 0} resposta(s) preenchida(s) de ${p?.total || 0}`,
+        aoExcluir: recarregar
+      })
+    }
+  })
+}
+
+// ---------------------------------------------------------------
+// Editar o ciclo — nome, datas e situação.
+// Trocar as datas não mexe em resposta nenhuma: o que decide se a
+// pessoa ainda pode responder é o status, não o calendário.
+// ---------------------------------------------------------------
+function formEditarCiclo360 (ciclo, aoFechar) {
+  if (!ciclo) return
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal">
+      <h3>Editar ciclo</h3>
+      <div class="form-grade">
+        <div class="campo" style="grid-column:1/-1;"><label>Nome *</label>
+          <input id="ec-nome" value="${esc(ciclo.nome)}"></div>
+        <div class="campo"><label>Abre em</label><input type="date" id="ec-inicio" value="${ciclo.data_inicio ?? ''}"></div>
+        <div class="campo"><label>Fecha em</label><input type="date" id="ec-fim" value="${ciclo.data_fim ?? ''}"></div>
+        <div class="campo" style="grid-column:1/-1;"><label>Situação</label>
+          <select id="ec-status">
+            <option value="PLANEJADO" ${ciclo.status === 'PLANEJADO' ? 'selected' : ''}>planejado — ninguém responde ainda</option>
+            <option value="ABERTO" ${ciclo.status === 'ABERTO' ? 'selected' : ''}>aberto — recebendo respostas</option>
+            <option value="ENCERRADO" ${ciclo.status === 'ENCERRADO' ? 'selected' : ''}>encerrado — resultado liberado pra cada pessoa</option>
+          </select></div>
+      </div>
+      <p class="texto-dim2" style="font-size:11.5px;margin:10px 0 0;line-height:1.5;">
+        A data é informativa: quem manda é a situação. Um ciclo com data vencida mas ainda
+        <b>aberto</b> continua aceitando resposta.</p>
+      <div class="acoes" style="margin-top:14px;">
+        <button class="btn" id="ec-salvar">Salvar</button>
+        <button class="btn-secundario" id="ec-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="ec-recado"></div>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#ec-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  q('#ec-salvar').onclick = async () => {
+    const nome = q('#ec-nome').value.trim()
+    if (!nome) {
+      const el = q('#ec-recado'); el.textContent = 'O ciclo precisa de um nome.'
+      el.classList.remove('oculto'); el.style.color = 'var(--warn-text)'; return
+    }
+    const btn = q('#ec-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const { error } = await db.from('avaliacao_360_ciclo').update({
+      nome, data_inicio: q('#ec-inicio').value || null,
+      data_fim: q('#ec-fim').value || null, status: q('#ec-status').value
+    }).eq('id', ciclo.id)
+    if (error) {
+      const el = q('#ec-recado'); el.textContent = error.message
+      el.classList.remove('oculto'); el.style.color = 'var(--warn-text)'
+      btn.disabled = false; btn.textContent = 'Salvar'; return
+    }
+    fechar(); aoFechar()
+  }
 }
 
 // Projeto próprio no Vercel, separado do gefoscal-relatorio-render:
