@@ -32121,7 +32121,9 @@ async function paginaFinanceiro () {
   })
 
   const [{ data: contas }, { data: categorias }, { data: centros }] = await Promise.all([
-    db.from('conta_financeira').select('id,nome,tipo,instituicao,saldo_ini,dia_fechamento,dia_vencimento,limite,status').order('nome'),
+    db.from('conta_financeira').select(`id,nome,tipo,instituicao,saldo_ini,dia_fechamento,dia_vencimento,limite,status,
+      empresa_id,codigo_banco,agencia,conta_numero,operacao,titular,titular_documento,
+      pix_chave,pix_tipo,observacao_pagamento,mostrar_para_cliente,ordem`).order('nome'),
     db.from('categoria_financeira').select('id,nome,tipo,status').order('nome'),
     db.from('centro_de_custo').select('id,nome,status').order('nome')
   ])
@@ -32374,15 +32376,40 @@ async function finContas (alvo, editavel) {
       <span class="texto-dim2" style="font-variant-numeric:tabular-nums;">R$ ${fmtNum(tot)}</span></div>
       <div class="panel" style="padding:0;margin-bottom:18px;">
       ${cs.map(c => `<div class="conta-linha">
-        <span><b>${esc(c.nome)}</b>${c.instituicao ? ` <span class="texto-dim2">· ${esc(c.instituicao)}</span>` : ''}</span>
+        <span><b>${esc(c.nome)}</b>${c.instituicao ? ` <span class="texto-dim2">· ${esc(c.instituicao)}</span>` : ''}
+          ${c.mostrar_para_cliente
+            ? `<span class="chip" style="margin-left:8px;border-color:var(--good-text);color:var(--good-text);">vai pro cliente</span>`
+            : ''}
+          ${resumoBancario(c) ? `<div class="texto-dim2" style="font-size:11.5px;margin-top:3px;">${esc(resumoBancario(c))}</div>` : ''}
+        </span>
         <span style="display:flex;gap:12px;align-items:center;">
           <span class="saldo ${saldoDe(c.id) < 0 ? 'neg' : 'pos'}">R$ ${fmtNum(saldoDe(c.id))}</span>
-          ${editavel ? `<button class="btn-secundario mini" data-del-conta="${c.id}">×</button>` : ''}
+          ${editavel ? `<button class="btn-secundario mini" data-banco-conta="${c.id}">dados bancários</button>` : ''}
+          ${editavel ? `<button class="btn-secundario mini" data-del-conta="${c.id}" data-nome-conta="${esc(c.nome)}">×</button>` : ''}
         </span></div>`).join('') || '<div class="vazio">Nenhuma conta.</div>'}
       </div>`
   }
 
+  // Empresas do grupo: o documento que vai pro cliente sai no nome e no
+  // CNPJ da empresa dona da conta, não num "Grupo Gefoscal" genérico --
+  // são quatro CNPJs diferentes e pagar no nome errado dá dor de cabeça.
+  if (!FIN_EMPRESAS) {
+    const { data } = await db.from('empresa').select('id,nome,cnpj,endereco').eq('status', 'ATIVO').order('nome')
+    FIN_EMPRESAS = data || []
+  }
+  const paraCliente = FIN_CACHE.contas
+    .filter(c => c.mostrar_para_cliente && c.status !== 'INATIVO')
+    .sort((a, b) => (a.ordem ?? 0) - (b.ordem ?? 0) || a.nome.localeCompare(b.nome))
+
   alvo.innerHTML =
+    `<div class="filtros" style="margin-bottom:14px;align-items:center;">
+      <button class="btn" id="ct-folha" ${paraCliente.length ? '' : 'disabled'}>Dados para pagamento</button>
+      <span class="texto-dim2" style="font-size:12px;">
+        ${paraCliente.length
+          ? `folha pra imprimir e mandar pro cliente — ${paraCliente.length} conta${paraCliente.length > 1 ? 's' : ''} liberada${paraCliente.length > 1 ? 's' : ''}`
+          : 'nenhuma conta marcada como "mostrar para o cliente" ainda'}
+      </span>
+    </div>` +
     secao(['CONTA_CORRENTE', 'CARTEIRA', 'INVESTIMENTO'], 'Contas de pagamento') +
     secao(['CARTAO_CREDITO'], 'Cartões de crédito') +
     secao(['PASSIVO'], 'Outros passivos') +
@@ -32407,8 +32434,17 @@ async function finContas (alvo, editavel) {
       <div class="recado oculto" id="ct-recado"></div>
     </div>` : '')
 
+  // A folha é só leitura de dados que já estão liberados — quem consulta o
+  // Financeiro consegue imprimir e mandar pro cliente sem precisar editar.
+  const btnFolha = alvo.querySelector('#ct-folha')
+  if (btnFolha) btnFolha.onclick = () => abrirFolhaPagamento(paraCliente)
+
   if (!editavel) return
 
+  alvo.querySelectorAll('[data-banco-conta]').forEach(b => {
+    b.onclick = () => formDadosBancarios(
+      FIN_CACHE.contas.find(c => c.id === b.dataset.bancoConta), paginaFinanceiro)
+  })
   alvo.querySelectorAll('[data-del-conta]').forEach(b => {
     b.onclick = () => excluirComJustificativa({
       tabela: 'conta_financeira', id: b.dataset.delConta, modulo: 'Financeiro',
@@ -32431,6 +32467,215 @@ async function finContas (alvo, editavel) {
     if (error) { aviso(error.message); return }
     paginaFinanceiro()
   }
+}
+
+// ----- Financeiro › dados bancários e folha de pagamento -----
+//
+// Os dados que o cliente precisa pra pagar moram na própria conta
+// financeira: é a mesma conta que aparece no saldo, agora com agência,
+// número, titular e Pix. Só vai pro papel a conta marcada como
+// "mostrar para o cliente" — conta interna (Nubank, C6, cartão) não
+// escapa pra fora por descuido, e o padrão do campo é desmarcado.
+let FIN_EMPRESAS = null
+
+const PIX_TIPOS = ['CNPJ', 'CPF', 'E-mail', 'Telefone', 'Chave aleatória']
+
+function resumoBancario (c) {
+  const p = []
+  if (c.codigo_banco) p.push('banco ' + c.codigo_banco)
+  if (c.agencia) p.push('ag. ' + c.agencia)
+  if (c.operacao) p.push('op./coop. ' + c.operacao)
+  if (c.conta_numero) p.push('conta ' + c.conta_numero)
+  if (c.pix_chave) p.push('Pix ' + c.pix_chave)
+  return p.join(' · ')
+}
+
+function formDadosBancarios (conta, recarregar) {
+  if (!conta) return
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  const v = k => esc(conta[k] ?? '')
+
+  fundo.innerHTML = `
+    <div class="modal">
+      <h3>Dados bancários — ${esc(conta.nome)}</h3>
+      <p class="texto-dim2" style="margin:-6px 0 12px;font-size:12px;">
+        É o que sai na folha de pagamento que vai pro cliente.</p>
+      <div class="form-grade">
+        <div class="campo" style="grid-column:1/-1;"><label>Empresa dona da conta</label>
+          <select id="db-empresa">${opcoesFin(FIN_EMPRESAS || [], 'sem empresa', conta.empresa_id)}</select>
+          <span class="texto-dim2" style="font-size:11px;">o nome e o CNPJ do cabeçalho do documento saem daqui</span></div>
+        <div class="campo"><label>Nome do banco</label>
+          <input id="db-inst" value="${v('instituicao')}" placeholder="Ex.: Banco do Brasil"></div>
+        <div class="campo"><label>Código do banco</label>
+          <input id="db-codigo" value="${v('codigo_banco')}" placeholder="Ex.: 001"></div>
+        <div class="campo"><label>Agência</label>
+          <input id="db-agencia" value="${v('agencia')}" placeholder="Ex.: 4624-8"></div>
+        <div class="campo"><label>Operação / cooperativa</label>
+          <input id="db-operacao" value="${v('operacao')}" placeholder="Sicredi, Caixa… se houver"></div>
+        <div class="campo"><label>Conta</label>
+          <input id="db-conta" value="${v('conta_numero')}" placeholder="Ex.: 8379-8"></div>
+        <div class="campo"><label>Ordem na folha</label>
+          <input id="db-ordem" type="number" value="${conta.ordem ?? 0}"></div>
+        <div class="campo" style="grid-column:1/-1;"><label>Titular</label>
+          <input id="db-titular" value="${v('titular')}" placeholder="razão social exatamente como está no banco"></div>
+        <div class="campo"><label>CNPJ / CPF do titular</label>
+          <input id="db-doc" value="${v('titular_documento')}"></div>
+        <div class="campo"><label>Tipo da chave Pix</label>
+          <select id="db-pix-tipo"><option value="">sem Pix</option>
+            ${PIX_TIPOS.map(t => `<option value="${t}" ${conta.pix_tipo === t ? 'selected' : ''}>${t}</option>`).join('')}
+          </select></div>
+        <div class="campo" style="grid-column:1/-1;"><label>Chave Pix</label>
+          <input id="db-pix" value="${v('pix_chave')}"></div>
+      </div>
+      <div class="campo" style="margin-top:10px;"><label>Observação que aparece no documento</label>
+        <input id="db-obs" value="${v('observacao_pagamento')}" placeholder="opcional — ex.: mandar o comprovante pro financeiro"></div>
+      <label style="display:flex;gap:9px;align-items:flex-start;margin-top:14px;cursor:pointer;">
+        <input type="checkbox" id="db-mostrar" ${conta.mostrar_para_cliente ? 'checked' : ''} style="margin-top:3px;">
+        <span>Mostrar esta conta para o cliente<br>
+          <span class="texto-dim2" style="font-size:11.5px;">só as marcadas entram na folha de pagamento</span></span>
+      </label>
+      <div class="acoes" style="margin-top:14px;">
+        <button class="btn" id="db-salvar">Salvar</button>
+        <button class="btn-secundario" id="db-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="db-recado"></div>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#db-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  const aviso = t => {
+    const el = q('#db-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  q('#db-salvar').onclick = async () => {
+    const limpo = id => q(id).value.trim() || null
+    const mostrar = q('#db-mostrar').checked
+    // Uma conta sem número não ajuda ninguém a pagar: se for pro cliente,
+    // exige pelo menos conta+titular ou uma chave Pix.
+    if (mostrar && !limpo('#db-pix') && !(limpo('#db-conta') && limpo('#db-titular'))) {
+      aviso('Pra ir pro cliente, preencha conta e titular — ou pelo menos a chave Pix.')
+      return
+    }
+    const btn = q('#db-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const { error } = await db.from('conta_financeira').update({
+      empresa_id: q('#db-empresa').value || null,
+      instituicao: limpo('#db-inst'),
+      codigo_banco: limpo('#db-codigo'),
+      agencia: limpo('#db-agencia'),
+      operacao: limpo('#db-operacao'),
+      conta_numero: limpo('#db-conta'),
+      titular: limpo('#db-titular'),
+      titular_documento: limpo('#db-doc'),
+      pix_tipo: limpo('#db-pix-tipo'),
+      pix_chave: limpo('#db-pix'),
+      observacao_pagamento: limpo('#db-obs'),
+      mostrar_para_cliente: mostrar,
+      ordem: Number(q('#db-ordem').value) || 0
+    }).eq('id', conta.id)
+    if (error) { btn.disabled = false; btn.textContent = 'Salvar'; aviso(error.message); return }
+    fechar()
+    recarregar?.()
+  }
+}
+
+// A folha que o cliente recebe. Mesmo molde .doc dos outros documentos do
+// sistema, com a logo embutida — imprime igual em qualquer máquina, sem
+// depender de rede. Cliente e referência são digitados na hora e não
+// ficam guardados: é um papel por pagamento, não um cadastro.
+function abrirFolhaPagamento (contas) {
+  if (!contas?.length) return
+  const empresaDe = id => (FIN_EMPRESAS || []).find(e => e.id === id)
+  const ids = [...new Set(contas.map(c => c.empresa_id).filter(Boolean))]
+  const unica = ids.length === 1 ? empresaDe(ids[0]) : null
+  const cabecalho = unica
+    ? unica.nome + (unica.cnpj ? ' · CNPJ ' + unica.cnpj : '')
+    : 'Grupo Gefoscal'
+
+  const linha = (rot, val) => val ? `<span>${esc(rot)}</span><b>${esc(val)}</b>` : ''
+  const blocoConta = c => {
+    const emp = empresaDe(c.empresa_id)
+    const nomeBanco = [c.codigo_banco, c.instituicao || c.nome].filter(Boolean).join(' — ')
+    return docBloco(nomeBanco, `
+      <div class="kv">
+        ${linha('Agência', c.agencia)}
+        ${linha('Operação / cooperativa', c.operacao)}
+        ${linha('Conta', c.conta_numero)}
+        ${linha('Titular', c.titular || emp?.nome)}
+        ${linha('CNPJ / CPF', c.titular_documento || emp?.cnpj)}
+        ${linha(c.pix_tipo ? 'Pix (' + c.pix_tipo + ')' : 'Pix', c.pix_chave)}
+      </div>
+      ${c.observacao_pagamento
+        ? `<div class="texto-dim2" style="font-size:12px;margin-top:8px;">${esc(c.observacao_pagamento)}</div>`
+        : ''}`)
+  }
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = documentoPDF({
+    titulo: 'Dados para pagamento',
+    subtitulo: fmtData(new Date().toISOString().slice(0, 10)),
+    empresa: cabecalho,
+    corpo: `
+      <div class="kv" id="fp-dest" style="display:none;"></div>
+      <p style="font-size:13.5px;line-height:1.65;margin:0;">
+        Seguem abaixo os dados para pagamento. Confira o titular e o CNPJ antes de transferir.</p>
+      ${contas.map(blocoConta).join('')}
+      <div class="doc-importante">
+        <div class="rot">Importante</div>
+        <ol>
+          <li>Só consideramos quitado o pagamento feito em uma das contas acima, no nome do titular indicado.</li>
+          <li>Depois de pagar, envie o comprovante para o nosso financeiro.</li>
+          <li>Nunca alteramos dados bancários por e-mail ou mensagem. Na dúvida, ligue para o número do rodapé.</li>
+        </ol>
+      </div>`,
+    acoes: `<button class="btn" id="fp-imprimir">Baixar / imprimir PDF</button>
+            <button class="btn-secundario" id="fp-fechar">Fechar</button>`
+  })
+
+  const doc = fundo.querySelector('.doc')
+  if (doc) doc.insertAdjacentHTML('beforeend', `
+    <div class="doc-rodape">
+      <span>📞 <b>(62) 99232-8743</b></span>
+      <span>R. Pernambuco, 55, Sala 16 - Centro, Luís Eduardo Magalhães - BA - CEP: 47.850-045</span>
+      <span>🌐 www.gefoscal.com.br</span>
+    </div>`)
+
+  // Cliente e referência ficam fora do documento, numa faixa que não
+  // imprime: a pessoa digita e vê aparecer no papel antes de mandar.
+  const acoes = fundo.querySelector('.acoes.nao-imprime')
+  if (acoes) acoes.insertAdjacentHTML('beforebegin', `
+    <div class="nao-imprime panel" style="padding:12px 14px;margin-top:12px;">
+      <div class="form-grade">
+        <div class="campo"><label>Cliente (opcional)</label>
+          <input id="fp-cliente" placeholder="pra quem é esta folha"></div>
+        <div class="campo"><label>Referência (opcional)</label>
+          <input id="fp-ref" placeholder="Ex.: Pedido 1042 — R$ 18.400,00"></div>
+      </div>
+    </div>`)
+
+  document.body.appendChild(fundo)
+  const dest = fundo.querySelector('#fp-dest')
+  const cliente = fundo.querySelector('#fp-cliente')
+  const ref = fundo.querySelector('#fp-ref')
+  const pintar = () => {
+    const html = [
+      cliente.value.trim() ? `<span>Cliente</span><b>${esc(cliente.value.trim())}</b>` : '',
+      ref.value.trim() ? `<span>Referência</span><b>${esc(ref.value.trim())}</b>` : ''
+    ].join('')
+    dest.innerHTML = html
+    dest.style.display = html ? '' : 'none'
+  }
+  cliente.oninput = pintar
+  ref.oninput = pintar
+
+  fundo.querySelector('#fp-fechar').onclick = () => fundo.remove()
+  fundo.querySelector('#fp-imprimir').onclick = () => window.print()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
 }
 
 // ----- Financeiro › Planos e metas -----
