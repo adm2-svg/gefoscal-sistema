@@ -530,6 +530,28 @@ tbody tr:hover { background: var(--hover-bg); }
 .grafico12 .b-desp { background:var(--rust); }
 .grafico12 .mes { font-size:9.5px; color:var(--dim2); margin-top:4px; }
 
+/* ---- Baixa de pagamento com parcelas ---- */
+.pag-resumo { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+.pag-resumo > div { border:1px solid var(--line); border-radius:9px; padding:12px 14px; min-width:0; }
+.pag-resumo span { display:block; font-size:10.5px; text-transform:uppercase;
+                   letter-spacing:.7px; color:var(--dim2); font-weight:700; }
+.pag-resumo b { display:block; font-size:19px; margin-top:5px; overflow-wrap:break-word; }
+.pag-resumo .falta { border-color:var(--warn-text); }
+.pag-resumo .falta b { color:var(--warn-text); }
+.pag-resumo .ok { border-color:var(--good-text); }
+.pag-resumo .ok b { color:var(--good-text); }
+.pag-parcelas { display:flex; flex-direction:column; gap:7px; }
+.pag-parcela { display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+               border:1px solid var(--line); border-radius:8px; padding:9px 12px; font-size:13px; }
+.pag-parcela .n { font-weight:700; color:var(--dim2); font-size:11.5px; min-width:26px; }
+.pag-parcela .quanto { font-weight:700; font-variant-numeric:tabular-nums; }
+.pag-parcela .onde { flex:1; min-width:120px; font-size:11.5px; }
+.pag-parcela .acoes-parcela { display:flex; gap:6px; align-items:center; margin-left:auto; }
+@media (max-width:620px) {
+  .pag-resumo { grid-template-columns:1fr; }
+  .pag-resumo b { font-size:17px; }
+}
+
 /* ---- Painel do Financeiro › Relatórios ----
    Tudo em token de skin, nada de cor fixa: o mesmo painel tem que ficar
    certo no tema escuro e no claro. */
@@ -10164,7 +10186,7 @@ async function painelFinanceiro (area) {
       db.from('painel_financeiro').select('*').maybeSingle(),
       db.from('solicitacao_compra')
         .select('id,numero,produto_servico,valor_estimado,valor_aprovado,vencimento,urgencia,solicitante:solicitante_id(nome)')
-        .eq('status', 'APROVADA').order('vencimento', { nullsFirst: false }).limit(8),
+        .in('status', ['APROVADA', 'PARCIAL']).order('vencimento', { nullsFirst: false }).limit(8),
       db.from('titulo_externo').select('id,tipo,parceiro,descricao,documento,vencimento,valor')
         .eq('situacao', 'ABERTO').lte('vencimento', em7)
         .order('vencimento').limit(12),
@@ -10330,6 +10352,7 @@ const STATUS_COMPRA = {
   AGUARDANDO_APROVACAO:           { rotulo: 'Aguardando aprovação',        classe: 'aguardando' },
   DEVOLVIDA:            { rotulo: 'Devolvida',              classe: 'reprovada' },
   APROVADA:             { rotulo: 'Aprovada — a pagar',    classe: 'aprovada' },
+  PARCIAL:              { rotulo: 'Paga em parte',         classe: 'aguardando' },
   PAGA:                 { rotulo: 'Paga',                  classe: 'aprovada' },
   REPROVADA:            { rotulo: 'Reprovada',              classe: 'reprovada' },
   RECEBIDA:             { rotulo: 'Recebida',               classe: 'recebida' },
@@ -10365,7 +10388,7 @@ const podeGerenciarFornecedores = () => podeEditar('compras') || podeCoordenar()
 
 // Quem pode mexer numa solicitação específica. O banco aplica a mesma
 // regra na RLS — aqui é só para não mostrar botão que vai falhar.
-const ENCERRADOS = ['APROVADA', 'REPROVADA', 'PAGA', 'RECEBIDA', 'CANCELADA']
+const ENCERRADOS = ['APROVADA', 'PARCIAL', 'REPROVADA', 'PAGA', 'RECEBIDA', 'CANCELADA']
 function podeEditarSolicitacao (s) {
   if (ehAdminSistema()) return true
   if (!s || ENCERRADOS.includes(s.status)) return false
@@ -10448,7 +10471,7 @@ const selSolicitacao = `
   id, status, urgencia, tipo_solicitacao, justificativa, tem_risco, descricao_risco,
   produto_servico, quantidade, unidade, especificacoes, finalidade, local_entrega,
   valor_estimado, recorrencia, data_solicitacao, setor_id, veiculo_id,
-  numero, valor_aprovado, onde_mais_barato, observacao_compras, solicitante_id,
+  numero, valor_aprovado, valor_pago, pago_em, onde_mais_barato, observacao_compras, solicitante_id,
   parecer_coordenacao, coordenado_em, parecer_aprovacao, decidido_em,
   parecer_cotacao, cotado_em, forma_pagamento, condicao_pagamento,
   parcelas, vencimento, dados_pagamento, orcamento_escolhido_id,
@@ -10497,7 +10520,7 @@ async function comprasSolicitacoes (alvo, editavel, apenasProprio) {
   // Em análise é o que ainda anda. Encerrada é o que já teve desfecho —
   // fica guardado numa gaveta, para não competir com o que precisa de ação.
   const ANDANDO = ['AGUARDANDO_COORD', 'AGUARDANDO_AUTORIZACAO_ORCAMENTO', 'AGUARDANDO_COTACAO', 'AGUARDANDO_APROVACAO']
-  const ENCERRADA = ['APROVADA', 'REPROVADA', 'DEVOLVIDA', 'PAGA', 'RECEBIDA', 'CANCELADA']
+  const ENCERRADA = ['APROVADA', 'PARCIAL', 'REPROVADA', 'DEVOLVIDA', 'PAGA', 'RECEBIDA', 'CANCELADA']
 
   const todas = data || []
   if (todas.length) {
@@ -10512,7 +10535,7 @@ async function comprasSolicitacoes (alvo, editavel, apenasProprio) {
   }
   const analise = todas.filter(s => ANDANDO.includes(s.status))
   const encerradas = todas.filter(s => ENCERRADA.includes(s.status))
-  const aprovadas = encerradas.filter(s => ['APROVADA', 'PAGA', 'RECEBIDA'].includes(s.status))
+  const aprovadas = encerradas.filter(s => ['APROVADA', 'PARCIAL', 'PAGA', 'RECEBIDA'].includes(s.status))
   const reprovadas = encerradas.filter(s => ['REPROVADA', 'DEVOLVIDA', 'CANCELADA'].includes(s.status))
 
   const soma = l => l.reduce((t, s) => t + Number(s.valor_aprovado ?? s.valor_estimado ?? 0), 0)
@@ -10911,7 +10934,7 @@ async function comprasRelatorio (alvo) {
     const valor = s => Number(s.valor_pago ?? s.valor_aprovado ?? s.valor_estimado ?? 0)
     const total = lista.reduce((t, s) => t + valor(s), 0)
     const pagas = lista.filter(s => s.status === 'PAGA')
-    const aPagar = lista.filter(s => s.status === 'APROVADA')
+    const aPagar = lista.filter(s => ['APROVADA', 'PARCIAL'].includes(s.status))
 
     // agrupa por setor, que é o corte mais útil no fim do mês
     const porSetor = {}
@@ -11271,7 +11294,7 @@ async function abrirFicha (s, editavel) {
         docValor('Valor solicitado', 'estimativa do solicitante', s.valor_estimado) +
         docValor('Valor análise compras', 'cotação e negociação', escolhido?.valor) +
         docValor('Valor aprovado', 'valor final autorizado',
-          s.valor_aprovado ?? (['APROVADA','PAGA','RECEBIDA'].includes(s.status) ? escolhido?.valor : null), true))}
+          s.valor_aprovado ?? (['APROVADA','PARCIAL','PAGA','RECEBIDA'].includes(s.status) ? escolhido?.valor : null), true))}
     </div>
 
     ${docBloco('Análise do compras e coordenação',
@@ -33384,7 +33407,7 @@ async function comprasPagar (alvo) {
   const [{ data, error }, { data: contas }, { data: categorias }, { data: centros }] =
     await Promise.all([
       db.from('solicitacao_compra').select(selSolicitacao)
-        .in('status', ['APROVADA', 'PAGA'])
+        .in('status', ['APROVADA', 'PARCIAL', 'PAGA'])
         .order('status').order('vencimento', { nullsFirst: false }),
       db.from('conta_financeira').select('id,nome').order('nome'),
       db.from('categoria_financeira').select('id,nome,tipo').order('nome'),
@@ -33393,18 +33416,25 @@ async function comprasPagar (alvo) {
 
   if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
 
-  const aPagar = (data || []).filter(s => s.status === 'APROVADA')
+  // Uma compra em PARCIAL continua na fila: o que ela deve é só o que
+  // falta, não o valor cheio.
+  const aPagar = (data || []).filter(s => ['APROVADA', 'PARCIAL'].includes(s.status))
   const pagas = (data || []).filter(s => s.status === 'PAGA')
-  const total = aPagar.reduce((t, s) => t + Number(s.valor_estimado || 0), 0)
+  const daCompra = s => Number(s.valor_aprovado ?? s.valor_estimado ?? 0)
+  const faltaDe = s => Math.max(0, daCompra(s) - Number(s.valor_pago || 0))
+  const total = aPagar.reduce((t, s) => t + faltaDe(s), 0)
+  const emParcelas = aPagar.filter(s => s.status === 'PARCIAL').length
 
   alvo.innerHTML = `
     <div class="cabeca-secao">
       <h3 style="font-family:var(--serif);font-size:17px;">A pagar</h3>
       <span class="texto-dim2" style="font-size:12px;">
-        ${aPagar.length} pendente(s)${total ? ' · aprox. R$ ' + fmtNum(total) : ''}</span>
+        ${aPagar.length} pendente(s)${total ? ' · falta R$ ' + fmtNum(total) : ''}${
+        emParcelas ? ` · ${emParcelas} em pagamento parcial` : ''}</span>
     </div>
     <p class="aviso" style="margin-top:0;margin-bottom:14px;">
-      Imprima a ordem de pagamento, efetue e dê a baixa. O solicitante é avisado automaticamente.</p>
+      Imprima a ordem de pagamento, efetue e dê a baixa. Dá pra pagar em partes:
+      cada parcela guarda o próprio comprovante, e o solicitante só é avisado quando quitar.</p>
     <div id="c-pagar"></div>
 
     ${pagas.length ? `<div class="cabeca-secao" style="margin-top:26px;">
@@ -33412,16 +33442,23 @@ async function comprasPagar (alvo) {
       <span class="texto-dim2" style="font-size:12px;">${pagas.length}</span></div>
       <div id="c-pagas"></div>` : ''}`
 
-  const cartao = (s, feito) => `
+  const cartao = (s, feito) => {
+    const parcial = s.status === 'PARCIAL'
+    const pago = Number(s.valor_pago || 0)
+    return `
     <div class="cartao-sol">
       <div class="linha1">
         <span class="titulo">${esc(s.produto_servico)}</span>
         ${s.urgencia === 'URGENTE_4H' && !feito ? '<span class="urgente">● urgente</span>' : ''}
         ${feito ? selo('PAGA') : ''}
+        ${parcial ? '<span class="chip" style="border-color:var(--warn-text);color:var(--warn-text);">pago em partes</span>' : ''}
         <div class="botoes">
-          ${!feito ? `<span class="texto-dim2" style="font-size:13px;font-weight:600;align-self:center;">R$ ${fmtNum(s.valor_estimado)}</span>` : ''}
+          ${!feito ? `<span class="texto-dim2" style="font-size:13px;font-weight:600;align-self:center;">
+            falta R$ ${fmtNum(faltaDe(s))}</span>` : ''}
           <button class="btn-secundario mini" data-ordem="${s.id}">ordem</button>
-          ${feito ? '' : `<button class="btn mini" data-baixa="${s.id}">dar baixa</button>`}
+          ${feito
+            ? `<button class="btn-secundario mini" data-baixa="${s.id}">pagamentos</button>`
+            : `<button class="btn mini" data-baixa="${s.id}">${parcial ? 'pagar mais' : 'dar baixa'}</button>`}
         </div>
       </div>
       <div class="meta">
@@ -33429,11 +33466,12 @@ async function comprasPagar (alvo) {
         ${s.setor?.nome ? '· ' + esc(s.setor.nome) : ''}
         ${s.fornecedor?.nome ? '· ' + esc(s.fornecedor.nome) : ''}
         ${feito
-          ? `· pago em ${fmtQuando(s.pago_em) ?? '—'} · R$ ${fmtNum(s.valor_pago)}`
+          ? `· quitado em ${fmtQuando(s.pago_em) ?? '—'} · R$ ${fmtNum(pago)}`
           : `${s.vencimento ? '· vence ' + fmtData(s.vencimento) : ''}
-             ${s.parcelas ? '· ' + s.parcelas + 'x' : ''}`}
+             ${parcial ? `· já pago R$ ${fmtNum(pago)} de R$ ${fmtNum(daCompra(s))}` : ''}`}
       </div>
     </div>`
+  }
 
   $('#c-pagar').innerHTML = aPagar.map(s => cartao(s, false)).join('') ||
     `<p class="vazio">Nada aguardando pagamento.</p>`
@@ -33508,184 +33546,370 @@ async function ordemPagamento (s) {
   fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
 }
 
-// ----- Baixa do pagamento -----
-function telaBaixa (s, contas, categorias, centros) {
-  if (!s) return
+// ----- Baixa de pagamento: título e compra, com parcial -----
+//
+// Uma tela só pras duas filas do Financeiro. Antes eram duas telas quase
+// iguais, e as duas exigiam o valor cheio: uma compra de R$ 16.000 paga em
+// quatro vezes só podia ser marcada no fim, e as três primeiras parcelas não
+// existiam em lugar nenhum — nem o valor, nem o comprovante.
+//
+// Agora cada pagamento é uma linha em `pagamento_saida`, com o comprovante
+// dele. Quem soma é o banco (saida_registrar_pagamento), numa transação só:
+// parcela + lançamento + acumulado do dono. A tela nunca escreve direto no
+// título nem na compra — foi exatamente esse caminho em dois passos que, em
+// setembro de 2025, deixou 8 compras pagas presas na fila.
+
+// Quanto ainda falta pagar: o que se deve mais juros, menos desconto,
+// menos o que já entrou.
+function pagSaldo (valorOriginal, parcelas) {
+  const soma = k => (parcelas || []).reduce((s, p) => s + Number(p[k] || 0), 0)
+  const pago = soma('valor')
+  const falta = Number(valorOriginal || 0) + soma('juros_multa') - soma('desconto') - pago
+  return { pago, falta: Math.max(0, Math.round(falta * 100) / 100), juros: soma('juros_multa'), desconto: soma('desconto') }
+}
+
+// Caixinha de motivo. Estorno mexe em dinheiro já lançado, então segue a
+// mesma regra das outras exclusões do sistema: sem frase, não passa.
+function pedirMotivo ({ titulo, texto, rotulo = 'Confirmar', minimo = 10 }) {
+  return new Promise(resolve => {
+    const fundo = document.createElement('div')
+    fundo.className = 'modal-fundo'
+    fundo.innerHTML = `
+      <div class="modal" style="max-width:520px;">
+        <h3>${esc(titulo)}</h3>
+        <p class="texto-dim" style="font-size:13px;">${texto}</p>
+        <div class="campo" style="margin-top:10px;"><label>Motivo *</label>
+          <textarea id="pm-motivo" rows="3" placeholder="escreva o que aconteceu"></textarea>
+          <span class="texto-dim2" style="font-size:11px;">pelo menos ${minimo} caracteres — fica no histórico</span></div>
+        <div class="acoes" style="margin-top:12px;">
+          <button class="btn" id="pm-ok">${esc(rotulo)}</button>
+          <button class="btn-secundario" id="pm-nao">Cancelar</button>
+        </div>
+        <div class="recado oculto" id="pm-recado"></div>
+      </div>`
+    document.body.appendChild(fundo)
+    const q = id => fundo.querySelector(id)
+    const fechar = v => { fundo.remove(); resolve(v) }
+    q('#pm-nao').onclick = () => fechar(null)
+    fundo.onclick = e => { if (e.target === fundo) fechar(null) }
+    q('#pm-ok').onclick = () => {
+      const m = q('#pm-motivo').value.trim()
+      if (m.length < minimo) {
+        const el = q('#pm-recado')
+        el.textContent = `Escreva pelo menos ${minimo} caracteres.`
+        el.classList.remove('oculto')
+        el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+        return
+      }
+      fechar(m)
+    }
+    setTimeout(() => q('#pm-motivo').focus(), 30)
+  })
+}
+
+// A tela. `ctx` diz de quem é a conta e o que mostrar na ficha; o resto é
+// igual pros dois lados.
+async function telaPagamento (ctx) {
+  const { origem, id, titulo, valorOriginal, contas = [], categorias = [], centros = [] } = ctx
   const despesas = categorias.filter(c => c.tipo === 'DESPESA')
+  const hoje = new Date().toISOString().slice(0, 10)
+
+  const colunaDono = origem === 'titulo' ? 'titulo_id' : 'compra_id'
+  const carregarParcelas = async () => {
+    const { data } = await db.from('pagamento_saida')
+      .select('id,valor,juros_multa,desconto,pago_em,comprovante_caminho,comprovante_nome,comprovante_link,observacao,criado_em,conta:conta_id(nome),autor:criado_por(nome)')
+      .eq(colunaDono, id).order('pago_em').order('criado_em')
+    return data || []
+  }
+  let parcelas = await carregarParcelas()
 
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
-  fundo.innerHTML = `
-    <div class="modal">
-      <h3>Dar baixa no pagamento</h3>
-      <div class="ficha" style="margin-bottom:16px;">
-        <div class="item"><div class="rot">Item</div><div class="val">${esc(s.produto_servico)}</div></div>
-        <div class="item"><div class="rot">Solicitante</div>
-          <div class="val">${esc(s.solicitante?.nome ?? '—')}</div></div>
-        <div class="item"><div class="rot">Fornecedor</div>
-          <div class="val">${esc(s.fornecedor?.nome ?? '—')}</div></div>
-      </div>
-
-      <div class="form-grade">
-        <div class="campo"><label>Valor pago (R$) *</label>
-          <input id="b-valor" inputmode="decimal" value="${s.valor_estimado ?? ''}"></div>
-        <div class="campo"><label>Data do pagamento</label>
-          <input type="date" id="b-data" value="${new Date().toISOString().slice(0, 10)}"></div>
-        <div class="campo"><label>Conta</label>
-          <select id="b-conta"><option value="">—</option>
-            ${contas.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('')}</select></div>
-        <div class="campo"><label>Categoria</label>
-          <select id="b-categoria"><option value="">—</option>
-            ${despesas.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('')}</select></div>
-        <div class="campo"><label>Centro de custo</label>
-          <select id="b-centro"><option value="">—</option>
-            ${centros.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('')}</select></div>
-        <div class="campo"><label>Comprovante (link)</label><input id="b-comp" placeholder="https://..."></div>
-        ${campoArquivo('b-arq-comprovante', 'Anexar comprovante')}
-        ${campoArquivo('b-arq-boleto', 'Anexar boleto')}
-      </div>
-
-      <label class="linha-modulo" style="margin-top:12px;">
-        <input type="checkbox" id="b-lancar" checked>
-        <span class="nome">Gerar lançamento no Financeiro</span></label>
-
-      <div class="acoes">
-        <button class="btn" id="b-confirmar">Confirmar baixa</button>
-        <button class="btn-secundario" id="b-cancelar">Cancelar</button>
-      </div>
-      <div class="recado oculto" id="b-recado"></div>
-      <p class="aviso">Ao confirmar, ${esc(s.solicitante?.nome ?? 'o solicitante')} recebe o aviso
-      de que a compra foi aprovada e paga.</p>
-    </div>`
-
   document.body.appendChild(fundo)
-  const q = id => fundo.querySelector(id)
+  const q = sel => fundo.querySelector(sel)
   const fechar = () => fundo.remove()
-  q('#b-cancelar').onclick = fechar
-  fundo.onclick = e => { if (e.target === fundo) fechar() }
 
-  const aviso = t => {
-    const el = q('#b-recado'); el.textContent = t; el.classList.remove('oculto')
-    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
-  }
+  const desenhar = () => {
+    const { pago, falta } = pagSaldo(valorOriginal, parcelas)
+    const quitado = falta < 0.01
 
-  q('#b-confirmar').onclick = async () => {
-    const valor = numeroBR(q('#b-valor').value)
-    if (valor === null) { aviso('Informe o valor pago.'); return }
+    fundo.innerHTML = `
+      <div class="modal" style="max-width:760px;">
+        <h3>${quitado ? 'Pagamento' : 'Registrar pagamento'}</h3>
+        <div class="ficha" style="margin-bottom:14px;">
+          ${(ctx.ficha || []).map(([rot, val]) =>
+            `<div class="item"><div class="rot">${esc(rot)}</div><div class="val">${esc(val ?? '—')}</div></div>`).join('')}
+        </div>
 
-    const btn = q('#b-confirmar'); btn.disabled = true; btn.textContent = 'Registrando...'
+        <div class="pag-resumo">
+          <div><span>Valor da conta</span><b>R$ ${fmtNum(valorOriginal)}</b></div>
+          <div><span>Já pago</span><b>R$ ${fmtNum(pago)}</b></div>
+          <div class="${quitado ? 'ok' : 'falta'}"><span>${quitado ? 'Situação' : 'Falta'}</span>
+            <b>${quitado ? 'quitado' : 'R$ ' + fmtNum(falta)}</b></div>
+        </div>
 
-    // Uma chamada só, e o banco faz as duas coisas na mesma transação:
-    // cria o lançamento e muda o status.
-    //
-    // Antes eram dois passos soltos daqui, e isso escondia um problema feio.
-    // A tela de baixa é liberada por quem edita o FINANCEIRO, mas mudar o
-    // status mexe em solicitacao_compra, cuja RLS pede papel de COMPRAS.
-    // Quem edita só o Financeiro conseguia criar o lançamento e era barrado
-    // no status -- e a RLS não devolve erro, ela some com a linha: voltava
-    // "sucesso, zero linhas". A tela fechava e a baixa parecia feita.
-    // Resultado em 3 e 4 de setembro: 8 compras já pagas presas na fila e,
-    // como parecia não funcionar, retentativas duplicando o lançamento.
-    //
-    // Agora, se a baixa não puder ser gravada, a função levanta exceção e o
-    // lançamento não sobra: não existe mais o meio-termo que gerava órfão.
-    const { data: baixada, error } = await db.rpc('compra_dar_baixa', {
-      p_id: s.id,
-      p_valor: valor,
-      // meio-dia, não meia-noite: "2026-09-03" sozinho é lido como meia-noite
-      // UTC, que aqui é 21h do dia 2 -- a baixa aparecia um dia antes da que
-      // foi digitada. Com T12:00:00 (hora local) a data não escorrega.
-      p_pago_em: q('#b-data').value
-        ? new Date(q('#b-data').value + 'T12:00:00').toISOString()
-        : new Date().toISOString(),
-      p_comprovante_link: q('#b-comp').value.trim() || null,
-      p_lancar: q('#b-lancar').checked,
-      p_conta_id: q('#b-conta').value || null,
-      p_categoria_id: q('#b-categoria').value || null,
-      p_centro_id: q('#b-centro').value || null
+        ${parcelas.length ? `
+          <div class="cabeca-secao" style="margin:18px 0 8px;">
+            <h3 style="font-family:var(--serif);font-size:15px;">Pagamentos já feitos</h3>
+            <span class="texto-dim2" style="font-size:12px;">${parcelas.length}x</span>
+          </div>
+          <div class="pag-parcelas">
+            ${parcelas.map((p, i) => `
+              <div class="pag-parcela">
+                <span class="n">${i + 1}ª</span>
+                <span class="quando">${fmtData(p.pago_em)}</span>
+                <span class="quanto">R$ ${fmtNum(p.valor)}</span>
+                <span class="onde texto-dim2">${esc(p.conta?.nome ?? '—')}${
+                  Number(p.juros_multa) ? ' · juros R$ ' + fmtNum(p.juros_multa) : ''}${
+                  Number(p.desconto) ? ' · desc. R$ ' + fmtNum(p.desconto) : ''}</span>
+                <span class="acoes-parcela">
+                  ${p.comprovante_caminho
+                    ? `<button class="btn-secundario mini" data-ver="${esc(p.comprovante_caminho)}">comprovante</button>`
+                    : p.comprovante_link
+                      ? `<a class="btn-secundario mini" href="${esc(p.comprovante_link)}" target="_blank" rel="noopener">comprovante</a>`
+                      : '<span class="texto-dim2" style="font-size:11px;">sem comprovante</span>'}
+                  <button class="btn-secundario mini" data-estornar="${p.id}" title="desfazer este pagamento">estornar</button>
+                </span>
+              </div>`).join('')}
+          </div>` : ''}
+
+        ${quitado ? `
+          <p class="aviso" style="margin-top:16px;">Esta conta está quitada. Pra corrigir um valor,
+          estorne o pagamento errado acima e registre de novo.</p>
+          <div class="acoes"><button class="btn-secundario" id="pg-fechar">Fechar</button></div>`
+        : `
+        <div class="form-grade" style="margin-top:16px;">
+          <div class="campo"><label>Valor pago (R$) *</label>
+            <input id="pg-valor" inputmode="decimal">
+            <span class="texto-dim2" style="font-size:11px;" id="pg-dica"></span></div>
+          <div class="campo"><label>Data do pagamento</label>
+            <input type="date" id="pg-data" value="${hoje}"></div>
+          <div class="campo"><label>Conta de onde saiu</label>
+            <select id="pg-conta"><option value="">—</option>
+              ${contas.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('')}</select></div>
+          <div class="campo"><label>Categoria</label>
+            <select id="pg-categoria"><option value="">—</option>
+              ${despesas.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('')}</select></div>
+          <div class="campo"><label>Centro de custo</label>
+            <select id="pg-centro"><option value="">—</option>
+              ${centros.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('')}</select></div>
+          <div class="campo"><label>Juros / multa (R$)</label><input id="pg-juros" inputmode="decimal"></div>
+          <div class="campo"><label>Desconto (R$)</label><input id="pg-desconto" inputmode="decimal"></div>
+          <div class="campo" id="pg-campo-motivo" style="display:none;"><label>Motivo do juros/desconto *</label>
+            <input id="pg-motivo" placeholder="atraso do boleto, devolução de item…"></div>
+          ${campoArquivo('pg-arquivo', 'Anexar comprovante')}
+          <div class="campo"><label>Comprovante (link)</label><input id="pg-link" placeholder="https://..."></div>
+          ${origem === 'compra' ? campoArquivo('pg-boleto', 'Anexar boleto') : ''}
+          <div class="campo" style="grid-column:1/-1;"><label>Observação</label>
+            <input id="pg-obs" placeholder="opcional — entra no lançamento"></div>
+        </div>
+
+        <label class="linha-modulo" style="margin-top:12px;">
+          <input type="checkbox" id="pg-lancar" checked>
+          <span class="nome">Gerar lançamento no Financeiro</span></label>
+
+        <div class="acoes" style="margin-top:14px;">
+          <button class="btn" id="pg-confirmar">Registrar pagamento</button>
+          <button class="btn-secundario" id="pg-fechar">Fechar</button>
+        </div>
+        <div class="recado oculto" id="pg-recado"></div>
+        ${ctx.rodape ? `<p class="aviso">${ctx.rodape}</p>` : ''}`}
+      </div>`
+
+    fundo.querySelectorAll('[data-ver]').forEach(b => {
+      b.onclick = () => abrirArquivo(b.dataset.ver)
     })
-
-    if (error || !baixada) {
-      aviso(error?.message ||
-        'A baixa não foi gravada — o status da compra continua como estava.')
-      btn.disabled = false; btn.textContent = 'Confirmar baixa'; return
-    }
-    const lancamentoId = baixada.lancamento_id ?? null
-
-    // se essa peça foi pedida de dentro de uma OS de manutenção ("Pedir peça
-    // pro Compras"), o valor pago soma no valor_pecas daquela OS — dali o
-    // valor_total (gerado automático) já reflete em Manutenção e em Frota.
-    const { data: materiaisLigados } = await db.from('os_material')
-      .select('ordem_servico_id').eq('solicitacao_compra_id', s.id)
-    if (materiaisLigados?.length) {
-      const osIds = [...new Set(materiaisLigados.map(m => m.ordem_servico_id))]
-      for (const osId of osIds) {
-        const { data: osAtual } = await db.from('ordem_servico').select('valor_pecas').eq('id', osId).single()
-        await db.from('ordem_servico').update({
-          valor_pecas: Number(osAtual?.valor_pecas || 0) + valor
-        }).eq('id', osId)
-      }
-    }
-
-    // boleto e comprovante entram no fechamento do mes
-    const competencia = (q('#b-data').value || new Date().toISOString().slice(0, 10)).slice(0, 7)
-    try {
-      const docs = []
-      const comprovante = await enviarArquivo(q('#b-arq-comprovante').files[0], competencia)
-      if (comprovante) docs.push({
-        tipo: 'COMPROVANTE', descricao: s.produto_servico,
-        valor, pago_em: q('#b-data').value || null, competencia,
-        arquivo_caminho: comprovante.caminho, arquivo_nome: comprovante.nome,
-        solicitacao_id: s.id, lancamento_id: lancamentoId, criado_por: PERFIL.pessoaId
-      })
-      const boleto = await enviarArquivo(q('#b-arq-boleto').files[0], competencia)
-      if (boleto) docs.push({
-        tipo: 'BOLETO', descricao: s.produto_servico,
-        valor, vencimento: s.vencimento ?? null, competencia,
-        arquivo_caminho: boleto.caminho, arquivo_nome: boleto.nome,
-        solicitacao_id: s.id, lancamento_id: lancamentoId, criado_por: PERFIL.pessoaId
-      })
-      if (docs.length) await db.from('documento_pagamento').insert(docs)
-    } catch (e) {
-      // a baixa já foi dada: avisa mas não desfaz
-      aviso('Baixa registrada, mas o anexo falhou: ' + String(e.message ?? e))
-      setTimeout(() => { fechar(); abrirFinanceiro('pagar', true) }, 2500)
-      return
-    }
-
-    // avisa o solicitante
-    if (s.solicitante?.nome) {
-      const { data: p } = await db.from('pessoa').select('id')
-        .eq('nome', s.solicitante.nome).maybeSingle()
-      if (p) {
-        const tituloAviso = 'Sua compra foi aprovada e paga'
-        const textoAviso = `${s.produto_servico} — pago em ${fmtData(q('#b-data').value)} `
-             + `no valor de R$ ${fmtNum(valor)}.`
-        await db.from('aviso').insert({
-          pessoa_id: p.id,
-          titulo: tituloAviso,
-          texto: textoAviso,
-          origem: 'compras',
-          registro_id: s.id
+    fundo.querySelectorAll('[data-estornar]').forEach(b => {
+      b.onclick = async () => {
+        const motivo = await pedirMotivo({
+          titulo: 'Estornar pagamento',
+          texto: 'O pagamento some da conta e o lançamento que ele gerou é apagado junto. Fica registrado quem estornou e por quê.',
+          rotulo: 'Estornar'
         })
-        // mesmo sino de notificações usado no resto do sistema — antes só
-        // avisava pelo card "aviso" da Visão Geral, agora acende o sino também
-        if (p.id !== PERFIL.pessoaId) {
-          await db.from('notificacao_pessoal').insert({
-            destinatario_id: p.id,
-            titulo: tituloAviso,
-            mensagem: textoAviso,
-            entidade: 'solicitacao_compra', entidade_id: s.id
-          })
-        }
-        await db.from('solicitacao_compra')
-          .update({ avisado_em: new Date().toISOString() }).eq('id', s.id)
+        if (!motivo) return
+        const { error } = await db.rpc('saida_estornar_pagamento', { p_id: b.dataset.estornar, p_motivo: motivo })
+        if (error) { alert(error.message); return }
+        parcelas = await carregarParcelas()
+        desenhar()
+        ctx.aoMudar?.()
+      }
+    })
+    q('#pg-fechar').onclick = () => { fechar(); ctx.aoFechar?.() }
+    if (quitado) return
+
+    const campoValor = q('#pg-valor'); ligarMascaraMoeda(campoValor, falta)
+    const campoJuros = q('#pg-juros'); ligarMascaraMoeda(campoJuros, '')
+    const campoDesc = q('#pg-desconto'); ligarMascaraMoeda(campoDesc, '')
+
+    // A dica embaixo do valor é o que separa "quitei" de "paguei uma parte":
+    // sem ela a pessoa só descobre que sobrou saldo depois de fechar a tela.
+    const atualizarDica = () => {
+      const v = campoValor.valorEmReais()
+      const j = campoJuros.valorEmReais()
+      const d = campoDesc.valorEmReais()
+      const restante = Math.round((falta + j - d - v) * 100) / 100
+      const dica = q('#pg-dica')
+      q('#pg-campo-motivo').style.display = (j > 0 || d > 0) ? '' : 'none'
+      if (!v) { dica.textContent = 'falta R$ ' + fmtNum(falta + j - d); dica.style.color = ''; return }
+      if (restante < -0.01) {
+        dica.textContent = `R$ ${fmtNum(-restante)} a mais do que se deve`
+        dica.style.color = 'var(--warn-text)'
+      } else if (restante < 0.01) {
+        dica.textContent = 'quita a conta'
+        dica.style.color = 'var(--good-text)'
+      } else {
+        dica.textContent = `pagamento parcial — ainda fica faltando R$ ${fmtNum(restante)}`
+        dica.style.color = ''
       }
     }
+    ;[campoValor, campoJuros, campoDesc].forEach(c => c.addEventListener('input', atualizarDica))
+    atualizarDica()
 
-    fechar()
-    abrirFinanceiro('pagar', true)
+    const aviso = t => {
+      const el = q('#pg-recado'); el.textContent = t; el.classList.remove('oculto')
+      el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+    }
+
+    q('#pg-confirmar').onclick = async () => {
+      const valor = campoValor.valorEmReais()
+      const juros = campoJuros.valorEmReais()
+      const desconto = campoDesc.valorEmReais()
+      const motivo = q('#pg-motivo')?.value.trim() ?? ''
+      if (!valor || valor <= 0) { aviso('Informe o valor pago.'); return }
+      if ((juros > 0 || desconto > 0) && motivo.length < 5) {
+        aviso('Escreva o motivo do juros/multa ou do desconto.'); return
+      }
+      const dataPg = q('#pg-data').value || hoje
+      const btn = q('#pg-confirmar'); btn.disabled = true; btn.textContent = 'Registrando...'
+
+      // O arquivo sobe ANTES: assim o caminho já entra na mesma transação
+      // do pagamento. Se a transação falhar sobra um arquivo solto no
+      // storage — bem melhor que um pagamento sem comprovante.
+      const competencia = dataPg.slice(0, 7)
+      let comprovante = null, boleto = null
+      try {
+        comprovante = await enviarArquivo(q('#pg-arquivo').files[0], competencia)
+        boleto = origem === 'compra' ? await enviarArquivo(q('#pg-boleto')?.files[0], competencia) : null
+      } catch (e) {
+        aviso(String(e.message ?? e)); btn.disabled = false; btn.textContent = 'Registrar pagamento'; return
+      }
+
+      const { data: res, error } = await db.rpc('saida_registrar_pagamento', {
+        p_origem: origem,
+        p_dono_id: id,
+        p_valor: valor,
+        p_pago_em: dataPg,
+        p_juros: juros,
+        p_desconto: desconto,
+        p_motivo: motivo || null,
+        p_lancar: q('#pg-lancar').checked,
+        p_conta_id: q('#pg-conta').value || null,
+        p_categoria_id: q('#pg-categoria').value || null,
+        p_centro_id: q('#pg-centro').value || null,
+        p_comprovante_caminho: comprovante?.caminho ?? null,
+        p_comprovante_nome: comprovante?.nome ?? null,
+        p_comprovante_link: q('#pg-link').value.trim() || null,
+        p_observacao: q('#pg-obs').value.trim() || null
+      })
+
+      if (error || !res?.ok) {
+        aviso(error?.message || 'O pagamento não foi gravado.')
+        btn.disabled = false; btn.textContent = 'Registrar pagamento'; return
+      }
+
+      // comprovante e boleto também entram no pacote do fechamento do mês
+      const docs = []
+      if (comprovante) docs.push({
+        tipo: 'COMPROVANTE', descricao: titulo, valor, pago_em: dataPg, competencia,
+        arquivo_caminho: comprovante.caminho, arquivo_nome: comprovante.nome,
+        solicitacao_id: origem === 'compra' ? id : null,
+        titulo_id: origem === 'titulo' ? id : null,
+        lancamento_id: res.lancamento_id ?? null, criado_por: PERFIL.pessoaId
+      })
+      if (boleto) docs.push({
+        tipo: 'BOLETO', descricao: titulo, valor, vencimento: ctx.vencimento ?? null, competencia,
+        arquivo_caminho: boleto.caminho, arquivo_nome: boleto.nome,
+        solicitacao_id: origem === 'compra' ? id : null,
+        titulo_id: origem === 'titulo' ? id : null,
+        lancamento_id: res.lancamento_id ?? null, criado_por: PERFIL.pessoaId
+      })
+      if (docs.length) {
+        const { error: eDoc } = await db.from('documento_pagamento').insert(docs)
+        // o pagamento já está gravado: avisa, mas não desfaz
+        if (eDoc) aviso('Pagamento registrado, mas o anexo não entrou no fechamento: ' + eDoc.message)
+      }
+
+      if (res.quitado) await ctx.aoQuitar?.(res, dataPg)
+      ctx.aoMudar?.()
+
+      if (res.quitado) { fechar(); ctx.aoFechar?.(); return }
+      parcelas = await carregarParcelas()
+      desenhar()
+    }
   }
+
+  desenhar()
+  fundo.onclick = e => { if (e.target === fundo) { fechar(); ctx.aoFechar?.() } }
+}
+
+// ----- Baixa do pagamento de uma compra -----
+function telaBaixa (s, contas, categorias, centros) {
+  if (!s) return
+  telaPagamento({
+    origem: 'compra',
+    id: s.id,
+    titulo: s.produto_servico,
+    valorOriginal: Number(s.valor_aprovado ?? s.valor_estimado ?? 0),
+    vencimento: s.vencimento ?? null,
+    contas, categorias, centros,
+    ficha: [
+      ['Item', s.produto_servico],
+      ['Solicitante', s.solicitante?.nome],
+      ['Fornecedor', s.fornecedor?.nome],
+      ['Vencimento', s.vencimento ? fmtData(s.vencimento) : '—']
+    ],
+    rodape: `${esc(s.solicitante?.nome ?? 'O solicitante')} é avisado quando a compra for quitada — não a cada parcela.`,
+    aoQuitar: async (res, dataPg) => { await posQuitacaoCompra(s, res.pago_total, dataPg) },
+    aoFechar: () => abrirFinanceiro('pagar', true)
+  })
+}
+
+// O que só acontece quando a compra fica QUITADA: o custo bate na OS que
+// pediu a peça e o solicitante é avisado. Se avisasse a cada parcela, uma
+// compra em quatro vezes tocaria o sino quatro vezes dizendo "foi paga".
+async function posQuitacaoCompra (s, valorTotal, dataPg) {
+  // peça pedida de dentro de uma OS de manutenção: o valor pago soma no
+  // valor_pecas daquela OS, e dali o valor_total já reflete em Frota
+  const { data: materiaisLigados } = await db.from('os_material')
+    .select('ordem_servico_id').eq('solicitacao_compra_id', s.id)
+  if (materiaisLigados?.length) {
+    const osIds = [...new Set(materiaisLigados.map(m => m.ordem_servico_id))]
+    for (const osId of osIds) {
+      const { data: osAtual } = await db.from('ordem_servico').select('valor_pecas').eq('id', osId).single()
+      await db.from('ordem_servico').update({
+        valor_pecas: Number(osAtual?.valor_pecas || 0) + Number(valorTotal || 0)
+      }).eq('id', osId)
+    }
+  }
+
+  if (!s.solicitante?.nome) return
+  const { data: p } = await db.from('pessoa').select('id').eq('nome', s.solicitante.nome).maybeSingle()
+  if (!p) return
+  const tituloAviso = 'Sua compra foi aprovada e paga'
+  const textoAviso = `${s.produto_servico} — quitado em ${fmtData(dataPg)} `
+    + `no valor total de R$ ${fmtNum(valorTotal)}.`
+  await db.from('aviso').insert({
+    pessoa_id: p.id, titulo: tituloAviso, texto: textoAviso,
+    origem: 'compras', registro_id: s.id
+  })
+  if (p.id !== PERFIL.pessoaId) {
+    await db.from('notificacao_pessoal').insert({
+      destinatario_id: p.id, titulo: tituloAviso, mensagem: textoAviso,
+      entidade: 'solicitacao_compra', entidade_id: s.id
+    })
+  }
+  await db.from('solicitacao_compra')
+    .update({ avisado_em: new Date().toISOString() }).eq('id', s.id)
 }
 
 
@@ -33735,19 +33959,22 @@ async function finAPagar (alvo, editavel) {
   const tabela = (lista, vazio, comBaixa = false) => `
     <div class="panel" style="padding:0;"><div class="tabela-scroll">
       <table><thead><tr>
-        <th>Vencimento</th><th>Documento</th><th>Descrição</th><th>Centro</th><th class="num">Valor</th>
+        <th>Vencimento</th><th>Documento</th><th>Descrição</th><th>Centro</th><th class="num">Falta pagar</th>
         ${comBaixa && comAcao ? '<th></th>' : ''}
       </tr></thead><tbody>
         ${lista.map(x => {
           const atrasado = x.vencimento && x.vencimento < hoje
+          const parcial = Number(x.valor_pago || 0) > 0
           return `<tr>
             <td class="${atrasado ? 'badge-alerta' : ''}">${x.vencimento ? fmtData(x.vencimento) : '—'}</td>
             <td class="texto-dim2">${esc(x.documento ?? '—')}</td>
-            <td>${esc((x.descricao ?? '').slice(0, 60))}</td>
+            <td>${esc((x.descricao ?? '').slice(0, 60))}
+              ${parcial ? `<div class="texto-dim2" style="font-size:11px;">
+                já pago R$ ${fmtNum(x.valor_pago)} de R$ ${fmtNum(x.valor_original)} · ${x.parcelas}x</div>` : ''}</td>
             <td class="texto-dim">${esc(x.setor ?? '—')}</td>
             <td class="num">R$ ${fmtNum(x.valor)}</td>
             ${comBaixa && comAcao
-              ? `<td class="num"><button class="btn mini" data-baixa-titulo="${x.id}">dar baixa</button></td>`
+              ? `<td class="num"><button class="btn mini" data-baixa-titulo="${x.id}">${parcial ? 'pagar mais' : 'dar baixa'}</button></td>`
               : ''}
           </tr>`
         }).join('') || `<tr><td colspan="${comBaixa && comAcao ? 6 : 5}" class="vazio">${vazio}</td></tr>`}
@@ -33767,6 +33994,7 @@ async function finAPagar (alvo, editavel) {
       nota: `${titulos.length} título(s) importado(s)` }
   ]) + `
     <p class="aviso" style="margin-top:0;">
+      Os valores aqui são o que <b>falta pagar</b>: conta paga pela metade aparece pela metade.
       As compras aprovadas ficam na aba <b>Compras</b>, onde a baixa anexa comprovante
       e gera o lançamento.</p>
 
@@ -33794,180 +34022,29 @@ async function finAPagar (alvo, editavel) {
 // pra sempre: não havia nenhum UPDATE em titulo_externo no sistema. A conta
 // era paga de verdade, o dinheiro saía, e a aba continuava cobrando.
 //
-// Segue a mesma forma da baixa de Compras de propósito: mesmos campos, mesma
-// ordem, e o lançamento do Financeiro sai junto — assim a despesa entra no
-// fluxo de caixa e nos relatórios do mês, em vez de só sumir da lista.
+// Hoje ela é a MESMA tela da baixa de compra (telaPagamento) — mesma forma,
+// mesmo parcelamento, mesmo comprovante por parcela. O que muda é só a
+// ficha de cima e de onde vem o valor.
 function telaBaixaTitulo (t, contas, categorias, centros) {
   if (!t) return
-  const despesas = categorias.filter(c => c.tipo === 'DESPESA')
-  const hoje = new Date().toISOString().slice(0, 10)
-
-  const fundo = document.createElement('div')
-  fundo.className = 'modal-fundo'
-  fundo.innerHTML = `
-    <div class="modal">
-      <h3>Dar baixa no título</h3>
-      <div class="ficha" style="margin-bottom:16px;">
-        <div class="item"><div class="rot">Documento</div>
-          <div class="val">${esc(t.documento ?? '—')}</div></div>
-        <div class="item"><div class="rot">Fornecedor</div>
-          <div class="val">${esc(t.descricao ?? '—')}</div></div>
-        <div class="item"><div class="rot">Vencimento</div>
-          <div class="val">${t.vencimento ? fmtData(t.vencimento) : '—'}</div></div>
-        <div class="item"><div class="rot">Valor do título</div>
-          <div class="val">R$ ${fmtNum(t.valor)}</div></div>
-      </div>
-
-      <div class="form-grade">
-        <div class="campo"><label>Juros / multa (R$)</label>
-          <input id="bt-juros" inputmode="decimal" placeholder="0,00"></div>
-        <div class="campo"><label>Desconto / devolução (R$)</label>
-          <input id="bt-desconto" inputmode="decimal" placeholder="0,00"></div>
-        <div class="campo"><label>Valor pago (R$) *</label>
-          <input id="bt-valor" inputmode="decimal" value="${t.valor ?? ''}"></div>
-        <div class="campo"><label>Data do pagamento</label>
-          <input type="date" id="bt-data" value="${hoje}"></div>
-        <div class="campo"><label>Conta</label>
-          <select id="bt-conta"><option value="">—</option>
-            ${contas.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('')}</select></div>
-        <div class="campo"><label>Categoria</label>
-          <select id="bt-categoria"><option value="">—</option>
-            ${despesas.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('')}</select></div>
-        <div class="campo"><label>Centro de custo</label>
-          <select id="bt-centro"><option value="">—</option>
-            ${centros.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('')}</select></div>
-      </div>
-
-      <div class="campo" style="margin-top:10px;">
-        <label>Motivo da diferença</label>
-        <input id="bt-motivo" placeholder="ex: nota de devolução 1234, desconto comercial, juros por atraso">
-      </div>
-      <div class="aviso" id="bt-conta-fecha" style="margin-top:8px;"></div>
-
-      <label class="linha-modulo" style="margin-top:12px;">
-        <input type="checkbox" id="bt-lancar" checked>
-        <span class="nome">Gerar lançamento no Financeiro</span></label>
-      <p class="aviso" style="margin-top:8px;">
-        Desmarque só se essa despesa já entrou no Financeiro por outro caminho,
-        senão o mesmo gasto conta duas vezes no mês.</p>
-
-      <div class="acoes">
-        <button class="btn" id="bt-confirmar">Confirmar baixa</button>
-        <button class="btn-secundario" id="bt-cancelar">Cancelar</button>
-      </div>
-      <div class="recado oculto" id="bt-recado"></div>
-    </div>`
-
-  document.body.appendChild(fundo)
-  const q = id => fundo.querySelector(id)
-  const fechar = () => fundo.remove()
-  q('#bt-cancelar').onclick = fechar
-  fundo.onclick = e => { if (e.target === fundo) fechar() }
-
-  const aviso = txt => {
-    const el = q('#bt-recado'); el.textContent = txt; el.classList.remove('oculto')
-    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
-  }
-
-  // A conta que tem que fechar: pago = título + juros/multa − desconto.
-  // O painel mostra ela montada, pra diferença aparecer antes de gravar e
-  // não seis meses depois, quando ninguém lembra por que saiu diferente.
-  const devido = Number(t.valor || 0)
-  const lerAjustes = () => ({
-    juros: numeroBR(q('#bt-juros').value) ?? 0,
-    desconto: numeroBR(q('#bt-desconto').value) ?? 0
+  telaPagamento({
+    origem: 'titulo',
+    id: t.id,
+    titulo: t.descricao || t.documento || 'Título',
+    // a fila já manda o SALDO em `valor`; o valor de face vem em
+    // valor_original, e é ele que a tela de pagamento usa como base
+    valorOriginal: Number(t.valor_original ?? t.valor ?? 0),
+    vencimento: t.vencimento ?? null,
+    contas, categorias, centros,
+    ficha: [
+      ['Documento', t.documento],
+      ['Parceiro / descrição', t.descricao],
+      ['Vencimento', t.vencimento ? fmtData(t.vencimento) : '—'],
+      ['Setor', t.setor]
+    ],
+    rodape: 'O lançamento sai com o valor que saiu do caixa em cada parcela, não com o valor cheio do título.',
+    aoFechar: () => abrirFinanceiro('pagar', true)
   })
-  const recalcular = (mexeuNoPago = false) => {
-    const { juros, desconto } = lerAjustes()
-    const esperado = devido + juros - desconto
-    if (!mexeuNoPago) q('#bt-valor').value = esperado.toFixed(2).replace('.', ',')
-    const pago = numeroBR(q('#bt-valor').value) ?? 0
-    const painel = q('#bt-conta-fecha')
-    const linha = `título R$ ${fmtNum(devido)}`
-      + (juros ? ` + juros/multa R$ ${fmtNum(juros)}` : '')
-      + (desconto ? ` − desconto/devolução R$ ${fmtNum(desconto)}` : '')
-      + ` = R$ ${fmtNum(esperado)}`
-    const fecha = Math.abs(pago - esperado) < 0.01
-    painel.innerHTML = fecha
-      ? linha
-      : `${linha}<br><b>Não fecha:</b> você informou R$ ${fmtNum(pago)}.
-         Ajuste o juros, o desconto ou o valor pago.`
-    painel.style.borderColor = fecha ? '' : 'var(--warn-text)'
-    painel.style.color = fecha ? '' : 'var(--warn-text)'
-    q('#bt-motivo').closest('.campo').style.display =
-      (juros || desconto) ? '' : 'none'
-  }
-  q('#bt-juros').oninput = () => recalcular()
-  q('#bt-desconto').oninput = () => recalcular()
-  q('#bt-valor').oninput = () => recalcular(true)
-  recalcular()
-
-  q('#bt-confirmar').onclick = async () => {
-    const valor = numeroBR(q('#bt-valor').value)
-    if (valor === null) { aviso('Informe o valor pago.'); return }
-
-    const { juros, desconto } = lerAjustes()
-    const motivo = q('#bt-motivo').value.trim()
-    if (Math.abs(valor - (devido + juros - desconto)) >= 0.01) {
-      aviso('A conta não fecha: pago tem que ser o título mais juros/multa menos desconto.')
-      return
-    }
-    if ((juros || desconto) && motivo.length < 5) {
-      aviso('Escreva o motivo da diferença — nota de devolução, desconto, juros.')
-      return
-    }
-
-    const btn = q('#bt-confirmar'); btn.disabled = true; btn.textContent = 'Registrando...'
-    const dataPg = q('#bt-data').value || hoje
-    let lancamentoId = null
-
-    if (q('#bt-lancar').checked) {
-      const { data: lanc, error: eL } = await db.from('lancamento_financeiro').insert({
-        tipo: 'SAIDA',
-        descricao: `Título ${t.documento ?? ''} — ${t.descricao ?? ''}`.trim(),
-        valor,
-        data_lancamento: dataPg,
-        conta_id: q('#bt-conta').value || null,
-        categoria_id: q('#bt-categoria').value || null,
-        centro_custo_id: q('#bt-centro').value || null,
-        situacao: 'EFETIVADO',
-        // o lançamento leva o valor que saiu do caixa, não o do título --
-        // e carrega o motivo, senão a diferença some do rastro
-        observacao: 'Baixa de título do relatório contábil'
-          + (juros ? ` · juros/multa R$ ${fmtNum(juros)}` : '')
-          + (desconto ? ` · desconto/devolução R$ ${fmtNum(desconto)}` : '')
-          + (motivo ? ` · ${motivo}` : ''),
-        registrado_por: PERFIL.pessoaId
-      }).select('id').single()
-
-      if (eL) { aviso('Não deu para lançar no financeiro: ' + eL.message)
-        btn.disabled = false; btn.textContent = 'Confirmar baixa'; return }
-      lancamentoId = lanc.id
-    }
-
-    // o .select() no fim não é enfeite: sem ele, um UPDATE que a RLS barra
-    // volta "sem erro" e com zero linhas, e a baixa parece ter dado certo
-    // sem nada ter mudado. Conferindo a linha de volta, isso vira erro.
-    const { data: atualizado, error } = await db.from('titulo_externo').update({
-      situacao: 'PAGO',
-      valor_pago: valor,
-      juros_multa: juros,
-      desconto,
-      motivo_baixa: motivo || null,
-      pago_em: dataPg,
-      pago_por_id: PERFIL.pessoaId,
-      lancamento_id: lancamentoId
-    }).eq('id', t.id).select('id')
-
-    if (error || !atualizado?.length) {
-      aviso(error?.message ||
-        'A baixa não foi gravada: o título não foi encontrado ou você não tem permissão de editar o Financeiro.')
-      btn.disabled = false; btn.textContent = 'Confirmar baixa'; return
-    }
-
-    fechar()
-    abrirFinanceiro('pagar', true)
-  }
 }
 
 // ----- Financeiro › Compras -----
@@ -41399,7 +41476,7 @@ async function custosCombustivelPorVeiculo () {
 // valor_pecas da própria OS quando a baixa é dada, então essas não se repetem aqui.
 async function custosPecasPorVeiculo () {
   const { data } = await db.from('solicitacao_compra').select('veiculo_id,valor_pago')
-    .not('veiculo_id', 'is', null).eq('status', 'PAGA')
+    .not('veiculo_id', 'is', null).in('status', ['PARCIAL', 'PAGA'])
   const porVeiculo = {}
   ;(data || []).forEach(p => { porVeiculo[p.veiculo_id] = (porVeiculo[p.veiculo_id] || 0) + Number(p.valor_pago || 0) })
   return Object.entries(porVeiculo).map(([veiculo_id, valor]) => ({ veiculo_id, valor }))
