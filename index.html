@@ -43086,7 +43086,7 @@ function frotaCalculadora (alvo) {
 // Notificações/autuações podem virar um Projeto com 1 clique, pra
 // tocar o trabalho no Kanban/Progresso que já existe.
 // ---------------------------------------------------------------
-let JUR_CACHE = { pessoas: [], empresas: [] }
+let JUR_CACHE = { pessoas: [], empresas: [], setores: [], certificados: [] }
 const CATEGORIAS_LICENCA = ['Ambiental', 'Sanitária/Bombeiros', 'Municipal/Alvará', 'Fiscal/Certidões', 'Seguros', 'Trabalhista', 'Outra']
 const CATEGORIAS_CONTRATO = ['Fornecedor', 'Cliente', 'Locação', 'Prestação de serviço', 'PJ', 'Parceria', 'Financeiro', 'Outro']
 const ROTULO_TIPO_PJ = { PJ_INTERNO: 'PJ interno (faz parte do time)', PJ_PRESTADOR_SERVICOS: 'PJ prestador de serviços (externo)' }
@@ -43104,16 +43104,21 @@ async function paginaJuridico () {
   const area = areaLivre()
   area.innerHTML = `<p class="texto-dim2">carregando...</p>`
 
-  const [{ data: pessoas }, { data: empresas }] = await Promise.all([
+  const [{ data: pessoas }, { data: empresas }, { data: setoresJur }, { data: certsJur }] = await Promise.all([
     db.from('pessoa').select('id,nome').eq('status', 'ATIVO').order('nome'),
-    db.from('empresa').select('id,nome').eq('status', 'ATIVO').order('nome')
+    db.from('empresa').select('id,nome').eq('status', 'ATIVO').order('nome'),
+    db.from('setor').select('id,nome').order('nome'),
+    // usados pelo cofre de senhas, pra amarrar a senha ao certificado
+    db.from('certificado_digital').select('id,tipo,titular_nome').eq('status', 'ATIVO').order('titular_nome')
   ])
   JUR_CACHE.pessoas = pessoas || []
   JUR_CACHE.empresas = empresas || []
+  JUR_CACHE.setores = setoresJur || []
+  JUR_CACHE.certificados = certsJur || []
 
   const abas = [['painel', 'Painel'], ['contratos', 'Contratos'], ['licencas', 'Licenças e certidões'],
     ['processos', 'Processos'], ['notificacoes', 'Notificações e autuações'], ['documentos', 'Documentos'],
-    ['termos', 'Termos'], ['certificados', 'Certificados digitais']]
+    ['termos', 'Termos'], ['certificados', 'Certificados digitais'], ['senhas', 'Cofre de senhas']]
   area.innerHTML = `
     <div style="background:linear-gradient(120deg,#1a1410 0%,#2b2018 55%,#1a1410 100%);border-radius:14px;padding:22px 26px;margin-bottom:18px;position:relative;overflow:hidden;border:1px solid #3a2e20;">
       <div style="position:absolute;right:-20px;top:-24px;font-size:120px;opacity:.08;line-height:1;">⚖️</div>
@@ -43149,6 +43154,319 @@ function abrirJuridico (sub, editavel) {
   // emite; o DP/RH também emite. Cada tipo de termo é um card.
   if (sub === 'termos') juridicoTermos(alvo, editavel)
   if (sub === 'certificados') juridicoCertificados(alvo, editavel)
+  if (sub === 'senhas') juridicoSenhas(alvo, editavel)
+}
+
+// ---------------------------------------------------------------
+// Jurídico › Cofre de senhas.
+// A senha NUNCA passa pelo banco em texto e NUNCA é lida direto pelo
+// cliente: quem cifra e decifra é a edge function `cofre-senha`, que
+// guarda a chave AES num secret dela -- fora do Postgres. Então nem
+// um dump do banco, nem um select pela API, nem uma consulta SQL
+// entregam senha nenhuma: trazem só o blob de senha_cofre_segredo,
+// tabela que de propósito não tem policy nenhuma.
+// Revelar exige motivo escrito, e o motivo vai pro log junto com
+// quem pediu, quando e de onde. Na prática é isso que segura a
+// olhada curiosa -- mais que a criptografia.
+// ---------------------------------------------------------------
+const ROTULO_ACAO_COFRE = { REVELAR: 'revelou', GUARDAR: 'guardou', TROCAR: 'trocou', EXCLUIR: 'excluiu' }
+
+async function juridicoSenhas (alvo, editavel) {
+  if (!editavel) {
+    alvo.innerHTML = `<div class="panel" style="padding:22px;">
+      <p class="texto-dim">O cofre de senhas é restrito a quem edita o módulo Jurídico.</p></div>`
+    return
+  }
+
+  const [{ data, error }, { data: logs }] = await Promise.all([
+    db.from('senha_cofre').select(`id,titulo,descricao,usuario,url,status,ultima_troca,setor_id,certificado_id,
+      setor:setor_id(nome),empresa:empresa_id(nome),
+      certificado:certificado_id(tipo,titular_nome),
+      criador:criado_por(nome)`).order('titulo'),
+    db.from('senha_cofre_log').select('id,senha_titulo,acao,motivo,quando,pessoa:pessoa_id(nome)')
+      .order('quando', { ascending: false }).limit(40)
+  ])
+
+  if (faltaMigracao(error)) { alvo.innerHTML = `<p class="vazio">Recurso ainda não disponível — a migração do cofre não rodou neste banco.</p>`; return }
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+
+  const lista = data || []
+  const recarregar = () => juridicoSenhas(alvo, editavel)
+
+  alvo.innerHTML = `
+    <div class="panel" style="padding:12px 14px;margin:-4px 0 14px;border-left:3px solid var(--gold,#c8a11a);">
+      <p class="texto-dim2" style="font-size:12px;line-height:1.6;margin:0;max-width:88ch;">
+        As senhas são guardadas cifradas, e a chave que abre não fica no banco — fica numa função à parte.
+        Toda vez que alguém revela uma senha, o sistema pede o motivo e registra quem foi, quando e de onde.
+        <b>Nunca escreva senha no campo de descrição ou de usuário</b>: esses campos não são cifrados.</p>
+    </div>
+
+    <div class="acoes" style="margin-bottom:14px;"><button class="btn" id="cs-nova">+ Nova senha</button></div>
+
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>O quê</th><th>Usuário/login</th><th>Onde</th><th>Última troca</th><th>Situação</th><th style="text-align:right;">Ações</th>
+      </tr></thead><tbody>
+      ${lista.map(s => `<tr>
+        <td><b>${esc(s.titulo)}</b>
+          ${s.certificado ? `<div class="texto-dim2" style="font-size:11px;">🔐 ${esc(s.certificado.tipo)} — ${esc(s.certificado.titular_nome)}</div>` : ''}
+          ${s.descricao ? `<div class="texto-dim2" style="font-size:11px;">${esc(s.descricao)}</div>` : ''}</td>
+        <td class="texto-dim">${esc(s.usuario || '—')}</td>
+        <td class="texto-dim">${esc(s.setor?.nome || s.empresa?.nome || '—')}
+          ${s.url ? `<div class="texto-dim2" style="font-size:11px;">${esc(s.url)}</div>` : ''}</td>
+        <td class="texto-dim">${s.ultima_troca ? fmtData(s.ultima_troca) : '<span class="texto-dim2">nunca guardada</span>'}</td>
+        <td><span class="chip" style="color:${s.status === 'ATIVA' ? '#2c6e3f' : '#8a8a8a'};">${s.status === 'ATIVA' ? 'ativa' : 'inativa'}</span></td>
+        <td style="text-align:right;white-space:nowrap;">
+          <button class="btn-secundario mini" data-revelar="${s.id}">revelar</button>
+          <button class="btn-secundario mini" data-trocar="${s.id}">trocar senha</button>
+          <button class="btn-secundario mini" data-editar-s="${s.id}">editar</button>
+          <button class="btn-secundario mini" data-excluir-s="${s.id}" style="color:var(--warn-text);">excluir</button>
+        </td>
+      </tr>`).join('') || `<tr><td colspan="6" class="vazio">Nenhuma senha guardada ainda.</td></tr>`}
+      </tbody></table>
+    </div></div>
+
+    <div class="cabeca-secao" style="margin:20px 0 8px;">
+      <h3 style="margin:0;font-size:14px;">Quem abriu o quê</h3>
+      <span class="texto-dim2" style="font-size:11.5px;">últimos 40 registros · ninguém apaga esta lista</span></div>
+    <div class="panel" style="padding:0;"><div class="tabela-scroll" style="max-height:320px;">
+      <table><thead><tr><th>Quando</th><th>Quem</th><th>O quê</th><th>Senha</th><th>Motivo</th></tr></thead><tbody>
+      ${(logs || []).map(l => `<tr>
+        <td class="texto-dim">${fmtQuando(l.quando)}</td>
+        <td class="texto-dim">${esc(l.pessoa?.nome || '—')}</td>
+        <td><span class="chip" style="color:${l.acao === 'REVELAR' ? '#a67c00' : '#2c6e3f'};">${esc(ROTULO_ACAO_COFRE[l.acao] || l.acao)}</span></td>
+        <td class="texto-dim">${esc(l.senha_titulo || '—')}</td>
+        <td class="texto-dim">${esc(l.motivo || '—')}</td>
+      </tr>`).join('') || `<tr><td colspan="5" class="vazio">Ninguém abriu nenhuma senha ainda.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+
+  const achar = id => lista.find(s => s.id === id)
+  alvo.querySelector('#cs-nova').onclick = () => formSenhaCofre(null, recarregar)
+  alvo.querySelectorAll('[data-editar-s]').forEach(b => { b.onclick = () => formSenhaCofre(achar(b.dataset.editarS), recarregar) })
+  alvo.querySelectorAll('[data-revelar]').forEach(b => { b.onclick = () => revelarSenhaCofre(achar(b.dataset.revelar), recarregar) })
+  alvo.querySelectorAll('[data-trocar]').forEach(b => { b.onclick = () => trocarSenhaCofre(achar(b.dataset.trocar), recarregar) })
+  alvo.querySelectorAll('[data-excluir-s]').forEach(b => {
+    b.onclick = async () => {
+      const s = achar(b.dataset.excluirS)
+      if (!confirm(`Excluir "${s.titulo}" do cofre?\n\nA senha guardada é apagada junto. O histórico de quem abriu fica.`)) return
+      const { error } = await db.from('senha_cofre').delete().eq('id', s.id)
+      if (error) { alert(error.message); return }
+      recarregar()
+    }
+  })
+}
+
+// cadastro: só os metadados vão direto pro banco. O valor da senha vai
+// por fora, pela edge function, e nunca volta numa consulta comum.
+function formSenhaCofre (s, recarregar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  const v = k => esc(s?.[k] ?? '')
+
+  fundo.innerHTML = `
+    <div class="modal">
+      <h3>${s ? 'Editar' : 'Nova'} senha no cofre</h3>
+      <div class="form-grade">
+        <div class="campo" style="grid-column:1/-1;"><label>O que é *</label>
+          <input id="cs-titulo" value="${v('titulo')}" placeholder="Ex.: Senha do e-CNPJ A1 — Gefoscal Indústria"></div>
+        <div class="campo"><label>Usuário / login</label>
+          <input id="cs-usuario" value="${v('usuario')}" placeholder="se houver"></div>
+        <div class="campo"><label>Onde se usa (site/sistema)</label>
+          <input id="cs-url" value="${v('url')}" placeholder="opcional"></div>
+        <div class="campo"><label>Setor</label>
+          <select id="cs-setor"><option value="">sem setor</option>
+            ${JUR_CACHE.setores?.map(x => `<option value="${x.id}" ${s?.setor_id === x.id ? 'selected' : ''}>${esc(x.nome)}</option>`).join('') ?? ''}
+          </select></div>
+        <div class="campo"><label>Empresa</label>
+          <select id="cs-empresa">${opcoesFin(JUR_CACHE.empresas, 'sem empresa', s?.empresa_id)}</select></div>
+        <div class="campo" style="grid-column:1/-1;"><label>Certificado digital ligado</label>
+          <select id="cs-cert"><option value="">nenhum</option>
+            ${(JUR_CACHE.certificados || []).map(c => `<option value="${c.id}" ${s?.certificado_id === c.id ? 'selected' : ''}>${esc(c.tipo)} — ${esc(c.titular_nome)}</option>`).join('')}
+          </select>
+          <span class="texto-dim2" style="font-size:11px;">amarra a senha ao certificado que ela abre</span></div>
+      </div>
+      <div class="campo" style="margin-top:10px;"><label>Descrição</label>
+        <input id="cs-descricao" value="${v('descricao')}" placeholder="pra que serve, quem costuma usar">
+        <span class="texto-dim2" style="font-size:11px;color:var(--warn-text);">este campo NÃO é cifrado — não escreva a senha aqui</span></div>
+
+      <div class="campo" style="margin-top:12px;"><label>${s ? 'Trocar a senha (deixe em branco pra manter)' : 'Senha *'}</label>
+        <input type="password" id="cs-valor" autocomplete="new-password" placeholder="${s ? 'em branco = não mexe na senha guardada' : 'só isso vai cifrado'}">
+        <span class="texto-dim2" style="font-size:11px;">É a única coisa que vai cifrada, por fora do banco.</span></div>
+
+      <div class="acoes" style="margin-top:14px;">
+        <button class="btn" id="cs-salvar">Salvar</button>
+        <button class="btn-secundario" id="cs-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="cs-recado"></div>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#cs-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  const aviso = t => {
+    const el = q('#cs-recado'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  q('#cs-salvar').onclick = async () => {
+    const titulo = q('#cs-titulo').value.trim()
+    const valor = q('#cs-valor').value
+    if (!titulo) { aviso('Escreva o que é essa senha.'); return }
+    if (!s && !valor) { aviso('Digite a senha que vai ser guardada.'); return }
+
+    const btn = q('#cs-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const corpo = {
+      titulo,
+      usuario: q('#cs-usuario').value.trim() || null,
+      url: q('#cs-url').value.trim() || null,
+      descricao: q('#cs-descricao').value.trim() || null,
+      setor_id: q('#cs-setor').value || null,
+      empresa_id: q('#cs-empresa').value || null,
+      certificado_id: q('#cs-cert').value || null
+    }
+
+    let error, id = s?.id
+    if (s) {
+      corpo.editado_por = PERFIL.pessoaId; corpo.editado_em = new Date().toISOString()
+      ;({ error } = await db.from('senha_cofre').update(corpo).eq('id', s.id))
+    } else {
+      corpo.criado_por = PERFIL.pessoaId
+      const r = await db.from('senha_cofre').insert(corpo).select('id').single()
+      error = r.error; id = r.data?.id
+    }
+    if (error) { btn.disabled = false; btn.textContent = 'Salvar'; aviso(error.message); return }
+
+    // a senha em si só existe depois que a função cifrar
+    if (valor) {
+      btn.textContent = 'Cifrando...'
+      const { data, error: e2 } = await db.functions.invoke('cofre-senha', {
+        body: { acao: 'guardar', senha_id: id, valor }
+      })
+      if (e2 || !data?.ok) {
+        btn.disabled = false; btn.textContent = 'Salvar'
+        aviso('O cadastro foi salvo, mas a senha não foi guardada: ' + (data?.erro || e2?.message || 'erro desconhecido'))
+        return
+      }
+    }
+    fechar(); recarregar()
+  }
+}
+
+function trocarSenhaCofre (s, recarregar) {
+  if (!s) return
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal">
+      <h3>Trocar senha — ${esc(s.titulo)}</h3>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 12px;">
+        A senha anterior é substituída e não tem como recuperar. A troca fica registrada no histórico.</p>
+      <div class="campo"><label>Senha nova *</label>
+        <input type="password" id="ts-valor" autocomplete="new-password"></div>
+      <div class="campo" style="margin-top:10px;"><label>Por que trocou</label>
+        <input id="ts-motivo" placeholder="Ex.: renovação do certificado"></div>
+      <div class="acoes" style="margin-top:14px;">
+        <button class="btn" id="ts-salvar">Guardar nova senha</button>
+        <button class="btn-secundario" id="ts-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="ts-recado"></div>
+    </div>`
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#ts-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  q('#ts-salvar').onclick = async () => {
+    const valor = q('#ts-valor').value
+    if (!valor) { q('#ts-recado').textContent = 'Digite a senha nova.'; q('#ts-recado').classList.remove('oculto'); return }
+    const btn = q('#ts-salvar'); btn.disabled = true; btn.textContent = 'Cifrando...'
+    const { data, error } = await db.functions.invoke('cofre-senha', {
+      body: { acao: 'guardar', senha_id: s.id, valor, motivo: q('#ts-motivo').value.trim() || null }
+    })
+    if (error || !data?.ok) {
+      btn.disabled = false; btn.textContent = 'Guardar nova senha'
+      const el = q('#ts-recado'); el.textContent = data?.erro || error?.message || 'erro desconhecido'
+      el.classList.remove('oculto'); el.style.color = 'var(--warn-text)'; return
+    }
+    fechar(); recarregar()
+  }
+}
+
+// revelar: pede o motivo ANTES, e o motivo vai junto na chamada -- não
+// tem como ver a senha sem deixar registrado por quê.
+function revelarSenhaCofre (s, recarregar) {
+  if (!s) return
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `
+    <div class="modal">
+      <h3>Revelar senha — ${esc(s.titulo)}</h3>
+      <p class="texto-dim2" style="font-size:12px;margin:0 0 12px;line-height:1.55;">
+        Escreva por que precisa dela agora. Isso fica registrado com seu nome, a data e o endereço de onde você abriu —
+        e esse histórico ninguém apaga.</p>
+      <div class="campo"><label>Motivo *</label>
+        <input id="rs-motivo" placeholder="Ex.: emitir NF-e da Indústria hoje"></div>
+      <div class="acoes" style="margin-top:14px;">
+        <button class="btn" id="rs-ver">Ver a senha</button>
+        <button class="btn-secundario" id="rs-cancelar">Cancelar</button>
+      </div>
+      <div id="rs-resultado" style="margin-top:14px;"></div>
+      <div class="recado oculto" id="rs-recado"></div>
+    </div>`
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => { fundo.remove(); if (recarregar) recarregar() }
+  q('#rs-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  q('#rs-ver').onclick = async () => {
+    const motivo = q('#rs-motivo').value.trim()
+    if (motivo.length < 5) {
+      const el = q('#rs-recado'); el.textContent = 'Escreva o motivo — pelo menos algumas palavras.'
+      el.classList.remove('oculto'); el.style.color = 'var(--warn-text)'; return
+    }
+    const btn = q('#rs-ver'); btn.disabled = true; btn.textContent = 'abrindo...'
+    const { data, error } = await db.functions.invoke('cofre-senha', {
+      body: { acao: 'revelar', senha_id: s.id, motivo }
+    })
+    if (error || !data?.ok) {
+      btn.disabled = false; btn.textContent = 'Ver a senha'
+      const el = q('#rs-recado'); el.textContent = data?.erro || error?.message || 'erro desconhecido'
+      el.classList.remove('oculto'); el.style.color = 'var(--warn-text)'; return
+    }
+
+    q('#rs-ver').remove()
+    q('#rs-motivo').disabled = true
+    q('#rs-resultado').innerHTML = `
+      <div class="panel" style="padding:14px 16px;border-left:3px solid #2c6e3f;">
+        <div class="texto-dim2" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.1em;font-weight:700;">Senha</div>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:6px;">
+          <input id="rs-valor" readonly value="${esc(data.valor)}" style="flex:1;font-family:var(--mono,monospace);font-size:14px;">
+          <button class="btn-secundario mini" id="rs-copiar">copiar</button>
+        </div>
+        <div class="texto-dim2" style="font-size:11.5px;margin-top:8px;">
+          Some da tela em <span id="rs-contador">45</span>s. Se copiar, limpe a área de transferência depois.</div>
+      </div>`
+
+    q('#rs-copiar').onclick = () => {
+      navigator.clipboard.writeText(data.valor).then(() => { q('#rs-copiar').textContent = 'copiado!' })
+    }
+
+    // some sozinha: senha aberta esquecida numa aba é o jeito mais
+    // comum de vazar sem ninguém invadir nada
+    let resta = 45
+    const t = setInterval(() => {
+      resta--
+      const c = fundo.querySelector('#rs-contador')
+      if (!c) { clearInterval(t); return }
+      c.textContent = String(resta)
+      if (resta <= 0) { clearInterval(t); fechar() }
+    }, 1000)
+  }
 }
 
 function diasParaVencer (data) {
