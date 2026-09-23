@@ -49903,11 +49903,11 @@ async function desempMeu (alvo) {
   const { data: popsMeus } = await db.from('pop')
     .select(`id,codigo,titulo,objetivo,status,obrigatorio,alcance,prazo_dias,setor_id,prazo_dias,
       setor:setor_id(nome),responsavel:responsavel_id(nome),
-      destinatarios:pop_destinatario(pessoa_id),
+      destinatarios:pop_destinatario(id,pessoa_id,tipo,motivo),
       versoes:pop_versao(id,numero,conteudo,video_url,video_caminho,video_nome,arquivo_caminho,arquivo_nome,nota_revisao,vigente,vigente_desde,criado_em)`)
     .eq('status', 'VIGENTE')
   const { data: popLidosMeus } = await db.from('pop_leitura')
-    .select('versao_id').eq('pessoa_id', PERFIL.pessoaId)
+    .select('versao_id').eq('pessoa_id', PERFIL.pessoaId).is('reaberto_em', null)
   const meusPops = (popsMeus || [])
     .map(x => ({ ...x, versoes: (x.versoes || []).sort((a, b) => b.numero - a.numero) }))
     .filter(x => popVersaoVigente(x))
@@ -50356,6 +50356,24 @@ function popDiasRestantes (p, versao) {
   return Math.ceil((limite.getTime() - Date.now()) / 864e5)
 }
 
+// Quem precisa ler este POP. Regra única, usada pelo acompanhamento e
+// pela tela de "quem recebe" -- se as duas calculassem por conta própria,
+// um dia elas discordariam e ninguém saberia qual está certa.
+// Dispensa ganha de tudo; incluído entra mesmo fora do alcance.
+// Só gente com login: quem não entra no sistema não tem como confirmar.
+function popElegiveis (p) {
+  const incluidos = new Set((p.destinatarios || []).filter(d => d.tipo !== 'DISPENSADO').map(d => d.pessoa_id))
+  const dispensados = new Set((p.destinatarios || []).filter(d => d.tipo === 'DISPENSADO').map(d => d.pessoa_id))
+  return POP_CACHE.pessoas.filter(x => {
+    if (!POP_CACHE.comLogin.has(x.id)) return false
+    if (dispensados.has(x.id)) return false
+    if (incluidos.has(x.id)) return true
+    if (p.alcance === 'GERAL') return true
+    if (p.alcance === 'PESSOAS') return false
+    return !!p.setor_id && x.setor_id === p.setor_id
+  })
+}
+
 const popVersaoVigente = p => (p.versoes || []).find(v => v.vigente) || null
 const popUltimoNumero = p => (p.versoes || []).reduce((n, v) => Math.max(n, v.numero), 0)
 
@@ -50420,7 +50438,8 @@ async function paginaPop () {
   POP_CACHE.pessoas = pessoas || []
   POP_CACHE.comLogin = new Set((logins || []).map(l => l.pessoa_id))
 
-  const abas = [['setores', 'Por setor'], ['meus', 'Pra ler']]
+  const abas = editavel ? [['gerenciar', 'Gerenciar']] : []
+  abas.push(['setores', 'Por setor'], ['meus', 'Pra ler'])
   if (editavel || souGestor()) abas.push(['acompanhamento', 'Quem leu'])
 
   area.innerHTML = `
@@ -50445,16 +50464,287 @@ async function paginaPop () {
       abrirPop(b.dataset.sub, editavel)
     }
   })
-  abrirPop('setores', editavel)
+  abrirPop(abas[0][0], editavel)
 }
 
 function abrirPop (sub, editavel) {
   const alvo = $('#sub-pop')
   if (!alvo) return
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  if (sub === 'gerenciar') return popGerenciar(alvo)
   if (sub === 'setores') return popPorSetor(alvo, editavel)
   if (sub === 'meus') return popParaLer(alvo)
   return popAcompanhamento(alvo, editavel)
+}
+
+// ---------------------------------------------------------------
+// Gerenciar — a mesa de trabalho de quem monta POP. Tudo numa tabela,
+// com as ações à mão: sem precisar abrir o POP como leitor e caçar o
+// botão de editar lá dentro.
+// ---------------------------------------------------------------
+async function popGerenciar (alvo) {
+  const { erro, lista, lidos } = await popCarregar(true)
+  if (faltaMigracao(erro)) { alvo.innerHTML = `<p class="vazio">Recurso ainda não disponível — a migração do POP não rodou neste banco.</p>`; return }
+  if (erro) { alvo.innerHTML = `<p class="vazio">${esc(erro.message)}</p>`; return }
+
+  const recarregar = () => popGerenciar(alvo)
+
+  // quantos já leram a versão vigente de cada POP
+  const idsVigentes = lista.map(p => popVersaoVigente(p)?.id).filter(Boolean)
+  const { data: leituras } = idsVigentes.length
+    ? await db.from('pop_leitura').select('versao_id,pessoa_id').in('versao_id', idsVigentes).is('reaberto_em', null)
+    : { data: [] }
+  const lidoPorVersao = {}
+  ;(leituras || []).forEach(l => { lidoPorVersao[l.versao_id] = (lidoPorVersao[l.versao_id] || 0) + 1 })
+
+  const rascunhos = lista.filter(p => p.status === 'RASCUNHO').length
+  const semVersao = lista.filter(p => !popVersaoVigente(p)).length
+  const revisaoVencida = lista.filter(p => p.proxima_revisao && new Date(p.proxima_revisao) < new Date()).length
+
+  alvo.innerHTML = `
+    <div class="cards-kpi" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+      ${kpi('POPs cadastrados', lista.length, `${lista.filter(p => p.status === 'VIGENTE').length} vigentes`)}
+      ${kpi('Em rascunho', rascunhos, rascunhos ? 'ninguém está vendo ainda' : '')}
+      ${kpi('Sem versão publicada', semVersao, semVersao ? 'falta escrever o conteúdo' : '')}
+      ${kpi('Revisão vencida', revisaoVencida, revisaoVencida ? 'passou da data de revisar' : '')}
+    </div>
+
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
+      <button class="btn" id="pg-novo">+ Novo POP</button>
+      <input id="pg-busca" placeholder="buscar por código, título, setor..." style="flex:1;min-width:220px;">
+      <select id="pg-status" style="min-width:150px;">
+        <option value="">todas as situações</option>
+        <option value="VIGENTE">vigentes</option>
+        <option value="RASCUNHO">rascunhos</option>
+        <option value="OBSOLETO">obsoletos</option>
+      </select>
+    </div>
+
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr>
+        <th>Código</th><th>Procedimento</th><th>Quem recebe</th><th>Versão</th>
+        <th>Prazo</th><th>Situação</th><th>Leitura</th><th style="text-align:right;">Ações</th>
+      </tr></thead><tbody id="pg-corpo"></tbody></table>
+    </div></div>
+    <p class="texto-dim2" style="font-size:11.5px;margin-top:8px;">
+      "Quem recebe" abre a lista de pessoas do POP: dá pra incluir gente de fora do setor,
+      dispensar quem não precisa e reabrir a leitura de alguém.</p>`
+
+  const desenhar = () => {
+    const termo = alvo.querySelector('#pg-busca').value.trim().toLowerCase()
+    const situacao = alvo.querySelector('#pg-status').value
+
+    const filtrada = lista.filter(p => {
+      if (situacao && p.status !== situacao) return false
+      if (!termo) return true
+      return [p.codigo, p.titulo, p.objetivo, p.setor?.nome, p.responsavel?.nome]
+        .some(c => String(c || '').toLowerCase().includes(termo))
+    })
+
+    alvo.querySelector('#pg-corpo').innerHTML = filtrada.map(p => {
+      const vig = popVersaoVigente(p)
+      const gente = popElegiveis(p)
+      const leram = vig ? (lidoPorVersao[vig.id] || 0) : 0
+      const pct = gente.length ? Math.round(leram * 100 / gente.length) : null
+      const revisaoAtrasada = p.proxima_revisao && new Date(p.proxima_revisao) < new Date()
+
+      return `<tr>
+        <td style="font-family:var(--mono,monospace);font-size:11.5px;">${esc(p.codigo || '—')}</td>
+        <td><b>${esc(p.titulo)}</b>
+          <div class="texto-dim2" style="font-size:11px;">
+            ${p.responsavel?.nome ? esc(p.responsavel.nome) : 'sem responsável'}
+            ${(vig?.video_url || vig?.video_caminho) ? ' · 🎬' : ''}${vig?.arquivo_caminho ? ' · 📎' : ''}
+            ${!p.obrigatorio ? ' · não obrigatório' : ''}</div></td>
+        <td class="texto-dim">${esc(ROTULO_ALCANCE_POP[p.alcance] || p.alcance)}
+          <div class="texto-dim2" style="font-size:11px;">
+            ${p.alcance === 'SETOR' ? esc(p.setor?.nome || 'sem setor') : `${gente.length} pessoa(s)`}</div></td>
+        <td class="texto-dim">${vig ? `v${vig.numero}` : '—'}
+          ${vig?.vigente_desde ? `<div class="texto-dim2" style="font-size:11px;">${fmtQuando(vig.vigente_desde)}</div>` : ''}</td>
+        <td class="texto-dim">${p.prazo_dias}d
+          ${p.proxima_revisao ? `<div class="texto-dim2" style="font-size:11px;${revisaoAtrasada ? 'color:var(--warn-text);' : ''}">
+            revisar ${fmtData(p.proxima_revisao)}</div>` : ''}</td>
+        <td><span class="chip" style="color:${COR_STATUS_POP[p.status]};">${ROTULO_STATUS_POP[p.status] || p.status}</span></td>
+        <td class="texto-dim">${!vig ? '<span class="texto-dim2">sem versão</span>'
+          : `${leram}/${gente.length}${pct != null ? ` <span class="texto-dim2" style="font-size:11px;">(${pct}%)</span>` : ''}`}</td>
+        <td style="text-align:right;white-space:nowrap;">
+          <button class="btn-secundario mini" data-pg-ver="${p.id}">abrir</button>
+          <button class="btn-secundario mini" data-pg-editar="${p.id}">editar</button>
+          <button class="btn-secundario mini" data-pg-versao="${p.id}">+ versão</button>
+          <button class="btn-secundario mini" data-pg-quem="${p.id}">quem recebe</button>
+          <button class="btn-secundario mini" data-pg-excluir="${p.id}" style="color:var(--warn-text);">excluir</button>
+        </td>
+      </tr>`
+    }).join('') || `<tr><td colspan="8" class="vazio">${lista.length ? 'Nada bate com esse filtro.' : 'Nenhum POP cadastrado. Clica em "+ Novo POP".'}</td></tr>`
+
+    const achar = id => lista.find(p => p.id === id)
+    alvo.querySelectorAll('[data-pg-ver]').forEach(b => { b.onclick = () => abrirPopLeitura(achar(b.dataset.pgVer), true, recarregar) })
+    alvo.querySelectorAll('[data-pg-editar]').forEach(b => { b.onclick = () => formPop(achar(b.dataset.pgEditar), recarregar) })
+    alvo.querySelectorAll('[data-pg-versao]').forEach(b => { b.onclick = () => formPopVersao(achar(b.dataset.pgVersao), recarregar) })
+    alvo.querySelectorAll('[data-pg-quem]').forEach(b => { b.onclick = () => popQuemRecebe(achar(b.dataset.pgQuem), recarregar) })
+    alvo.querySelectorAll('[data-pg-excluir]').forEach(b => {
+      b.onclick = async () => {
+        const p = achar(b.dataset.pgExcluir)
+        if (!confirm(`Excluir "${p.titulo}" em definitivo?\n\nAs versões e os registros de leitura vão junto — inclusive a prova de quem já leu.`)) return
+        const { error } = await db.from('pop').delete().eq('id', p.id)
+        if (error) { alert(error.message); return }
+        recarregar()
+      }
+    })
+  }
+
+  alvo.querySelector('#pg-busca').oninput = desenhar
+  alvo.querySelector('#pg-status').onchange = desenhar
+  alvo.querySelector('#pg-novo').onclick = () => formPop(null, recarregar)
+  desenhar()
+}
+
+// ---------------------------------------------------------------
+// Quem recebe — CRUD das pessoas de um POP.
+// Mostra todo mundo com login e o que cada um é neste POP: quem entra
+// pela regra do alcance, quem foi incluído à mão, quem foi dispensado.
+// Reabrir a leitura não apaga a anterior -- marca reaberto_em e libera
+// uma nova, então a prova de que a pessoa leu em tal dia continua lá.
+// ---------------------------------------------------------------
+async function popQuemRecebe (p, aoFechar) {
+  if (!p) return
+  const vig = popVersaoVigente(p)
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  document.body.appendChild(fundo)
+
+  const desenhar = async () => {
+    // relê os destinatários direto do banco: a lista muda aqui dentro
+    const [{ data: dests }, { data: leituras }] = await Promise.all([
+      db.from('pop_destinatario').select('id,pessoa_id,tipo,motivo').eq('pop_id', p.id),
+      vig ? db.from('pop_leitura').select('id,pessoa_id,lido_em,no_prazo,pontos,reaberto_em').eq('versao_id', vig.id)
+        : Promise.resolve({ data: [] })
+    ])
+    const porPessoa = {}
+    ;(dests || []).forEach(d => { porPessoa[d.pessoa_id] = d })
+    const leuAtiva = {}
+    ;(leituras || []).filter(l => !l.reaberto_em).forEach(l => { leuAtiva[l.pessoa_id] = l })
+
+    const pAtual = { ...p, destinatarios: dests || [] }
+    const dentro = new Set(popElegiveis(pAtual).map(x => x.id))
+
+    // três grupos, nessa ordem: quem recebe, quem foi dispensado, e o
+    // resto da empresa (pra poder incluir alguém de fora do setor)
+    const comLogin = POP_CACHE.pessoas.filter(x => POP_CACHE.comLogin.has(x.id))
+    const recebendo = comLogin.filter(x => dentro.has(x.id))
+    const dispensados = comLogin.filter(x => porPessoa[x.id]?.tipo === 'DISPENSADO')
+    const fora = comLogin.filter(x => !dentro.has(x.id) && porPessoa[x.id]?.tipo !== 'DISPENSADO')
+
+    const linhaPessoa = (x, grupo) => {
+      const d = porPessoa[x.id]
+      const l = leuAtiva[x.id]
+      const manual = d?.tipo === 'INCLUIDO'
+      return `<tr>
+        <td><b>${esc(x.nome)}</b>
+          <div class="texto-dim2" style="font-size:11px;">
+            ${esc(POP_CACHE.setores.find(s => s.id === x.setor_id)?.nome || 'sem setor')}
+            ${manual ? ' · incluído à mão' : ''}${d?.motivo ? ` · ${esc(d.motivo)}` : ''}</div></td>
+        <td class="texto-dim">${grupo === 'dispensado' ? '<span class="chip" style="color:#8a8a8a;">dispensado</span>'
+          : !vig ? '<span class="texto-dim2">sem versão</span>'
+          : l ? `<span class="chip" style="color:#2c6e3f;">leu ${fmtQuando(l.lido_em)}</span>
+                 <div class="texto-dim2" style="font-size:11px;">${l.no_prazo === false ? 'com atraso' : 'no prazo'} · ${l.pontos ?? 0} pts</div>`
+          : '<span class="chip" style="color:#a67c00;">não leu</span>'}</td>
+        <td style="text-align:right;white-space:nowrap;">
+          ${grupo === 'recebendo' ? `<button class="btn-secundario mini" data-dispensar="${x.id}">dispensar</button>` : ''}
+          ${grupo === 'dispensado' ? `<button class="btn-secundario mini" data-voltar="${d.id}">voltar a receber</button>` : ''}
+          ${grupo === 'fora' ? `<button class="btn-secundario mini" data-incluir="${x.id}">incluir</button>` : ''}
+          ${l ? `<button class="btn-secundario mini" data-reabrir="${l.id}">reabrir leitura</button>` : ''}
+        </td>
+      </tr>`
+    }
+
+    const tabela = (titulo, itens, grupo, vazio) => `
+      <div class="cabeca-secao" style="margin:14px 0 6px;">
+        <h3 style="margin:0;font-size:13px;">${titulo}</h3>
+        <span class="texto-dim2" style="font-size:11.5px;">${itens.length}</span></div>
+      ${itens.length ? `<div class="panel" style="padding:0;"><div class="tabela-scroll" style="max-height:230px;">
+        <table><tbody>${itens.map(x => linhaPessoa(x, grupo)).join('')}</tbody></table>
+      </div></div>` : `<p class="texto-dim2" style="font-size:12px;margin:0;">${vazio}</p>`}`
+
+    const modal = document.createElement('div')
+    modal.className = 'modal'
+    modal.style.maxWidth = '720px'
+    modal.innerHTML = `
+      <h3 style="margin:0;">Quem recebe — ${esc(p.titulo)}</h3>
+      <p class="texto-dim2" style="font-size:11.5px;margin:6px 0 0;line-height:1.55;">
+        Alcance: <b>${esc(ROTULO_ALCANCE_POP[p.alcance] || p.alcance)}</b>${p.alcance === 'SETOR' ? ` (${esc(p.setor?.nome || 'sem setor')})` : ''}
+        · prazo de ${p.prazo_dias} dias${vig ? ` · versão ${vig.numero}` : ' · sem versão publicada'}.
+        Só entra na conta quem tem login — quem não acessa o sistema não consegue confirmar leitura.</p>
+
+      ${tabela('Recebendo', recebendo, 'recebendo', 'Ninguém está recebendo este POP.')}
+      ${tabela('Dispensados', dispensados, 'dispensado', 'Ninguém dispensado.')}
+      ${tabela('Fora do alcance (dá pra incluir)', fora, 'fora', 'Todo mundo já está recebendo.')}
+
+      <div class="acoes" style="margin-top:16px;">
+        <button class="btn-secundario" id="qr-fechar">Fechar</button>
+      </div>
+      <div class="recado oculto" id="qr-recado"></div>`
+
+    fundo.innerHTML = ''
+    fundo.appendChild(modal)
+
+    const q = id => fundo.querySelector(id)
+    const fechar = () => { fundo.remove(); if (aoFechar) aoFechar() }
+    q('#qr-fechar').onclick = fechar
+    fundo.onclick = e => { if (e.target === fundo) fechar() }
+    const aviso = t => {
+      const el = q('#qr-recado'); el.textContent = t; el.classList.remove('oculto')
+      el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+    }
+
+    fundo.querySelectorAll('[data-incluir]').forEach(b => {
+      b.onclick = async () => {
+        b.disabled = true
+        const motivo = prompt('Por que essa pessoa também precisa ler? (opcional)') || null
+        const { error } = await db.from('pop_destinatario').upsert(
+          { pop_id: p.id, pessoa_id: b.dataset.incluir, tipo: 'INCLUIDO', motivo, criado_por: PERFIL.pessoaId },
+          { onConflict: 'pop_id,pessoa_id' })
+        if (error) { aviso(error.message); b.disabled = false; return }
+        desenhar()
+      }
+    })
+
+    fundo.querySelectorAll('[data-dispensar]').forEach(b => {
+      b.onclick = async () => {
+        b.disabled = true
+        const motivo = prompt('Por que essa pessoa não precisa ler? (fica registrado)') || null
+        const { error } = await db.from('pop_destinatario').upsert(
+          { pop_id: p.id, pessoa_id: b.dataset.dispensar, tipo: 'DISPENSADO', motivo, criado_por: PERFIL.pessoaId },
+          { onConflict: 'pop_id,pessoa_id' })
+        if (error) { aviso(error.message); b.disabled = false; return }
+        desenhar()
+      }
+    })
+
+    fundo.querySelectorAll('[data-voltar]').forEach(b => {
+      b.onclick = async () => {
+        b.disabled = true
+        // apagar a linha devolve a pessoa à regra normal do alcance;
+        // se ela estava fora do setor, some da lista de novo
+        const { error } = await db.from('pop_destinatario').delete().eq('id', b.dataset.voltar)
+        if (error) { aviso(error.message); b.disabled = false; return }
+        desenhar()
+      }
+    })
+
+    fundo.querySelectorAll('[data-reabrir]').forEach(b => {
+      b.onclick = async () => {
+        if (!confirm('Reabrir a leitura?\n\nA pessoa vai precisar ler e confirmar de novo.\nA leitura anterior fica guardada no histórico e os pontos já dados não são tirados.')) return
+        b.disabled = true
+        const motivo = prompt('Por que está reabrindo? (opcional)') || null
+        const { error } = await db.from('pop_leitura').update({
+          reaberto_em: new Date().toISOString(), reaberto_por: PERFIL.pessoaId, reaberto_motivo: motivo
+        }).eq('id', b.dataset.reabrir)
+        if (error) { aviso(error.message); b.disabled = false; return }
+        desenhar()
+      }
+    })
+  }
+  desenhar()
 }
 
 // carrega os POPs com as versões aninhadas e o que a pessoa já leu.
@@ -50465,10 +50755,10 @@ async function popCarregar (editavel) {
     db.from('pop').select(`id,codigo,titulo,objetivo,status,obrigatorio,proxima_revisao,setor_id,
       alcance,prazo_dias,responsavel_id,
       setor:setor_id(nome),responsavel:responsavel_id(nome),
-      destinatarios:pop_destinatario(pessoa_id),
+      destinatarios:pop_destinatario(id,pessoa_id,tipo,motivo),
       versoes:pop_versao(id,numero,conteudo,video_url,video_caminho,video_nome,arquivo_caminho,arquivo_nome,nota_revisao,vigente,vigente_desde,criado_em)`)
       .order('codigo', { ascending: true, nullsFirst: false }),
-    db.from('pop_leitura').select('pop_id,versao_id,lido_em').eq('pessoa_id', PERFIL.pessoaId)
+    db.from('pop_leitura').select('pop_id,versao_id,lido_em').eq('pessoa_id', PERFIL.pessoaId).is('reaberto_em', null)
   ])
   if (error) return { erro: error, lista: [], lidos: new Set() }
   const lista = (data || [])
@@ -50632,7 +50922,7 @@ async function abrirPopLeitura (p, editavel, recarregar) {
 
   const desenhar = async () => {
     const { data: minha } = vig
-      ? await db.from('pop_leitura').select('lido_em').eq('versao_id', vig.id).eq('pessoa_id', PERFIL.pessoaId).maybeSingle()
+      ? await db.from('pop_leitura').select('lido_em').eq('versao_id', vig.id).eq('pessoa_id', PERFIL.pessoaId).is('reaberto_em', null).maybeSingle()
       : { data: null }
     const playerHtml = vig ? await popPlayerVideo(vig) : ''
 
@@ -50701,9 +50991,15 @@ async function abrirPopLeitura (p, editavel, recarregar) {
       bConf.disabled = true; bConf.textContent = 'registrando...'
       const dias = popDiasRestantes(p, vig)
       const noPrazo = dias == null ? true : dias >= 0
+      // releitura de uma versão que já foi lida e reaberta não pontua de
+      // novo: senão bastaria pedir pra reabrir pra ganhar pontos sem fim
+      const { count: jaReaberta } = await db.from('pop_leitura')
+        .select('id', { count: 'exact', head: true })
+        .eq('versao_id', vig.id).eq('pessoa_id', PERFIL.pessoaId).not('reaberto_em', 'is', null)
       // POP não obrigatório não pontua: vale como referência, não como
       // treinamento cobrado
-      const pontos = !p.obrigatorio ? 0 : noPrazo ? PONTOS_POP_NO_PRAZO : PONTOS_POP_ATRASADO
+      const pontos = (!p.obrigatorio || jaReaberta > 0) ? 0
+        : noPrazo ? PONTOS_POP_NO_PRAZO : PONTOS_POP_ATRASADO
 
       const { error } = await db.from('pop_leitura').insert({
         pop_id: p.id, versao_id: vig.id, pessoa_id: PERFIL.pessoaId,
@@ -51063,6 +51359,7 @@ async function popAcompanhamento (alvo, editavel) {
   const { data: leituras } = await db.from('pop_leitura')
     .select('versao_id,pessoa_id,lido_em')
     .in('versao_id', vigentes.map(p => popVersaoVigente(p).id))
+    .is('reaberto_em', null)
 
   const porVersao = new Map()
   ;(leituras || []).forEach(l => {
@@ -51075,15 +51372,7 @@ async function popAcompanhamento (alvo, editavel) {
   // Sempre filtrado por quem tem login — quem não entra no sistema não
   // tem como confirmar, e contar essa gente deixaria o número ruim pra
   // sempre sem ninguém poder fazer nada.
-  const elegiveis = p => {
-    const ids = new Set((p.destinatarios || []).map(d => d.pessoa_id))
-    return POP_CACHE.pessoas.filter(x => {
-      if (!POP_CACHE.comLogin.has(x.id)) return false
-      if (p.alcance === 'GERAL') return true
-      if (p.alcance === 'PESSOAS') return ids.has(x.id)
-      return !!p.setor_id && x.setor_id === p.setor_id
-    })
-  }
+  const elegiveis = p => popElegiveis(p)
 
   const linhas = vigentes.map(p => {
     const vig = popVersaoVigente(p)
