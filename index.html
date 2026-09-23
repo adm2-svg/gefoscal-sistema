@@ -529,6 +529,64 @@ tbody tr:hover { background: var(--hover-bg); }
 .grafico12 .b-rec { background:var(--good-text); }
 .grafico12 .b-desp { background:var(--rust); }
 .grafico12 .mes { font-size:9.5px; color:var(--dim2); margin-top:4px; }
+
+/* ---- Painel do Financeiro › Relatórios ----
+   Tudo em token de skin, nada de cor fixa: o mesmo painel tem que ficar
+   certo no tema escuro e no claro. */
+.pnl-filtros { margin-bottom:14px; align-items:center; gap:9px; flex-wrap:wrap; }
+.pnl-filtros select { font-size:12.5px; padding:5px 8px; }
+.pnl-origem { font-size:12.5px; line-height:1.55; margin:0 0 16px; }
+.pnl-cartoes { display:grid; gap:12px; margin-bottom:20px;
+               grid-template-columns:repeat(auto-fit,minmax(min(215px,100%),1fr)); }
+.pnl-cartao { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+              padding:16px 18px 10px; min-width:0; overflow:hidden; }
+.pnl-cartao.bom { box-shadow:inset 3px 0 0 var(--good-text); }
+.pnl-cartao.ruim { box-shadow:inset 3px 0 0 var(--critico-text); }
+.pnl-cartao .rot { color:var(--dim2); font-size:10.5px; text-transform:uppercase;
+                   letter-spacing:.8px; font-weight:700; }
+.pnl-cartao .val { font-size:26px; line-height:1.15; margin-top:7px; font-weight:600;
+                   overflow-wrap:break-word; }
+.pnl-cartao.comprido .val { font-size:21px; }
+.pnl-cartao .linha-var { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:7px; }
+.pnl-cartao .linha-var .nota { font-size:11.5px; color:var(--dim); }
+.pnl-spark { width:100%; height:30px; margin-top:8px; display:block; opacity:.75; }
+.pnl-var { font-size:11.5px; font-weight:700; white-space:nowrap; }
+.pnl-var.bom { color:var(--good-text); }
+.pnl-var.ruim { color:var(--critico-text); }
+.pnl-var.neutro { color:var(--dim2); font-weight:600; }
+.pnl-bloco { padding:18px; }
+.pnl-bloco .cabeca-secao { margin-bottom:12px; }
+.pnl-bloco .cabeca-secao h3 { font-family:var(--serif); font-size:16px; }
+/* No celular o gráfico não encolhe junto com a tela: encolhido, o texto
+   do eixo vira risco. Ele mantém a largura mínima e rola de lado. */
+.pnl-grafico { overflow-x:auto; overflow-y:hidden; }
+.pnl-svg { width:100%; min-width:600px; height:auto; display:block; }
+.pnl-legenda { display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+               font-size:12px; color:var(--dim); }
+.pnl-legenda i, .pnl-rank .nome i { width:9px; height:9px; border-radius:2px;
+               display:inline-block; margin-right:6px; flex:none; }
+.pnl-duas { margin-bottom:22px; }
+.pnl-destaque { margin:0 0 12px; font-size:15px; font-weight:700; }
+.pnl-destaque.ruim { color:var(--critico-text); }
+.pnl-faixas { display:flex; flex-direction:column; gap:11px; }
+.pnl-faixa .topo, .pnl-rank-item .topo { display:flex; justify-content:space-between;
+               align-items:baseline; gap:10px; font-size:12.5px; margin-bottom:4px; }
+.pnl-faixa .topo b, .pnl-rank-item .topo b { font-variant-numeric:tabular-nums; }
+.pnl-faixa .trilho, .pnl-rank-item .trilho { background:var(--surface2, var(--line));
+               border-radius:5px; height:9px; overflow:hidden; }
+.pnl-faixa .trilho > span, .pnl-rank-item .trilho > span { display:block; height:100%; border-radius:5px; }
+.pnl-faixa-total { display:flex; justify-content:space-between; font-size:13px;
+               border-top:1px solid var(--line); padding-top:10px; margin-top:3px; }
+.pnl-faixa-total b { font-variant-numeric:tabular-nums; }
+.pnl-rank { display:flex; flex-direction:column; gap:11px; margin-top:14px; }
+.pnl-rank-item .nome { display:flex; align-items:center; min-width:0;
+               overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pnl-rank-item .dir { display:flex; align-items:baseline; gap:8px; white-space:nowrap; flex:none; }
+.pnl-rosca { margin-bottom:6px; }
+@media (max-width:620px) {
+  .pnl-cartao .val { font-size:22px; }
+  .pnl-rank-item .topo { flex-wrap:wrap; }
+}
 .ticks { display:flex; gap:2px; margin:8px 0 4px; }
 .ticks .seg { flex:1; height:6px; border-radius:2px; background:var(--surface2); }
 .ticks.editavel .seg { cursor:pointer; }
@@ -32865,76 +32923,454 @@ async function finInvestimentos (alvo, editavel) {
 }
 
 // ----- Financeiro › Relatórios -----
-async function finRelatorios (alvo, editavel) {
-  const meses = []
-  for (let k = 11; k >= 0; k--) meses.push(new Date(FIN_MES.getFullYear(), FIN_MES.getMonth() - k, 1))
-  const inicio = isoMes(meses[0])
-  const fimExcl = isoMes(new Date(FIN_MES.getFullYear(), FIN_MES.getMonth() + 1, 1))
+//
+// Painel do período: o que entrou, o que saiu, o que sobrou, o que está
+// vencido e pra onde a despesa está indo.
+//
+// Uma coisa importante pra ler este painel: RECEITA vem dos PEDIDOS, não
+// dos lançamentos. Hoje os lançamentos registram praticamente só saída —
+// em 2026 são R$ 8,1 mi de despesa contra R$ 8,8 mil de entrada — então
+// somar as entradas de lançamento mostraria um prejuízo que não existe.
+// Pedido cancelado fica de fora. Isso está escrito na tela também: número
+// sem origem clara vale menos que número nenhum.
+//
+// A conta é feita no banco (fin_painel_meses / _categorias / _centros).
+// A tabela de lançamentos passa de 1.700 linhas e o PostgREST corta em
+// 1.000 sem avisar — somar no navegador daria erro silencioso.
+let FIN_PAINEL = { periodo: 12, comparar: 'anterior', tabela: false }
 
-  const { data: lancs, error } = await db.from('lancamento_financeiro')
-    .select('data_lancamento,valor,tipo,categoria_id,centro_custo_id')
-    .gte('data_lancamento', inicio).lt('data_lancamento', fimExcl)
-  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+// verde = entrou, vermelho = saiu. A cor não anda sozinha em lugar
+// nenhum: sempre tem legenda, rótulo ou posição junto, senão quem tem
+// daltonismo verde/vermelho fica sem o gráfico.
+const PNL_RECEITA = 'var(--good-text)'
+const PNL_DESPESA = 'var(--critico-text)'
 
-  const chaveMes = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')
-  const serie = meses.map(m => {
-    const chave = chaveMes(m)
-    const doMes = (lancs || []).filter(l => l.data_lancamento.slice(0, 7) === chave)
-    return { m, r: doMes.filter(l => l.tipo === 'ENTRADA').reduce((s, l) => s + Number(l.valor), 0),
-      d: doMes.filter(l => l.tipo === 'SAIDA').reduce((s, l) => s + Number(l.valor), 0) }
-  })
-  const max = Math.max(1, ...serie.map(s => Math.max(s.r, s.d)))
-  const recA = serie.reduce((s, x) => s + x.r, 0), desA = serie.reduce((s, x) => s + x.d, 0)
+// paleta categórica já conferida pra daltonismo, a mesma do painel Onfly
+function pnlCores () {
+  try { return onflyCoresCategoricas() } catch { return CORES_GRAFICO }
+}
 
-  const mesAtualLancs = (lancs || []).filter(l => l.data_lancamento.slice(0, 7) === chaveMes(FIN_MES))
-  const porCat = FIN_CACHE.categorias.filter(c => c.tipo === 'DESPESA').map(c => ({
-    n: c.nome, v: mesAtualLancs.filter(l => l.categoria_id === c.id).reduce((s, l) => s + Number(l.valor), 0)
-  })).filter(x => x.v > 0).sort((a, b) => b.v - a.v)
-  const maxCat = Math.max(1, ...porCat.map(x => x.v))
+const pnlFimDoMes = d => new Date(d.getFullYear(), d.getMonth() + 1, 0)
+const pnlIso = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') +
+  '-' + String(d.getDate()).padStart(2, '0')
+const PNL_MES_CURTO = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez']
+const pnlRotuloMes = iso => {
+  const [a, m] = iso.split('-')
+  return PNL_MES_CURTO[Number(m) - 1] + '/' + a.slice(2)
+}
 
-  const porCC = FIN_CACHE.centros.map(cc => ({
-    n: cc.nome, v: mesAtualLancs.filter(l => l.centro_custo_id === cc.id && l.tipo === 'SAIDA').reduce((s, l) => s + Number(l.valor), 0)
-  })).filter(x => x.v > 0).sort((a, b) => b.v - a.v)
-  const totCC = porCC.reduce((s, x) => s + x.v, 0)
-  const nomesMes = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez']
-  const recMes = mesAtualLancs.filter(l => l.tipo === 'ENTRADA').reduce((s, l) => s + Number(l.valor), 0)
-  const desMes = mesAtualLancs.filter(l => l.tipo === 'SAIDA').reduce((s, l) => s + Number(l.valor), 0)
+// R$ no eixo cabe em 5 caracteres ou não cabe
+function pnlCurto (v) {
+  const a = Math.abs(v)
+  const sinal = v < 0 ? '-' : ''
+  if (a >= 1e6) return sinal + (a / 1e6).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + ' mi'
+  if (a >= 1e3) return sinal + Math.round(a / 1e3).toLocaleString('pt-BR') + ' mil'
+  return sinal + fmtNum(a, 0)
+}
+const pnlReais = v => (v < 0 ? '-' : '') + 'R$ ' + fmtNum(Math.abs(v))
 
-  alvo.innerHTML = navMesHtml() + `
-    <div class="secao panel" style="padding:18px;">
-      <h3>Receitas e despesas · 12 meses</h3>
-      <div class="grafico12">${serie.map(s => `<div class="coluna">
-        <div class="barras"><span class="b-rec" style="height:${s.r / max * 100}%"></span><span class="b-desp" style="height:${s.d / max * 100}%"></span></div>
-        <div class="mes">${nomesMes[s.m.getMonth()]}</div></div>`).join('')}</div>
-      <div class="duas-colunas" style="margin-top:14px;">
-        <div><span class="texto-dim">receitas 12m</span> <span class="badge-bom" style="font-variant-numeric:tabular-nums;">R$ ${fmtNum(recA)}</span></div>
-        <div><span class="texto-dim">despesas 12m</span> <span class="badge-alerta" style="font-variant-numeric:tabular-nums;">R$ ${fmtNum(desA)}</span></div>
-      </div>
-    </div>
-    <div class="secao panel" style="padding:18px;">
-      <h3>Receita x despesa · ${nomeMes(FIN_MES)}</h3>
-      ${svgDonut([{ rotulo: 'Receita', valor: recMes }, { rotulo: 'Despesa', valor: desMes }], { unidade: '', prefixo: 'R$ ', casas: 0, tamanho: 140 })}
-    </div>
-    <div class="duas-colunas" style="margin-top:16px;">
-      <div class="panel" style="padding:18px;">
-        <h3>Despesas por categoria · ${nomeMes(FIN_MES)}</h3>
-        ${porCat.length ? svgDonut(porCat.map(x => ({ rotulo: x.n, valor: x.v })), { unidade: '', prefixo: 'R$ ', casas: 0, tamanho: 140 }) : ''}
-        <div style="margin-top:14px;">
-        ${porCat.map(x => `<div style="margin-bottom:9px;">
-          <div style="display:flex;justify-content:space-between;font-size:13px;"><span>${esc(x.n)}</span><span>R$ ${fmtNum(x.v)}</span></div>
-          <div class="barra"><span style="width:${x.v / maxCat * 100}%"></span></div></div>`).join('') || '<p class="vazio">Sem lançamentos neste mês.</p>'}
+// Variação contra o período de comparação. Sem base não existe variação:
+// devolve nulo em vez de inventar 100%, que é o erro clássico de painel.
+function pnlVariacao (atual, base) {
+  if (!base) return null
+  return (atual - base) / Math.abs(base) * 100
+}
+
+// A setinha some quando não dá pra comparar, e a cor depende do que é
+// bom naquela linha: despesa subindo é ruim, receita subindo é boa.
+function pnlSelo (variacao, subirEhBom = true, curto = false) {
+  if (variacao == null) {
+    // no ranking a frase inteira repetida em 12 linhas vira parede de
+    // texto: ali vai um traço com o motivo no title
+    return curto
+      ? `<span class="pnl-var neutro" title="não teve despesa nessa categoria no período comparado">—</span>`
+      : `<span class="pnl-var neutro">sem base pra comparar</span>`
+  }
+  if (Math.abs(variacao) < 0.05) return `<span class="pnl-var neutro">sem mudança</span>`
+  const sobe = variacao > 0
+  const classe = (sobe === subirEhBom) ? 'bom' : 'ruim'
+  return `<span class="pnl-var ${classe}">${sobe ? '▲' : '▼'} ${fmtNum(Math.abs(variacao), 1)}%</span>`
+}
+
+// Linha miúda dentro do cartão: é enfeite de leitura rápida, o número
+// exato está no gráfico grande logo abaixo. Por isso aria-hidden.
+function pnlSpark (valores, cor) {
+  if (valores.length < 2) return ''
+  const max = Math.max(...valores, 0)
+  const min = Math.min(...valores, 0)
+  const faixa = (max - min) || 1
+  const L = 120, A = 30
+  const pts = valores.map((v, i) =>
+    `${(i / (valores.length - 1) * L).toFixed(1)},${(A - 3 - ((v - min) / faixa) * (A - 6)).toFixed(1)}`).join(' ')
+  return `<svg class="pnl-spark" viewBox="0 0 ${L} ${A}" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+    <polyline points="${pts}" fill="none" stroke="${cor}" stroke-width="1.6"
+      stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"></polyline>
+  </svg>`
+}
+
+function pnlCartao ({ rotulo, valor, nota, variacao, subirEhBom = true, comparar = true,
+                     serie = [], cor = 'var(--dim)', classe = '', comprido = false }) {
+  return `<div class="pnl-cartao ${classe}${comprido ? ' comprido' : ''}">
+    <div class="rot">${esc(rotulo)}</div>
+    <div class="val">${esc(valor)}</div>
+    <div class="linha-var">${comparar ? pnlSelo(variacao, subirEhBom) : ''}${nota ? `<span class="nota">${esc(nota)}</span>` : ''}</div>
+    ${pnlSpark(serie, cor)}
+  </div>`
+}
+
+// ---- gráfico de barras agrupadas: receita x despesa, mês a mês ----
+// Ordem fixa dentro do mês (receita sempre à esquerda) + legenda: é o
+// que deixa as duas séries distinguíveis sem depender só da cor.
+function pnlBarrasMeses (serie) {
+  if (!serie.length) return `<p class="vazio">Sem movimento no período.</p>`
+  const L = 780, A = 250, esq = 64, dir = 10, topo = 18, base = 32
+  const larg = L - esq - dir, alt = A - topo - base
+  const max = Math.max(1, ...serie.map(s => Math.max(s.receita, s.despesa)))
+  const y = v => topo + alt - (v / max) * alt
+  const fatia = larg / serie.length
+  const bw = Math.max(4, Math.min(16, fatia * 0.3))
+  const grade = [0, 0.25, 0.5, 0.75, 1]
+  const topoRec = Math.max(...serie.map(s => s.receita))
+  const topoDes = Math.max(...serie.map(s => s.despesa))
+
+  const barra = (s, i, valor, cor, lado, nome) => {
+    if (valor <= 0) return ''
+    const x = esq + fatia * i + fatia / 2 + (lado === 'esq' ? -bw - 1 : 1)
+    const altura = Math.max(1.5, topo + alt - y(valor))
+    return `<rect x="${x.toFixed(1)}" y="${y(valor).toFixed(1)}" width="${bw.toFixed(1)}" height="${altura.toFixed(1)}"
+      rx="2" fill="${cor}"><title>${esc(s.rotulo)} · ${nome} ${pnlReais(valor)}</title></rect>`
+  }
+  // rótulo direto só no pico de cada série — número em toda barra vira ruído
+  const rotuloPico = (s, i, valor, cor, lado, pico) => (valor > 0 && valor === pico)
+    ? `<text x="${(esq + fatia * i + fatia / 2 + (lado === 'esq' ? -bw / 2 - 1 : bw / 2 + 1)).toFixed(1)}"
+        y="${(y(valor) - 5).toFixed(1)}" font-size="10" font-weight="700" fill="${cor}" text-anchor="middle"
+        >${esc(pnlCurto(valor))}</text>` : ''
+  const passo = serie.length > 14 ? 2 : 1
+
+  return `<div class="pnl-grafico"><svg viewBox="0 0 ${L} ${A}" class="pnl-svg" role="img"
+      aria-label="Receita e despesa por mês no período">
+    ${grade.map(g => {
+      const yy = topo + alt - g * alt
+      return `<line x1="${esq}" y1="${yy}" x2="${L - dir}" y2="${yy}" stroke="var(--line)" stroke-width="1"></line>
+        <text x="${esq - 8}" y="${yy + 3.5}" font-size="10" fill="var(--dim2)" text-anchor="end">${esc(pnlCurto(max * g))}</text>`
+    }).join('')}
+    ${serie.map((s, i) => barra(s, i, s.receita, PNL_RECEITA, 'esq', 'receita') +
+                          barra(s, i, s.despesa, PNL_DESPESA, 'dir', 'despesa')).join('')}
+    ${serie.map((s, i) => rotuloPico(s, i, s.receita, PNL_RECEITA, 'esq', topoRec) +
+                          rotuloPico(s, i, s.despesa, PNL_DESPESA, 'dir', topoDes)).join('')}
+    ${serie.map((s, i) => i % passo ? '' :
+      `<text x="${(esq + fatia * i + fatia / 2).toFixed(1)}" y="${A - 12}" font-size="10"
+        fill="var(--dim2)" text-anchor="middle">${esc(s.rotulo)}</text>`).join('')}
+  </svg></div>`
+}
+
+// ---- resultado mês a mês, em torno da linha do zero ----
+// Aqui a posição (acima/abaixo do zero) já diz lucro ou prejuízo — a cor
+// só reforça. Serve pra quem não distingue verde de vermelho.
+function pnlBarrasResultado (serie) {
+  if (!serie.length) return `<p class="vazio">Sem movimento no período.</p>`
+  // base folgada de propósito: o rótulo do mês mais negativo desce
+  // bastante, e com menos espaço ele encavalava no nome do mês
+  const L = 780, A = 248, esq = 64, dir = 10, topo = 18, base = 48
+  const larg = L - esq - dir, alt = A - topo - base
+  const valores = serie.map(s => s.receita - s.despesa)
+  const alto = Math.max(0, ...valores), baixo = Math.min(0, ...valores)
+  const faixa = (alto - baixo) || 1
+  const y = v => topo + (alto - v) / faixa * alt
+  const yZero = y(0)
+  const fatia = larg / serie.length
+  const bw = Math.max(6, Math.min(26, fatia * 0.55))
+  const passo = serie.length > 14 ? 2 : 1
+
+  return `<div class="pnl-grafico"><svg viewBox="0 0 ${L} ${A}" class="pnl-svg" role="img"
+      aria-label="Resultado de cada mês: receita menos despesa">
+    <text x="${esq - 8}" y="${(topo + 4).toFixed(1)}" font-size="10" fill="var(--dim2)" text-anchor="end">${esc(pnlCurto(alto))}</text>
+    <text x="${esq - 8}" y="${(topo + alt).toFixed(1)}" font-size="10" fill="var(--dim2)" text-anchor="end">${esc(pnlCurto(baixo))}</text>
+    ${serie.map((s, i) => {
+      const v = valores[i]
+      if (!v) return ''
+      const x = esq + fatia * i + (fatia - bw) / 2
+      const yy = v >= 0 ? y(v) : yZero
+      const h = Math.max(1.5, Math.abs(yZero - y(v)))
+      const cor = v >= 0 ? PNL_RECEITA : PNL_DESPESA
+      return `<rect x="${x.toFixed(1)}" y="${yy.toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="2" fill="${cor}"
+        ><title>${esc(s.rotulo)} · ${v >= 0 ? 'lucro' : 'prejuízo'} ${pnlReais(Math.abs(v))}</title></rect>
+        <text x="${(x + bw / 2).toFixed(1)}" y="${(v >= 0 ? y(v) - 5 : y(v) + 12).toFixed(1)}" font-size="9.5"
+          fill="${cor}" font-weight="700" text-anchor="middle">${esc(pnlCurto(v))}</text>`
+    }).join('')}
+    <line x1="${esq}" y1="${yZero.toFixed(1)}" x2="${L - dir}" y2="${yZero.toFixed(1)}" stroke="var(--dim2)" stroke-width="1"></line>
+    ${serie.map((s, i) => i % passo ? '' :
+      `<text x="${(esq + fatia * i + fatia / 2).toFixed(1)}" y="${A - 10}" font-size="10"
+        fill="var(--dim2)" text-anchor="middle">${esc(s.rotulo)}</text>`).join('')}
+  </svg></div>`
+}
+
+// ---- faixas de atraso (a pagar / a receber) ----
+// São faixas ordenadas, então a cor vai esquentando junto com o atraso —
+// e cada barra tem o valor escrito do lado, nunca só a cor.
+const PNL_CORES_FAIXA = ['var(--dim2)', '#e0a92b', '#e0822b', '#d96a2b', 'var(--critico-text)']
+
+function pnlFaixas (itens) {
+  const total = itens.reduce((s, x) => s + x.valor, 0)
+  if (!total) return `<p class="vazio">Nada em aberto.</p>`
+  const max = Math.max(...itens.map(x => x.valor), 1)
+  return `<div class="pnl-faixas">
+    ${itens.map((x, i) => `
+      <div class="pnl-faixa">
+        <div class="topo">
+          <span>${esc(x.rotulo)}${x.qtd ? ` <span class="texto-dim2">· ${x.qtd}</span>` : ''}</span>
+          <b>${esc(pnlReais(x.valor))}</b>
         </div>
+        <div class="trilho"><span style="width:${Math.max(x.valor / max * 100, x.valor ? 2 : 0)}%;
+          background:${PNL_CORES_FAIXA[i] || 'var(--critico-text)'};"></span></div>
+      </div>`).join('')}
+    <div class="pnl-faixa-total"><span>Total em aberto</span><b>${esc(pnlReais(total))}</b></div>
+  </div>`
+}
+
+// ---- ranking de despesa (categoria ou centro de custo) ----
+// `coresAte` é onde a rosca parou: da linha seguinte em diante todo mundo
+// usa a cor do pedaço "outras". Sem isso a 9ª categoria voltaria pro azul
+// da 1ª e as duas pareceriam a mesma coisa ao lado da rosca.
+function pnlRanking (itens, antes, cores, coresAte = 6) {
+  if (!itens.length) return `<p class="vazio">Sem despesa no período.</p>`
+  const max = Math.max(...itens.map(x => x.valor), 1)
+  const total = itens.reduce((s, x) => s + x.valor, 0)
+  const comparar = Array.isArray(antes) && antes.length > 0
+  const base = new Map((antes || []).map(x => [x.nome, Number(x.valor)]))
+  const cor = i => cores ? cores[Math.min(i, coresAte) % cores.length] : 'var(--rust)'
+  return `<div class="pnl-rank">
+    ${itens.map((x, i) => `
+      <div class="pnl-rank-item">
+        <div class="topo">
+          <span class="nome">${cores ? `<i style="background:${cor(i)}"></i>` : ''}${esc(x.nome)}</span>
+          <span class="dir"><b>${esc(pnlReais(x.valor))}</b>
+            <span class="texto-dim2">${total ? Math.round(x.valor / total * 100) : 0}%</span>
+            ${comparar ? pnlSelo(pnlVariacao(x.valor, base.get(x.nome)), false, true) : ''}</span>
+        </div>
+        <div class="trilho"><span style="width:${Math.max(x.valor / max * 100, 2)}%;
+          background:${cor(i)};"></span></div>
+      </div>`).join('')}
+  </div>`
+}
+
+async function finRelatorios (alvo, editavel) {
+  const n = FIN_PAINEL.periodo
+  const iniRef = new Date(FIN_MES.getFullYear(), FIN_MES.getMonth() - (n - 1), 1)
+  const de = isoMes(iniRef), ate = pnlIso(pnlFimDoMes(FIN_MES))
+  // comparação: ou os N meses logo antes, ou os mesmos N meses do ano passado
+  const desloc = FIN_PAINEL.comparar === 'ano' ? 12 : n
+  const deC = isoMes(new Date(iniRef.getFullYear(), iniRef.getMonth() - desloc, 1))
+  const ateC = pnlIso(pnlFimDoMes(new Date(FIN_MES.getFullYear(), FIN_MES.getMonth() - desloc, 1)))
+  const hoje = new Date().toISOString().slice(0, 10)
+
+  const [rMes, rMesC, rCat, rCatC, rCentro, rPagar, rReceber, rSaldo] = await Promise.all([
+    db.rpc('fin_painel_meses', { p_de: de, p_ate: ate }),
+    db.rpc('fin_painel_meses', { p_de: deC, p_ate: ateC }),
+    db.rpc('fin_painel_categorias', { p_de: de, p_ate: ate }),
+    db.rpc('fin_painel_categorias', { p_de: deC, p_ate: ateC }),
+    db.rpc('fin_painel_centros', { p_de: de, p_ate: ate }),
+    db.from('contas_a_pagar').select('valor,vencimento,origem'),
+    db.from('parcela_a_receber').select('saldo,vencimento,faixa,situacao'),
+    db.from('saldo_conta').select('conta_id,saldo,tipo')
+  ])
+
+  const erro = rMes.error || rCat.error || rCentro.error
+  if (erro) {
+    alvo.innerHTML = faltaMigracao(erro)
+      ? `<p class="vazio">O painel novo precisa da migração <b>fin_painel_relatorios</b>. Assim que ela rodar, esta aba monta sozinha.</p>`
+      : `<p class="vazio">${esc(erro.message)}</p>`
+    return
+  }
+
+  const serie = (rMes.data || []).map(m => ({
+    rotulo: pnlRotuloMes(m.mes), mes: m.mes,
+    receita: Number(m.receita || 0), despesa: Number(m.despesa || 0),
+    pedidos: m.qtd_pedidos || 0, lancamentos: m.qtd_lancamentos || 0
+  }))
+  const serieC = (rMesC.data || []).map(m => ({
+    receita: Number(m.receita || 0), despesa: Number(m.despesa || 0)
+  }))
+  const soma = (l, k) => l.reduce((s, x) => s + x[k], 0)
+  const receita = soma(serie, 'receita'), despesa = soma(serie, 'despesa')
+  const receitaC = soma(serieC, 'receita'), despesaC = soma(serieC, 'despesa')
+  const resultado = receita - despesa, resultadoC = receitaC - despesaC
+  const margem = receita ? resultado / receita * 100 : null
+  const mesesNoVermelho = serie.filter(s => s.receita - s.despesa < 0).length
+
+  // caixa é foto de hoje, não do período — fica dito na tela
+  const caixa = (rSaldo.data || [])
+    .filter(s => s.tipo !== 'CARTAO_CREDITO' && s.tipo !== 'PASSIVO')
+    .reduce((s, x) => s + Number(x.saldo || 0), 0)
+
+  // ---- atrasos (hoje) ----
+  const dias = venc => Math.floor((new Date(hoje) - new Date(venc)) / 864e5)
+  const faixaDe = d => d <= 0 ? 0 : d <= 30 ? 1 : d <= 60 ? 2 : d <= 90 ? 3 : 4
+  const ROTULOS = ['a vencer', 'até 30 dias', '31 a 60 dias', '61 a 90 dias', 'mais de 90 dias']
+
+  const montarFaixas = (linhas, campoValor, campoVenc) => {
+    const baldes = ROTULOS.map(r => ({ rotulo: r, valor: 0, qtd: 0 }))
+    let semData = { valor: 0, qtd: 0 }
+    for (const l of linhas) {
+      const v = Number(l[campoValor] || 0)
+      if (!l[campoVenc]) { semData.valor += v; semData.qtd++; continue }
+      const b = baldes[faixaDe(dias(l[campoVenc]))]
+      b.valor += v; b.qtd++
+    }
+    return { baldes, semData }
+  }
+  const pagar = montarFaixas(rPagar.data || [], 'valor', 'vencimento')
+  const receber = montarFaixas((rReceber.data || []).filter(p => p.situacao !== 'RECEBIDA'), 'saldo', 'vencimento')
+  const vencidoPagar = pagar.baldes.slice(1).reduce((s, b) => s + b.valor, 0)
+  const vencidoReceber = receber.baldes.slice(1).reduce((s, b) => s + b.valor, 0)
+
+  // ---- despesa por categoria: 6 maiores + "outras", pra rosca ficar legível ----
+  const cats = (rCat.data || []).map(c => ({ nome: c.nome, valor: Number(c.valor), qtd: c.qtd }))
+  const catsC = (rCatC.data || []).map(c => ({ nome: c.nome, valor: Number(c.valor) }))
+  const topo6 = cats.slice(0, 6)
+  const resto = cats.slice(6)
+  const paraRosca = resto.length
+    ? [...topo6, { nome: `outras ${resto.length} categorias`, valor: resto.reduce((s, x) => s + x.valor, 0) }]
+    : topo6
+  const centros = (rCentro.data || []).map(c => ({ nome: c.nome, valor: Number(c.valor), qtd: c.qtd }))
+  const cores = pnlCores()
+
+  // Os quatro cartões usam o MESMO tamanho de fonte, escolhido pelo maior
+  // número da linha: se cada um encolhesse sozinho, a linha ficava
+  // desalinhada e o cartão de fonte maior parecia o mais importante.
+  const comprido = [receita, despesa, resultado, caixa].some(v => pnlReais(v).length > 13)
+
+  const opt = (v, txt, atual) => `<option value="${v}" ${String(atual) === String(v) ? 'selected' : ''}>${txt}</option>`
+  const periodoTxt = n === 1 ? nomeMes(FIN_MES) : `${serie[0]?.rotulo ?? ''} a ${serie[serie.length - 1]?.rotulo ?? ''}`
+  const comparaTxt = FIN_PAINEL.comparar === 'ano' ? 'mesmo período do ano anterior' : 'período anterior'
+
+  alvo.innerHTML = `
+    <div class="filtros pnl-filtros">
+      <button class="btn-secundario mini" id="fm-menos">‹</button>
+      <span style="min-width:140px;text-align:center;">${esc(nomeMes(FIN_MES))}</span>
+      <button class="btn-secundario mini" id="fm-mais">›</button>
+      <button class="btn-secundario mini" id="fm-hoje">hoje</button>
+      <span class="texto-dim2" style="font-size:12px;margin-left:8px;">período:</span>
+      <select id="pnl-periodo">
+        ${opt(1, 'só este mês', n)}${opt(3, 'últimos 3 meses', n)}${opt(6, 'últimos 6 meses', n)}${opt(12, 'últimos 12 meses', n)}
+      </select>
+      <span class="texto-dim2" style="font-size:12px;">comparar com:</span>
+      <select id="pnl-comparar">
+        ${opt('anterior', 'período anterior', FIN_PAINEL.comparar)}${opt('ano', 'ano anterior', FIN_PAINEL.comparar)}
+      </select>
+    </div>
+
+    <p class="aviso pnl-origem">
+      <b>De onde vêm os números:</b> receita é a soma dos <b>pedidos</b> do período (cancelados de fora);
+      despesa é a soma dos <b>lançamentos de saída já efetivados</b>. São dois cadastros diferentes —
+      enquanto a entrada não for lançada no Financeiro, o resultado aqui é o do comercial contra o caixa.
+    </p>
+
+    <div class="pnl-cartoes">
+      ${pnlCartao({ rotulo: 'Receita', valor: pnlReais(receita), comprido,
+        nota: `${serie.reduce((s, x) => s + x.pedidos, 0)} pedidos`,
+        variacao: pnlVariacao(receita, receitaC), subirEhBom: true,
+        serie: serie.map(s => s.receita), cor: PNL_RECEITA })}
+      ${pnlCartao({ rotulo: 'Despesa', valor: pnlReais(despesa), comprido,
+        nota: `${serie.reduce((s, x) => s + x.lancamentos, 0)} lançamentos`,
+        variacao: pnlVariacao(despesa, despesaC), subirEhBom: false,
+        serie: serie.map(s => s.despesa), cor: PNL_DESPESA })}
+      ${pnlCartao({ rotulo: 'Resultado', valor: pnlReais(resultado), comprido,
+        nota: margem == null ? 'sem receita no período' : `margem de ${fmtNum(margem, 1)}%`,
+        variacao: pnlVariacao(resultado, resultadoC), subirEhBom: true,
+        serie: serie.map(s => s.receita - s.despesa),
+        cor: resultado >= 0 ? PNL_RECEITA : PNL_DESPESA,
+        classe: resultado >= 0 ? 'bom' : 'ruim' })}
+      ${pnlCartao({ rotulo: 'Saldo em caixa', valor: pnlReais(caixa), comprido,
+        nota: 'posição de hoje, não do período',
+        comparar: false, classe: caixa < 0 ? 'ruim' : '' })}
+    </div>
+
+    <div class="secao panel pnl-bloco">
+      <div class="cabeca-secao">
+        <h3>Receita e despesa · ${esc(periodoTxt)}</h3>
+        <span class="pnl-legenda">
+          <span><i style="background:${PNL_RECEITA}"></i>receita (pedidos)</span>
+          <span><i style="background:${PNL_DESPESA}"></i>despesa (lançamentos)</span>
+          <button class="btn-secundario mini" id="pnl-tabela">${FIN_PAINEL.tabela ? 'ver gráfico' : 'ver números'}</button>
+        </span>
       </div>
-      <div class="panel" style="padding:18px;">
-        <h3>Por centro de custo</h3>
-        ${porCC.map(x => `<div style="margin-bottom:9px;">
-          <div style="display:flex;justify-content:space-between;font-size:13px;"><span>${esc(x.n)}</span>
-          <span>R$ ${fmtNum(x.v)} <span class="texto-dim2">${totCC ? Math.round(x.v / totCC * 100) : 0}%</span></span></div>
-          <div class="barra"><span style="width:${totCC ? x.v / totCC * 100 : 0}%;background:var(--gold);"></span></div></div>`).join('') || '<p class="vazio">Sem lançamentos neste mês.</p>'}
+      ${FIN_PAINEL.tabela ? `
+        <div class="tabela-scroll"><table><thead><tr>
+          <th>Mês</th><th class="num">Receita</th><th class="num">Despesa</th><th class="num">Resultado</th>
+        </tr></thead><tbody>
+        ${serie.map(s => `<tr><td>${esc(s.rotulo)}</td>
+          <td class="num">${esc(pnlReais(s.receita))}</td>
+          <td class="num">${esc(pnlReais(s.despesa))}</td>
+          <td class="num" style="color:${s.receita - s.despesa >= 0 ? PNL_RECEITA : PNL_DESPESA};font-weight:700;"
+            >${esc(pnlReais(s.receita - s.despesa))}</td></tr>`).join('')}
+        </tbody><tfoot><tr><th>Total</th>
+          <th class="num">${esc(pnlReais(receita))}</th>
+          <th class="num">${esc(pnlReais(despesa))}</th>
+          <th class="num">${esc(pnlReais(resultado))}</th></tr></tfoot></table></div>`
+        : pnlBarrasMeses(serie)}
+    </div>
+
+    <div class="secao panel pnl-bloco">
+      <div class="cabeca-secao">
+        <h3>Resultado de cada mês</h3>
+        <span class="texto-dim2" style="font-size:12px;">
+          ${mesesNoVermelho ? `${mesesNoVermelho} de ${serie.length} ${mesesNoVermelho > 1 ? 'meses fecharam' : 'mês fechou'} no vermelho` : 'nenhum mês fechou no vermelho'}
+          · comparando com ${esc(comparaTxt)}</span>
       </div>
+      ${pnlBarrasResultado(serie)}
+    </div>
+
+    <div class="duas-colunas pnl-duas">
+      <div class="panel pnl-bloco">
+        <div class="cabeca-secao">
+          <h3>Contas a pagar</h3>
+          <span class="texto-dim2" style="font-size:12px;">posição de hoje</span>
+        </div>
+        ${vencidoPagar ? `<p class="pnl-destaque ruim">${esc(pnlReais(vencidoPagar))} já vencido</p>` : ''}
+        ${pnlFaixas(pagar.baldes)}
+        ${pagar.semData.qtd ? `<p class="texto-dim2" style="font-size:11.5px;margin-top:10px;">
+          ${pagar.semData.qtd} conta(s) sem data de vencimento, somando ${esc(pnlReais(pagar.semData.valor))} — ficam fora das faixas.</p>` : ''}
+      </div>
+      <div class="panel pnl-bloco">
+        <div class="cabeca-secao">
+          <h3>Contas a receber</h3>
+          <span class="texto-dim2" style="font-size:12px;">posição de hoje</span>
+        </div>
+        ${vencidoReceber ? `<p class="pnl-destaque ruim">${esc(pnlReais(vencidoReceber))} atrasado</p>` : ''}
+        ${pnlFaixas(receber.baldes)}
+        ${receber.semData.qtd ? `<p class="texto-dim2" style="font-size:11.5px;margin-top:10px;">
+          ${receber.semData.qtd} parcela(s) sem vencimento, somando ${esc(pnlReais(receber.semData.valor))}.</p>` : ''}
+      </div>
+    </div>
+
+    <div class="secao panel pnl-bloco">
+      <div class="cabeca-secao">
+        <h3>Despesa por categoria · ${esc(periodoTxt)}</h3>
+        <span class="texto-dim2" style="font-size:12px;">a seta compara com o ${esc(comparaTxt)}</span>
+      </div>
+      <div class="pnl-rosca">
+        ${svgDonut(paraRosca.map(x => ({ rotulo: x.nome, valor: x.valor })),
+          { tamanho: 168, unidade: '', prefixo: 'R$ ', casas: 0, cores })}
+      </div>
+      ${pnlRanking(cats.slice(0, 12), catsC, cores)}
+      ${cats.length > 12 ? `<p class="texto-dim2" style="font-size:11.5px;margin-top:10px;">
+        mostrando as 12 maiores de ${cats.length} categorias com despesa no período.</p>` : ''}
+    </div>
+
+    <div class="secao panel pnl-bloco">
+      <div class="cabeca-secao">
+        <h3>Despesa por centro de custo</h3>
+        <span class="texto-dim2" style="font-size:12px;">${esc(periodoTxt)}</span>
+      </div>
+      ${pnlRanking(centros, null, null)}
     </div>`
 
   ligarNavMes('relatorios', editavel)
+  const recarregar = () => abrirFinanceiro('relatorios', editavel)
+  $('#pnl-periodo').onchange = e => { FIN_PAINEL.periodo = Number(e.target.value); recarregar() }
+  $('#pnl-comparar').onchange = e => { FIN_PAINEL.comparar = e.target.value; recarregar() }
+  $('#pnl-tabela').onclick = () => { FIN_PAINEL.tabela = !FIN_PAINEL.tabela; recarregar() }
 }
 
 // ----- Compras › Pagamento (financeiro) -----
@@ -37249,7 +37685,15 @@ function svgLinha (pontos, { largura = 640, altura = 200, cor = 'var(--rust)' } 
 
 const CORES_GRAFICO = ['var(--rust)', '#4b4fd0', '#c8a11a', '#5b8c5a', '#a15b8c']
 
-function svgDonut (fatias, { tamanho = 180 } = {}) {
+// A legenda antes vinha sempre com " L" e duas casas colado no valor —
+// era litro de combustível, que foi quem estreou o gráfico. Só que a
+// mesma rosca passou a mostrar contagem e dinheiro, e as opções que
+// algumas telas já passavam (prefixo 'R$ ', unidade 'veículo(s)') eram
+// ignoradas: o CRM mostrava "5,00 L" de leads por etapa e a Cobrança,
+// "1.234,00 L" de carteira. Agora o padrão é número puro e quem tem
+// unidade diz qual é.
+function svgDonut (fatias, { tamanho = 180, unidade = '', prefixo = '', casas = 0, cores = CORES_GRAFICO } = {}) {
+  const cor = i => cores[i % cores.length]
   const total = fatias.reduce((s, f) => s + f.valor, 0)
   if (!total) return `<p class="vazio" style="padding:20px 0;">Sem dados no período.</p>`
   const raio = tamanho / 2, centro = tamanho / 2, espessura = raio * 0.38
@@ -37263,12 +37707,12 @@ function svgDonut (fatias, { tamanho = 180 } = {}) {
     const y2 = centro + (raio - espessura / 2) * Math.sin(anguloAcum * Math.PI / 180)
     const grandeArco = angulo > 180 ? 1 : 0
     return `<path d="M ${x1} ${y1} A ${raio - espessura / 2} ${raio - espessura / 2} 0 ${grandeArco} 1 ${x2} ${y2}"
-      fill="none" stroke="${CORES_GRAFICO[i % CORES_GRAFICO.length]}" stroke-width="${espessura}"></path>`
+      fill="none" stroke="${cor(i)}" stroke-width="${espessura}"></path>`
   }).join('')
   const legenda = fatias.filter(f => f.valor > 0).map((f, i) => `
     <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--dim);">
-      <span style="width:9px;height:9px;border-radius:50%;background:${CORES_GRAFICO[i % CORES_GRAFICO.length]};display:inline-block;"></span>
-      ${esc(f.rotulo)} — ${fmtNum(f.valor)} L (${(f.valor / total * 100).toFixed(0)}%)
+      <span style="width:9px;height:9px;border-radius:50%;background:${cor(i)};display:inline-block;flex:none;"></span>
+      ${esc(f.rotulo)} — ${prefixo}${fmtNum(f.valor, casas)}${unidade ? ' ' + unidade : ''} (${(f.valor / total * 100).toFixed(0)}%)
     </div>`).join('')
   return `
     <div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap;">
@@ -37645,7 +38089,7 @@ async function combPainel (alvo, editavel) {
         </div>
         <div class="panel" style="padding:18px;">
           <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Por combustível</h3>
-          ${svgDonut(fatiasDonut)}
+          ${svgDonut(fatiasDonut, { unidade: 'L', casas: 2 })}
         </div>
       </div>
 
