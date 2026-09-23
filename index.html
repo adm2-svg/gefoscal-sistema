@@ -44890,16 +44890,23 @@ async function paginaDesempenho () {
   ])
   DESEMP_CACHE = { pessoas: pessoas || [], setores: setores || [] }
 
+  // RH é módulo "sempre" no menu: toda pessoa logada abre esta página.
+  // Mas quase toda subaba aqui é ferramenta do RH -- perfil DISC dos
+  // colegas, ranking de agilidade, recrutamento, resultado do 360 de
+  // todo mundo. Quem não edita RH vê só o que é dela: o Meu RH e o
+  // termo de uso que precisa aceitar. O `todos: true` é o que libera.
   const abas = [
     ['painel', '📊', 'Painel'], ['especialista', '🎯', 'Especialista RH'],
     ['disc', '🧭', 'Perfis DISC'], ['motivadores', '💡', 'Motivadores'],
     ['termos-emitir', '📋', 'Termos'],
-    ['termos', '📜', 'Termo de uso'],
+    ['termos', '📜', 'Termo de uso', true],
     ['agilidade', '⚡', 'Agilidade e prazos'],
     ['individual', '👤', 'Acompanhamento Individual'], ['prestadores', '🏢', 'Prestadores Atrelados'], ['recrutamento', '🗂️', 'Recrutamento e Seleção'],
     ['360', '🔄', 'Avaliação 360'], ['pdi', '🌱', 'Planos de desenvolvimento'],
-    ['trilhas', '🎓', 'Trilhas'], ['meu', '🙋', 'Meu RH']
-  ]
+    ['trilhas', '🎓', 'Trilhas'], ['meu', '🙋', 'Meu RH', true]
+  ].filter(a => editavel || a[3])
+  // pra quem não edita, o Meu RH vem primeiro: é o que ela veio fazer
+  if (!editavel) abas.sort((a, b) => (a[0] === 'meu' ? -1 : 0) - (b[0] === 'meu' ? -1 : 0))
   area.innerHTML = `
     <div style="background:linear-gradient(120deg,#0f2418 0%,#1a3a26 55%,#0f2418 100%);border-radius:14px;padding:22px 26px;margin-bottom:18px;position:relative;overflow:hidden;border:1px solid #1f4530;">
       <div style="position:absolute;right:-16px;top:-22px;font-size:120px;opacity:.09;line-height:1;">👥</div>
@@ -44919,7 +44926,8 @@ async function paginaDesempenho () {
       abrirDesempenho(b.dataset.sub, editavel)
     }
   })
-  abrirDesempenho('painel', editavel)
+  // quem não edita cai direto no Meu RH — a primeira aba da lista dela
+  abrirDesempenho(abas[0][0], editavel)
 }
 
 function abrirDesempenho (sub, editavel) {
@@ -50841,6 +50849,16 @@ async function desempMeu (alvo) {
     .filter(r => r.ciclo?.status === 'ENCERRADO')
     .map(r => [r.ciclo.id, r.ciclo])).values()]
 
+  // o que ela tem pra RESPONDER: a subaba "Avaliação 360" é do RH e a
+  // pessoa comum não a enxerga, então o convite mora aqui — é a tela
+  // dela, e é onde ela vai procurar
+  const { data: minhas360 } = await db.from('avaliacao_360_resposta')
+    .select('id,status,ciclo:ciclo_id(id,nome,status,data_fim)')
+    .eq('avaliador_id', PERFIL.pessoaId)
+  const aResponder = (minhas360 || []).filter(r => r.ciclo?.status === 'ABERTO')
+  const cicloAberto360 = aResponder[0]?.ciclo || null
+  const falta360 = aResponder.filter(r => r.status === 'PENDENTE').length
+
   // POPs dirigidos a ela. Não precisa filtrar por setor aqui: a RLS do
   // banco já só devolve o que está no alcance da pessoa (setor dela,
   // lista nominal, ou POP geral da empresa).
@@ -51026,6 +51044,20 @@ async function desempMeu (alvo) {
       </tbody></table>
     </div></div>
 
+    ${cicloAberto360 ? `
+      <div class="panel" style="padding:16px 18px;margin-bottom:18px;border-left:3px solid ${falta360 ? 'var(--rust)' : '#2c6e3f'};">
+        <div style="font-family:var(--serif);font-size:16px;">
+          ${falta360 ? `Avaliação 360 aberta — faltam ${falta360} ${falta360 === 1 ? 'colega' : 'colegas'} pra você avaliar`
+            : '✅ Você já avaliou todo mundo'}</div>
+        <p class="texto-dim2" style="font-size:12px;margin:5px 0 ${falta360 ? '12px' : '0'};line-height:1.55;">
+          ${esc(cicloAberto360.nome)}${cicloAberto360.data_fim ? ` · vai até ${fmtData(cicloAberto360.data_fim)}` : ''}.
+          ${falta360
+            ? 'Dá pra parar no meio e voltar depois — o que você já respondeu fica salvo. Quem você não conhece ou não trabalhou junto, é só marcar e seguir.'
+            : 'Obrigada. O resultado aparece aqui quando o ciclo encerrar.'}</p>
+        ${falta360 ? `<button class="btn" id="meu360-responder">
+          ${falta360 === aResponder.length ? 'Começar' : 'Continuar'} minha avaliação</button>` : ''}
+      </div>` : ''}
+
     ${secaoMeuRh("🔄", "Minha avaliação 360", ciclos360Meus.length)}
     <div id="meu-360" style="margin-bottom:18px;">
       ${ciclos360Meus.length ? `
@@ -51064,6 +51096,9 @@ async function desempMeu (alvo) {
   alvo.querySelectorAll('[data-abrir-minha-trilha]').forEach(card => {
     card.onclick = () => abrirMinhaTrilha(listaAtribs.find(a => a.id === card.dataset.abrirMinhaTrilha), () => desempMeu(alvo))
   })
+
+  const bResp360 = alvo.querySelector('#meu360-responder')
+  if (bResp360) bResp360.onclick = () => responder360Wizard(cicloAberto360, () => desempMeu(alvo))
 
   // resultado do 360: sempre pela RPC, nunca por select nas notas
   const sel360 = alvo.querySelector('#meu360-ciclo')
