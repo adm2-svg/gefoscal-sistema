@@ -32480,6 +32480,16 @@ let FIN_EMPRESAS = null
 
 const PIX_TIPOS = ['CNPJ', 'CPF', 'E-mail', 'Telefone', 'Chave aleatória']
 
+// Pra onde o cliente manda o comprovante. Fica num lugar só: se a Rose
+// sair de férias ou o número mudar, troca aqui e muda em toda folha que
+// sair daqui pra frente.
+const CONTATO_FINANCEIRO = {
+  nome: 'Rose',
+  papel: 'Financeiro — Grupo Gefoscal',
+  whatsapp: '(63) 99685-6885',
+  email: 'financeiro@grupogefoscal.com.br'
+}
+
 function resumoBancario (c) {
   const p = []
   if (c.codigo_banco) p.push('banco ' + c.codigo_banco)
@@ -32625,12 +32635,23 @@ function abrirFolhaPagamento (contas) {
       <p style="font-size:13.5px;line-height:1.65;margin:0;">
         Seguem abaixo os dados para pagamento. Confira o titular e o CNPJ antes de transferir.</p>
       ${contas.map(blocoConta).join('')}
+      ${docBloco('Depois de pagar, mande o comprovante', `
+        <div class="kv">
+          ${linha('Falar com', CONTATO_FINANCEIRO.nome + ' — ' + CONTATO_FINANCEIRO.papel)}
+          ${linha('WhatsApp', CONTATO_FINANCEIRO.whatsapp)}
+          ${/* o .doc joga tudo em caixa alta; e-mail em maiúscula fica ruim de ler */ ''}
+          <span>E-mail</span><b style="text-transform:none;">${esc(CONTATO_FINANCEIRO.email)}</b>
+        </div>`)}
       <div class="doc-importante">
         <div class="rot">Importante</div>
         <ol>
           <li>Só consideramos quitado o pagamento feito em uma das contas acima, no nome do titular indicado.</li>
-          <li>Depois de pagar, envie o comprovante para o nosso financeiro.</li>
-          <li>Nunca alteramos dados bancários por e-mail ou mensagem. Na dúvida, ligue para o número do rodapé.</li>
+          <li>Envie o comprovante para a ${esc(CONTATO_FINANCEIRO.nome)} no WhatsApp
+              ${esc(CONTATO_FINANCEIRO.whatsapp)} ou para ${esc(CONTATO_FINANCEIRO.email)}.
+              Sem o comprovante a baixa pode demorar.</li>
+          <li>Nunca alteramos dados bancários por e-mail, WhatsApp ou mensagem.
+              Recebeu um pedido de pagamento com outra conta? Não pague — fale com a
+              ${esc(CONTATO_FINANCEIRO.nome)} no número acima antes.</li>
         </ol>
       </div>`,
     acoes: `<button class="btn" id="fp-imprimir">Baixar / imprimir PDF</button>
