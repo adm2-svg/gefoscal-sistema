@@ -3774,7 +3774,8 @@ async function painelExecutivoDiretor (area) {
         }
       }),
       tentar(async () => {
-        const { data } = await db.from('lead').select('id').eq('arquivado', false).not('etapa', 'in', '(GANHO,PERDIDO)')
+        const { data } = await db.from('lead').select('id')
+          .eq('arquivado', false).eq('inativo_temporario', false).not('etapa', 'in', '(GANHO,PERDIDO)')
         return { abertas: (data || []).length }
       }),
       tentar(async () => {
@@ -17663,7 +17664,10 @@ const selLead = `
 // Também tira os registros arquivados (histórico/suporte, ex.: migração
 // do CRM antigo) do funil ativo — esses só aparecem na aba Histórico.
 function filtrarPorDono (q, gerencia) {
-  q = q.eq('arquivado', false)
+  // Inativo de safra NÃO é lead do funil. Ele tem a aba Recontatos, e
+  // volta pro funil sozinho quando alguém clica em "Reativar" — deixar os
+  // dois no mesmo quadro só polui a coluna de quem está trabalhando.
+  q = q.eq('arquivado', false).eq('inativo_temporario', false)
   if (gerencia) return q.not('vendedor_id', 'is', null) // gerência já vê tudo atribuído; o pool fica na aba Atribuir
   // pré-vendas trabalha justamente o pool: os leads que ainda não têm dono
   if (souPreVendas()) return q.is('vendedor_id', null)
@@ -18959,7 +18963,9 @@ async function crmAtribuir (alvo, { podeAtribuir = ehGestorComercial() } = {}) {
   }
 
   const carregarPool = async () => {
-    const { data, error } = await db.from('lead').select(selLead).is('vendedor_id', null).eq('arquivado', false).order('criado_em', { ascending: false }).limit(300)
+    const { data, error } = await db.from('lead').select(selLead).is('vendedor_id', null)
+      .eq('arquivado', false).eq('inativo_temporario', false)
+      .order('criado_em', { ascending: false }).limit(300)
     if (faltaMigracao(error) || error) { $('#crm-pool').innerHTML = `<p class="vazio">${esc(error?.message ?? '')}</p>`; return }
     const lista = data || []
     $('#crm-pool').innerHTML = lista.length ? `
@@ -23429,7 +23435,6 @@ function renderFunilGestao (alvo, lista, editavel, aoMudar, gerencia = true, pod
       <div class="nome">${esc(l.nome)}</div>
       <div class="sub">${esc([ROTULO_ETAPA_LEAD[l.etapa] ?? l.etapa, gerencia ? (l.vendedor?.nome ?? 'sem vendedor') : null].filter(Boolean).join(' · '))}</div>
       ${l.bloqueio_lgpd ? `<div style="margin-top:6px;"><span class="badge-alerta" style="background:rgba(var(--critico-rgb),.18);color:var(--critico-text);">🚫 Bloqueado (LGPD)</span></div>` : ''}
-      ${l.inativo_temporario ? `<div><span class="selo-inativo">⏸ inativo nesta safra</span></div>` : ''}
       <div class="linhas">
         ${l.telefone ? `<div><span class="ic">📞</span>${esc(l.telefone)}</div>` : ''}
         ${l.municipio || l.uf ? `<div><span class="ic">📍</span>${esc([l.municipio, l.uf].filter(Boolean).join(' / '))}</div>` : ''}
@@ -24007,7 +24012,8 @@ async function blocoDaOriginacao (alvo, leads, recarregar) {
 
 async function crmGestaoTab (alvo, editavel) {
   const { data, error } = await db.from('lead').select(selLead)
-    .eq('arquivado', false).order('atualizado_em', { ascending: false }).limit(1500)
+    .eq('arquivado', false).eq('inativo_temporario', false)
+    .order('atualizado_em', { ascending: false }).limit(1500)
   if (faltaMigracao(error)) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
 
   const lista = data || []
@@ -55546,7 +55552,7 @@ async function dashDiretorGefoscal (alvo) {
     db.from('plano_meta').select('valor_alvo').eq('tipo', 'PRODUCAO_ANUAL').maybeSingle(),
     db.from('plano_meta').select('valor_alvo').eq('tipo', 'CAPACIDADE_NOMINAL').maybeSingle(),
     db.from('producao_diaria').select('day,qtd'),
-    db.from('lead').select('etapa').eq('arquivado', false),
+    db.from('lead').select('etapa').eq('arquivado', false).eq('inativo_temporario', false),
     db.from('produto').select('nome,unidade,estoque_minimo').not('estoque_minimo', 'is', null),
     db.from('ordem_servico').select('status,data_limite'),
     db.from('carregamento').select('status'),
