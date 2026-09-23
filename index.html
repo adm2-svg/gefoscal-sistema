@@ -49758,46 +49758,120 @@ function desempConduta (alvo, editavel) {
 }
 
 // ----- Avaliação 360 -----
+// ---------------------------------------------------------------
+// Avaliação 360
+// ---------------------------------------------------------------
+// Todo mundo avalia todo mundo. Antes das perguntas de cada avaliado
+// vem o sinalizador: um clique que diz "não tenho como avaliar esta
+// pessoa" e passa pra próxima, sem pedir motivo -- pedir justificativa
+// faria a pessoa preferir avaliar mal a admitir que não convive.
+//
+// O anonimato não é promessa de tela, é regra de banco: a RLS de
+// av360_nota só deixa o AVALIADOR e o RH lerem as notas. O avaliado
+// nunca lê linha nenhuma -- ele vê o consolidado que a tela calcula.
+// Por cima disso valem dois pisos: resultado só aparece com pelo menos
+// 3 avaliações válidas, e comentário de um bloco só aparece separado
+// se houver 3 comentários ali. Com menos que isso dá pra adivinhar
+// quem escreveu pelo contexto.
+// ---------------------------------------------------------------
+const MIN_AVALIACOES_360 = 3
+const MIN_COMENTARIOS_360 = 3
+const ESCALA_360 = [
+  [1, 'Raramente ou nunca'],
+  [2, 'Poucas vezes'],
+  [3, 'Às vezes'],
+  [4, 'Quase sempre'],
+  [5, 'Sempre ou quase sempre']
+]
+const AV360_CACHE = { dimensoes: [], perguntas: [] }
+
+async function carregar360Questionario () {
+  if (AV360_CACHE.dimensoes.length) return AV360_CACHE
+  const [{ data: dims }, { data: perg }] = await Promise.all([
+    db.from('av360_dimensao').select('id,codigo,nome,ordem').eq('ativa', true).order('ordem'),
+    db.from('av360_pergunta').select('id,dimensao_id,texto,ordem').eq('ativa', true).order('ordem')
+  ])
+  AV360_CACHE.dimensoes = dims || []
+  AV360_CACHE.perguntas = perg || []
+  return AV360_CACHE
+}
+
+const perguntasDaDimensao = dimId => AV360_CACHE.perguntas.filter(p => p.dimensao_id === dimId)
+const media360 = arr => arr.length ? arr.reduce((s, n) => s + n, 0) / arr.length : null
+
+// desvio padrão: é o que denuncia percepções muito diferentes sobre a
+// mesma pessoa (média 4,5 feita de 1,1,5,5,5 não é média nenhuma)
+function desvioPadrao (arr) {
+  if (arr.length < 2) return 0
+  const m = media360(arr)
+  return Math.sqrt(arr.reduce((s, n) => s + (n - m) ** 2, 0) / arr.length)
+}
+
 async function desemp360 (alvo, editavel) {
-  const { data: ciclos, error } = await db.from('avaliacao_360_ciclo').select('id,nome,data_inicio,data_fim,status').order('data_inicio', { ascending: false })
+  await carregar360Questionario()
+  const { data: ciclos, error } = await db.from('avaliacao_360_ciclo')
+    .select('id,nome,data_inicio,data_fim,status').order('data_inicio', { ascending: false })
   if (faltaMigracao(error)) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
   const listaCiclos = ciclos || []
 
   const { data: respostasTodas } = listaCiclos.length
-    ? await db.from('avaliacao_360_resposta').select('ciclo_id,status')
+    ? await db.from('avaliacao_360_resposta').select('ciclo_id,status,nao_avalia,avaliador_id')
     : { data: [] }
+
   const progressoPorCiclo = {}
   ;(respostasTodas || []).forEach(r => {
-    progressoPorCiclo[r.ciclo_id] = progressoPorCiclo[r.ciclo_id] || { total: 0, respondidas: 0 }
-    progressoPorCiclo[r.ciclo_id].total++
-    if (r.status === 'RESPONDIDO') progressoPorCiclo[r.ciclo_id].respondidas++
+    const p = progressoPorCiclo[r.ciclo_id] = progressoPorCiclo[r.ciclo_id] || { total: 0, respondidas: 0, puladas: 0 }
+    p.total++
+    if (r.status === 'RESPONDIDO') { p.respondidas++; if (r.nao_avalia) p.puladas++ }
   })
 
   const cicloAberto = listaCiclos.find(c => c.status === 'ABERTO')
-  const progressoAberto = cicloAberto ? progressoPorCiclo[cicloAberto.id] : null
+  const prog = cicloAberto ? progressoPorCiclo[cicloAberto.id] : null
+
+  // o que EU ainda devo responder no ciclo aberto
+  const minhasPendentes = cicloAberto
+    ? (respostasTodas || []).filter(r => r.ciclo_id === cicloAberto.id && r.avaliador_id === PERFIL.pessoaId && r.status === 'PENDENTE').length
+    : 0
+  const minhasTotal = cicloAberto
+    ? (respostasTodas || []).filter(r => r.ciclo_id === cicloAberto.id && r.avaliador_id === PERFIL.pessoaId).length
+    : 0
 
   const corStatus360 = s => s === 'ENCERRADO' ? 'texto-dim2' : s === 'ABERTO' ? 'badge-alerta' : 'chip'
 
   alvo.innerHTML = `
     <div class="resumo-topo" style="margin-bottom:18px;">
       ${kpi('Ciclos criados', listaCiclos.length)}
-      ${kpi('Ciclo atual', cicloAberto ? cicloAberto.nome : 'nenhum aberto')}
-      ${kpi('Respostas preenchidas', progressoAberto ? `${progressoAberto.respondidas}/${progressoAberto.total}` : '—')}
-      ${kpi('% concluído', progressoAberto?.total ? Math.round(progressoAberto.respondidas / progressoAberto.total * 100) + '%' : '—')}
+      ${kpi('Ciclo atual', cicloAberto ? cicloAberto.nome : 'nenhum aberto',
+        cicloAberto ? `${fmtData(cicloAberto.data_inicio)} a ${fmtData(cicloAberto.data_fim)}` : '')}
+      ${kpi('Avaliações preenchidas', prog ? `${prog.respondidas}/${prog.total}` : '—',
+        prog?.puladas ? `${prog.puladas} marcadas como "não avalio"` : '')}
+      ${kpi('Taxa de resposta', prog?.total ? Math.round(prog.respondidas / prog.total * 100) + '%' : '—')}
     </div>
-    ${editavel ? `<div class="acoes" style="margin-bottom:16px;"><button class="btn" id="c360-novo">+ Novo ciclo trimestral</button></div>` : ''}
 
-    <div id="c360-minhas" style="margin-bottom:18px;"></div>
+    ${minhasTotal ? `
+      <div class="panel" style="padding:16px 18px;margin-bottom:18px;border-left:3px solid ${minhasPendentes ? 'var(--rust)' : '#2c6e3f'};">
+        ${minhasPendentes ? `
+          <div style="font-family:var(--serif);font-size:16px;">Faltam ${minhasPendentes} de ${minhasTotal} colegas pra você avaliar</div>
+          <p class="texto-dim2" style="font-size:12px;margin:5px 0 12px;line-height:1.55;">
+            Dá pra parar no meio e voltar depois — o que você já respondeu fica salvo.
+            Quem você não conhece ou não trabalhou junto, é só marcar e seguir.</p>
+          <button class="btn" id="c360-responder">${minhasPendentes === minhasTotal ? 'Começar' : 'Continuar'} minha avaliação</button>
+        ` : `
+          <div style="font-family:var(--serif);font-size:16px;">✅ Você já avaliou todo mundo</div>
+          <p class="texto-dim2" style="font-size:12px;margin:5px 0 0;">
+            Obrigada. O resultado aparece pra você quando o ciclo encerrar.</p>`}
+      </div>` : ''}
+
+    ${editavel ? `<div class="acoes" style="margin-bottom:16px;">
+      <button class="btn" id="c360-novo">+ Novo ciclo</button></div>` : ''}
 
     ${listaCiclos.length ? `
       <h4 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Ciclos de avaliação</h4>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(260px, 100%), 1fr));gap:14px;">
         ${listaCiclos.map(c => {
-          const prog = progressoPorCiclo[c.id]
-          const pct = prog?.total ? Math.round(prog.respondidas / prog.total * 100) : 0
-          return `<div class="panel" style="padding:16px;cursor:pointer;transition:transform .12s ease,box-shadow .12s ease;" data-abrir-ciclo="${c.id}"
-            onmouseenter="this.style.transform='translateY(-2px)';this.style.boxShadow='0 8px 18px rgba(0,0,0,.12)'"
-            onmouseleave="this.style.transform='';this.style.boxShadow=''">
+          const p = progressoPorCiclo[c.id]
+          const pct = p?.total ? Math.round(p.respondidas / p.total * 100) : 0
+          return `<div class="panel" style="padding:16px;cursor:pointer;" data-abrir-ciclo="${c.id}">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
               <div style="font-weight:600;font-size:14px;">${esc(c.nome)}</div>
               <span class="${corStatus360(c.status)}" style="font-size:10px;">${esc(ROTULO_STATUS_360_CICLO[c.status])}</span>
@@ -49806,214 +49880,739 @@ async function desemp360 (alvo, editavel) {
             <div style="background:var(--surface2);border-radius:5px;height:8px;overflow:hidden;margin-bottom:6px;">
               <div style="width:${pct}%;height:100%;background:var(--rust);"></div>
             </div>
-            <div class="texto-dim2" style="font-size:11px;">${prog ? `${prog.respondidas} de ${prog.total} respostas (${pct}%)` : 'sem participantes ainda'}</div>
+            <div class="texto-dim2" style="font-size:11px;">${p ? `${p.respondidas} de ${p.total} respostas (${pct}%)` : 'sem participantes ainda'}</div>
           </div>`
         }).join('')}
       </div>` : `
       <div class="panel" style="padding:40px 24px;text-align:center;">
         <div style="font-size:32px;margin-bottom:8px;opacity:.5;">🔄</div>
         <p class="texto-dim" style="margin:0 0 4px;font-weight:600;">Nenhum ciclo criado ainda</p>
-        <p class="texto-dim2" style="font-size:12.5px;margin:0;">${editavel ? 'Clica em "+ Novo ciclo trimestral" pra começar o primeiro.' : 'Assim que o RH abrir um ciclo, ele aparece aqui.'}</p>
+        <p class="texto-dim2" style="font-size:12.5px;margin:0;">${editavel ? 'Clica em "+ Novo ciclo" pra abrir o primeiro.' : 'Assim que o RH abrir um ciclo, ele aparece aqui.'}</p>
       </div>`}`
 
-  // respostas pendentes que EU preciso preencher, de qualquer ciclo aberto
-  ;(async () => {
-    const { data: minhas } = await db.from('avaliacao_360_resposta')
-      .select('id,tipo,status,ciclo:ciclo_id(nome,status),avaliado:avaliado_id(nome)')
-      .eq('avaliador_id', PERFIL.pessoaId).eq('status', 'PENDENTE')
-    const pendentes = (minhas || []).filter(m => m.ciclo?.status === 'ABERTO')
-    if (!pendentes.length) return
-    $('#c360-minhas').innerHTML = `
-      <div class="panel" style="padding:16px;border-left:3px solid var(--rust);">
-        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 10px;">📋 Suas avaliações pendentes (${pendentes.length})</h3>
-        ${pendentes.map(p => `<div class="passo">
-          <span class="quando">${ROTULO_TIPO_360[p.tipo]}</span>
-          <span>Avaliar <b>${esc(p.avaliado?.nome ?? '—')}</b> — ${esc(p.ciclo?.nome ?? '')}</span>
-          <button class="btn-secundario mini" data-responder="${p.id}" style="margin-left:auto;">responder</button>
-        </div>`).join('')}
-      </div>`
-    $('#c360-minhas').querySelectorAll('[data-responder]').forEach(b => {
-      b.onclick = () => formResponder360(pendentes.find(p => p.id === b.dataset.responder), () => desemp360(alvo, editavel))
-    })
-  })()
-
-  alvo.querySelectorAll('[data-abrir-ciclo]').forEach(b => {
-    b.onclick = () => detalheCiclo360(listaCiclos.find(c => c.id === b.dataset.abrirCiclo), editavel, () => desemp360(alvo, editavel))
+  const recarregar = () => desemp360(alvo, editavel)
+  const bResp = $('#c360-responder')
+  if (bResp) bResp.onclick = () => responder360Wizard(cicloAberto, recarregar)
+  const bNovo = $('#c360-novo')
+  if (bNovo) bNovo.onclick = () => formNovoCiclo360(recarregar)
+  alvo.querySelectorAll('[data-abrir-ciclo]').forEach(card => {
+    card.onclick = () => detalheCiclo360(listaCiclos.find(c => c.id === card.dataset.abrirCiclo), editavel, recarregar)
   })
-
-  if (!editavel) return
-  const btnNovo = $('#c360-novo')
-  if (btnNovo) btnNovo.onclick = () => formNovoCiclo360(() => desemp360(alvo, editavel))
 }
 
-function formNovoCiclo360 (aoFechar) {
-  const trimestre = Math.floor(new Date().getMonth() / 3) + 1
+// ---------------------------------------------------------------
+// Novo ciclo — todo mundo avalia todo mundo.
+// Só entra quem tem login: quem não acessa o sistema não tem como
+// responder, e deixar essas pessoas na conta faria a taxa de resposta
+// nascer errada e nunca fechar.
+// ---------------------------------------------------------------
+async function formNovoCiclo360 (aoFechar) {
+  const { data: logins } = await db.from('usuario_perfil').select('pessoa_id').eq('ativo', true)
+  const idsComLogin = new Set((logins || []).map(l => l.pessoa_id))
+  const elegiveis = (DESEMP_CACHE.pessoas || []).filter(p => idsComLogin.has(p.id))
+
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
-  fundo.innerHTML = `<div class="modal" style="max-width:640px;">
-    <h3>Novo ciclo de avaliação 360</h3>
-    <div class="form-grade">
-      <div class="campo" style="grid-column:1/-1;"><label>Nome do ciclo *</label>
-        <input id="nc-nome" value="${trimestre}º trimestre ${new Date().getFullYear()}"></div>
-      <div class="campo"><label>Início</label><input type="date" id="nc-inicio" value="${new Date().toISOString().slice(0, 10)}"></div>
-      <div class="campo"><label>Fim</label><input type="date" id="nc-fim" value="${new Date(Date.now() + 21 * 864e5).toISOString().slice(0, 10)}"></div>
-    </div>
-    <p class="texto-dim" style="font-size:12.5px;margin-top:10px;">Marque quem participa. Pra cada participante,
-      já cria a autoavaliação e — se o setor tiver gestor definido — a avaliação do gestor. Avaliação de pares
-      você adiciona manualmente depois, abrindo o ciclo.</p>
-    <div style="max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:8px;margin-top:8px;">
-      ${DESEMP_CACHE.pessoas.map(p => `<label class="linha-modulo">
-        <input type="checkbox" class="nc-participante" value="${p.id}">
-        <span class="nome">${esc(p.nome)}</span></label>`).join('')}
-    </div>
-    <div class="acoes" style="margin-top:14px;"><button class="btn" id="nc-criar">Criar ciclo</button>
-      <button class="btn-secundario" id="nc-cancelar">Cancelar</button></div>
-    <div class="recado oculto" id="nc-recado"></div>
-  </div>`
-  document.body.appendChild(fundo)
-  const fechar = () => fundo.remove()
-  fundo.querySelector('#nc-cancelar').onclick = fechar
-  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  const hoje = new Date().toISOString().slice(0, 10)
 
+  fundo.innerHTML = `
+    <div class="modal" style="max-width:640px;">
+      <h3>Novo ciclo de Avaliação 360</h3>
+      <div class="form-grade">
+        <div class="campo" style="grid-column:1/-1;"><label>Nome do ciclo *</label>
+          <input id="nc-nome" placeholder="Ex.: 360 — Setembro/2026"></div>
+        <div class="campo"><label>Abre em</label><input type="date" id="nc-inicio" value="${hoje}"></div>
+        <div class="campo"><label>Fecha em</label><input type="date" id="nc-fim" value="${hoje}"></div>
+      </div>
+
+      <div class="cabeca-secao" style="margin:16px 0 6px;">
+        <h3 style="margin:0;font-size:13.5px;">Quem participa</h3>
+        <span class="texto-dim2" style="font-size:11.5px;">
+          <button class="btn-secundario mini" id="nc-todos" type="button">marcar todos</button></span></div>
+      <p class="texto-dim2" style="font-size:11.5px;margin:0 0 8px;line-height:1.5;">
+        Cada participante avalia todos os outros. Só aparece quem tem login ativo —
+        sem login não tem como responder.</p>
+      <div class="panel" style="padding:10px 12px;max-height:220px;overflow:auto;">
+        ${elegiveis.map(p => `<label style="display:flex;align-items:center;gap:7px;font-size:12.5px;padding:2px 0;">
+          <input type="checkbox" class="nc-participante" value="${p.id}" checked style="width:auto;"> ${esc(p.nome)}</label>`).join('')
+          || '<p class="vazio">Ninguém com login ativo no cadastro.</p>'}
+      </div>
+
+      <div class="panel" style="padding:11px 13px;margin-top:12px;background:rgba(200,161,26,.08);">
+        <div class="texto-dim2" style="font-size:12px;line-height:1.55;" id="nc-conta"></div></div>
+
+      <div class="acoes" style="margin-top:14px;">
+        <button class="btn" id="nc-criar">Criar e abrir ciclo</button>
+        <button class="btn-secundario" id="nc-cancelar">Cancelar</button>
+      </div>
+      <div class="recado oculto" id="nc-recado"></div>
+    </div>`
+
+  document.body.appendChild(fundo)
+  const q = id => fundo.querySelector(id)
+  const fechar = () => fundo.remove()
+  q('#nc-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
   const aviso = t => {
-    const el = fundo.querySelector('#nc-recado'); el.textContent = t; el.classList.remove('oculto')
+    const el = q('#nc-recado'); el.textContent = t; el.classList.remove('oculto')
     el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
   }
 
-  fundo.querySelector('#nc-criar').onclick = async () => {
-    const nome = fundo.querySelector('#nc-nome').value.trim()
+  // mostra o tamanho real do que está sendo criado ANTES de criar:
+  // "todo mundo avalia todo mundo" cresce ao quadrado e vira um
+  // questionário longo demais sem ninguém perceber
+  const recalcular = () => {
+    const n = fundo.querySelectorAll('.nc-participante:checked').length
+    const porPessoa = Math.max(0, n - 1)
+    const totalPerguntas = porPessoa * AV360_CACHE.perguntas.length
+    q('#nc-conta').innerHTML = n < 2
+      ? 'Marque pelo menos duas pessoas.'
+      : `Com <b>${n} participantes</b>, cada um avalia <b>${porPessoa} colegas</b> —
+         ${AV360_CACHE.perguntas.length} perguntas por colega, <b>${totalPerguntas} respostas</b> por pessoa.
+         Ao todo o ciclo gera ${n * porPessoa} avaliações.
+         ${totalPerguntas > 150 ? '<br><b>É bastante coisa.</b> Vale avisar a equipe que dá pra responder em várias sessões, e que o botão de "não consigo avaliar" existe pra quem não tem convivência.' : ''}`
+  }
+  fundo.querySelectorAll('.nc-participante').forEach(c => { c.onchange = recalcular })
+  q('#nc-todos').onclick = () => {
+    const todosMarcados = [...fundo.querySelectorAll('.nc-participante')].every(c => c.checked)
+    fundo.querySelectorAll('.nc-participante').forEach(c => { c.checked = !todosMarcados })
+    recalcular()
+  }
+  recalcular()
+
+  q('#nc-criar').onclick = async () => {
+    const nome = q('#nc-nome').value.trim()
     if (!nome) { aviso('Dê um nome pro ciclo.'); return }
     const participantes = [...fundo.querySelectorAll('.nc-participante:checked')].map(c => c.value)
-    if (!participantes.length) { aviso('Marque pelo menos um participante.'); return }
+    if (participantes.length < 2) { aviso('Marque pelo menos duas pessoas — 360 com uma pessoa só não existe.'); return }
+    if (q('#nc-fim').value < q('#nc-inicio').value) { aviso('A data de fechamento é anterior à de abertura.'); return }
 
-    const btn = fundo.querySelector('#nc-criar'); btn.disabled = true; btn.textContent = 'Criando...'
+    const btn = q('#nc-criar'); btn.disabled = true; btn.textContent = 'Criando...'
     const { data: ciclo, error } = await db.from('avaliacao_360_ciclo').insert({
-      nome, data_inicio: fundo.querySelector('#nc-inicio').value, data_fim: fundo.querySelector('#nc-fim').value,
+      nome, data_inicio: q('#nc-inicio').value, data_fim: q('#nc-fim').value,
       status: 'ABERTO', criado_por: PERFIL.pessoaId
     }).select('id').single()
-    if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Criar ciclo'; return }
+    if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Criar e abrir ciclo'; return }
 
+    // cada par ordenado (avaliador, avaliado), sem a própria pessoa
     const linhas = []
-    participantes.forEach(pid => {
-      linhas.push({ ciclo_id: ciclo.id, avaliado_id: pid, avaliador_id: pid, tipo: 'AUTOAVALIACAO' })
-      const pessoa = DESEMP_CACHE.pessoas.find(p => p.id === pid)
-      const setor = DESEMP_CACHE.setores.find(s => s.id === pessoa?.setor_id)
-      if (setor?.gestor_id && setor.gestor_id !== pid) {
-        linhas.push({ ciclo_id: ciclo.id, avaliado_id: pid, avaliador_id: setor.gestor_id, tipo: 'GESTOR' })
-      }
+    participantes.forEach(avaliador => {
+      participantes.forEach(avaliado => {
+        if (avaliador !== avaliado) {
+          linhas.push({ ciclo_id: ciclo.id, avaliado_id: avaliado, avaliador_id: avaliador, tipo: 'PARES' })
+        }
+      })
     })
-    const { error: erroResp } = await db.from('avaliacao_360_resposta').insert(linhas)
-    if (erroResp) { aviso('Ciclo criado, mas falhou ao gerar as avaliações: ' + erroResp.message); btn.disabled = false; btn.textContent = 'Criar ciclo'; return }
+
+    // em lotes: 20 pessoas já dão 380 linhas, e um insert gigante
+    // costuma esbarrar no limite da requisição
+    for (let i = 0; i < linhas.length; i += 200) {
+      const { error: e2 } = await db.from('avaliacao_360_resposta').insert(linhas.slice(i, i + 200))
+      if (e2) {
+        aviso('Ciclo criado, mas falhou ao gerar as avaliações: ' + e2.message)
+        btn.disabled = false; btn.textContent = 'Criar e abrir ciclo'; return
+      }
+    }
     fechar(); aoFechar()
   }
 }
 
-async function detalheCiclo360 (ciclo, editavel, aoFechar) {
-  const { data: respostas } = await db.from('avaliacao_360_resposta')
-    .select('id,tipo,status,nota_competencia_tecnica,nota_trabalho_equipe,nota_comunicacao,nota_lideranca,nota_proatividade,pontos_fortes,pontos_melhoria,avaliado:avaliado_id(nome),avaliador:avaliador_id(nome)')
-    .eq('ciclo_id', ciclo.id).order('avaliado_id')
+// ---------------------------------------------------------------
+// Responder — um avaliado por vez, salvando ao avançar.
+// Salvar por avaliado (e não só no fim) é o que deixa a pessoa parar
+// no meio e voltar amanhã sem perder nada; num ciclo grande isso não
+// é conforto, é o que torna o formulário possível.
+// ---------------------------------------------------------------
+async function responder360Wizard (ciclo, aoFechar) {
+  if (!ciclo) return
+  await carregar360Questionario()
 
+  const { data: minhas, error } = await db.from('avaliacao_360_resposta')
+    .select('id,status,nao_avalia,sugestao,avaliado:avaliado_id(id,nome,foto_url,cargo,setor:setor_id(nome))')
+    .eq('ciclo_id', ciclo.id).eq('avaliador_id', PERFIL.pessoaId)
+  if (error) { alert(error.message); return }
+
+  const itens = (minhas || []).sort((a, b) =>
+    (a.status === 'RESPONDIDO' ? 1 : 0) - (b.status === 'RESPONDIDO' ? 1 : 0) ||
+    String(a.avaliado?.nome || '').localeCompare(String(b.avaliado?.nome || '')))
+  if (!itens.length) { alert('Você não tem ninguém pra avaliar neste ciclo.'); return }
+
+  let indice = Math.max(0, itens.findIndex(i => i.status === 'PENDENTE'))
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
-  fundo.innerHTML = `<div class="modal" style="max-width:820px;">
-    <div class="cabeca-secao"><h3>${esc(ciclo.nome)}</h3>
-      <span class="${ciclo.status === 'ABERTO' ? 'badge-alerta' : 'chip'}">${ROTULO_STATUS_360_CICLO[ciclo.status]}</span></div>
-    <p class="texto-dim2" style="font-size:12px;margin:-8px 0 14px;">${fmtData(ciclo.data_inicio)} – ${fmtData(ciclo.data_fim)}</p>
+  document.body.appendChild(fundo)
 
-    ${editavel && ciclo.status !== 'ENCERRADO' ? `
-      <div class="form-grade" style="margin-bottom:8px;">
-        <div class="campo"><label>Avaliado</label><select id="pr-avaliado">${DESEMP_CACHE.pessoas.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')}</select></div>
-        <div class="campo"><label>Avaliador (par)</label><select id="pr-avaliador">${DESEMP_CACHE.pessoas.map(p => `<option value="${p.id}">${esc(p.nome)}</option>`).join('')}</select></div>
+  const fechar = () => { fundo.remove(); if (aoFechar) aoFechar() }
+
+  const desenhar = async () => {
+    const item = itens[indice]
+    const feitas = itens.filter(i => i.status === 'RESPONDIDO').length
+    const pct = Math.round(feitas / itens.length * 100)
+
+    // rascunho do que já foi marcado pra esta pessoa
+    const [{ data: notas }, { data: coments }] = await Promise.all([
+      db.from('av360_nota').select('pergunta_id,nota').eq('resposta_id', item.id),
+      db.from('av360_comentario').select('dimensao_id,texto').eq('resposta_id', item.id)
+    ])
+    const notaDe = {}; (notas || []).forEach(n => { notaDe[n.pergunta_id] = n.nota })
+    const comentDe = {}; (coments || []).forEach(c => { comentDe[c.dimensao_id] = c.texto })
+
+    const modal = document.createElement('div')
+    modal.className = 'modal'
+    modal.style.maxWidth = '780px'
+    modal.innerHTML = `
+      <div style="position:sticky;top:0;background:var(--panel);padding-bottom:10px;margin:-2px -2px 6px;z-index:2;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+          <div class="texto-dim2" style="font-size:11.5px;">
+            ${esc(ciclo.nome)} · pessoa ${indice + 1} de ${itens.length} · ${feitas} concluída(s)</div>
+          <button class="btn-secundario mini" id="w-sair">salvar e sair</button>
+        </div>
+        <div style="background:var(--surface2);border-radius:5px;height:7px;overflow:hidden;margin-top:7px;">
+          <div style="width:${pct}%;height:100%;background:var(--rust);transition:width .2s;"></div>
+        </div>
       </div>
-      <div class="acoes" style="margin-bottom:14px;"><button class="btn-secundario" id="pr-add">+ Adicionar avaliação de pares</button></div>
-    ` : ''}
 
-    <div class="panel" style="padding:0;"><div class="tabela-scroll">
-      <table><thead><tr><th>Avaliado</th><th>Tipo</th><th>Avaliador</th><th>Status</th><th class="num">Média</th></tr></thead><tbody>
-        ${(respostas || []).map(r => {
-          const notas = [r.nota_competencia_tecnica, r.nota_trabalho_equipe, r.nota_comunicacao, r.nota_lideranca, r.nota_proatividade].filter(n => n != null)
-          const media = notas.length ? (notas.reduce((s, n) => s + n, 0) / notas.length).toFixed(1) : '—'
-          return `<tr>
-          <td>${esc(r.avaliado?.nome ?? '—')}</td>
-          <td><span class="chip">${ROTULO_TIPO_360[r.tipo]}</span></td>
-          <td class="texto-dim">${esc(r.avaliador?.nome ?? '—')}</td>
-          <td>${r.status === 'RESPONDIDO' ? '<span class="badge-bom">respondido</span>' : '<span class="badge-alerta">pendente</span>'}</td>
-          <td class="num">${media}</td>
-        </tr>`}).join('') || `<tr><td colspan="5" class="vazio">Nenhuma avaliação neste ciclo.</td></tr>`}
-      </tbody></table>
-    </div></div>
+      <div style="display:flex;align-items:center;gap:12px;margin:8px 0 4px;">
+        <div style="flex:1;">
+          <h3 style="margin:0;font-family:var(--serif);font-size:20px;">${esc(item.avaliado?.nome || '—')}</h3>
+          <div class="texto-dim2" style="font-size:12px;">
+            ${esc(item.avaliado?.cargo || '')}${item.avaliado?.setor?.nome ? ` · ${esc(item.avaliado.setor.nome)}` : ''}</div>
+        </div>
+        ${item.status === 'RESPONDIDO' ? `<span class="chip" style="color:#2c6e3f;">já respondida</span>` : ''}
+      </div>
+
+      <label class="panel" style="display:flex;align-items:flex-start;gap:9px;padding:12px 14px;margin:12px 0;cursor:pointer;border-left:3px solid var(--warn-text);">
+        <input type="checkbox" id="w-nao-avalia" ${item.nao_avalia ? 'checked' : ''} style="width:auto;margin-top:2px;">
+        <span style="font-size:12.5px;line-height:1.5;">
+          <b>Não consigo avaliar esta pessoa</b>
+          <span class="texto-dim2" style="display:block;font-size:11.5px;margin-top:2px;">
+            sou eu mesmo(a), não tivemos contato nos últimos 3 meses, ou não sei identificar quem é</span></span>
+      </label>
+
+      <div id="w-perguntas">
+        ${AV360_CACHE.dimensoes.map(d => `
+          <div class="panel" style="padding:14px 16px;margin-bottom:10px;">
+            <div style="font-weight:600;font-size:13.5px;margin-bottom:2px;">${esc(d.nome)}</div>
+            <div class="texto-dim2" style="font-size:11px;margin-bottom:10px;">1 = raramente ou nunca · 5 = sempre ou quase sempre</div>
+            ${perguntasDaDimensao(d.id).map(p => `
+              <div style="padding:8px 0;border-top:1px solid var(--line2);">
+                <div style="font-size:12.5px;line-height:1.5;margin-bottom:6px;">${esc(p.texto)}</div>
+                <div style="display:flex;gap:5px;flex-wrap:wrap;" data-pergunta="${p.id}">
+                  ${ESCALA_360.map(([n, rot]) => `
+                    <button type="button" class="btn-secundario mini w-nota" data-nota="${n}" title="${esc(rot)}"
+                      style="min-width:40px;${notaDe[p.id] === n ? 'background:var(--rust);color:#fff;border-color:var(--rust);' : ''}">${n}</button>`).join('')}
+                </div>
+              </div>`).join('')}
+            <div class="campo" style="margin-top:10px;"><label style="font-size:11.5px;">Comentário sobre ${esc(d.nome.toLowerCase())} (opcional)</label>
+              <textarea data-coment="${d.id}" style="min-height:52px;font-size:12.5px;">${esc(comentDe[d.id] || '')}</textarea></div>
+          </div>`).join('')}
+
+        <div class="panel" style="padding:14px 16px;margin-bottom:10px;">
+          <div style="font-weight:600;font-size:13.5px;margin-bottom:6px;">Uma última, se quiser</div>
+          <div style="font-size:12.5px;line-height:1.5;margin-bottom:7px;">
+            Se você pudesse dar uma sugestão sincera para que essa pessoa crescesse profissionalmente, o que diria?</div>
+          <textarea id="w-sugestao" style="min-height:70px;font-size:12.5px;">${esc(item.sugestao || '')}</textarea>
+        </div>
+      </div>
+
+      <div class="acoes" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        ${indice > 0 ? `<button class="btn-secundario" id="w-voltar">‹ anterior</button>` : ''}
+        <button class="btn" id="w-proximo">${indice === itens.length - 1 ? 'Salvar e concluir' : 'Salvar e ir pro próximo ›'}</button>
+        <button class="btn-secundario" id="w-pular">deixar pra depois</button>
+      </div>
+      <div class="recado oculto" id="w-recado"></div>`
+
+    fundo.innerHTML = ''
+    fundo.appendChild(modal)
+
+    const q = id => fundo.querySelector(id)
+    const avisar = t => {
+      const el = q('#w-recado'); el.textContent = t; el.classList.remove('oculto')
+      el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+      el.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }
+
+    // marcar o sinalizador esconde o questionário inteiro -- é a
+    // resposta, não um complemento dela
+    const aplicarSinalizador = () => {
+      q('#w-perguntas').style.display = q('#w-nao-avalia').checked ? 'none' : ''
+    }
+    q('#w-nao-avalia').onchange = aplicarSinalizador
+    aplicarSinalizador()
+
+    const escolhidas = { ...notaDe }
+    fundo.querySelectorAll('.w-nota').forEach(b => {
+      b.onclick = () => {
+        const grupo = b.parentElement
+        const perguntaId = grupo.dataset.pergunta
+        escolhidas[perguntaId] = Number(b.dataset.nota)
+        grupo.querySelectorAll('.w-nota').forEach(x => {
+          const ativo = x === b
+          x.style.background = ativo ? 'var(--rust)' : ''
+          x.style.color = ativo ? '#fff' : ''
+          x.style.borderColor = ativo ? 'var(--rust)' : ''
+        })
+      }
+    })
+
+    const salvar = async ({ exigirCompleto }) => {
+      const naoAvalia = q('#w-nao-avalia').checked
+
+      if (!naoAvalia && exigirCompleto) {
+        const faltando = AV360_CACHE.perguntas.filter(p => !escolhidas[p.id])
+        if (faltando.length) {
+          avisar(`Faltam ${faltando.length} pergunta(s) sem nota. Se não tem como avaliar esta pessoa, marque a caixa lá em cima.`)
+          return false
+        }
+      }
+
+      const atualizacao = {
+        nao_avalia: naoAvalia,
+        sugestao: naoAvalia ? null : (q('#w-sugestao')?.value.trim() || null),
+        status: exigirCompleto ? 'RESPONDIDO' : item.status,
+        respondido_em: exigirCompleto ? new Date().toISOString() : null
+      }
+      const { error: e1 } = await db.from('avaliacao_360_resposta').update(atualizacao).eq('id', item.id)
+      if (e1) { avisar(e1.message); return false }
+
+      if (naoAvalia) {
+        // quem não avalia não deixa nota nem comentário pra trás
+        await db.from('av360_nota').delete().eq('resposta_id', item.id)
+        await db.from('av360_comentario').delete().eq('resposta_id', item.id)
+      } else {
+        const linhasNota = Object.entries(escolhidas).map(([pergunta_id, nota]) => ({
+          resposta_id: item.id, pergunta_id, nota
+        }))
+        if (linhasNota.length) {
+          const { error: e2 } = await db.from('av360_nota').upsert(linhasNota, { onConflict: 'resposta_id,pergunta_id' })
+          if (e2) { avisar(e2.message); return false }
+        }
+        const linhasComent = [...fundo.querySelectorAll('[data-coment]')]
+          .filter(t => t.value.trim())
+          .map(t => ({ resposta_id: item.id, dimensao_id: t.dataset.coment, texto: t.value.trim() }))
+        const vazios = [...fundo.querySelectorAll('[data-coment]')].filter(t => !t.value.trim()).map(t => t.dataset.coment)
+        if (vazios.length) await db.from('av360_comentario').delete().eq('resposta_id', item.id).in('dimensao_id', vazios)
+        if (linhasComent.length) {
+          await db.from('av360_comentario').upsert(linhasComent, { onConflict: 'resposta_id,dimensao_id' })
+        }
+      }
+
+      item.nao_avalia = naoAvalia
+      item.sugestao = atualizacao.sugestao
+      if (exigirCompleto) item.status = 'RESPONDIDO'
+      return true
+    }
+
+    q('#w-proximo').onclick = async () => {
+      const btn = q('#w-proximo'); btn.disabled = true; btn.textContent = 'salvando...'
+      const ok = await salvar({ exigirCompleto: true })
+      if (!ok) { btn.disabled = false; btn.textContent = indice === itens.length - 1 ? 'Salvar e concluir' : 'Salvar e ir pro próximo ›'; return }
+      const proximoPendente = itens.findIndex((i, idx) => idx > indice && i.status === 'PENDENTE')
+      if (proximoPendente === -1) {
+        const aindaFalta = itens.findIndex(i => i.status === 'PENDENTE')
+        if (aindaFalta === -1) { fechar(); return }
+        indice = aindaFalta
+      } else indice = proximoPendente
+      desenhar()
+    }
+
+    q('#w-pular').onclick = async () => {
+      // guarda o que já foi marcado, sem fechar a avaliação
+      await salvar({ exigirCompleto: false })
+      if (indice < itens.length - 1) { indice++; desenhar() } else fechar()
+    }
+
+    const bVoltar = q('#w-voltar')
+    if (bVoltar) bVoltar.onclick = async () => { await salvar({ exigirCompleto: false }); indice--; desenhar() }
+
+    q('#w-sair').onclick = async () => { await salvar({ exigirCompleto: false }); fechar() }
+  }
+
+  desenhar()
+}
+
+// ---------------------------------------------------------------
+// Consolidação — transforma as respostas de uma pessoa no que ela vê.
+// Nunca devolve quem deu qual nota; só médias, distribuição e textos
+// soltos. É aqui que moram os dois pisos de anonimato.
+// ---------------------------------------------------------------
+function consolidar360 (respostasDaPessoa, notasPorResposta, comentariosPorResposta) {
+  const validas = respostasDaPessoa.filter(r => r.status === 'RESPONDIDO' && !r.nao_avalia)
+  const idsValidos = new Set(validas.map(r => r.id))
+
+  const notasPorPergunta = {}
+  Object.entries(notasPorResposta).forEach(([respostaId, notas]) => {
+    if (!idsValidos.has(respostaId)) return
+    notas.forEach(n => {
+      notasPorPergunta[n.pergunta_id] = notasPorPergunta[n.pergunta_id] || []
+      notasPorPergunta[n.pergunta_id].push(n.nota)
+    })
+  })
+
+  const porDimensao = AV360_CACHE.dimensoes.map(d => {
+    const perguntas = perguntasDaDimensao(d.id).map(p => {
+      const notas = notasPorPergunta[p.id] || []
+      const dist = [1, 2, 3, 4, 5].map(n => notas.filter(x => x === n).length)
+      return { pergunta: p, media: media360(notas), quantidade: notas.length, distribuicao: dist }
+    })
+    const todas = perguntas.flatMap(p => notasPorPergunta[p.pergunta.id] || [])
+    return { dimensao: d, perguntas, media: media360(todas), desvio: desvioPadrao(todas) }
+  })
+
+  const todasNotas = Object.values(notasPorPergunta).flat()
+
+  const comentarios = {}
+  Object.entries(comentariosPorResposta).forEach(([respostaId, lista]) => {
+    if (!idsValidos.has(respostaId)) return
+    lista.forEach(c => {
+      comentarios[c.dimensao_id] = comentarios[c.dimensao_id] || []
+      comentarios[c.dimensao_id].push(c.texto)
+    })
+  })
+
+  return {
+    validas: validas.length,
+    recusadas: respostasDaPessoa.filter(r => r.nao_avalia).length,
+    pendentes: respostasDaPessoa.filter(r => r.status === 'PENDENTE').length,
+    geral: media360(todasNotas),
+    desvio: desvioPadrao(todasNotas),
+    porDimensao,
+    comentarios,
+    sugestoes: validas.map(r => r.sugestao).filter(Boolean),
+    amostraSuficiente: validas.length >= MIN_AVALIACOES_360
+  }
+}
+
+// carrega tudo de um ciclo de uma vez e devolve o consolidado por pessoa
+async function carregar360Ciclo (cicloId) {
+  await carregar360Questionario()
+  const { data: respostas } = await db.from('avaliacao_360_resposta')
+    .select('id,status,nao_avalia,sugestao,avaliado_id,avaliado:avaliado_id(id,nome,setor:setor_id(nome))')
+    .eq('ciclo_id', cicloId)
+  const lista = respostas || []
+  const ids = lista.map(r => r.id)
+
+  const notasPorResposta = {}, comentariosPorResposta = {}
+  for (let i = 0; i < ids.length; i += 300) {
+    const fatia = ids.slice(i, i + 300)
+    const [{ data: notas }, { data: coments }] = await Promise.all([
+      db.from('av360_nota').select('resposta_id,pergunta_id,nota').in('resposta_id', fatia),
+      db.from('av360_comentario').select('resposta_id,dimensao_id,texto').in('resposta_id', fatia)
+    ])
+    ;(notas || []).forEach(n => { (notasPorResposta[n.resposta_id] = notasPorResposta[n.resposta_id] || []).push(n) })
+    ;(coments || []).forEach(c => { (comentariosPorResposta[c.resposta_id] = comentariosPorResposta[c.resposta_id] || []).push(c) })
+  }
+
+  const porPessoa = new Map()
+  lista.forEach(r => {
+    if (!porPessoa.has(r.avaliado_id)) porPessoa.set(r.avaliado_id, { pessoa: r.avaliado, respostas: [] })
+    porPessoa.get(r.avaliado_id).respostas.push(r)
+  })
+
+  const pessoas = [...porPessoa.values()].map(x => ({
+    pessoa: x.pessoa,
+    ...consolidar360(x.respostas, notasPorResposta, comentariosPorResposta)
+  }))
+
+  // média do grupo por dimensão — só de quem tem amostra suficiente,
+  // senão um resultado de 1 avaliação distorce a régua de todo mundo
+  const comAmostra = pessoas.filter(p => p.amostraSuficiente)
+  const mediaGrupoDimensao = {}
+  AV360_CACHE.dimensoes.forEach(d => {
+    const medias = comAmostra
+      .map(p => p.porDimensao.find(x => x.dimensao.id === d.id)?.media)
+      .filter(m => m != null)
+    mediaGrupoDimensao[d.id] = media360(medias)
+  })
+  const mediaGrupoGeral = media360(comAmostra.map(p => p.geral).filter(m => m != null))
+
+  return { lista, pessoas, mediaGrupoDimensao, mediaGrupoGeral }
+}
+
+const fmt360 = n => n == null ? '—' : n.toFixed(1).replace('.', ',')
+
+// barra + número, usado no resultado individual
+function barra360 (valor, comparativo) {
+  const pct = valor == null ? 0 : (valor / 5) * 100
+  const cor = valor == null ? 'var(--line)' : valor >= 4 ? '#2c6e3f' : valor >= 3 ? '#D19C1D' : '#a02a1e'
+  return `<div style="display:flex;align-items:center;gap:9px;">
+    <div style="flex:1;height:8px;border-radius:4px;background:var(--surface2);overflow:hidden;min-width:70px;position:relative;">
+      <div style="width:${pct}%;height:100%;background:${cor};"></div>
+      ${comparativo != null ? `<div title="média da equipe: ${fmt360(comparativo)}"
+        style="position:absolute;left:${(comparativo / 5) * 100}%;top:-2px;width:2px;height:12px;background:var(--texto);opacity:.45;"></div>` : ''}
+    </div>
+    <span style="font-size:12.5px;font-weight:600;min-width:26px;text-align:right;">${fmt360(valor)}</span>
+  </div>`
+}
+
+// o resultado como a PESSOA vê
+function html360Resultado (r, mediaGrupoDimensao, mediaGrupoGeral, { mostrarComentarios = true } = {}) {
+  if (!r.amostraSuficiente) {
+    return `<div class="panel" style="padding:22px;text-align:center;">
+      <div style="font-size:26px;">🔒</div>
+      <p style="font-family:var(--serif);font-size:15px;margin:8px 0 4px;">Amostra insuficiente</p>
+      <p class="texto-dim2" style="font-size:12.5px;margin:0;line-height:1.55;">
+        Só ${r.validas} ${r.validas === 1 ? 'pessoa avaliou' : 'pessoas avaliaram'}. O resultado só aparece com pelo menos
+        ${MIN_AVALIACOES_360} avaliações — com menos que isso dá pra adivinhar quem disse o quê.</p></div>`
+  }
+
+  const sec = (titulo, conteudo) => `
+    <div class="cabeca-secao" style="margin:18px 0 8px;"><h3 style="margin:0;font-size:13.5px;">${titulo}</h3></div>${conteudo}`
+
+  return `
+    <div class="panel" style="padding:18px;text-align:center;margin-bottom:6px;">
+      <div style="font-family:var(--serif);font-size:34px;line-height:1;">${fmt360(r.geral)}</div>
+      <div class="texto-dim2" style="font-size:12px;margin-top:5px;">
+        de 5,0 · ${r.validas} ${r.validas === 1 ? 'avaliação válida' : 'avaliações válidas'}
+        ${mediaGrupoGeral != null ? ` · média da equipe ${fmt360(mediaGrupoGeral)}` : ''}</div>
+    </div>
+
+    ${sec('Por dimensão', `
+      <div class="panel" style="padding:14px 16px;">
+        ${r.porDimensao.map(d => `
+          <div style="padding:8px 0;${d === r.porDimensao[0] ? '' : 'border-top:1px solid var(--line2);'}">
+            <div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:5px;">
+              <span>${esc(d.dimensao.nome)}</span></div>
+            ${barra360(d.media, mediaGrupoDimensao[d.dimensao.id])}
+          </div>`).join('')}
+        <p class="texto-dim2" style="font-size:11px;margin:10px 0 0;">
+          O traço vertical em cada barra é a média da equipe naquela dimensão.</p>
+      </div>`)}
+
+    ${sec('Pergunta por pergunta', r.porDimensao.map(d => `
+      <div class="panel" style="padding:13px 15px;margin-bottom:8px;">
+        <div style="font-weight:600;font-size:12.5px;margin-bottom:6px;">${esc(d.dimensao.nome)}</div>
+        ${d.perguntas.map(p => `
+          <div style="padding:7px 0;border-top:1px solid var(--line2);">
+            <div style="font-size:12px;line-height:1.45;margin-bottom:5px;">${esc(p.pergunta.texto)}</div>
+            ${barra360(p.media, null)}
+            <div class="texto-dim2" style="font-size:10.5px;margin-top:4px;">
+              ${p.distribuicao.map((qtd, i) => qtd ? `${qtd}× nota ${i + 1}` : null).filter(Boolean).join(' · ') || 'sem respostas'}</div>
+          </div>`).join('')}
+      </div>`).join(''))}
+
+    ${mostrarComentarios ? (() => {
+      const blocos = AV360_CACHE.dimensoes
+        .map(d => ({ d, textos: r.comentarios[d.id] || [] }))
+        .filter(x => x.textos.length)
+      const separados = blocos.filter(x => x.textos.length >= MIN_COMENTARIOS_360)
+      const juntos = blocos.filter(x => x.textos.length < MIN_COMENTARIOS_360).flatMap(x => x.textos)
+      const embaralhado = juntos.slice().sort(() => Math.random() - 0.5)
+      if (!blocos.length && !r.sugestoes.length) return ''
+      return sec('Comentários', `
+        ${separados.map(x => `
+          <div class="panel" style="padding:13px 15px;margin-bottom:8px;">
+            <div style="font-weight:600;font-size:12.5px;margin-bottom:7px;">${esc(x.d.nome)}</div>
+            ${x.textos.map(t => `<div class="caixa-texto" style="font-size:12.5px;margin-bottom:6px;">${esc(t)}</div>`).join('')}
+          </div>`).join('')}
+        ${embaralhado.length ? `
+          <div class="panel" style="padding:13px 15px;margin-bottom:8px;">
+            <div style="font-weight:600;font-size:12.5px;margin-bottom:3px;">Outros comentários</div>
+            <div class="texto-dim2" style="font-size:11px;margin-bottom:7px;">
+              Vieram de blocos com poucos comentários, então estão juntos e fora de ordem — é o que protege quem escreveu.</div>
+            ${embaralhado.map(t => `<div class="caixa-texto" style="font-size:12.5px;margin-bottom:6px;">${esc(t)}</div>`).join('')}
+          </div>` : ''}
+        ${r.sugestoes.length ? `
+          <div class="panel" style="padding:13px 15px;">
+            <div style="font-weight:600;font-size:12.5px;margin-bottom:7px;">Sugestões pra você crescer</div>
+            ${r.sugestoes.slice().sort(() => Math.random() - 0.5).map(t => `<div class="caixa-texto" style="font-size:12.5px;margin-bottom:6px;">${esc(t)}</div>`).join('')}
+          </div>` : ''}`)
+    })() : ''}`
+}
+
+// O resultado que a PRÓPRIA pessoa vê, no Meu RH. Vem da RPC
+// av360_meu_resultado, que devolve as notas soltas e embaralhadas --
+// sem resposta_id, então não dá pra remontar o "voto" de ninguém.
+// A mesma tela do RH é reaproveitada, só que alimentada por aqui.
+async function montarMeuResultado360 (cicloId, alvo) {
+  await carregar360Questionario()
+  alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
+  const { data, error } = await db.rpc('av360_meu_resultado', { p_ciclo: cicloId })
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  if (data?.erro) { alvo.innerHTML = `<p class="vazio">${esc(data.erro)}</p>`; return }
+
+  if (!data?.amostra_suficiente) {
+    alvo.innerHTML = `<div class="panel" style="padding:22px;text-align:center;">
+      <div style="font-size:26px;">🔒</div>
+      <p style="font-family:var(--serif);font-size:15px;margin:8px 0 4px;">Amostra insuficiente</p>
+      <p class="texto-dim2" style="font-size:12.5px;margin:0;line-height:1.55;">
+        Só ${data?.validas ?? 0} ${data?.validas === 1 ? 'pessoa avaliou' : 'pessoas avaliaram'} você neste ciclo.
+        O resultado só aparece com pelo menos ${MIN_AVALIACOES_360} — com menos que isso dá pra adivinhar quem disse o quê.</p></div>`
+    return
+  }
+
+  // remonta o formato que html360Resultado espera, a partir das notas soltas
+  const porPergunta = {}
+  ;(data.notas || []).forEach(n => { (porPergunta[n.pergunta_id] = porPergunta[n.pergunta_id] || []).push(n.nota) })
+
+  const porDimensao = AV360_CACHE.dimensoes.map(d => {
+    const perguntas = perguntasDaDimensao(d.id).map(p => {
+      const notas = porPergunta[p.id] || []
+      return {
+        pergunta: p, media: media360(notas), quantidade: notas.length,
+        distribuicao: [1, 2, 3, 4, 5].map(n => notas.filter(x => x === n).length)
+      }
+    })
+    const todas = perguntas.flatMap(p => porPergunta[p.pergunta.id] || [])
+    return { dimensao: d, perguntas, media: media360(todas), desvio: desvioPadrao(todas) }
+  })
+
+  const comentarios = {}
+  ;(data.comentarios || []).forEach(c => { (comentarios[c.dimensao_id] = comentarios[c.dimensao_id] || []).push(c.texto) })
+
+  const r = {
+    validas: data.validas, recusadas: data.recusadas, pendentes: data.pendentes,
+    geral: media360(Object.values(porPergunta).flat()),
+    desvio: desvioPadrao(Object.values(porPergunta).flat()),
+    porDimensao, comentarios, sugestoes: data.sugestoes || [], amostraSuficiente: true
+  }
+  // sem comparativo de equipe aqui: a média do grupo é informação do
+  // RH, e no Meu RH ela viraria ranking informal entre colegas
+  alvo.innerHTML = html360Resultado(r, {}, null)
+}
+
+// ---------------------------------------------------------------
+// Detalhe do ciclo — a visão do RH
+// ---------------------------------------------------------------
+async function detalheCiclo360 (ciclo, editavel, aoFechar) {
+  if (!ciclo) return
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:880px;"><p class="texto-dim2">carregando o consolidado...</p></div>`
+  document.body.appendChild(fundo)
+
+  const { lista, pessoas, mediaGrupoDimensao, mediaGrupoGeral } = await carregar360Ciclo(ciclo.id)
+
+  const totalRespostas = lista.length
+  const respondidas = lista.filter(r => r.status === 'RESPONDIDO').length
+  const puladas = lista.filter(r => r.nao_avalia).length
+  const taxa = totalRespostas ? Math.round(respondidas / totalRespostas * 100) : 0
+
+  const ordenadas = pessoas.slice().sort((a, b) => (b.geral ?? -1) - (a.geral ?? -1))
+  const semAmostra = pessoas.filter(p => !p.amostraSuficiente)
+  // desvio alto = gente que vê a mesma pessoa de jeitos muito
+  // diferentes. Não é nota ruim, é assunto pra conversa.
+  const discrepantes = pessoas.filter(p => p.amostraSuficiente && p.desvio >= 1.2)
+    .sort((a, b) => b.desvio - a.desvio)
+
+  const modal = fundo.querySelector('.modal')
+  modal.innerHTML = `
+    <div class="cabeca-secao"><h3 style="margin:0;">${esc(ciclo.nome)}</h3>
+      <span class="${ciclo.status === 'ABERTO' ? 'badge-alerta' : 'chip'}">${ROTULO_STATUS_360_CICLO[ciclo.status]}</span></div>
+    <p class="texto-dim2" style="font-size:12px;margin:4px 0 14px;">${fmtData(ciclo.data_inicio)} – ${fmtData(ciclo.data_fim)}</p>
+
+    <div class="cards-kpi" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+      ${kpi('Taxa de resposta', taxa + '%', `${respondidas} de ${totalRespostas}`)}
+      ${kpi('Participantes', pessoas.length)}
+      ${kpi('Média do grupo', fmt360(mediaGrupoGeral), 'só quem tem amostra suficiente')}
+      ${kpi('"Não avalio"', puladas, puladas ? 'fora de todas as médias' : '')}
+    </div>
+
+    <div class="subabas" style="margin-bottom:12px;">
+      <button data-aba360="ranking" class="ativo">Consolidado</button>
+      <button data-aba360="atencao">Pede atenção</button>
+      <button data-aba360="pessoa">Ver de uma pessoa</button>
+    </div>
+    <div id="cc360-corpo"></div>
 
     <div class="acoes" style="margin-top:16px;">
       ${editavel && ciclo.status === 'ABERTO' ? `<button class="btn-secundario" id="cc-encerrar">Encerrar ciclo</button>` : ''}
-      <button class="btn-secundario" id="cc-fechar">Fechar</button>
-    </div>
-  </div>`
-  document.body.appendChild(fundo)
-  const fechar = () => fundo.remove()
-  fundo.querySelector('#cc-fechar').onclick = fechar
-  fundo.onclick = e => { if (e.target === fundo) fechar() }
+      <button class="btn-secundario" id="cc-fechar" style="margin-left:auto;">Fechar</button>
+    </div>`
 
-  const badd = fundo.querySelector('#pr-add')
-  if (badd) badd.onclick = async () => {
-    const avaliado = fundo.querySelector('#pr-avaliado').value
-    const avaliador = fundo.querySelector('#pr-avaliador').value
-    if (avaliado === avaliador) { alert('Avaliado e avaliador não podem ser a mesma pessoa numa avaliação de pares.'); return }
-    const { error } = await db.from('avaliacao_360_resposta').insert({ ciclo_id: ciclo.id, avaliado_id: avaliado, avaliador_id: avaliador, tipo: 'PARES' })
-    if (error) { alert(error.message); return }
-    fechar(); detalheCiclo360(ciclo, editavel, aoFechar)
+  const corpo = modal.querySelector('#cc360-corpo')
+
+  const desenharRanking = () => {
+    corpo.innerHTML = `
+      <div class="panel" style="padding:0;"><div class="tabela-scroll" style="max-height:380px;">
+        <table><thead><tr><th>Pessoa</th><th>Setor</th><th>Avaliações</th><th style="min-width:130px;">Nota geral</th>
+        ${AV360_CACHE.dimensoes.map(d => `<th title="${esc(d.nome)}">${esc(d.nome.split(' ')[0])}</th>`).join('')}
+        </tr></thead><tbody>
+        ${ordenadas.map(p => `<tr>
+          <td><b>${esc(p.pessoa?.nome || '—')}</b></td>
+          <td class="texto-dim">${esc(p.pessoa?.setor?.nome || '—')}</td>
+          <td class="texto-dim">${p.validas}${p.recusadas ? ` <span class="texto-dim2" style="font-size:10.5px;">(+${p.recusadas} não avaliou)</span>` : ''}</td>
+          <td>${p.amostraSuficiente ? barra360(p.geral, mediaGrupoGeral) : '<span class="chip">amostra insuficiente</span>'}</td>
+          ${AV360_CACHE.dimensoes.map(d => {
+            const dd = p.porDimensao.find(x => x.dimensao.id === d.id)
+            return `<td class="texto-dim">${p.amostraSuficiente ? fmt360(dd?.media) : '—'}</td>`
+          }).join('')}
+        </tr>`).join('') || '<tr><td colspan="9" class="vazio">Ninguém neste ciclo.</td></tr>'}
+        </tbody></table>
+      </div></div>
+      <p class="texto-dim2" style="font-size:11px;margin-top:8px;">
+        Quem tem menos de ${MIN_AVALIACOES_360} avaliações válidas fica fora do ranking — a nota não teria significado.</p>`
   }
 
-  const benc = fundo.querySelector('#cc-encerrar')
+  const desenharAtencao = () => {
+    corpo.innerHTML = `
+      ${discrepantes.length ? `
+        <div class="cabeca-secao" style="margin:4px 0 8px;">
+          <h3 style="margin:0;font-size:13.5px;">Percepções muito diferentes</h3>
+          <span class="texto-dim2" style="font-size:11.5px;">${discrepantes.length}</span></div>
+        <p class="texto-dim2" style="font-size:11.5px;margin:0 0 8px;line-height:1.5;">
+          Gente que recebeu notas muito espalhadas — uns veem de um jeito, outros de outro.
+          Não quer dizer nota ruim; quer dizer que vale uma conversa.</p>
+        <div class="panel" style="padding:0;margin-bottom:14px;"><div class="tabela-scroll">
+          <table><thead><tr><th>Pessoa</th><th>Média</th><th>Espalhamento</th><th>Avaliações</th></tr></thead><tbody>
+          ${discrepantes.map(p => `<tr>
+            <td><b>${esc(p.pessoa?.nome || '—')}</b></td>
+            <td class="texto-dim">${fmt360(p.geral)}</td>
+            <td><span class="chip" style="color:${p.desvio >= 1.5 ? '#a02a1e' : '#a67c00'};">${p.desvio.toFixed(2).replace('.', ',')}</span></td>
+            <td class="texto-dim">${p.validas}</td>
+          </tr>`).join('')}
+          </tbody></table>
+        </div></div>` : `<p class="texto-dim2" style="font-size:12.5px;">Ninguém com notas muito espalhadas — as percepções estão razoavelmente alinhadas.</p>`}
+
+      ${semAmostra.length ? `
+        <div class="cabeca-secao" style="margin:16px 0 8px;">
+          <h3 style="margin:0;font-size:13.5px;">Amostra insuficiente</h3>
+          <span class="texto-dim2" style="font-size:11.5px;">${semAmostra.length}</span></div>
+        <p class="texto-dim2" style="font-size:11.5px;margin:0 0 8px;line-height:1.5;">
+          Receberam menos de ${MIN_AVALIACOES_360} avaliações válidas. Ficam fora do ranking e não veem resultado —
+          geralmente é gente que trabalha meio isolada, ou de quem muita gente marcou "não consigo avaliar".</p>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          ${semAmostra.map(p => `<span class="chip">${esc(p.pessoa?.nome || '—')} · ${p.validas}</span>`).join('')}
+        </div>` : ''}`
+  }
+
+  const desenharPessoa = () => {
+    corpo.innerHTML = `
+      <div class="campo" style="margin-bottom:12px;"><label>Ver o resultado de</label>
+        <select id="cc360-quem">
+          ${pessoas.slice().sort((a, b) => String(a.pessoa?.nome || '').localeCompare(String(b.pessoa?.nome || '')))
+            .map(p => `<option value="${p.pessoa?.id}">${esc(p.pessoa?.nome || '—')}</option>`).join('')}
+        </select></div>
+      <div id="cc360-resultado"></div>`
+    const sel = corpo.querySelector('#cc360-quem')
+    const mostrar = () => {
+      const p = pessoas.find(x => x.pessoa?.id === sel.value)
+      corpo.querySelector('#cc360-resultado').innerHTML = p
+        ? html360Resultado(p, mediaGrupoDimensao, mediaGrupoGeral)
+        : '<p class="vazio">Sem dados.</p>'
+    }
+    sel.onchange = mostrar
+    mostrar()
+  }
+
+  modal.querySelectorAll('[data-aba360]').forEach(b => {
+    b.onclick = () => {
+      modal.querySelectorAll('[data-aba360]').forEach(x => x.classList.toggle('ativo', x === b))
+      if (b.dataset.aba360 === 'ranking') desenharRanking()
+      else if (b.dataset.aba360 === 'atencao') desenharAtencao()
+      else desenharPessoa()
+    }
+  })
+  desenharRanking()
+
+  const fechar = () => fundo.remove()
+  modal.querySelector('#cc-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  const benc = modal.querySelector('#cc-encerrar')
   if (benc) benc.onclick = async () => {
-    if (!confirm('Encerrar este ciclo? As respostas pendentes ficam registradas como não respondidas.')) return
+    if (!confirm('Encerrar este ciclo?\n\nQuem não respondeu fica registrado como não respondido, e o resultado passa a aparecer pra cada pessoa no Meu RH.')) return
     await db.from('avaliacao_360_ciclo').update({ status: 'ENCERRADO' }).eq('id', ciclo.id)
-    fechar(); aoFechar()
-  }
-}
-
-function formResponder360 (item, aoFechar) {
-  const fundo = document.createElement('div')
-  fundo.className = 'modal-fundo'
-  fundo.innerHTML = `<div class="modal">
-    <h3>Avaliar ${esc(item.avaliado?.nome ?? '')}</h3>
-    <p class="texto-dim2" style="font-size:12px;margin-top:-8px;">${ROTULO_TIPO_360[item.tipo]} · ${esc(item.ciclo?.nome ?? '')}</p>
-    <div class="form-grade">
-      <div class="campo"><label>Competência técnica (1-5)</label><input type="number" min="1" max="5" id="r3-tecnica"></div>
-      <div class="campo"><label>Trabalho em equipe (1-5)</label><input type="number" min="1" max="5" id="r3-equipe"></div>
-      <div class="campo"><label>Comunicação (1-5)</label><input type="number" min="1" max="5" id="r3-comunicacao"></div>
-      <div class="campo"><label>Liderança (1-5)</label><input type="number" min="1" max="5" id="r3-lideranca"></div>
-      <div class="campo"><label>Proatividade (1-5)</label><input type="number" min="1" max="5" id="r3-proatividade"></div>
-    </div>
-    <div class="campo" style="margin-top:10px;"><label>Pontos fortes</label><textarea id="r3-fortes" style="min-height:60px;"></textarea></div>
-    <div class="campo" style="margin-top:10px;"><label>Pontos de melhoria</label><textarea id="r3-melhoria" style="min-height:60px;"></textarea></div>
-    <div class="acoes"><button class="btn" id="r3-salvar">Enviar avaliação</button>
-      <button class="btn-secundario" id="r3-cancelar">Cancelar</button></div>
-    <div class="recado oculto" id="r3-recado"></div>
-  </div>`
-  document.body.appendChild(fundo)
-  const fechar = () => fundo.remove()
-  fundo.querySelector('#r3-cancelar').onclick = fechar
-  fundo.onclick = e => { if (e.target === fundo) fechar() }
-
-  const aviso = t => {
-    const el = fundo.querySelector('#r3-recado'); el.textContent = t; el.classList.remove('oculto')
-    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
-  }
-
-  fundo.querySelector('#r3-salvar').onclick = async () => {
-    const q = id => fundo.querySelector(id).value
-    const { error } = await db.from('avaliacao_360_resposta').update({
-      status: 'RESPONDIDO',
-      nota_competencia_tecnica: q('#r3-tecnica') || null,
-      nota_trabalho_equipe: q('#r3-equipe') || null,
-      nota_comunicacao: q('#r3-comunicacao') || null,
-      nota_lideranca: q('#r3-lideranca') || null,
-      nota_proatividade: q('#r3-proatividade') || null,
-      pontos_fortes: fundo.querySelector('#r3-fortes').value.trim() || null,
-      pontos_melhoria: fundo.querySelector('#r3-melhoria').value.trim() || null,
-      respondido_em: new Date().toISOString()
-    }).eq('id', item.id)
-    if (error) { aviso(error.message); return }
     fechar(); aoFechar()
   }
 }
@@ -50212,7 +50811,7 @@ async function desempMeu (alvo) {
   const [{ data: conduta }, { data: resp360 }, { data: pdi }, { data: bonus }, { data: minhasAtribs }] = await Promise.all([
     db.from('avaliacao_conduta').select('data_avaliacao,nota_prazos,nota_demandas,nota_postura,observacoes')
       .eq('pessoa_id', PERFIL.pessoaId).order('data_avaliacao', { ascending: false }).limit(20),
-    db.from('avaliacao_360_resposta').select('tipo,status,nota_competencia_tecnica,nota_trabalho_equipe,nota_comunicacao,nota_lideranca,nota_proatividade,pontos_fortes,pontos_melhoria,ciclo:ciclo_id(nome,status)')
+    db.from('avaliacao_360_resposta').select('status,nao_avalia,ciclo:ciclo_id(id,nome,status)')
       .eq('avaliado_id', PERFIL.pessoaId).eq('status', 'RESPONDIDO'),
     db.from('plano_desenvolvimento').select('objetivo,acoes,prazo,status')
       .eq('pessoa_id', PERFIL.pessoaId).order('prazo', { ascending: true, nullsFirst: false }),
@@ -50234,6 +50833,13 @@ async function desempMeu (alvo) {
   ])
   const compPendentes = (termosComp || []).filter(t => t.status === 'AGUARDANDO_ASSINATURA')
   const gerPendentes = (termosGer || []).filter(t => t.status === 'AGUARDANDO_ASSINATURA')
+
+  // ciclos de 360 já encerrados em que ela foi avaliada — só ciclo
+  // fechado devolve resultado, e o consolidado vem por RPC, nunca de
+  // um select nas notas (ver av360_meu_resultado)
+  const ciclos360Meus = [...new Map((resp360 || [])
+    .filter(r => r.ciclo?.status === 'ENCERRADO')
+    .map(r => [r.ciclo.id, r.ciclo])).values()]
 
   // POPs dirigidos a ela. Não precisa filtrar por setor aqui: a RLS do
   // banco já só devolve o que está no alcance da pessoa (setor dela,
@@ -50420,17 +51026,15 @@ async function desempMeu (alvo) {
       </tbody></table>
     </div></div>
 
-    ${secaoMeuRh("🔄", "Minha avaliação 360", (resp360 || []).length)}
-    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:18px;">
-      ${(resp360 || []).map(r => {
-        const notas = [r.nota_competencia_tecnica, r.nota_trabalho_equipe, r.nota_comunicacao, r.nota_lideranca, r.nota_proatividade].filter(n => n != null)
-        return `<div class="panel" style="padding:14px;">
-          <div class="cabeca-secao"><span><b>${esc(r.ciclo?.nome ?? '—')}</b> · ${ROTULO_TIPO_360[r.tipo]}</span>
-            <span class="${corNota(Number(media(notas)))}">média ${media(notas)}</span></div>
-          ${r.pontos_fortes ? `<p class="texto-dim" style="font-size:12.5px;margin:6px 0 0;"><b>Pontos fortes:</b> ${esc(r.pontos_fortes)}</p>` : ''}
-          ${r.pontos_melhoria ? `<p class="texto-dim" style="font-size:12.5px;margin:4px 0 0;"><b>A melhorar:</b> ${esc(r.pontos_melhoria)}</p>` : ''}
-        </div>`
-      }).join('') || `<p class="vazio">Nenhuma avaliação 360 concluída sobre você ainda.</p>`}
+    ${secaoMeuRh("🔄", "Minha avaliação 360", ciclos360Meus.length)}
+    <div id="meu-360" style="margin-bottom:18px;">
+      ${ciclos360Meus.length ? `
+        <div class="campo" style="max-width:340px;margin-bottom:10px;"><label>Ciclo</label>
+          <select id="meu360-ciclo">
+            ${ciclos360Meus.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('')}
+          </select></div>
+        <div id="meu360-corpo"><p class="texto-dim2">carregando...</p></div>`
+        : `<p class="vazio">Nenhum ciclo de 360 encerrado ainda. O resultado aparece aqui quando o ciclo fechar.</p>`}
     </div>
 
     ${secaoMeuRh("🌱", "Meus planos de desenvolvimento", (pdi || []).length)}
@@ -50460,6 +51064,14 @@ async function desempMeu (alvo) {
   alvo.querySelectorAll('[data-abrir-minha-trilha]').forEach(card => {
     card.onclick = () => abrirMinhaTrilha(listaAtribs.find(a => a.id === card.dataset.abrirMinhaTrilha), () => desempMeu(alvo))
   })
+
+  // resultado do 360: sempre pela RPC, nunca por select nas notas
+  const sel360 = alvo.querySelector('#meu360-ciclo')
+  if (sel360) {
+    const carregar360 = () => montarMeuResultado360(sel360.value, alvo.querySelector('#meu360-corpo'))
+    sel360.onchange = carregar360
+    carregar360()
+  }
 
   // POPs: a pessoa lê e confirma sem sair do Meu RH
   alvo.querySelectorAll('[data-abrir-pop]').forEach(card => {
@@ -58372,11 +58984,13 @@ async function relPDI (alvo) {
 }
 
 const ROTULO_STATUS_360_RESPOSTA = { PENDENTE: 'Pendente', RESPONDIDO: 'Respondido' }
-const COLUNAS_REL_360 = ['Ciclo', 'Avaliado', 'Avaliador', 'Tipo', 'Status', 'Nota técnica', 'Nota equipe', 'Nota comunicação', 'Nota liderança', 'Nota proatividade', 'Respondido em']
+// O relatório é a única tela que cruza avaliador com avaliado -- por
+// isso NÃO leva nota nenhuma. Serve pra acompanhar quem respondeu e
+// quem não respondeu; nota sai no consolidado da aba 360, sem autoria.
+const COLUNAS_REL_360 = ['Ciclo', 'Avaliado', 'Avaliador', 'Situação', 'Respondido em']
 function linhaRel360 (r) {
-  return [r.ciclo?.nome ?? '—', r.avaliado?.nome ?? '—', r.avaliador?.nome ?? '—', ROTULO_TIPO_360[r.tipo] ?? r.tipo,
-    ROTULO_STATUS_360_RESPOSTA[r.status] ?? r.status ?? '—', r.nota_competencia_tecnica ?? '—', r.nota_trabalho_equipe ?? '—',
-    r.nota_comunicacao ?? '—', r.nota_lideranca ?? '—', r.nota_proatividade ?? '—',
+  return [r.ciclo?.nome ?? '—', r.avaliado?.nome ?? '—', r.avaliador?.nome ?? '—',
+    r.nao_avalia ? 'Não avaliou (sem convivência)' : (ROTULO_STATUS_360_RESPOSTA[r.status] ?? r.status ?? '—'),
     r.respondido_em ? fmtQuando(r.respondido_em) : '—']
 }
 
@@ -58399,8 +59013,7 @@ async function relAvaliacao360 (alvo) {
     const nomeVal = $('#r360-nome').value
     $('#r360-resultado').innerHTML = `<p class="texto-dim2">carregando...</p>`
     let q = db.from('avaliacao_360_resposta').select(`
-      id, tipo, status, respondido_em, criado_em,
-      nota_competencia_tecnica, nota_trabalho_equipe, nota_comunicacao, nota_lideranca, nota_proatividade,
+      id, tipo, status, nao_avalia, respondido_em, criado_em,
       ciclo:ciclo_id ( nome ), avaliado:avaliado_id ( nome ), avaliador:avaliador_id ( nome )
     `).order('criado_em', { ascending: false }).limit(2000)
     if (cicloVal) q = q.eq('ciclo_id', cicloVal)
@@ -58420,15 +59033,15 @@ async function relAvaliacao360 (alvo) {
         </div>
       </div>
       <div class="panel" style="padding:0;"><div class="tabela-scroll">
-        <table><thead><tr><th>Ciclo</th><th>Avaliado</th><th>Avaliador</th><th>Tipo</th><th>Status</th>
-          <th>Técnica</th><th>Equipe</th><th>Comunicação</th><th>Liderança</th><th>Proatividade</th><th>Respondido em</th>
+        <table><thead><tr><th>Ciclo</th><th>Avaliado</th><th>Avaliador</th><th>Situação</th><th>Respondido em</th>
         </tr></thead><tbody>
           ${ultimaLista.map(r => `<tr>
             <td>${esc(r.ciclo?.nome ?? '—')}</td><td>${esc(r.avaliado?.nome ?? '—')}</td><td>${esc(r.avaliador?.nome ?? '—')}</td>
-            <td><span class="chip">${esc(ROTULO_TIPO_360[r.tipo] ?? r.tipo)}</span></td>
-            <td>${esc(ROTULO_STATUS_360_RESPOSTA[r.status] ?? r.status ?? '—')}</td>
-            <td>${r.nota_competencia_tecnica ?? '—'}</td><td>${r.nota_trabalho_equipe ?? '—'}</td>
-            <td>${r.nota_comunicacao ?? '—'}</td><td>${r.nota_lideranca ?? '—'}</td><td>${r.nota_proatividade ?? '—'}</td>
+            <td>${r.nao_avalia
+              ? '<span class="chip">não avaliou — sem convivência</span>'
+              : r.status === 'RESPONDIDO'
+                ? '<span class="chip" style="color:#2c6e3f;">respondido</span>'
+                : '<span class="chip" style="color:#a67c00;">pendente</span>'}</td>
             <td>${r.respondido_em ? fmtQuando(r.respondido_em) : '—'}</td>
           </tr>`).join('')}
         </tbody></table>
