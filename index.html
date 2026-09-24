@@ -3166,6 +3166,17 @@ const MODULOS_POR_PAPEL = { cobranca: ['ADMIN', 'DIRETORIA', 'COMERCIAL', 'COBRA
 // pra quem gerencia especificamente o setor Comercial (souGestorComercial)
 // — gestor de Indústria, Almoxarifado etc. não deve enxergar CRM.
 const souGestor = () => PERFIL.setoresGeridos.length > 0
+
+// Quem enxerga o painel de Relatórios do Financeiro.
+//
+// Não dá pra usar podeEditar('financeiro'): a Rose e a Rayssa editam o
+// Financeiro (lançam, dão baixa) e não é pra elas verem resultado,
+// margem e despesa da empresa inteira. Aqui é cargo, não módulo.
+//
+// Uma definição só, espelhada na função eh_gestao_financeiro() do banco.
+// Pra liberar mais gente, muda nos dois lugares.
+const ehGestaoFinanceiro = () =>
+  PERFIL.papeis.includes('ADMIN') || PERFIL.papeis.includes('DIRETORIA')
 const MODULOS_SO_GESTOR_COMERCIAL = ['crm']
 
 // Dois caminhos valem como gestor comercial, e os dois já valiam no banco
@@ -32487,7 +32498,8 @@ async function paginaFinanceiro () {
   const area = areaLivre()
   const abas = [['lancamentos', 'Lançamentos'], ['compras', 'Compras'], ['pagar', 'A pagar'], ['fechamento', 'Fechamento'], ['movimentacao', 'Movimentação bancária'], ['gastos', 'Gastos por setor'],
     ['orcamento', 'Orçamento'], ['contas', 'Saldo e contas'], ['planos', 'Planos e metas'],
-    ['investimentos', 'Investimentos'], ['relatorios', 'Relatórios'], ['onfly', 'Onfly'], ['cadastros', 'Cadastros']]
+    ['investimentos', 'Investimentos'], ['relatorios', 'Relatórios', true], ['onfly', 'Onfly'], ['cadastros', 'Cadastros']]
+    .filter(a => !a[2] || ehGestaoFinanceiro())
   area.innerHTML = `
     <div class="subabas">
       ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
@@ -33478,6 +33490,12 @@ function pnlRanking (itens, antes, cores, coresAte = 6) {
 }
 
 async function finRelatorios (alvo, editavel) {
+  // trava também aqui: a aba escondida não é segurança, é arrumação
+  if (!ehGestaoFinanceiro()) {
+    alvo.innerHTML = `<div class="panel" style="padding:22px;"><p class="texto-dim">
+      O painel de Relatórios é de quem tem acesso de gestão.</p></div>`
+    return
+  }
   const n = FIN_PAINEL.periodo
   const iniRef = new Date(FIN_MES.getFullYear(), FIN_MES.getMonth() - (n - 1), 1)
   const de = isoMes(iniRef), ate = pnlIso(pnlFimDoMes(FIN_MES))
