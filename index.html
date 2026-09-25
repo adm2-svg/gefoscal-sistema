@@ -45294,30 +45294,88 @@ function formCertificado (c, recarregar) {
   }
 }
 
+// data + hora, no fuso de LEM — o fmtQuando genérico do sistema só mostra
+// a data; o termo legal precisa da hora também
+function fmtQuandoHora (iso) {
+  if (!iso) return ''
+  try {
+    return new Date(iso).toLocaleString('pt-BR', {
+      timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit',
+      year: 'numeric', hour: '2-digit', minute: '2-digit'
+    })
+  } catch { return '' }
+}
+
 // texto espelhado do gerado pela edge function certificado-acesso — a pessoa
-// vê exatamente este texto (congelado em termo_texto) quando assina o link
+// vê exatamente este texto (congelado em termo_texto) quando assina o link.
+// Termo de Responsabilidade para Uso de Certificado Digital — modelo oficial
+// fornecido pela empresa (set/2026). Campos do modelo que o sistema ainda
+// não coleta (cargo/função, setor/unidade, mídia de armazenamento) saem
+// como "não informado" — dá pra cadastrar depois se precisar que apareçam.
 function textoTermoPadraoCertificado (c, nome, doc, finalidade, expiraEm) {
+  const na = 'não informado'
+  const validadeCert = c.validade_fim
+    ? `até ${fmtData(c.validade_fim)}${c.validade_inicio ? ` (emitido em ${fmtData(c.validade_inicio)})` : ''}`
+    : na
   return [
-    'TERMO DE RESPONSABILIDADE — CERTIFICADO DIGITAL',
+    'TERMO DE RESPONSABILIDADE PARA USO DE CERTIFICADO DIGITAL',
     '',
-    `Destinatário: ${nome}${doc ? `, CPF/CNPJ ${doc}` : ''}.`,
-    `Certificado: ${c.tipo} — titular ${c.titular_nome}${c.titular_documento ? `, ${c.titular_documento}` : ''}.`,
-    `Finalidade: ${finalidade || 'não informada'}.`,
-    `Acesso liberado até: ${fmtQuando(expiraEm)}.`,
+    'Pelo presente Termo de Responsabilidade, o usuário abaixo identificado, colaborador da GEFOSCAL COM., IND., REPRESENTAÇÕES E TRANSPORTES DE PRODUTOS AGROPECUÁRIOS LTDA, pessoa jurídica de direito privado, com sede em Luís Eduardo Magalhães, Estado da Bahia, doravante denominada simplesmente GEFOSCAL ou EMPRESA, declara estar ciente das obrigações, responsabilidades e condições de uso relacionadas à posse e utilização de certificado digital disponibilizado pela EMPRESA, comprometendo-se a observar integralmente as disposições a seguir.',
     '',
-    '1 — DO RECEBIMENTO',
-    'O destinatário acima identificado declara ter solicitado acesso ao certificado digital descrito neste termo e está ciente de que se trata de documento de uso restrito e de responsabilidade legal, exclusivo para a finalidade aqui declarada.',
+    'IDENTIFICAÇÃO DO USUÁRIO',
+    `Nome completo: ${nome || na}`,
+    `CPF/CNPJ: ${doc || na}`,
+    `Cargo / função: ${na}`,
+    `Setor / unidade: ${na}`,
+    `Tipo de certificado digital (e-CPF / e-CNPJ): ${c.tipo || na}`,
+    `Titular do certificado: ${c.titular_nome || na}${c.titular_documento ? `, ${c.titular_documento}` : ''}`,
+    `Nº de série do certificado: ${c.numero_serie || na}`,
+    `Validade do certificado: ${validadeCert}`,
+    `Mídia de armazenamento (token / cartão / A1): ${na}`,
+    `Data de entrega (liberação deste acesso): ${fmtQuandoHora(new Date().toISOString())}`,
+    `Finalidade declarada para este acesso: ${finalidade || na}`,
+    `Este link de acesso eletrônico permanece válido até: ${fmtQuandoHora(expiraEm)}`,
     '',
-    '2 — DA GUARDA E DO SIGILO',
-    'O destinatário se compromete a manter o certificado e sua senha em sigilo, utilizá-lo apenas para a finalidade declarada, e não repassá-lo a terceiros sem autorização expressa do Grupo Gefoscal.',
+    '1 — DO OBJETO',
+    'O presente Termo tem por objeto estabelecer as condições, obrigações e responsabilidades do USUÁRIO quanto à guarda, uso e conservação do certificado digital (e-CPF e/ou e-CNPJ) e de sua respectiva mídia de armazenamento (token, cartão inteligente ou arquivo A1), disponibilizados pela GEFOSCAL para a prática de atos em nome próprio e/ou em nome da EMPRESA no exercício de suas funções.',
     '',
-    '3 — DA RESPONSABILIDADE',
-    'Qualquer uso indevido do certificado, no período em que estiver de posse do destinatário, é de sua exclusiva responsabilidade, inclusive civil e criminalmente.',
+    '2 — DA NATUREZA DO CERTIFICADO DIGITAL',
+    'O USUÁRIO declara estar ciente de que o certificado digital constitui identidade eletrônica com validade jurídica, nos termos da Medida Provisória nº 2.200-2, de 24 de agosto de 2001, e que sua assinatura eletrônica tem a mesma validade e os mesmos efeitos jurídicos de uma assinatura manuscrita, sendo, portanto, pessoal, intransferível e de uso exclusivo do titular.',
     '',
-    '4 — DA VIGÊNCIA DESTE ACESSO',
-    `Este link de acesso expira automaticamente em ${fmtQuando(expiraEm)}, após o que o download deixa de estar disponível.`,
+    '3 — DAS OBRIGAÇÕES DO USUÁRIO',
+    'O USUÁRIO obriga-se a:',
+    'a) manter o certificado digital, a senha de acesso e a mídia de armazenamento sob sua guarda pessoal e exclusiva, adotando todas as medidas de segurança necessárias à sua proteção;',
+    'b) não compartilhar, emprestar, ceder ou permitir o uso do certificado digital, da senha ou da mídia por terceiros, ainda que se trate de superiores hierárquicos, subordinados ou colegas de trabalho;',
+    'c) utilizar o certificado digital exclusivamente para fins relacionados às atividades profissionais desempenhadas em favor da GEFOSCAL, sendo vedado seu uso para fins particulares ou estranhos ao interesse da EMPRESA, salvo autorização expressa;',
+    'd) comunicar imediatamente ao setor responsável, por escrito, qualquer suspeita de perda, furto, roubo, extravio, dano, clonagem ou uso indevido do certificado digital ou de sua mídia;',
+    'e) solicitar a revogação do certificado junto à Autoridade Certificadora, com o apoio da EMPRESA, na hipótese de comprometimento de sua segurança ou de desligamento do USUÁRIO do quadro de colaboradores;',
+    'f) devolver a mídia de armazenamento e cessar imediatamente o uso do certificado digital em caso de desligamento, afastamento, mudança de função ou revogação da autorização de uso, o que ocorrer primeiro;',
+    'g) zelar pela atualização e correto funcionamento dos aplicativos e drivers necessários à utilização do certificado, evitando a instalação em equipamentos não autorizados ou de terceiros;',
+    'h) não realizar cópias não autorizadas do certificado, tampouco divulgar a senha de acesso em meios físicos ou eletrônicos que comprometam sua confidencialidade.',
     '',
-    'Ao assinar abaixo, o destinatário declara ter lido e concordado com o acima exposto.'
+    '4 — DA RESPONSABILIDADE',
+    'O USUÁRIO reconhece que é o único responsável, civil, administrativa e criminalmente, por todos os atos, transações e assinaturas eletrônicas realizadas mediante o uso do certificado digital de que trata este Termo, ainda que praticados por terceiros em decorrência de negligência, imprudência ou descumprimento das obrigações aqui assumidas.',
+    '',
+    'Fica a GEFOSCAL isenta de qualquer responsabilidade decorrente do uso indevido, fraudulento ou não autorizado do certificado digital pelo USUÁRIO ou por terceiros a quem este tenha, em desacordo com este Termo, facultado o acesso.',
+    '',
+    '5 — DA CONFIDENCIALIDADE E DA PROTEÇÃO DE DADOS',
+    'O USUÁRIO compromete-se a manter sigilo sobre as informações, documentos e transações a que tiver acesso em razão do uso do certificado digital, em conformidade com a Lei nº 13.709/2018 (Lei Geral de Proteção de Dados Pessoais — LGPD), abstendo-se de utilizar tais informações para fins alheios às atividades da EMPRESA.',
+    '',
+    '6 — DA FISCALIZAÇÃO E AUDITORIA',
+    'A GEFOSCAL poderá, a qualquer tempo, fiscalizar e auditar o uso do certificado digital, inclusive por meio de registros de assinatura, logs de acesso e demais mecanismos de rastreabilidade disponíveis, sem prejuízo das obrigações de sigilo aplicáveis a terceiros não relacionados.',
+    '',
+    '7 — DAS SANÇÕES',
+    'O descumprimento de qualquer das obrigações previstas neste Termo sujeitará o USUÁRIO às medidas disciplinares cabíveis, nos termos da Consolidação das Leis do Trabalho (CLT), sem prejuízo da responsabilização civil e criminal decorrente de eventuais danos causados à EMPRESA ou a terceiros.',
+    '',
+    '8 — DA VIGÊNCIA',
+    'O presente Termo vigorará por todo o período em que o USUÁRIO estiver autorizado a utilizar o certificado digital disponibilizado pela GEFOSCAL, extinguindo-se automaticamente em caso de desligamento, revogação da autorização ou revogação do próprio certificado, sem prejuízo da subsistência das obrigações de confidencialidade e responsabilidade aqui previstas.',
+    '',
+    '9 — DISPOSIÇÕES FINAIS',
+    'O USUÁRIO declara ter lido e compreendido integralmente o presente Termo, firmando-o em caráter irretratável e irrevogável, na condição de manifestação livre e consciente de sua vontade.',
+    '',
+    `Local e data: Luís Eduardo Magalhães, BA, ${new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' })}.`,
+    '',
+    'A assinatura eletrônica lançada abaixo, nos termos do item 2 deste Termo, tem a mesma validade e os mesmos efeitos jurídicos de uma assinatura manuscrita, e formaliza a concordância integral do USUÁRIO com todas as disposições acima, em nome próprio e perante a GEFOSCAL COM., IND., REPRESENTAÇÕES E TRANSPORTES DE PRODUTOS AGROPECUÁRIOS LTDA.'
   ].join('\n')
 }
 
@@ -45469,7 +45527,7 @@ function statusLiberacaoAtual (l) {
 async function listaLiberacoesCertificado (corpo, c, editavel) {
   corpo.innerHTML = `<p class="texto-dim2">carregando...</p>`
   const { data, error } = await db.from('certificado_liberacao')
-    .select('id,token,destinatario_nome,destinatario_documento,finalidade,status,criado_em,expira_em,assinado_em,assinatura')
+    .select('id,token,destinatario_nome,destinatario_documento,finalidade,status,criado_em,expira_em,assinado_em,assinatura,termo_texto,assinado_ip,assinado_navegador')
     .eq('certificado_id', c.id).order('criado_em', { ascending: false }).limit(200)
   if (error) { corpo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
   const lista = data || []
@@ -45497,7 +45555,7 @@ async function listaLiberacoesCertificado (corpo, c, editavel) {
             </div>
             <div style="display:flex;gap:6px;flex-wrap:wrap;">
               ${st !== 'EXPIRADO' && st !== 'REVOGADO' ? `<button class="btn-secundario mini" data-copiar="${esc(l.token)}">copiar link</button>` : ''}
-              ${l.assinatura ? `<button class="btn-secundario mini" data-ver-assinatura="${l.id}">ver assinatura</button>` : ''}
+              ${l.assinatura ? `<button class="btn-secundario mini" data-comprovante="${l.id}">comprovante (PDF)</button>` : ''}
               ${editavel && (st === 'AGUARDANDO_ASSINATURA' || st === 'ASSINADO') ? `<button class="lnk-crud" data-revogar="${l.id}" title="revogar">🗑</button>` : ''}
             </div>
           </div>
@@ -45512,10 +45570,10 @@ async function listaLiberacoesCertificado (corpo, c, editavel) {
       navigator.clipboard.writeText(link).then(() => { b.textContent = 'copiado!' })
     }
   })
-  corpo.querySelectorAll('[data-ver-assinatura]').forEach(b => {
+  corpo.querySelectorAll('[data-comprovante]').forEach(b => {
     b.onclick = () => {
-      const l = lista.find(x => x.id === b.dataset.verAssinatura)
-      if (l?.assinatura) window.open(l.assinatura, '_blank', 'noopener')
+      const l = lista.find(x => x.id === b.dataset.comprovante)
+      if (l) pdfTermoCertificado(l, c)
     }
   })
   corpo.querySelectorAll('[data-revogar]').forEach(b => {
@@ -45528,6 +45586,88 @@ async function listaLiberacoesCertificado (corpo, c, editavel) {
       listaLiberacoesCertificado(corpo, c, editavel)
     }
   })
+}
+
+// ---------------------------------------------------------------
+// Comprovante em PDF do termo de certificado digital assinado: o texto
+// completo do termo (congelado em termo_texto no momento da assinatura,
+// não recalculado agora) + a assinatura da pessoa + o rastro de
+// autenticidade (data/hora, IP, navegador). É isso que prova o que foi
+// assinado perante terceiros — não só a imagem solta da assinatura.
+// ---------------------------------------------------------------
+async function pdfTermoCertificado (l, c) {
+  const { jsPDF } = window.jspdf || {}
+  if (!jsPDF) { alert('O gerador de PDF não carregou. Recarregue a página e tente de novo.'); return }
+  if (!l.termo_texto) { alert('Este link não tem o texto do termo registrado — não dá pra gerar o comprovante.'); return }
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' })
+  const M = 18
+  const L = 210 - M * 2
+  let y = M
+
+  const quebra = (altura = 8) => { if (y + altura > 282) { doc.addPage(); y = M } }
+  const paragrafo = (txt, { tamanho = 9.5, estilo = 'normal', espaco = 3.4, cor = [25, 25, 25] } = {}) => {
+    doc.setFont('helvetica', estilo); doc.setFontSize(tamanho); doc.setTextColor(...cor)
+    for (const linha of doc.splitTextToSize(String(txt), L)) {
+      quebra(6); doc.text(linha, M, y); y += tamanho * 0.42 + 1.4
+    }
+    y += espaco
+  }
+
+  // ---- cabeçalho ----
+  doc.setFillColor(28, 40, 34); doc.rect(0, 0, 210, 26, 'F')
+  doc.setTextColor(255, 255, 255)
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(13)
+  doc.text('TERMO DE RESPONSABILIDADE — CERTIFICADO DIGITAL', M, 12)
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5)
+  doc.text(`Grupo Gefoscal · ${c.tipo || ''}${c.titular_nome ? ' — ' + c.titular_nome : ''}`, M, 18)
+  doc.setFontSize(7.5)
+  doc.text(`Assinado em ${fmtQuandoHora(l.assinado_em) || '—'}`, 210 - M, 18, { align: 'right' })
+  y = 34
+
+  // ---- corpo do termo (o mesmo texto que a pessoa leu e assinou; pula só
+  // a linha de título, repetida no cabeçalho acima) ----
+  const corpoTexto = String(l.termo_texto || '')
+  const linhas = corpoTexto.split('\n')
+  const resto = /^TERMO DE RESPONSABILIDADE/i.test((linhas[0] || '').trim()) ? linhas.slice(1) : linhas
+  for (const bruta of resto) {
+    const linha = bruta.trim()
+    if (!linha) { y += 1.5; continue }
+    const ehClausula = /^\d+\s*—/.test(linha) || linha === 'IDENTIFICAÇÃO DO USUÁRIO'
+    if (ehClausula) { quebra(14); paragrafo(linha, { tamanho: 9.5, estilo: 'bold', espaco: 1.2 }) }
+    else paragrafo(linha, { tamanho: 9 })
+  }
+
+  // ---- assinatura ----
+  quebra(50)
+  y += 4
+  paragrafo('ASSINATURA ELETRÔNICA DO USUÁRIO', { tamanho: 9.5, estilo: 'bold', espaco: 1.5 })
+  if (l.assinatura) {
+    try { doc.addImage(l.assinatura, 'PNG', M, y, 70, 26) } catch { /* imagem ilegível: fica só o campo de nome abaixo */ }
+  }
+  y += 30
+  doc.setDrawColor(150, 158, 150); doc.line(M, y, M + 80, y); y += 5
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(25, 25, 25)
+  doc.text(String(l.destinatario_nome || ''), M, y); y += 4.5
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(110, 118, 110)
+  doc.text(l.destinatario_documento || '', M, y)
+  y += 10
+
+  // ---- rodapé de autenticidade ----
+  const hash = await hashDoTexto(corpoTexto)
+  quebra(20)
+  doc.setDrawColor(215, 220, 215); doc.line(M, y, 210 - M, y); y += 4
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(120, 128, 120)
+  const rodape = [
+    `Assinado eletronicamente em ${fmtQuandoHora(l.assinado_em) || '—'} · IP ${l.assinado_ip || '—'}.`,
+    l.assinado_navegador ? `Navegador/dispositivo: ${l.assinado_navegador}` : null,
+    hash ? `Impressão digital do texto assinado (SHA-256): ${hash}` : null,
+    'Documento gerado pelo sistema do Grupo Gefoscal a partir do link de liberação assinado eletronicamente — o texto acima é exatamente o que a pessoa leu e assinou.'
+  ].filter(Boolean)
+  rodape.forEach(t => { doc.splitTextToSize(t, L).forEach(lin => { quebra(5); doc.text(lin, M, y); y += 3.2 }) })
+
+  const arquivo = `termo-certificado-${(l.destinatario_nome || 'assinatura').toString()
+    .replace(/[^\w]+/g, '-').toLowerCase()}-${String(l.assinado_em || '').slice(0, 10)}.pdf`
+  doc.save(arquivo)
 }
 
 // ----- Jurídico › Processos (com filtro por tipo) -----
