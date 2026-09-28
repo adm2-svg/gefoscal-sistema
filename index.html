@@ -27720,16 +27720,26 @@ const VOZES_TTS = [
 ]
 
 async function sdrAbaCanais (alvo) {
-  const { data: canais, error } = await db.from('sdr_canal').select('*').order('tipo')
+  const { data: canaisTodos, error } = await db.from('sdr_canal').select('*, dono:pessoa_id(nome)').order('tipo')
   if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
 
-  const podeMexer = ehTotal()
+  // Total continua vendo e mexendo em tudo, como sempre. Quem não é Total só
+  // vê o(s) canal(is) que são dele — cada um mexe só no seu próprio número.
+  const souTotal = ehTotal()
+  const canais = souTotal ? canaisTodos : (canaisTodos || []).filter(c => c.pessoa_id === PERFIL.pessoaId)
+
+  if (!souTotal && (canais || []).length === 0) {
+    alvo.innerHTML = `<p class="vazio">Você ainda não tem um número de WhatsApp próprio configurado aqui.
+      Fale com a Amanda pra vincular um canal ao seu usuário.</p>`
+    return
+  }
+
   alvo.innerHTML = `
     <p class="texto-dim2" style="margin-bottom:14px;">
       Os números de WhatsApp que a IA atende. O oficial da Meta atende qualquer pessoa;
       o do QR Code só fala com quem está numa lista ativa.</p>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(320px, 100%), 1fr));gap:14px;">
-      ${(canais || []).map(c => cartaoCanal(c, podeMexer)).join('')}
+      ${(canais || []).map(c => cartaoCanal(c, souTotal || c.pessoa_id === PERFIL.pessoaId, souTotal)).join('')}
     </div>`
 
   // Antes isto só escrevia 'aguardando_qr' no banco e torcia pra Evolution
@@ -27792,7 +27802,7 @@ async function sdrAbaCanais (alvo) {
   }
 }
 
-function cartaoCanal (c, podeMexer) {
+function cartaoCanal (c, podeMexer, mostrarDono) {
   const oficial = c.tipo === 'meta'
   const cor = { conectado: 'var(--good-text)', erro: 'var(--critico-text)',
                 aguardando_qr: 'var(--warn-text)' }[c.status] || 'var(--dim2)'
@@ -27804,6 +27814,8 @@ function cartaoCanal (c, podeMexer) {
           <div style="font-family:var(--serif);font-size:16px;">${esc(c.nome)}</div>
           <div class="texto-dim2" style="font-size:12px;margin-top:2px;">
             ${esc(c.numero || 'número ainda não informado')}</div>
+          ${mostrarDono ? `<div class="texto-dim2" style="font-size:11.5px;margin-top:2px;">
+            dono: ${c.dono?.nome ? esc(c.dono.nome) : 'ninguém (compartilhado)'}</div>` : ''}
         </div>
         <span class="chip" style="flex:none;">${oficial ? 'oficial' : 'QR Code'}</span>
       </div>
@@ -27848,8 +27860,16 @@ function cartaoCanal (c, podeMexer) {
     </div>`
 }
 
-function abrirEdicaoCanal (c, aoSalvar) {
+async function abrirEdicaoCanal (c, aoSalvar) {
   if (!c) return
+  // Só quem é Total pode trocar o dono do canal — atribuir a alguém é uma
+  // decisão de gestão, não algo que a própria pessoa dona mexe.
+  const podeAtribuirDono = ehTotal()
+  let pessoas = []
+  if (podeAtribuirDono) {
+    const { data } = await db.from('pessoa').select('id,nome').eq('status', 'ATIVO').order('nome')
+    pessoas = data || []
+  }
   const fundo = document.createElement('div')
   fundo.className = 'modal-fundo'
   fundo.innerHTML = `
@@ -27864,6 +27884,11 @@ function abrirEdicaoCanal (c, aoSalvar) {
         <div class="campo"><label>Ligado</label>
           <select id="cn-ativo"><option value="sim" ${c.ativo ? 'selected' : ''}>sim</option>
             <option value="nao" ${!c.ativo ? 'selected' : ''}>não</option></select></div>
+        ${podeAtribuirDono ? `<div class="campo"><label>Dono</label>
+          <select id="cn-dono">
+            <option value="">ninguém (compartilhado)</option>
+            ${pessoas.map(p => `<option value="${esc(p.id)}" ${p.id === c.pessoa_id ? 'selected' : ''}>${esc(p.nome)}</option>`).join('')}
+          </select></div>` : ''}
       </div>
       <div class="acoes">
         <button class="btn" id="cn-salvar">Salvar</button>
@@ -27882,6 +27907,7 @@ function abrirEdicaoCanal (c, aoSalvar) {
       instancia: fundo.querySelector('#cn-inst').value.trim() || null,
       ativo: fundo.querySelector('#cn-ativo').value === 'sim'
     }
+    if (podeAtribuirDono) patch.pessoa_id = fundo.querySelector('#cn-dono').value || null
     if (!patch.nome) { alert('O canal precisa de um nome.'); return }
     const { error } = await db.from('sdr_canal').update(patch).eq('id', c.id)
     if (error) { alert('Não consegui salvar: ' + error.message); return }
