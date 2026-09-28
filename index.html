@@ -26125,6 +26125,17 @@ const ROTULO_DISC = { D: 'Dominância', I: 'Influência', S: 'Estabilidade', C: 
 
 let SDR_CACHE = { leads: [], selecionado: null, mensagens: [], regioes: [], vendedores: [] }
 let SDR_ARRASTANDO = null
+// "" = vendo todo mundo. Filtra Leads e Funil (que usam o mesmo
+// sdrCarregarLeads) pelo dono do canal de origem — só Total enxerga esse
+// seletor, e sem escolher nada o comportamento continua idêntico a antes.
+let SDR_LEADS_PESSOA = ''
+
+async function sdrListaDonosCanais () {
+  const { data } = await db.from('sdr_canal').select('pessoa_id, dono:pessoa_id(nome)').not('pessoa_id', 'is', null)
+  const vistos = new Map()
+  ;(data || []).forEach(c => { if (c.pessoa_id && c.dono?.nome && !vistos.has(c.pessoa_id)) vistos.set(c.pessoa_id, c.dono.nome) })
+  return [...vistos.entries()].map(([id, nome]) => ({ id, nome })).sort((a, b) => a.nome.localeCompare(b.nome))
+}
 
 async function paginaSdrWhatsapp () {
   if (!podeVer('sdr_whatsapp')) { areaLivre().innerHTML =
@@ -26231,7 +26242,15 @@ function abrirSubAbaSdr (sub) {
 }
 
 async function sdrCarregarLeads () {
-  const { data, error } = await db.from('leads').select('*').order('updated_at', { ascending: false }).limit(500)
+  let q = db.from('leads').select('*').order('updated_at', { ascending: false }).limit(500)
+  // "Vendo de" (só Total): restringe aos leads cujo canal de origem é da
+  // pessoa escolhida. Sem escolha, segue exatamente como sempre foi.
+  if (ehTotal() && SDR_LEADS_PESSOA) {
+    const { data: canaisDaPessoa } = await db.from('sdr_canal').select('id').eq('pessoa_id', SDR_LEADS_PESSOA)
+    const ids = (canaisDaPessoa || []).map(c => c.id)
+    q = ids.length ? q.in('canal_origem_id', ids) : q.eq('id', -1) // pessoa sem canal: nenhum lead bate
+  }
+  const { data, error } = await q
   if (error) throw error
   SDR_CACHE.leads = data || []
   return SDR_CACHE.leads
@@ -26475,11 +26494,20 @@ async function sdrAbaLeads (alvo) {
   try { await sdrMontarCaixaDeEntrada() }
   catch (erro) { alvo.innerHTML = `<p class="vazio">${esc(erro.message)}</p>`; return }
 
+  const donosSdr = ehTotal() ? await sdrListaDonosCanais() : []
+
   alvo.innerHTML = `
     <div class="sdr-shell">
       <div class="sdr-coluna">
         <div class="sdr-topo">
           <h4>💬 Conversas</h4>
+          ${donosSdr.length ? `<div style="display:flex;gap:7px;align-items:center;margin:6px 0 2px;">
+            <label style="font-size:11.5px;font-weight:600;flex:none;">Vendo de</label>
+            <select id="sdr-leads-pessoa" style="flex:1;min-width:0;font-size:12.5px;">
+              <option value="">todo mundo</option>
+              ${donosSdr.map(d => `<option value="${esc(d.id)}" ${d.id === SDR_LEADS_PESSOA ? 'selected' : ''}>${esc(d.nome)}</option>`).join('')}
+            </select>
+          </div>` : ''}
           <div class="sdr-busca-linha">
             <input id="sdr-busca-lead" class="sdr-busca" placeholder="Buscar por nome ou telefone...">
             <button class="btn-secundario mini" id="sdr-btn-novo-lead"
@@ -26503,6 +26531,8 @@ async function sdrAbaLeads (alvo) {
   const busca = $('#sdr-busca-lead')
   busca.oninput = () => renderItensListaSdr(busca.value.trim().toLowerCase())
   $('#sdr-btn-novo-lead').onclick = () => abrirNovoLeadSdr()
+  const selPessoaLeads = $('#sdr-leads-pessoa')
+  if (selPessoaLeads) selPessoaLeads.onchange = () => { SDR_LEADS_PESSOA = selPessoaLeads.value; sdrAbaLeads(alvo) }
 }
 
 // Mantido porque outras telas ainda chamam pra redesenhar a lista.
@@ -26531,12 +26561,23 @@ async function sdrMontarCaixaDeEntrada () {
   SDR_CACHE.ultimas = new Map()
   SDR_CACHE.comuns = []
 
+  // "Vendo de" ativo: sem isso, uma conversa de outro canal que não tem
+  // "lead" batendo no filtro entrava disfarçada de "Comum" (fora de lista)
+  // em vez de simplesmente sumir junto com o resto de quem não é a pessoa
+  // escolhida — mesma regra do sdrCarregarLeads, aplicada às mensagens.
+  const filtroPessoaAtivo = ehTotal() && SDR_LEADS_PESSOA
+  let idsCanalPessoa = null
+  if (filtroPessoaAtivo) {
+    const { data: canaisDaPessoa } = await db.from('sdr_canal').select('id').eq('pessoa_id', SDR_LEADS_PESSOA)
+    idsCanalPessoa = new Set((canaisDaPessoa || []).map(c => c.id))
+  }
+
   // Os leads e as últimas mensagens vão juntos pro servidor. A prévia da
   // conversa só precisa do começo do texto, então pedimos poucas colunas.
   const [, { data: msgs, error: erroMsgs }] = await Promise.all([
     sdrCarregarLeads(),
     db.from('mensagens')
-      .select('telefone,telefone_norm,nome,conteudo,created_at,papel,fora_da_lista,audio')
+      .select('telefone,telefone_norm,nome,conteudo,created_at,papel,fora_da_lista,audio,canal_id')
       .order('created_at', { ascending: false }).limit(400)
   ])
   if (erroMsgs) throw erroMsgs
@@ -26545,6 +26586,7 @@ async function sdrMontarCaixaDeEntrada () {
   const doSdr = new Set(SDR_CACHE.leads.map(l => l.telefone_norm || l.telefone))
 
   for (const m of msgs || []) {
+    if (idsCanalPessoa && !idsCanalPessoa.has(m.canal_id)) continue
     const chave = m.telefone_norm || m.telefone
     if (!SDR_CACHE.ultimas.has(chave)) SDR_CACHE.ultimas.set(chave, m)
     if (doSdr.has(chave)) continue
@@ -27479,6 +27521,7 @@ async function sdrAbaFunil (alvo) {
   try { await sdrCarregarLeads() }
   catch (erro) { alvo.innerHTML = `<p class="vazio">${esc(erro.message)}</p>`; return }
 
+  const donosSdrFunil = ehTotal() ? await sdrListaDonosCanais() : []
   const lista = SDR_CACHE.leads.filter(l => !l.enviado_para_consultor)
 
   const cartao = l => {
@@ -27518,7 +27561,16 @@ async function sdrAbaFunil (alvo) {
         A IA atualiza o status automaticamente conforme a conversa. Você também pode arrastar entre colunas
         ou clicar num card pra abrir a ficha completa.
       </p>
-      <button class="btn-secundario mini" id="sdr-funil-novo-lead" style="flex:none;">+ Novo lead</button>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        ${donosSdrFunil.length ? `<div style="display:flex;gap:7px;align-items:center;">
+          <label style="font-size:11.5px;font-weight:600;">Vendo de</label>
+          <select id="sdr-funil-pessoa" style="font-size:12.5px;">
+            <option value="">todo mundo</option>
+            ${donosSdrFunil.map(d => `<option value="${esc(d.id)}" ${d.id === SDR_LEADS_PESSOA ? 'selected' : ''}>${esc(d.nome)}</option>`).join('')}
+          </select>
+        </div>` : ''}
+        <button class="btn-secundario mini" id="sdr-funil-novo-lead" style="flex:none;">+ Novo lead</button>
+      </div>
     </div>
     <div class="crm-board" style="grid-template-columns:repeat(${STATUS_LEAD_SDR.length},minmax(min(220px, 100%), 1fr));">
       ${STATUS_LEAD_SDR.map(st => {
@@ -27533,6 +27585,8 @@ async function sdrAbaFunil (alvo) {
     </div>`
 
   $('#sdr-funil-novo-lead').onclick = () => abrirNovoLeadSdr()
+  const selPessoaFunil = $('#sdr-funil-pessoa')
+  if (selPessoaFunil) selPessoaFunil.onchange = () => { SDR_LEADS_PESSOA = selPessoaFunil.value; sdrAbaFunil(alvo) }
 
   alvo.querySelectorAll('[data-lead-sdr]').forEach(el => {
     el.ondragstart = e => {
