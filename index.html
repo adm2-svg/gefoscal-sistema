@@ -27708,6 +27708,9 @@ const ROTULO_STATUS_CANAL = {
   conectado: 'conectado', erro: 'com erro'
 }
 let SDR_TIMER_QR = null
+// "" = vendo todo mundo. Mesmo padrão do drop "Vendo a fila de" da
+// Originação (ORIG_PESSOA) — só quem é Total enxerga esse seletor.
+let SDR_CANAL_PESSOA = ''
 
 // Vozes da OpenAI. Onyx é masculina e grave — a que mais combina com o
 // Eduardo; nova e shimmer são femininas, se um dia o SDR mudar de nome.
@@ -27726,7 +27729,22 @@ async function sdrAbaCanais (alvo) {
   // Total continua vendo e mexendo em tudo, como sempre. Quem não é Total só
   // vê o(s) canal(is) que são dele — cada um mexe só no seu próprio número.
   const souTotal = ehTotal()
-  const canais = souTotal ? canaisTodos : (canaisTodos || []).filter(c => c.pessoa_id === PERFIL.pessoaId)
+
+  // Pra quem é Total: o drop "Vendo de" deixa escolher um dono específico e
+  // ver só o canal dele, separado dos demais — mesmo padrão do "Vendo a
+  // fila de" que já existe na Originação. Sem escolher (ou "todo mundo"),
+  // continua vendo tudo junto, como sempre foi.
+  const donos = []
+  ;(canaisTodos || []).forEach(c => {
+    if (c.pessoa_id && c.dono?.nome && !donos.some(d => d.id === c.pessoa_id)) {
+      donos.push({ id: c.pessoa_id, nome: c.dono.nome })
+    }
+  })
+  donos.sort((a, b) => a.nome.localeCompare(b.nome))
+
+  const canais = souTotal
+    ? (SDR_CANAL_PESSOA ? (canaisTodos || []).filter(c => c.pessoa_id === SDR_CANAL_PESSOA) : canaisTodos)
+    : (canaisTodos || []).filter(c => c.pessoa_id === PERFIL.pessoaId)
 
   if (!souTotal && (canais || []).length === 0) {
     alvo.innerHTML = `<p class="vazio">Você ainda não tem um número de WhatsApp próprio configurado aqui.
@@ -27738,9 +27756,21 @@ async function sdrAbaCanais (alvo) {
     <p class="texto-dim2" style="margin-bottom:14px;">
       Os números de WhatsApp que a IA atende. O oficial da Meta atende qualquer pessoa;
       o do QR Code só fala com quem está numa lista ativa.</p>
+    ${souTotal && donos.length ? `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 14px;">
+      <label style="font-size:12px;font-weight:600;">Vendo de</label>
+      <select id="sc-pessoa" style="max-width:260px;">
+        <option value="">todo mundo</option>
+        ${donos.map(d => `<option value="${esc(d.id)}" ${d.id === SDR_CANAL_PESSOA ? 'selected' : ''}>${esc(d.nome)}</option>`).join('')}
+      </select>
+    </div>` : ''}
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(320px, 100%), 1fr));gap:14px;">
-      ${(canais || []).map(c => cartaoCanal(c, souTotal || c.pessoa_id === PERFIL.pessoaId, souTotal)).join('')}
+      ${(canais || []).length
+        ? (canais || []).map(c => cartaoCanal(c, souTotal || c.pessoa_id === PERFIL.pessoaId, souTotal)).join('')
+        : `<p class="vazio">Ninguém com esse filtro tem canal configurado.</p>`}
     </div>`
+
+  const selPessoaCanal = alvo.querySelector('#sc-pessoa')
+  if (selPessoaCanal) selPessoaCanal.onchange = () => { SDR_CANAL_PESSOA = selPessoaCanal.value; sdrAbaCanais(alvo) }
 
   // Antes isto só escrevia 'aguardando_qr' no banco e torcia pra Evolution
   // mandar um webhook por conta própria — quando a sessão caía de vez, ela
