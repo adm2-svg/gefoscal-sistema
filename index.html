@@ -11818,7 +11818,7 @@ function formSolicitacaoServicoIndustria () {
   fundo.innerHTML = `
     <div class="modal">
       <h3>🔧 Solicitação de Serviço (indústria)</h3>
-      <p class="texto-dim2" style="font-size:12.5px;margin-top:-6px;">
+      <p class="texto-dim2" style="font-size:12.5px;margin-top:-6px;" id="ss-explica-aprovacao">
         Vai direto pra cotação e, depois de escolhido o orçamento, a aprovação é do Adão Umpierre pelo WhatsApp.</p>
 
       <div class="campo" style="margin-top:6px;display:flex;align-items:flex-start;gap:8px;">
@@ -11892,10 +11892,17 @@ function formSolicitacaoServicoIndustria () {
   const q = id => fundo.querySelector(id)
 
   q('#ss-modalidade').onchange = () => q('#ss-linha-variavel').classList.toggle('oculto', !['VARIAVEL', 'FIXO_E_VARIAVEL'].includes(q('#ss-modalidade').value))
+  // Veículo comum (carro de vendedor, frota administrativa) não é "indústria"
+  // de verdade — só máquina/equipamento de produção é. Por isso, vinculado a
+  // um veículo, a solicitação segue o fluxo normal de aprovação (Diretoria),
+  // não o link avulso do Adão no WhatsApp — que é só pra ativo industrial.
   q('#ss-ativo-tipo').onchange = () => {
     const t = q('#ss-ativo-tipo').value
     q('#ss-linha-veiculo').classList.toggle('oculto', t !== 'VEICULO')
     q('#ss-linha-equipamento').classList.toggle('oculto', t !== 'EQUIPAMENTO')
+    q('#ss-explica-aprovacao').textContent = t === 'VEICULO'
+      ? 'Vai direto pra cotação e, depois de escolhido o orçamento, a aprovação final segue o fluxo normal (Diretoria) — veículo comum não passa pelo WhatsApp do Adão.'
+      : 'Vai direto pra cotação e, depois de escolhido o orçamento, a aprovação é do Adão Umpierre pelo WhatsApp.'
   }
 
   const aviso = (t, alerta = false) => {
@@ -11932,7 +11939,12 @@ function formSolicitacaoServicoIndustria () {
       equipamento_id: ativoTipo === 'EQUIPAMENTO' ? q('#ss-equipamento').value : null,
       justificativa: q('#ss-justificativa').value.trim() || null,
       especificacoes: q('#ss-especificacoes').value.trim() || null,
-      eh_servico_industria: true,
+      // só máquina/equipamento de produção (ou serviço avulso, sem ativo) é
+      // "indústria" de verdade — aprovação exclusiva do Adão pelo WhatsApp.
+      // Veículo comum segue o fluxo normal (fila de Aprovação da Diretoria),
+      // senão a solicitação fica invisível: some da fila normal e a
+      // notificação por WhatsApp não é pra esse caso.
+      eh_servico_industria: ativoTipo !== 'VEICULO',
       solicitante_id: PERFIL.pessoaId,
       data_solicitacao: new Date().toISOString(),
       precisa_autorizacao_orcamento: q('#ss-precisa-autorizacao').checked,
