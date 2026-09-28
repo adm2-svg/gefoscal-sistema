@@ -26137,6 +26137,67 @@ async function sdrListaDonosCanais () {
   return [...vistos.entries()].map(([id, nome]) => ({ id, nome })).sort((a, b) => a.nome.localeCompare(b.nome))
 }
 
+// ---------------------------------------------------------------
+// Tempo real na aba Leads — mensagem chegando (ou saindo) atualiza a lista
+// e, se a conversa já estiver aberta, entra na fita sozinha, sem precisar
+// dar F5. Mesmo padrão de ligarEscutaChatInterno/ligarEscutaNotificacoes,
+// só que escutando "mensagens" e respeitando o mesmo recorte por canal do
+// "Vendo de" (pra não vazar mensagem de quem não é a pessoa filtrada).
+// ---------------------------------------------------------------
+let SDR_LEADS_CANAL_RT = null
+
+function pararEscutaSdrLeads () {
+  if (SDR_LEADS_CANAL_RT) { db.removeChannel(SDR_LEADS_CANAL_RT); SDR_LEADS_CANAL_RT = null }
+}
+
+async function ligarEscutaSdrLeads () {
+  pararEscutaSdrLeads()
+
+  // Descobre qual canal escutar: o meu (quem não é Total), o da pessoa
+  // escolhida no "Vendo de" (Total filtrado), ou nenhum filtro (Total
+  // vendo todo mundo — a própria RLS já garante que só chega o que pode
+  // ver). Sem canal próprio: filtra por um id que não existe, não escuta
+  // nada — igual ao vazio que já aparece na lista hoje.
+  let filtroCanal = null
+  if (!ehTotal()) {
+    const { data: meuCanal } = await db.from('sdr_canal').select('id').eq('pessoa_id', PERFIL.pessoaId).maybeSingle()
+    filtroCanal = meuCanal?.id || '00000000-0000-0000-0000-000000000000'
+  } else if (SDR_LEADS_PESSOA) {
+    const { data: canaisDaPessoa } = await db.from('sdr_canal').select('id').eq('pessoa_id', SDR_LEADS_PESSOA)
+    filtroCanal = canaisDaPessoa?.[0]?.id || '00000000-0000-0000-0000-000000000000'
+  }
+
+  SDR_LEADS_CANAL_RT = db.channel('sdr-leads-rt')
+    .on('postgres_changes', {
+      event: 'INSERT', schema: 'public', table: 'mensagens',
+      ...(filtroCanal ? { filter: `canal_id=eq.${filtroCanal}` } : {})
+    }, payload => tratarMensagemSdrEmTempoReal(payload.new))
+    .subscribe()
+}
+
+function tratarMensagemSdrEmTempoReal (m) {
+  // a aba Leads já não está mais na tela — desliga a escuta e some
+  if (!document.getElementById('sdr-lista-itens')) { pararEscutaSdrLeads(); return }
+
+  const chave = m.telefone_norm || m.telefone
+  SDR_CACHE.ultimas = SDR_CACHE.ultimas || new Map()
+  SDR_CACHE.ultimas.set(chave, m)
+
+  const leadDaMensagem = (SDR_CACHE.leads || []).find(l => (l.telefone_norm || l.telefone) === chave)
+  if (leadDaMensagem) leadDaMensagem.updated_at = m.created_at
+
+  renderItensListaSdr($('#sdr-busca-lead')?.value.trim().toLowerCase() || '')
+
+  const conversaAberta = (SDR_CACHE.selecionado &&
+    (SDR_CACHE.selecionado.telefone_norm || SDR_CACHE.selecionado.telefone) === chave) ||
+    SDR_CACHE.comumAberto === chave
+  if (conversaAberta) {
+    SDR_CACHE.mensagens = [...(SDR_CACHE.mensagens || []), m]
+    const fita = $('#sdr-fita')
+    if (fita) { fita.innerHTML = fitaDeMensagens(); rolarFitaAteOFim() }
+  }
+}
+
 async function paginaSdrWhatsapp () {
   if (!podeVer('sdr_whatsapp')) { areaLivre().innerHTML =
     `<div class="panel" style="padding:22px;"><p class="texto-dim">Você não tem acesso ao SDR WhatsApp.</p></div>`; return }
@@ -26500,7 +26561,8 @@ async function sdrAbaLeads (alvo) {
     <div class="sdr-shell">
       <div class="sdr-coluna">
         <div class="sdr-topo">
-          <h4>💬 Conversas</h4>
+          <h4>💬 Conversas <span class="texto-dim2" style="font-size:10.5px;font-weight:600;vertical-align:middle;"
+            title="Mensagens novas aparecem sozinhas, sem precisar atualizar a tela">🟢 ao vivo</span></h4>
           ${donosSdr.length ? `<div style="display:flex;gap:7px;align-items:center;margin:6px 0 2px;">
             <label style="font-size:11.5px;font-weight:600;flex:none;">Vendo de</label>
             <select id="sdr-leads-pessoa" style="flex:1;min-width:0;font-size:12.5px;">
@@ -26533,6 +26595,7 @@ async function sdrAbaLeads (alvo) {
   $('#sdr-btn-novo-lead').onclick = () => abrirNovoLeadSdr()
   const selPessoaLeads = $('#sdr-leads-pessoa')
   if (selPessoaLeads) selPessoaLeads.onchange = () => { SDR_LEADS_PESSOA = selPessoaLeads.value; sdrAbaLeads(alvo) }
+  ligarEscutaSdrLeads()
 }
 
 // Mantido porque outras telas ainda chamam pra redesenhar a lista.
