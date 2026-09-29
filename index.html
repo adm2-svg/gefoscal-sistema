@@ -25420,7 +25420,8 @@ async function tecAbrirFicha (id) {
       <button class="btn-secundario" id="tec-nova-dem">Qualificar demanda</button>
       <button class="btn-secundario" id="tec-editar-cli">Editar cliente</button>
       <button class="btn-secundario" id="tec-novo-contato">+ Contato</button>
-      <button class="btn-secundario" id="tec-relatorio-pdf" style="margin-left:auto;">📄 Gerar relatório</button>
+      <button class="btn-secundario" id="tec-especialista" style="margin-left:auto;">🔬 Especialista Técnica</button>
+      <button class="btn-secundario" id="tec-relatorio-pdf">📄 Gerar relatório</button>
     </div>
 
     <div class="secao"><div class="cabeca-secao"><h3 style="font-size:14px;">1 · Identificação</h3></div>
@@ -25532,6 +25533,10 @@ async function tecAbrirFicha (id) {
     abrirMapaTecnico(c, podeEditar('crm_tecnico'), async () => { await tecRecarregar(); tecAbrirFicha(id) })
   }
   fundo.querySelector('#tec-relatorio-pdf').onclick = () => tecGerarRelatorioPDF(c, { ts, aps, vis, res, ocs, dms })
+  fundo.querySelector('#tec-especialista').onclick = () => {
+    fundo.remove()
+    abrirEspecialistaTecnico(c, { ts, aps, vis, res, ocs, dms }, () => tecAbrirFicha(id))
+  }
   fundo.querySelector('#tec-novo-doc').onclick = () => { fundo.remove(); tecFormDoc(null, id) }
   fundo.querySelector('#tec-excluir-cli').onclick = () => tecExcluirCliente(id, fundo)
   fundo.querySelectorAll('[data-virar-caso]').forEach(el => { el.onclick = () => tecVirarCaso(el.dataset.virarCaso, fundo, id) })
@@ -25611,6 +25616,154 @@ function tecGerarRelatorioPDF (c, { ts, aps, vis, res, ocs, dms }) {
 
   const arquivo = (c.nome || 'cliente').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-')
   doc.save(`crm-tecnico-${arquivo}-${hojeISO()}.pdf`)
+}
+
+// ----- Especialista Técnica dentro da ficha -----
+// Mesma IA treinada em Treinamento IA (especialidade Técnica) que já
+// existia pro time comercial — aqui ela entra sabendo os dados reais
+// DESSE cliente (talhões, análise de solo, aplicações, visitas,
+// resultados, ocorrências, demandas), pra ajudar o técnico na hora:
+// o que falta levantar, como aplicar, se já tem análise de solo etc.
+// Histórico de conversa fica por cliente (TEC_ESPEC_HISTORICO[id]),
+// então trocar de ficha não mistura assunto de cliente diferente.
+const AGENTE_ESPECIALISTA_TECNICA_ID = 'aeaa11a1-71ad-4063-b770-479efba320c3'
+let TEC_ESPEC_HISTORICO = {}
+
+function coletarContextoTecnico (c, { ts, aps, vis, res, ocs, dms }) {
+  const fase = TEC_FASES.find(x => x.id === c.fase)
+  let texto = `FICHA TÉCNICA — ${c.nome}${c.codigo ? ' (' + c.codigo + ')' : ''} — ${c.municipio || 'município não informado'}\n`
+  texto += `Fase atual: ${fase?.nome || c.fase || '—'}${fase?.sig ? ' — ' + fase.sig : ''}\n`
+  texto += `Área total: ${c.area_total_ha ? tecNHa(c.area_total_ha) + ' ha' : 'não informada'}\n`
+
+  texto += `\nTALHÕES E ANÁLISE DE SOLO:\n`
+  texto += ts.length ? ts.map(t => {
+    const an = tecAnalisesDe(t.id), ult = an[0]
+    return `- ${t.nome} (${t.area_ha ? tecNHa(t.area_ha) + ' ha' : 'área não informada'}, cultura ${t.cultura || 'não informada'}): ` +
+      (ult
+        ? `última análise de solo em ${fmtData(ult.data)} — ${TEC_PARAMS_SOLO.map(pp => pp.r + ' ' + (ult[pp.k] ?? '—')).join(', ')}\n`
+        : `SEM análise de solo cadastrada ainda\n`)
+  }).join('') : `- Nenhum talhão cadastrado ainda — sem talhão não dá pra registrar aplicação nem apontar área.\n`
+
+  texto += `\nAPLICAÇÕES:\n`
+  texto += aps.length ? aps.map(a => {
+    const t = ts.find(x => x.id === a.talhao_id)
+    return `- ${t ? t.nome : 'talhão não identificado'} · safra ${a.safra || '—'} · ${(a.produtos || []).join(' + ') || 'produto não informado'} · ` +
+      `dose ${a.dose_t_ha ? tecNT(a.dose_t_ha) + ' t/ha' : '—'} · volume ${a.volume_t ? tecNT(a.volume_t) + ' t' : '—'} · ` +
+      `${fmtData(a.data_aplicacao)} · ${a.tem_testemunha ? 'com testemunha' : 'sem testemunha'}\n`
+  }).join('') : `- Nenhuma aplicação registrada ainda.\n`
+
+  texto += `\nVISITAS DE ACOMPANHAMENTO:\n`
+  texto += vis.length ? vis.map(v =>
+    `- ${fmtData(v.data)} · estágio ${v.estagio_cultura || '—'}${v.dae ? ' (DAE ' + v.dae + ')' : ''}${v.realizada ? '' : ' [programada, ainda não realizada]'}` +
+    `${v.dor_identificada ? ' · dor identificada: ' + v.dor_identificada : ''}` +
+    `${v.proximo_passo ? ' · próximo passo: ' + v.proximo_passo + (v.data_proximo_passo ? ' até ' + fmtData(v.data_proximo_passo) : '') : ''}\n`
+  ).join('') : `- Nenhuma visita registrada ainda.\n`
+
+  texto += `\nRESULTADOS (produtividade):\n`
+  texto += res.length ? res.map(r => {
+    const a = TEC.aplicacoes.find(x => x.id === r.aplicacao_id)
+    const t = a ? ts.find(x => x.id === a.talhao_id) : null
+    const g = tecGanho(r)
+    return `- ${t ? t.nome : '—'} · obtida ${r.produtividade_obtida ?? '—'} ${r.unidade || ''} · ` +
+      `${r.produtividade_testemunha ? 'testemunha ' + r.produtividade_testemunha + ' ' + (r.unidade || '') : 'sem testemunha'} · ` +
+      `${g == null ? 'ganho não calculado' : 'ganho ' + tecNP(g)} · colheita ${fmtData(r.data_colheita)}\n`
+  }).join('') : `- Nenhum resultado lançado ainda.\n`
+
+  texto += `\nOCORRÊNCIAS:\n`
+  texto += ocs.length ? ocs.map(o =>
+    `- [${TEC_STATUS_OCO.find(s => s.id === o.status)?.nome || o.status}] ${o.tipo || '—'}: ${o.descricao || '—'}` +
+    `${o.status !== 'resolvida' ? ' (' + tecDiasAberta(o) + ' dias aberta)' : ''}\n`
+  ).join('') : `- Nenhuma ocorrência.\n`
+
+  texto += `\nDEMANDAS:\n`
+  texto += dms.length ? dms.map(d =>
+    `- [${TEC_STATUS_DEM.find(s => s.id === d.status)?.nome || d.status}] ${TEC_TIPOS_DEM.find(t => t.id === d.tipo)?.nome || d.tipo}` +
+    ` · ${d.volume_estimado_t ? tecNT(d.volume_estimado_t) + ' t' : 'volume não estimado'} · janela ${d.janela_estimada || '—'}\n`
+  ).join('') : `- Nenhuma demanda gerada ainda.\n`
+
+  return texto
+}
+
+async function abrirEspecialistaTecnico (c, dados, aoFechar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:820px;">
+    <div style="padding:16px 18px;margin:-24px -24px 16px;background:linear-gradient(120deg,rgba(74,144,217,.14),rgba(74,144,217,.03));border-bottom:1px solid rgba(74,144,217,.25);border-radius:12px 12px 0 0;display:flex;align-items:center;gap:12px;">
+      <div style="width:40px;height:40px;border-radius:50%;background:linear-gradient(135deg,#4a90d9,#2d6bb0);display:flex;align-items:center;justify-content:center;font-size:20px;flex:none;">🔬</div>
+      <div style="flex:1;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 2px;">Especialista Técnica — ${esc(c.nome)}</h3>
+        <p class="texto-dim2" style="font-size:11px;margin:0;">Já entra sabendo os talhões, análises de solo, aplicações e visitas dessa conta. Pergunte o que falta fazer, como aplicar, ou qualquer dúvida técnica.</p>
+      </div>
+    </div>
+    <div id="et-chat" style="display:flex;flex-direction:column;gap:12px;max-height:420px;overflow-y:auto;margin-bottom:12px;"></div>
+    <div style="display:flex;gap:8px;align-items:flex-end;">
+      <textarea id="et-pergunta" placeholder="Digite sua pergunta..." style="flex:1;min-height:46px;max-height:120px;"></textarea>
+      <button class="btn" id="et-enviar" style="background:linear-gradient(135deg,#4a90d9,#2d6bb0);border:none;">Enviar</button>
+    </div>
+    <div class="acoes" style="margin-top:12px;"><button class="btn-secundario" id="et-fechar">fechar</button></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => { fundo.remove(); if (aoFechar) aoFechar() }
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  fundo.querySelector('#et-fechar').onclick = fechar
+
+  const chat = fundo.querySelector('#et-chat')
+  const historico = TEC_ESPEC_HISTORICO[c.id] || (TEC_ESPEC_HISTORICO[c.id] = [])
+
+  const renderMensagem = (autor, texto) => {
+    const minha = autor === 'user'
+    const bolha = document.createElement('div')
+    bolha.style.cssText = `align-self:${minha ? 'flex-end' : 'flex-start'};max-width:85%;`
+    bolha.innerHTML = `
+      <div class="texto-dim2" style="font-size:10.5px;margin-bottom:3px;${minha ? 'text-align:right;' : ''}">${minha ? 'Você' : '🔬 Especialista Técnica'}</div>
+      <div style="background:${minha ? 'var(--rust)' : 'linear-gradient(135deg,rgba(74,144,217,.14),rgba(74,144,217,.06))'};color:${minha ? '#fff' : 'inherit'};
+                  border:${minha ? 'none' : '1px solid rgba(74,144,217,.25)'};
+                  padding:10px 14px;border-radius:10px;font-size:13px;line-height:1.55;white-space:pre-wrap;">${esc(texto)}</div>`
+    chat.appendChild(bolha)
+    chat.scrollTop = chat.scrollHeight
+    return bolha
+  }
+
+  const enviarParaIA = async textoParaIA => {
+    const btn = fundo.querySelector('#et-enviar'); btn.disabled = true; btn.textContent = 'Pensando...'
+    const carregando = renderMensagem('assistant', 'Analisando...')
+    historico.push({ role: 'user', content: textoParaIA })
+    const { data, error } = await db.functions.invoke('ia-agente-chat', { body: { agenteId: AGENTE_ESPECIALISTA_TECNICA_ID, mensagens: historico } })
+    btn.disabled = false; btn.textContent = 'Enviar'
+    carregando.remove()
+    if (error || data?.erro) {
+      let msg = data?.erro || error?.message || 'Erro ao consultar.'
+      if (error?.context?.json) { try { const corpo = await error.context.json(); msg = corpo?.erro || msg } catch { /* corpo não veio em JSON */ } }
+      renderMensagem('assistant', msg)
+      historico.pop()
+      return
+    }
+    historico.push({ role: 'assistant', content: data.resposta })
+    renderMensagem('assistant', data.resposta)
+  }
+
+  if (!historico.length) {
+    chat.innerHTML = `<p class="texto-dim2">Carregando o panorama de ${esc(c.nome)}...</p>`
+    const contexto = coletarContextoTecnico(c, dados)
+    chat.innerHTML = ''
+    await enviarParaIA(`${contexto}\n\nCom base nesse panorama, me dê uma saudação breve dizendo o que já está feito com esse cliente e o que falta (levantamento, análise de solo, aplicação, acompanhamento). Depois disso eu vou fazer perguntas.`)
+  } else {
+    historico.forEach(m => {
+      if (m.role === 'user' && m.content.startsWith('FICHA TÉCNICA')) return
+      renderMensagem(m.role === 'user' ? 'user' : 'assistant', m.content)
+    })
+  }
+
+  fundo.querySelector('#et-enviar').onclick = () => {
+    const texto = fundo.querySelector('#et-pergunta').value.trim()
+    if (!texto) return
+    renderMensagem('user', texto)
+    fundo.querySelector('#et-pergunta').value = ''
+    enviarParaIA(texto)
+  }
+  fundo.querySelector('#et-pergunta').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); fundo.querySelector('#et-enviar').click() }
+  })
 }
 
 // ----- Formulário: Cliente -----
