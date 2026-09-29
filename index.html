@@ -58119,8 +58119,12 @@ const COR_TIPO_OCORRENCIA = {
 
 async function dpOcorrencias (alvo, editavel) {
   await garantirDpPessoas()
-  const { data } = await db.from('dp_ocorrencia').select('*, pessoa:pessoa_id(nome,cargo)').order('data_ocorrencia', { ascending: false })
+  const [{ data }, { data: relSeg }] = await Promise.all([
+    db.from('dp_ocorrencia').select('*, pessoa:pessoa_id(nome,cargo)').order('data_ocorrencia', { ascending: false }),
+    db.from('dp_relatorio_seguranca').select('*').order('data', { ascending: false })
+  ])
   const lista = data || []
+  const listaRelSeg = relSeg || []
   const corStatusOcorr = s => s === 'ENCERRADA' ? 'badge-bom' : s === 'EM_ANDAMENTO' ? 'chip' : 'badge-alerta'
   const abertas = lista.filter(o => o.status !== 'ENCERRADA')
   const acidentes = lista.filter(o => o.tipo === 'Acidente')
@@ -58130,6 +58134,27 @@ async function dpOcorrencias (alvo, editavel) {
       <div class="bloco"><div class="rot">Total de ocorrências</div><div class="val">${lista.length}</div></div>
       <div class="bloco ${abertas.length ? 'alerta' : ''}"><div class="rot">Em aberto</div><div class="val">${abertas.length}</div></div>
       <div class="bloco"><div class="rot">Acidentes registrados</div><div class="val">${acidentes.length}</div></div>
+    </div>
+    <div class="cabeca-secao" style="margin-bottom:10px;">
+      <h3 style="font-size:14.5px;">🦺 Relatórios de segurança</h3>
+      ${editavel ? `<button class="btn-secundario mini" id="dprs-novo">${icDp('novo')}Relatório de segurança</button>` : ''}
+    </div>
+    ${listaRelSeg.map(r => `<div class="panel" style="padding:16px 18px;margin-bottom:12px;">
+      <div class="cabeca-secao">
+        <span class="texto-dim2" style="font-size:12px;">${fmtData(r.data)}</span>
+        <div style="display:flex;gap:8px;">
+          ${editavel ? `<button class="btn-secundario mini" data-editar-relseg="${r.id}">${icDp('editar')}editar</button>` : ''}
+          ${editavel ? `<button class="btn-secundario mini" data-excluir-relseg="${r.id}" style="color:var(--warn-text);">${icDp('excluir')}excluir</button>` : ''}
+        </div>
+      </div>
+      <p style="font-size:13.5px;white-space:pre-wrap;margin:10px 0;line-height:1.55;">${esc(r.descricao)}</p>
+      ${(r.anexos || []).length ? `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;">
+        ${r.anexos.map(a => `<button class="btn-secundario mini" data-abrir-anexo-relseg="${esc(a.caminho)}">${icDp('anexo')}${esc(a.nome)}</button>`).join('')}
+      </div>` : ''}
+    </div>`).join('') || `<p class="vazio" style="margin-bottom:18px;">Nenhum relatório de segurança registrado.</p>`}
+
+    <div class="cabeca-secao" style="margin:22px 0 10px;">
+      <h3 style="font-size:14.5px;">Ocorrências</h3>
     </div>
     ${editavel ? `<div class="acoes" style="margin-bottom:16px;"><button class="btn" id="dpo-novo">${icDp('novo')}Registrar ocorrência</button></div>` : ''}
     ${lista.map(o => `<div class="panel" style="padding:18px 20px;margin-bottom:14px;border-left:4px solid ${COR_TIPO_OCORRENCIA[o.tipo] || 'var(--line2)'};">
@@ -58156,6 +58181,19 @@ async function dpOcorrencias (alvo, editavel) {
       </div>
     </div>`).join('') || `<p class="vazio">Nenhuma ocorrência registrada.</p>`}`
 
+  alvo.querySelectorAll('[data-abrir-anexo-relseg]').forEach(b => {
+    b.onclick = () => abrirArquivo(b.dataset.abrirAnexoRelseg)
+  })
+  if (editavel) {
+    $('#dprs-novo').onclick = () => formDpRelatorioSeguranca(null, () => dpOcorrencias(alvo, editavel))
+    alvo.querySelectorAll('[data-editar-relseg]').forEach(b => {
+      b.onclick = () => formDpRelatorioSeguranca(listaRelSeg.find(r => r.id === b.dataset.editarRelseg), () => dpOcorrencias(alvo, editavel))
+    })
+    alvo.querySelectorAll('[data-excluir-relseg]').forEach(b => {
+      b.onclick = () => excluirRegistroDp('dp_relatorio_seguranca', b.dataset.excluirRelseg, () => dpOcorrencias(alvo, editavel), 'este relatório de segurança')
+    })
+  }
+
   alvo.querySelectorAll('[data-pdf-ocorr]').forEach(b => {
     b.onclick = () => dpGerarPdfOcorrencia(lista.find(o => o.id === b.dataset.pdfOcorr))
   })
@@ -58174,6 +58212,86 @@ async function dpOcorrencias (alvo, editavel) {
         dpOcorrencias(alvo, editavel)
       }
     })
+  }
+}
+
+function formDpRelatorioSeguranca (registro, aoSalvar) {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal">
+    <h3>${registro?.id ? 'Editar' : 'Novo'} relatório de segurança</h3>
+    <div class="form-grade">
+      <div class="campo"><label>Data</label><input type="date" id="drs-data" value="${registro?.data ?? hojeISO()}"></div>
+    </div>
+    <div class="campo" style="margin-top:10px;"><label>Descrição *</label><textarea id="drs-desc" style="min-height:90px;" placeholder="sobre o que é esse relatório">${esc(registro?.descricao ?? '')}</textarea></div>
+    <div class="campo" style="margin-top:10px;" id="drs-anexos-atuais"></div>
+    <div class="campo" style="margin-top:6px;"><label>Anexar arquivo(s) / foto(s)</label>
+      <input type="file" id="drs-arquivo" accept="image/*,application/pdf,.doc,.docx" multiple>
+      <span class="texto-dim2" style="font-size:10.5px;">pode selecionar mais de um</span></div>
+    <div class="acoes" style="margin-top:14px;"><button class="btn" id="drs-salvar">${icDp('salvar')}Salvar</button>
+      <button class="btn-secundario" id="drs-fechar">${icDp('fechar')}Fechar</button></div>
+    <div class="recado oculto" id="drs-recado"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const fechar = () => fundo.remove()
+  fundo.querySelector('#drs-fechar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+
+  let anexosAtuais = registro?.anexos ? [...registro.anexos] : []
+  const renderAnexosAtuais = () => {
+    const caixa = fundo.querySelector('#drs-anexos-atuais')
+    if (!anexosAtuais.length) { caixa.innerHTML = ''; return }
+    caixa.innerHTML = `<label>Anexos já salvos</label><div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:4px;">
+      ${anexosAtuais.map((a, i) => `<span class="chip" style="display:inline-flex;align-items:center;gap:6px;">
+        <button type="button" data-abrir-drs="${esc(a.caminho)}" style="background:none;border:none;color:inherit;cursor:pointer;padding:0;">${esc(a.nome)}</button>
+        <button type="button" data-remover-drs="${i}" style="background:none;border:none;color:var(--warn-text);cursor:pointer;padding:0;">✕</button>
+      </span>`).join('')}
+    </div>`
+    caixa.querySelectorAll('[data-abrir-drs]').forEach(b => { b.onclick = () => abrirArquivo(b.dataset.abrirDrs) })
+    caixa.querySelectorAll('[data-remover-drs]').forEach(b => {
+      b.onclick = async () => {
+        if (!confirm('Remover esse anexo?')) return
+        const i = Number(b.dataset.removerDrs)
+        const [removido] = anexosAtuais.splice(i, 1)
+        if (registro?.id) {
+          const { error } = await db.from('dp_relatorio_seguranca').update({ anexos: anexosAtuais }).eq('id', registro.id)
+          if (error) { alert('Não deu pra remover: ' + error.message); anexosAtuais.splice(i, 0, removido) }
+        }
+        renderAnexosAtuais()
+      }
+    })
+  }
+  renderAnexosAtuais()
+
+  fundo.querySelector('#drs-salvar').onclick = async () => {
+    const el = fundo.querySelector('#drs-recado')
+    const aviso = t => { el.textContent = t; el.classList.remove('oculto'); el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)' }
+    const descricao = fundo.querySelector('#drs-desc').value.trim()
+    if (!descricao) { aviso('Escreva a descrição.'); return }
+    const btn = fundo.querySelector('#drs-salvar'); btn.disabled = true; btn.textContent = 'Salvando...'
+    const corpo = { data: fundo.querySelector('#drs-data').value || hojeISO(), descricao }
+    let id = registro?.id
+    let error
+    if (id) { ({ error } = await db.from('dp_relatorio_seguranca').update(corpo).eq('id', id)) }
+    else {
+      const { data: novo, error: e2 } = await db.from('dp_relatorio_seguranca').insert({ ...corpo, criado_por: PERFIL.pessoaId }).select('id').single()
+      error = e2; id = novo?.id
+    }
+    if (error) { aviso(error.message); btn.disabled = false; btn.textContent = 'Salvar'; return }
+
+    const arquivos = [...fundo.querySelector('#drs-arquivo').files]
+    if (arquivos.length) {
+      try {
+        for (const arquivo of arquivos) {
+          const enviado = await enviarArquivo(arquivo, `dp-relatorio-seguranca/${id}`)
+          anexosAtuais.push(enviado)
+        }
+        const { error: e3 } = await db.from('dp_relatorio_seguranca').update({ anexos: anexosAtuais }).eq('id', id)
+        if (e3) throw new Error(e3.message)
+      } catch (e) { aviso('Relatório salvo, mas não deu pra enviar os anexos: ' + e.message); btn.disabled = false; btn.textContent = 'Salvar'; return }
+    }
+    btn.disabled = false; btn.textContent = 'Salvar'
+    fechar(); aoSalvar()
   }
 }
 
