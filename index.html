@@ -24033,6 +24033,150 @@ async function blocoDaOriginacao (alvo, leads, recarregar) {
   })
 }
 
+// ---------------------------------------------------------------
+// Desempenho comercial por vendedor — pedido da Amanda em 29/09: numa
+// tabela só, recebidos (leads atribuídos), contatados (com pelo menos
+// 1 ligação), orçamentos (lead_proposta) e pedidos por vendedor, mais
+// a conversão etapa a etapa do funil, os perdidos por fase e o gargalo
+// automático de cada vendedor (etapa onde ele mais trava). Só leitura,
+// não mexe em nada que a Gestão comercial já tinha — é uma seção nova.
+// Mensagem em tempo real / alerta de sem resposta / tempo de espera
+// real (o resto da lista dela) ficaram de fora por enquanto: dependem
+// de ligar o WhatsApp de cada vendedor no sistema, e ela pediu pra
+// deixar isso pra depois.
+// ---------------------------------------------------------------
+async function montarDesempenhoComercial (alvo, atribuidos) {
+  if (!alvo) return
+  alvo.innerHTML = `<p class="texto-dim2" style="padding:16px;">carregando desempenho comercial...</p>`
+
+  const [{ data: ligacoes, error: e1 }, { data: propostas, error: e2 }, { data: pedidos, error: e3 }, { data: historico, error: e4 }] =
+    await Promise.all([
+      db.from('lead_ligacao').select('lead_id, lead:lead_id!inner(vendedor_id)').not('lead.vendedor_id', 'is', null),
+      db.from('lead_proposta').select('lead_id, lead:lead_id!inner(vendedor_id)').not('lead.vendedor_id', 'is', null),
+      db.from('pedido').select('vendedor_id, valor_total, status').not('vendedor_id', 'is', null),
+      db.from('lead_historico').select('lead_id, etapa_de, etapa_para, criado_em, lead:lead_id!inner(vendedor_id)').not('lead.vendedor_id', 'is', null).order('criado_em')
+    ])
+  const erro = e1 || e2 || e3 || e4
+  if (faltaMigracao(erro) || erro) { alvo.innerHTML = `<p class="vazio">${esc(erro.message)}</p>`; return }
+
+  // ----- 1) painel consolidado por vendedor -----
+  const base = () => ({ recebidos: 0, contatados: new Set(), orcamentos: 0, pedidos: 0, valorPedidos: 0 })
+  const porVend = {}
+  const nomeVend = {}
+  atribuidos.forEach(l => {
+    nomeVend[l.vendedor_id] = l.vendedor?.nome ?? '—'
+    ;(porVend[l.vendedor_id] ||= base()).recebidos++
+  })
+  ;(ligacoes || []).forEach(g0 => {
+    const vid = g0.lead?.vendedor_id; if (!vid) return
+    ;(porVend[vid] ||= base()).contatados.add(g0.lead_id)
+  })
+  ;(propostas || []).forEach(p => {
+    const vid = p.lead?.vendedor_id; if (!vid) return
+    ;(porVend[vid] ||= base()).orcamentos++
+  })
+  ;(pedidos || []).forEach(p => {
+    if (!p.vendedor_id || p.status === 'CANCELADO') return
+    const g = (porVend[p.vendedor_id] ||= base())
+    g.pedidos++; g.valorPedidos += Number(p.valor_total || 0)
+  })
+
+  // ----- 4) gargalo automático por vendedor (etapa aberta com maior tempo médio parado) -----
+  const porVendEtapa = {}
+  atribuidos.filter(l => ETAPAS_LEAD_ABERTAS.includes(l.etapa)).forEach(l => {
+    const d = diasDesde(l.atualizado_em); if (d == null) return
+    const g = (porVendEtapa[l.vendedor_id] ||= {})
+    const e = (g[l.etapa] ||= { soma: 0, qtd: 0 })
+    e.soma += d; e.qtd++
+  })
+  const gargaloPorVend = {}
+  Object.entries(porVendEtapa).forEach(([vid, porEtapa]) => {
+    let pior = null
+    Object.entries(porEtapa).forEach(([etapa, v]) => {
+      const media = v.soma / v.qtd
+      if (v.qtd >= 2 && (!pior || media > pior.media)) pior = { etapa, media: Math.round(media), qtd: v.qtd }
+    })
+    if (pior) gargaloPorVend[vid] = pior
+  })
+
+  const linhasVend = Object.entries(porVend).map(([vid, g]) => ({
+    vid, nome: nomeVend[vid] || '—', recebidos: g.recebidos, contatados: g.contatados.size,
+    orcamentos: g.orcamentos, pedidos: g.pedidos, valorPedidos: g.valorPedidos,
+    taxaContato: g.recebidos ? Math.round(g.contatados.size / g.recebidos * 100) : null,
+    gargalo: gargaloPorVend[vid] || null
+  })).sort((a, b) => b.recebidos - a.recebidos)
+
+  // ----- 2) conversão por etapa (baseado no histórico de mudança de etapa,
+  // pra incluir também quem já foi perdido no caminho — não só quem tá
+  // parado numa etapa hoje) -----
+  const alcancou = {}
+  ETAPAS_LEAD.forEach(e => { alcancou[e] = new Set() })
+  atribuidos.forEach(l => { if (alcancou[l.etapa]) alcancou[l.etapa].add(l.id) })
+  ;(historico || []).forEach(h => {
+    if (alcancou[h.etapa_para]) alcancou[h.etapa_para].add(h.lead_id)
+    if (alcancou[h.etapa_de]) alcancou[h.etapa_de].add(h.lead_id)
+  })
+  const ORDEM_FUNIL = ['NOVO', 'CONTATO', 'QUALIFICADO', 'PROPOSTA', 'NEGOCIACAO', 'GANHO']
+  const conversaoEtapas = ORDEM_FUNIL.slice(1).map((etapa, i) => {
+    const anterior = ORDEM_FUNIL[i]
+    const baseCount = alcancou[anterior].size
+    const chegou = alcancou[etapa].size
+    return { rotulo: `${ROTULO_ETAPA_LEAD[anterior]} → ${ROTULO_ETAPA_LEAD[etapa]}`, valor: baseCount ? Math.round(chegou / baseCount * 100) : 0 }
+  })
+
+  // ----- 3) perdidos por fase (última etapa antes de virar PERDIDO) -----
+  const ultimaAntesDePerdido = {}
+  ;(historico || []).forEach(h => {
+    if (h.etapa_para !== 'PERDIDO') return
+    const atual = ultimaAntesDePerdido[h.lead_id]
+    if (!atual || h.criado_em > atual.criado_em) ultimaAntesDePerdido[h.lead_id] = { etapa_de: h.etapa_de, criado_em: h.criado_em }
+  })
+  const perdidosPorFase = {}
+  atribuidos.filter(l => l.etapa === 'PERDIDO').forEach(l => {
+    const fase = ultimaAntesDePerdido[l.id]?.etapa_de || 'não registrado'
+    perdidosPorFase[fase] = (perdidosPorFase[fase] || 0) + 1
+  })
+  const rankingPerdidosFase = Object.entries(perdidosPorFase)
+    .map(([fase, total]) => ({ rotulo: ROTULO_ETAPA_LEAD[fase] || fase, valor: total }))
+    .sort((a, b) => b.valor - a.valor)
+
+  alvo.innerHTML = `
+    <p class="texto-dim2" style="font-size:11.5px;margin:-4px 0 12px;">
+      Recebidos = leads atribuídos a ele. Contatados = têm pelo menos 1 ligação registrada. Orçamentos = propostas enviadas ao lead. Pedidos = pedidos emitidos (cancelados não contam). Gargalo = etapa aberta onde os leads dele mais ficam parados.</p>
+    <div class="panel" style="padding:0;margin-bottom:18px;">
+      <div class="tabela-scroll" style="max-height:none;">
+        <table><thead><tr>
+          <th>Vendedor</th><th class="num">Recebidos</th><th class="num">Contatados</th><th class="num">% contato</th>
+          <th class="num">Orçamentos</th><th class="num">Pedidos</th><th class="num">Valor em pedidos</th>
+          <th>Gargalo</th>
+        </tr></thead><tbody>
+          ${linhasVend.map(v => `<tr>
+            <td>${esc(v.nome)}</td>
+            <td class="num">${v.recebidos}</td>
+            <td class="num">${v.contatados}</td>
+            <td class="num">${v.taxaContato != null ? `<span class="${v.taxaContato >= 70 ? 'badge-bom' : v.taxaContato >= 40 ? 'chip' : 'badge-alerta'}">${v.taxaContato}%</span>` : '—'}</td>
+            <td class="num">${v.orcamentos || '—'}</td>
+            <td class="num">${v.pedidos || '—'}</td>
+            <td class="num">${v.valorPedidos ? 'R$ ' + fmtNum(v.valorPedidos) : '—'}</td>
+            <td>${v.gargalo ? `<span class="badge-alerta" style="font-size:10.5px;" title="${v.gargalo.qtd} lead(s) nessa etapa, média de ${v.gargalo.media} dias parado">${esc(ROTULO_ETAPA_LEAD[v.gargalo.etapa] ?? v.gargalo.etapa)}</span>` : '<span class="texto-dim2">—</span>'}</td>
+          </tr>`).join('') || `<tr><td colspan="8" class="vazio">Nenhum vendedor com lead atribuído ainda.</td></tr>`}
+        </tbody></table>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;" class="grade-painel-comb">
+      <div class="panel" style="padding:18px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Conversão etapa a etapa</h3>
+        ${barrasHorizontais(conversaoEtapas, { unidade: '%' })}
+        <p class="texto-dim2" style="font-size:10.5px;margin-top:8px;">Baseado no histórico de troca de etapa — inclui quem já foi perdido no meio do caminho, não só quem tá parado numa etapa hoje.</p>
+      </div>
+      <div class="panel" style="padding:18px;">
+        <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 12px;">Perdidos por fase do funil</h3>
+        ${rankingPerdidosFase.length ? barrasHorizontais(rankingPerdidosFase, { unidade: 'leads' }) : '<p class="vazio">Nenhuma perda registrada ainda.</p>'}
+      </div>
+    </div>`
+}
+
 async function crmGestaoTab (alvo, editavel) {
   const { data, error } = await db.from('lead').select(selLead)
     .eq('arquivado', false).eq('inativo_temporario', false)
@@ -24180,6 +24324,11 @@ async function crmGestaoTab (alvo, editavel) {
     </div>
 
     <div class="cabeca-secao" style="margin-top:20px;">
+      <h3 style="font-family:var(--serif);font-size:16px;">Desempenho comercial por vendedor</h3>
+    </div>
+    <div id="cg-desempenho" style="margin-bottom:6px;"><p class="texto-dim2" style="padding:16px;">carregando...</p></div>
+
+    <div class="cabeca-secao" style="margin-top:20px;">
       <h3 style="font-family:var(--serif);font-size:16px;">Atividade da equipe — funil e agenda</h3>
     </div>
     <p class="texto-dim2" style="font-size:11.5px;margin:-4px 0 12px;">
@@ -24224,6 +24373,7 @@ async function crmGestaoTab (alvo, editavel) {
   $('#cg-indicadores-parado').appendChild(montarIndicadoresFunilParado(atribuidos))
   ligarBuscaFunilGestao()
   carregarAtividadeEquipe(atribuidos)
+  montarDesempenhoComercial($('#cg-desempenho'), atribuidos)
 
   const painelHistorico = $('#cg-historico-painel')
   $('#cg-toggle-historico').onclick = () => {
