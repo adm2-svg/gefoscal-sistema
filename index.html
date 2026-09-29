@@ -25554,68 +25554,74 @@ async function tecAbrirFicha (id) {
 // que o resto do sistema já usa nos relatórios (mesma lib, mesmo padrão
 // de exportarRelatorioPDF) — não lê nada que a ficha já não tivesse
 // carregado, então não bate no banco de novo.
+// Relatório do cliente — usa o mesmo molde .doc/documentoPDF de todo
+// documento imprimível do sistema (cabeçalho com a logo da Gefoscal,
+// mesma tipografia/cores dos outros PDFs), pra poder mostrar pro
+// cliente. Antes saía num PDF à parte via jsPDF, sem logo e sem esse
+// padrão visual — os dados mostrados continuam os mesmos (talhões,
+// aplicações, visitas, resultados, ocorrências, demandas).
 function tecGerarRelatorioPDF (c, { ts, aps, vis, res, ocs, dms }) {
-  const { jsPDF } = window.jspdf || {}
-  if (!jsPDF) { alert('O gerador de PDF não carregou. Recarregue a página e tente de novo.'); return }
-  const doc = new jsPDF({ unit: 'mm', format: 'a4' })
-  let y = 16
-  const garantirEspaco = () => { if (y > 265) { doc.addPage(); y = 16 } }
-  const secao = (titulo, cabecalho, linhas) => {
-    if (!linhas.length) return
-    garantirEspaco()
-    doc.setFontSize(11); doc.setTextColor(0); doc.text(titulo, 14, y); y += 2
-    doc.autoTable({ startY: y, head: [cabecalho], body: linhas, styles: { fontSize: 8.5 }, headStyles: { fillColor: [90, 60, 40] } })
-    y = doc.lastAutoTable.finalY + 8
-  }
+  const tabela = (cabecalho, linhas, vazio) => !linhas.length
+    ? `<p style="padding:12px;color:#6d7c72;">${esc(vazio)}</p>`
+    : `<table style="width:100%;border-collapse:collapse;">
+        <thead><tr>${cabecalho.map(h => `<th style="text-align:left;padding:6px;">${esc(h)}</th>`).join('')}</tr></thead>
+        <tbody>${linhas.map(ln => `<tr>${ln.map(v => `<td style="padding:6px;">${v}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table>`
 
-  doc.setFontSize(15)
-  doc.text(`CRM Técnico — ${c.nome}`, 14, y)
-  y += 6
-  doc.setFontSize(9); doc.setTextColor(110)
-  doc.text(`${c.codigo || ''}  ·  ${c.municipio || '—'}  ·  rota ${c.rota || '—'}  ·  gerado em ${new Date().toLocaleString('pt-BR')}`, 14, y)
-  doc.setTextColor(0)
-  y += 8
+  const fase = TEC_FASES.find(x => x.id === c.fase)
 
-  doc.autoTable({
-    startY: y, theme: 'plain', styles: { fontSize: 9 },
-    body: [
-      ['Fase', TEC_FASES.find(x => x.id === c.fase)?.nome || c.fase || '—'],
-      ['Decisor', c.decisor || '—'],
-      ['Área total', c.area_total_ha ? tecNHa(c.area_total_ha) + ' ha' : '—'],
-      ['Última visita', c.ultima_visita ? fmtData(c.ultima_visita) : '—']
-    ]
+  const corpo = `
+    ${docBloco('Identificação', docLinha('Código', c.codigo) + docLinha('Município', c.municipio) +
+      docLinha('Rota', c.rota) + docLinha('Fase', fase?.nome || c.fase) + docLinha('Decisor', c.decisor) +
+      docLinha('Área total', c.area_total_ha ? tecNHa(c.area_total_ha) + ' ha' : '') +
+      docLinha('Última visita', c.ultima_visita ? fmtData(c.ultima_visita) : ''))}
+
+    ${docBloco('Talhões', tabela(['Talhão', 'Área (ha)', 'Cultura'],
+      ts.map(t => [esc(t.nome), t.area_ha ? fmtNum(t.area_ha) : '—', esc(t.cultura || '—')]),
+      'Nenhum talhão cadastrado ainda.'))}
+
+    ${docBloco('Aplicações', tabela(['Talhão', 'Safra', 'Produtos', 'Dose', 'Data', 'Testemunha'],
+      aps.map(a => { const t = tecTalhao(a.talhao_id)
+        return [esc(t ? t.nome : '—'), esc(a.safra || '—'), esc((a.produtos || []).join(' + ') || '—'),
+          a.dose_t_ha ? tecNT(a.dose_t_ha) + ' t/ha' : '—', fmtData(a.data_aplicacao), a.tem_testemunha ? 'sim' : 'não'] }),
+      'Nenhuma aplicação registrada ainda.'))}
+
+    ${docBloco('Visitas de acompanhamento', tabela(['Data', 'Estágio', 'Observação / próximo passo'],
+      vis.map(v => [fmtData(v.data), esc(v.estagio_cultura || '—'),
+        esc([v.observacao, v.dor_identificada ? 'Dor: ' + v.dor_identificada : '', v.proximo_passo ? 'Próximo: ' + v.proximo_passo : '']
+          .filter(Boolean).join(' — ') || '—')]),
+      'Nenhuma visita registrada ainda.'))}
+
+    ${docBloco('Resultados', tabela(['Talhão', 'Obtida', 'Testemunha', 'Ganho', 'Colheita'],
+      res.map(r => { const a = TEC.aplicacoes.find(x => x.id === r.aplicacao_id); const t = a ? tecTalhao(a.talhao_id) : null; const g = tecGanho(r)
+        return [esc(t ? t.nome : '—'), esc(`${r.produtividade_obtida ?? '—'} ${r.unidade || ''}`),
+          esc(r.produtividade_testemunha ? `${r.produtividade_testemunha} ${r.unidade || ''}` : 'sem testemunha'),
+          g == null ? '—' : tecNP(g), fmtData(r.data_colheita)] }),
+      'Nenhum resultado lançado ainda.'))}
+
+    ${docBloco('Ocorrências', tabela(['Status', 'Tipo', 'Descrição', 'Dias'],
+      ocs.map(o => [esc(TEC_STATUS_OCO.find(s => s.id === o.status)?.nome || o.status), esc(o.tipo || '—'), esc(o.descricao || '—'),
+        o.status === 'resolvida' ? 'fechada' : (tecDiasAberta(o) + 'd')]),
+      'Nenhuma ocorrência.'))}
+
+    ${docBloco('Demandas', tabela(['Status', 'Tipo', 'Volume', 'Janela'],
+      dms.map(d => [esc(TEC_STATUS_DEM.find(s => s.id === d.status)?.nome || d.status), esc(TEC_TIPOS_DEM.find(t => t.id === d.tipo)?.nome || d.tipo),
+        d.volume_estimado_t ? tecNT(d.volume_estimado_t) + ' t' : '—', esc(d.janela_estimada || '—')]),
+      'Nenhuma demanda gerada ainda.'))}`
+
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = documentoPDF({
+    titulo: 'Relatório Técnico',
+    subtitulo: `${c.nome}${c.codigo ? ' · ' + c.codigo : ''}`,
+    corpo,
+    acoes: `<button class="btn" id="tec-rel-imprimir">Baixar / imprimir PDF</button>
+            <button class="btn-secundario" id="tec-rel-fechar">Fechar</button>`
   })
-  y = doc.lastAutoTable.finalY + 8
-
-  secao('Talhões', ['Talhão', 'Área (ha)', 'Cultura'],
-    ts.map(t => [t.nome, t.area_ha ? fmtNum(t.area_ha) : '—', t.cultura || '—']))
-
-  secao('Aplicações', ['Talhão', 'Safra', 'Produtos', 'Dose', 'Data', 'Testemunha'],
-    aps.map(a => { const t = tecTalhao(a.talhao_id)
-      return [t ? t.nome : '—', a.safra || '—', (a.produtos || []).join(' + ') || '—',
-        a.dose_t_ha ? tecNT(a.dose_t_ha) + ' t/ha' : '—', fmtData(a.data_aplicacao), a.tem_testemunha ? 'sim' : 'não'] }))
-
-  secao('Visitas', ['Data', 'Estágio', 'Observação / próximo passo'],
-    vis.map(v => [fmtData(v.data), v.estagio_cultura || '—',
-      [v.observacao, v.dor_identificada ? 'Dor: ' + v.dor_identificada : '', v.proximo_passo ? 'Próximo: ' + v.proximo_passo : '']
-        .filter(Boolean).join(' — ') || '—']))
-
-  secao('Resultados', ['Talhão', 'Obtida', 'Testemunha', 'Ganho', 'Colheita'],
-    res.map(r => { const a = TEC.aplicacoes.find(x => x.id === r.aplicacao_id); const t = a ? tecTalhao(a.talhao_id) : null; const g = tecGanho(r)
-      return [t ? t.nome : '—', `${r.produtividade_obtida ?? '—'} ${r.unidade || ''}`,
-        r.produtividade_testemunha ? `${r.produtividade_testemunha} ${r.unidade || ''}` : 'sem testemunha',
-        g == null ? '—' : tecNP(g), fmtData(r.data_colheita)] }))
-
-  secao('Ocorrências', ['Status', 'Tipo', 'Descrição', 'Dias'],
-    ocs.map(o => [TEC_STATUS_OCO.find(s => s.id === o.status)?.nome || o.status, o.tipo || '—', o.descricao || '—',
-      o.status === 'resolvida' ? 'fechada' : (tecDiasAberta(o) + 'd')]))
-
-  secao('Demandas', ['Status', 'Tipo', 'Volume', 'Janela'],
-    dms.map(d => [TEC_STATUS_DEM.find(s => s.id === d.status)?.nome || d.status, TEC_TIPOS_DEM.find(t => t.id === d.tipo)?.nome || d.tipo,
-      d.volume_estimado_t ? tecNT(d.volume_estimado_t) + ' t' : '—', d.janela_estimada || '—']))
-
-  const arquivo = (c.nome || 'cliente').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-')
-  doc.save(`crm-tecnico-${arquivo}-${hojeISO()}.pdf`)
+  document.body.appendChild(fundo)
+  fundo.querySelector('#tec-rel-fechar').onclick = () => fundo.remove()
+  fundo.querySelector('#tec-rel-imprimir').onclick = () => window.print()
+  fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
 }
 
 // ----- Especialista Técnica dentro da ficha -----
