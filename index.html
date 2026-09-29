@@ -47215,12 +47215,13 @@ const AGENTE_ESPECIALISTA_RH_ID = '469c5bfc-1f69-4bad-9756-a1cc6a587bf9'
 let RH_ESPEC_HISTORICO = []
 
 async function coletarContextoRH () {
-  const [resumoAgil, { data: cicloAtivo }, { data: pdiTodos }, { data: vagas }, { data: perfisDisc }] = await Promise.all([
+  const [resumoAgil, { data: cicloAtivo }, { data: pdiTodos }, { data: vagas }, { data: perfisDisc }, { data: perfisMotivador }] = await Promise.all([
     resumoAgilidadeIndividual(),
     db.from('avaliacao_360_ciclo').select('id,nome,status').eq('status', 'ABERTO').maybeSingle(),
     db.from('plano_desenvolvimento').select('status'),
     db.from('vaga').select('cargo,etapa,tipo_contratacao').neq('status', 'CANCELADA'),
-    db.from('rh_perfil_disc').select('nome,cargo_no_laudo,primario,secundario,disc_natural,disc_adaptado').order('nome')
+    db.from('rh_perfil_disc').select('nome,cargo_no_laudo,primario,secundario,disc_natural,disc_adaptado').order('nome'),
+    db.from('rh_perfil_motivador').select('nome,cargo_no_laudo,scores').order('nome')
   ])
 
   const pdiAtivos = (pdiTodos || []).filter(p => p.status === 'EM_ANDAMENTO').length
@@ -47269,6 +47270,27 @@ async function coletarContextoRH () {
       `- "Adapta\u00e7\u00e3o forte" \u00e9 a dist\u00e2ncia entre como a pessoa \u00e9 e como ela acha que precisa ` +
       `ser no trabalho de hoje. Diferen\u00e7a grande costuma significar desgaste, e vale investigar ` +
       `com a pessoa antes de concluir qualquer coisa.\n`
+  }
+
+  // Motivadores: o "por quê" que o DISC não alcança. Mesmo cuidado do
+  // bloco de DISC acima — mostra o que move e o que drena cada pessoa,
+  // mas trava explicitamente o uso pra decisão de promoção/aumento/desligamento.
+  if ((perfisMotivador || []).length) {
+    texto += `\nMOTIVADORES DA EQUIPE (${perfisMotivador.length} pessoa(s) com laudo):\n`
+    for (const m of perfisMotivador) {
+      const scores = m.scores || {}
+      const nota = f => Number(scores[f] ?? 0)
+      const ordem = MOTIV_LISTA.slice().sort((a, b) => nota(b) - nota(a))
+      const topo = ordem.slice(0, 3)
+      const fundo = ordem[ordem.length - 1]
+      texto += `- ${m.nome}${m.cargo_no_laudo ? ` (${m.cargo_no_laudo})` : ''}: ` +
+        `move mais por ${topo.map(f => MOTIV_FATOR[f]?.nome ?? f).join(', ')} | ` +
+        `menos por ${MOTIV_FATOR[fundo]?.nome ?? fundo}\n`
+    }
+    texto += `- Como usar: Motivadores diz O QUE energiza ou drena a pessoa no trabalho — ajuda a ` +
+      `montar tarefa, argumentar um pedido, ou entender um desgaste. Não serve pra ranquear gente, ` +
+      `nem pra decidir quem promove, quem ganha aumento ou quem desliga — se perguntarem isso, diga ` +
+      `que Motivadores não responde essa pergunta.\n`
   }
 
   texto += await blocoDiscComercialRH()
