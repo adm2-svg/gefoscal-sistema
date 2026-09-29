@@ -13356,7 +13356,8 @@ async function expedPainel (alvo) {
       quantidade_t, valor_nf, numero_nf, status, data_carregamento, empresa_id,
       produto:produto_id ( nome, unidade ), cliente:cliente_id ( razao_social ),
       empresa:empresa_id ( nome, regime_tributario )
-    `).gte('data_carregamento', $('#ep-de').value).lte('data_carregamento', $('#ep-ate').value).limit(2000)
+    `).gte('data_carregamento', $('#ep-de').value).lte('data_carregamento', $('#ep-ate').value)
+      .neq('status', 'CANCELADO').limit(2000)
     if (error) { $('#ep-conteudo').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
     const lista = data || []
 
@@ -62081,7 +62082,7 @@ async function relFaturamento (alvo) {
       let q = db.from('pedido').select(`
         id, numero, quantidade_t, valor_total, status, situacao_pagamento, data_pedido, vencimento,
         cliente:cliente_id ( razao_social, nome_fantasia ), vendedor:vendedor_id ( nome ), produto:produto_id ( nome )
-      `).gte('data_pedido', deVal).lte('data_pedido', ateVal).order('data_pedido', { ascending: false }).limit(3000)
+      `).gte('data_pedido', deVal).lte('data_pedido', ateVal).neq('status', 'CANCELADO').order('data_pedido', { ascending: false }).limit(3000)
       if (situacaoVal) q = q.eq('situacao_pagamento', situacaoVal)
       const { data, error } = await q
       if (error) { $('#rf-resultado').innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
@@ -62215,7 +62216,7 @@ async function relFaturamento (alvo) {
         let q = db.from('pedido').select(`
           id, numero, quantidade_t, valor_total, status, situacao_pagamento, data_pedido,
           cliente:cliente_id ( razao_social, nome_fantasia ), vendedor:vendedor_id ( nome ), produto:produto_id ( nome )
-        `).gte('data_pedido', deVal).lte('data_pedido', ateVal).order('data_pedido', { ascending: false }).limit(3000)
+        `).gte('data_pedido', deVal).lte('data_pedido', ateVal).neq('status', 'CANCELADO').order('data_pedido', { ascending: false }).limit(3000)
         const { data: pedidos, error: eP } = await q
         if (eP) { $('#rf-resultado').innerHTML = `<p class="vazio">${esc(eP.message)}</p>`; return }
 
