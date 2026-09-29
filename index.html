@@ -25429,6 +25429,7 @@ async function tecAbrirFicha (id) {
       <button class="btn-secundario" id="tec-nova-dem">Qualificar demanda</button>
       <button class="btn-secundario" id="tec-editar-cli">Editar cliente</button>
       <button class="btn-secundario" id="tec-novo-contato">+ Contato</button>
+      <button class="btn-secundario" id="tec-relatorio-pdf" style="margin-left:auto;">📄 Gerar relatório</button>
     </div>
 
     <div class="secao"><div class="cabeca-secao"><h3 style="font-size:14px;">1 · Identificação</h3></div>
@@ -25445,7 +25446,11 @@ async function tecAbrirFicha (id) {
         : '<p class="texto-dim2" style="margin-top:8px;">Nenhum contato cadastrado.</p>'}
     </div>
 
-    <div class="secao"><div class="cabeca-secao"><h3 style="font-size:14px;">2 · Talhões e solo</h3><button class="btn-secundario mini" id="tec-novo-talhao">+ talhão</button></div>
+    <div class="secao"><div class="cabeca-secao"><h3 style="font-size:14px;">2 · Talhões e solo</h3>
+      <span style="display:flex;gap:6px;">
+        <button class="btn-secundario mini" id="tec-mapa-talhao">🛰️ Mapa</button>
+        <button class="btn-secundario mini" id="tec-novo-talhao">+ talhão</button>
+      </span></div>
       <div id="tec-lista-talhoes"></div>
     </div>
 
@@ -25526,12 +25531,90 @@ async function tecAbrirFicha (id) {
   fundo.querySelector('#tec-editar-cli').onclick = () => { fundo.remove(); tecFormCliente(c) }
   fundo.querySelector('#tec-novo-contato').onclick = () => { fundo.remove(); tecFormContato(id) }
   fundo.querySelector('#tec-novo-talhao').onclick = () => { fundo.remove(); tecFormTalhao(null, id) }
+  fundo.querySelector('#tec-mapa-talhao').onclick = () => {
+    fundo.remove()
+    abrirMapaTecnico(c, editavel, async () => { await tecRecarregar(); tecAbrirFicha(id) })
+  }
+  fundo.querySelector('#tec-relatorio-pdf').onclick = () => tecGerarRelatorioPDF(c, { ts, aps, vis, res, ocs, dms })
   fundo.querySelector('#tec-novo-doc').onclick = () => { fundo.remove(); tecFormDoc(null, id) }
   fundo.querySelector('#tec-excluir-cli').onclick = () => tecExcluirCliente(id, fundo)
   fundo.querySelectorAll('[data-virar-caso]').forEach(el => { el.onclick = () => tecVirarCaso(el.dataset.virarCaso, fundo, id) })
   fundo.querySelectorAll('[data-abrir-oco2]').forEach(el => { el.onclick = () => { fundo.remove(); tecFormOcorrencia(TEC.ocorrencias.find(o => o.id === el.dataset.abrirOco2)) } })
   fundo.querySelectorAll('[data-abrir-dem]').forEach(el => { el.onclick = () => { fundo.remove(); tecFormDemanda(TEC.demandas.find(d => d.id === el.dataset.abrirDem)) } })
   fundo.querySelectorAll('[data-abrir-doc]').forEach(el => { el.onclick = () => { fundo.remove(); tecFormDoc(TEC.docs.find(d => d.id === el.dataset.abrirDoc), id) } })
+}
+
+// ----- Relatório em PDF do cliente (dossiê de acompanhamento) -----
+//
+// Junta o que já está lançado pro cliente — identificação, talhões,
+// aplicações, visitas, resultados e ocorrências — num PDF só. Pedido da
+// Amanda (29/09): "gerar um PDF... do que foi feito", pra levar pro
+// cliente ou anexar num relatório maior. Reaproveita o jsPDF + autotable
+// que o resto do sistema já usa nos relatórios (mesma lib, mesmo padrão
+// de exportarRelatorioPDF) — não lê nada que a ficha já não tivesse
+// carregado, então não bate no banco de novo.
+function tecGerarRelatorioPDF (c, { ts, aps, vis, res, ocs, dms }) {
+  const { jsPDF } = window.jspdf || {}
+  if (!jsPDF) { alert('O gerador de PDF não carregou. Recarregue a página e tente de novo.'); return }
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' })
+  let y = 16
+  const garantirEspaco = () => { if (y > 265) { doc.addPage(); y = 16 } }
+  const secao = (titulo, cabecalho, linhas) => {
+    if (!linhas.length) return
+    garantirEspaco()
+    doc.setFontSize(11); doc.setTextColor(0); doc.text(titulo, 14, y); y += 2
+    doc.autoTable({ startY: y, head: [cabecalho], body: linhas, styles: { fontSize: 8.5 }, headStyles: { fillColor: [90, 60, 40] } })
+    y = doc.lastAutoTable.finalY + 8
+  }
+
+  doc.setFontSize(15)
+  doc.text(`CRM Técnico — ${c.nome}`, 14, y)
+  y += 6
+  doc.setFontSize(9); doc.setTextColor(110)
+  doc.text(`${c.codigo || ''}  ·  ${c.municipio || '—'}  ·  rota ${c.rota || '—'}  ·  gerado em ${new Date().toLocaleString('pt-BR')}`, 14, y)
+  doc.setTextColor(0)
+  y += 8
+
+  doc.autoTable({
+    startY: y, theme: 'plain', styles: { fontSize: 9 },
+    body: [
+      ['Fase', TEC_FASES.find(x => x.id === c.fase)?.nome || c.fase || '—'],
+      ['Decisor', c.decisor || '—'],
+      ['Área total', c.area_total_ha ? tecNHa(c.area_total_ha) + ' ha' : '—'],
+      ['Última visita', c.ultima_visita ? fmtData(c.ultima_visita) : '—']
+    ]
+  })
+  y = doc.lastAutoTable.finalY + 8
+
+  secao('Talhões', ['Talhão', 'Área (ha)', 'Cultura'],
+    ts.map(t => [t.nome, t.area_ha ? fmtNum(t.area_ha) : '—', t.cultura || '—']))
+
+  secao('Aplicações', ['Talhão', 'Safra', 'Produtos', 'Dose', 'Data', 'Testemunha'],
+    aps.map(a => { const t = tecTalhao(a.talhao_id)
+      return [t ? t.nome : '—', a.safra || '—', (a.produtos || []).join(' + ') || '—',
+        a.dose_t_ha ? tecNT(a.dose_t_ha) + ' t/ha' : '—', fmtData(a.data_aplicacao), a.tem_testemunha ? 'sim' : 'não'] }))
+
+  secao('Visitas', ['Data', 'Estágio', 'Observação / próximo passo'],
+    vis.map(v => [fmtData(v.data), v.estagio_cultura || '—',
+      [v.observacao, v.dor_identificada ? 'Dor: ' + v.dor_identificada : '', v.proximo_passo ? 'Próximo: ' + v.proximo_passo : '']
+        .filter(Boolean).join(' — ') || '—']))
+
+  secao('Resultados', ['Talhão', 'Obtida', 'Testemunha', 'Ganho', 'Colheita'],
+    res.map(r => { const a = TEC.aplicacoes.find(x => x.id === r.aplicacao_id); const t = a ? tecTalhao(a.talhao_id) : null; const g = tecGanho(r)
+      return [t ? t.nome : '—', `${r.produtividade_obtida ?? '—'} ${r.unidade || ''}`,
+        r.produtividade_testemunha ? `${r.produtividade_testemunha} ${r.unidade || ''}` : 'sem testemunha',
+        g == null ? '—' : tecNP(g), fmtData(r.data_colheita)] }))
+
+  secao('Ocorrências', ['Status', 'Tipo', 'Descrição', 'Dias'],
+    ocs.map(o => [TEC_STATUS_OCO.find(s => s.id === o.status)?.nome || o.status, o.tipo || '—', o.descricao || '—',
+      o.status === 'resolvida' ? 'fechada' : (tecDiasAberta(o) + 'd')]))
+
+  secao('Demandas', ['Status', 'Tipo', 'Volume', 'Janela'],
+    dms.map(d => [TEC_STATUS_DEM.find(s => s.id === d.status)?.nome || d.status, TEC_TIPOS_DEM.find(t => t.id === d.tipo)?.nome || d.tipo,
+      d.volume_estimado_t ? tecNT(d.volume_estimado_t) + ' t' : '—', d.janela_estimada || '—']))
+
+  const arquivo = (c.nome || 'cliente').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-')
+  doc.save(`crm-tecnico-${arquivo}-${hojeISO()}.pdf`)
 }
 
 // ----- Formulário: Cliente -----
@@ -25642,6 +25725,353 @@ function tecFormContato (cid) {
   }
 }
 
+// ----- Mapa e talhões (desenho) -----
+//
+// Mesma tela de satélite + desenho de polígono que já existe no CRM
+// Comercial (abrirMapaFazenda, pra lead_fazenda/lead_talhao) — pedido da
+// Amanda (29/09) pro CRM Técnico. Reaproveita 100% da lógica de mapa
+// (Leaflet, cálculo de área/perímetro, busca de endereço, desenho de
+// vértice arrastável) só trocando lead_fazenda/lead_talhao por
+// tecnico_cliente/tecnico_talhao. Nada do mapa já existente foi tocado.
+async function abrirMapaTecnico (cliente, editavel, aoFechar) {
+  if (!cliente) return
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal modal-largo">
+    <div class="cabeca-secao">
+      <h3>🛰️ ${esc(cliente.nome)}</h3>
+      <span class="texto-dim2" style="font-size:11.5px;">${esc(cliente.municipio || '')}</span>
+    </div>
+    <p class="texto-dim2">carregando o mapa...</p>
+  </div>`
+  document.body.appendChild(fundo)
+  let desenhando = false
+  fundo.onclick = e => {
+    if (e.target !== fundo) return
+    if (desenhando && !confirm('Você está no meio de um desenho. Fechar e perder?')) return
+    fundo.remove()
+    if (aoFechar) aoFechar()
+  }
+
+  let L
+  try { L = await carregarLeaflet() } catch (e) {
+    fundo.querySelector('.modal').innerHTML =
+      `<p class="vazio">${esc(e.message)}</p>
+       <div class="acoes"><button class="btn-secundario" id="mpt-fechar">Fechar</button></div>`
+    fundo.querySelector('#mpt-fechar').onclick = () => { fundo.remove(); if (aoFechar) aoFechar() }
+    return
+  }
+
+  const { data: talhoes0 } = await db.from('tecnico_talhao')
+    .select('id,nome,cultura,area_ha,poligono,cor').eq('cliente_id', cliente.id)
+    .order('criado_em')
+  let talhoes = talhoes0 || []
+
+  fundo.querySelector('.modal').innerHTML = `
+    <div class="cabeca-secao">
+      <h3>🛰️ ${esc(cliente.nome)}</h3>
+      <span class="texto-dim2" style="font-size:11.5px;">${esc(cliente.municipio || '')}</span>
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">
+      <input id="mpt-busca" style="flex:1;min-width:180px;"
+        placeholder="nome da fazenda, cidade, ou cole a coordenada (-12.93, -46.41)">
+      <button type="button" class="btn-secundario mini" id="mpt-buscar">Buscar</button>
+    </div>
+    <div id="mpt-achados" class="oculto" style="margin-bottom:8px;"></div>
+    <div id="mpt-mapa" style="height:min(56vh,460px);border-radius:10px;overflow:hidden;
+      border:1px solid var(--line2);background:var(--surface2);"></div>
+    <p class="texto-dim2" style="font-size:11px;margin:6px 0 10px;line-height:1.5;" id="mpt-dica">
+      ${editavel ? 'Clique no mapa pra marcar onde fica a sede. Pra desenhar um talhão, use o botão abaixo.'
+                 : 'Você está vendo o mapa, mas não tem permissão pra editar este cliente.'}</p>
+    ${editavel ? `<div class="acoes" style="margin-bottom:10px;">
+      <button type="button" class="btn-secundario mini" id="mpt-desenhar">✏️ Desenhar talhão</button>
+      <button type="button" class="btn-secundario mini oculto" id="mpt-fechar-talhao">✓ Fechar talhão</button>
+      <button type="button" class="btn-secundario mini oculto" id="mpt-desfazer">↶ Tirar último ponto</button>
+      <button type="button" class="btn-secundario mini oculto" id="mpt-cancelar-desenho">Cancelar desenho</button>
+      <span class="texto-dim2" style="font-size:11.5px;" id="mpt-medindo"></span>
+    </div>` : ''}
+    <div class="cabeca-secao" style="margin-bottom:4px;">
+      <h3 style="font-family:var(--serif);font-size:14px;">Talhões</h3>
+      <span class="texto-dim2" style="font-size:11.5px;" id="mpt-soma"></span>
+    </div>
+    <div id="mpt-talhoes" style="margin-bottom:10px;"></div>
+    <div class="recado oculto" id="mpt-erro"></div>
+    <div class="acoes" style="margin-top:6px;">
+      ${editavel ? `<button class="btn" id="mpt-salvar-local">Salvar local do cliente</button>` : ''}
+      <button class="btn-secundario" id="mpt-fechar">Fechar</button>
+    </div>`
+
+  const q = sel => fundo.querySelector(sel)
+  const avisar = t => {
+    const e = q('#mpt-erro')
+    e.textContent = t
+    e.classList.toggle('oculto', !t)
+  }
+  q('#mpt-fechar').onclick = () => {
+    if (desenhando && !confirm('Você está no meio de um desenho. Fechar e perder?')) return
+    fundo.remove()
+    if (aoFechar) aoFechar()
+  }
+
+  // ---------- o mapa ----------
+  const centro = cliente.lat != null
+    ? [Number(cliente.lat), Number(cliente.lng)]
+    : [-12.9256, -46.9375]   // Arraias/TO, que é de onde a empresa fala
+  const mapa = L.map(q('#mpt-mapa'), { zoomControl: true })
+    .setView(centro, cliente.zoom || (cliente.lat != null ? 15 : 6))
+
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    maxNativeZoom: 19, maxZoom: 21,
+    attribution: 'Imagem © Esri, Maxar, Earthstar Geographics'
+  }).addTo(mapa)
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
+    maxNativeZoom: 19, maxZoom: 21, opacity: 0.9
+  }).addTo(mapa)
+
+  setTimeout(() => mapa.invalidateSize(), 60)
+
+  let marcador = null
+  const porMarcador = ll => {
+    if (marcador) { marcador.setLatLng(ll); return }
+    marcador = L.marker(ll, { draggable: editavel }).addTo(mapa)
+    marcador.bindTooltip(cliente.nome, { permanent: false })
+  }
+  if (cliente.lat != null) porMarcador([Number(cliente.lat), Number(cliente.lng)])
+
+  // ---------- busca ----------
+  const buscar = async () => {
+    const termo = q('#mpt-busca').value.trim()
+    if (!termo) return
+    avisar('')
+    const coord = lerCoordenada(termo)
+    if (coord) {
+      mapa.setView([coord.lat, coord.lng], 16)
+      if (editavel) porMarcador([coord.lat, coord.lng])
+      q('#mpt-achados').classList.add('oculto')
+      return
+    }
+    const btn = q('#mpt-buscar')
+    btn.disabled = true; btn.textContent = 'buscando...'
+    try {
+      const url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&countrycodes=br&q='
+        + encodeURIComponent(termo)
+      const r = await fetch(url, { headers: { 'Accept-Language': 'pt-BR' } })
+      const achados = await r.json()
+      const cx = q('#mpt-achados')
+      if (!Array.isArray(achados) || !achados.length) {
+        cx.classList.remove('oculto')
+        cx.innerHTML = `<p class="texto-dim2" style="font-size:12px;margin:0;">
+          Não achei esse lugar. Fazenda muitas vezes não está no mapa público —
+          procure a cidade mais próxima e ande no mapa, ou cole a coordenada do GPS.</p>`
+      } else {
+        cx.classList.remove('oculto')
+        cx.innerHTML = achados.map((a, i) => `
+          <button type="button" class="btn-secundario mini" data-achado="${i}"
+            style="display:block;width:100%;text-align:left;margin-bottom:4px;white-space:normal;">
+            ${esc(a.display_name)}</button>`).join('')
+        cx.querySelectorAll('[data-achado]').forEach(b => {
+          b.onclick = () => {
+            const a = achados[Number(b.dataset.achado)]
+            const ll = [Number(a.lat), Number(a.lon)]
+            mapa.setView(ll, 15)
+            if (editavel) porMarcador(ll)
+            cliente.endereco = a.display_name
+            cx.classList.add('oculto')
+          }
+        })
+      }
+    } catch (e) {
+      avisar('A busca de endereço não respondeu. Você ainda pode andar no mapa ou colar a coordenada.')
+    }
+    btn.disabled = false; btn.textContent = 'Buscar'
+  }
+  q('#mpt-buscar').onclick = buscar
+  q('#mpt-busca').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); buscar() }
+  })
+
+  // ---------- talhões já salvos ----------
+  const camadas = {}
+  const desenharTalhoes = () => {
+    Object.values(camadas).forEach(c => mapa.removeLayer(c))
+    talhoes.forEach(t => {
+      const pts = (t.poligono || []).map(p => [p[1], p[0]])   // GeoJSON é [lng,lat]
+      if (pts.length < 3) return
+      const poly = L.polygon(pts, { color: t.cor || '#c8a11a', weight: 2, fillOpacity: 0.28 })
+      poly.bindTooltip(`${t.nome}${t.cultura ? ' · ' + t.cultura : ''} — ${fmtNum(t.area_ha)} ha`,
+        { sticky: true })
+      poly.addTo(mapa)
+      camadas[t.id] = poly
+    })
+
+    const soma = talhoes.reduce((s, t) => s + Number(t.area_ha || 0), 0)
+    q('#mpt-soma').textContent = talhoes.length
+      ? `${talhoes.length} talhão(ões) · ${fmtNum(soma)} ha desenhados`
+      : ''
+    q('#mpt-talhoes').innerHTML = talhoes.length ? talhoes.map(t => `
+      <div class="passo" style="align-items:center;gap:8px;">
+        <span style="width:12px;height:12px;border-radius:3px;flex:none;
+          background:${esc(t.cor || '#c8a11a')};"></span>
+        <span style="flex:1;min-width:0;"><b>${esc(t.nome)}</b>${t.cultura ? ' · ' + esc(t.cultura) : ''}
+          <span class="texto-dim2"> — ${fmtNum(t.area_ha)} ha</span></span>
+        <button type="button" class="btn-secundario mini" data-ir-talhao="${esc(t.id)}"
+          style="padding:2px 8px;">ver</button>
+        ${editavel ? `<button type="button" class="btn-secundario mini" data-apagar-talhao="${esc(t.id)}"
+          style="padding:2px 8px;">✕</button>` : ''}
+      </div>`).join('')
+      : `<p class="texto-dim2" style="font-size:12px;">Nenhum talhão desenhado ainda.</p>`
+
+    q('#mpt-talhoes').querySelectorAll('[data-ir-talhao]').forEach(b => {
+      b.onclick = () => {
+        const c = camadas[b.dataset.irTalhao]
+        if (c) mapa.fitBounds(c.getBounds(), { padding: [20, 20] })
+      }
+    })
+    q('#mpt-talhoes').querySelectorAll('[data-apagar-talhao]').forEach(b => {
+      b.onclick = async () => {
+        const t = talhoes.find(x => x.id === b.dataset.apagarTalhao)
+        if (!confirm(`Apagar o talhão "${t.nome}"?`)) return
+        const { error } = await db.from('tecnico_talhao').delete().eq('id', t.id)
+        if (error) { avisar(error.message); return }
+        if (camadas[t.id]) { mapa.removeLayer(camadas[t.id]); delete camadas[t.id] }
+        talhoes = talhoes.filter(x => x.id !== t.id)
+        desenharTalhoes()
+      }
+    })
+  }
+  desenharTalhoes()
+  if (talhoes.length && cliente.lat == null) {
+    const todos = L.featureGroup(Object.values(camadas))
+    if (Object.values(camadas).length) mapa.fitBounds(todos.getBounds(), { padding: [20, 20] })
+  }
+
+  if (!editavel) return
+
+  // ---------- desenhar ----------
+  let pontos = []
+  let linha = null
+  let bolinhas = []
+
+  const medir = () => {
+    const el = q('#mpt-medindo')
+    if (pontos.length < 3) {
+      el.textContent = pontos.length
+        ? `${pontos.length} ponto(s) — precisa de 3 pra fechar`
+        : 'Clique no mapa pra marcar o primeiro ponto.'
+      return
+    }
+    el.textContent = `${fmtNum(areaHaDoPoligono(pontos))} ha · ${fmtNum(perimetroKm(pontos), 2)} km de perímetro`
+  }
+
+  const redesenhar = () => {
+    if (linha) mapa.removeLayer(linha)
+    linha = null
+    if (pontos.length >= 2) {
+      linha = pontos.length >= 3
+        ? L.polygon(pontos.map(p => [p.lat, p.lng]),
+            { color: '#fff', weight: 2, dashArray: '5,5', fillOpacity: 0.18 })
+        : L.polyline(pontos.map(p => [p.lat, p.lng]), { color: '#fff', weight: 2, dashArray: '5,5' })
+      linha.addTo(mapa)
+    }
+    medir()
+  }
+
+  const limparDesenho = () => {
+    bolinhas.forEach(b => mapa.removeLayer(b))
+    bolinhas = []
+    if (linha) mapa.removeLayer(linha)
+    linha = null
+    pontos = []
+  }
+
+  const modoDesenho = ligado => {
+    desenhando = ligado
+    q('#mpt-desenhar').classList.toggle('oculto', ligado)
+    q('#mpt-fechar-talhao').classList.toggle('oculto', !ligado)
+    q('#mpt-desfazer').classList.toggle('oculto', !ligado)
+    q('#mpt-cancelar-desenho').classList.toggle('oculto', !ligado)
+    q('#mpt-dica').textContent = ligado
+      ? 'Clique em volta do talhão, ponto por ponto. Dá pra arrastar cada bolinha pra ajustar.'
+      : 'Clique no mapa pra marcar onde fica a sede. Pra desenhar um talhão, use o botão abaixo.'
+    q('#mpt-medindo').textContent = ''
+    if (!ligado) limparDesenho()
+    else medir()
+  }
+
+  const ICONE_VERTICE_TEC = L.divIcon({
+    className: '',
+    html: '<div style="width:16px;height:16px;border-radius:50%;background:#c8a11a;' +
+          'border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.6);"></div>',
+    iconSize: [16, 16], iconAnchor: [8, 8]
+  })
+  const porPonto = ll => {
+    const i = pontos.length
+    pontos.push({ lat: ll.lat, lng: ll.lng })
+    const b = L.marker([ll.lat, ll.lng], {
+      icon: ICONE_VERTICE_TEC, draggable: true, autoPan: true
+    }).addTo(mapa)
+    b.on('drag', ev => {
+      const p = ev.target.getLatLng()
+      pontos[i] = { lat: p.lat, lng: p.lng }
+      redesenhar()
+    })
+    b.on('click', ev => { if (ev.originalEvent) ev.originalEvent.stopPropagation() })
+    bolinhas.push(b)
+    redesenhar()
+  }
+
+  mapa.on('click', e => {
+    if (desenhando) { porPonto(e.latlng); return }
+    porMarcador(e.latlng)
+  })
+
+  q('#mpt-desenhar').onclick = () => modoDesenho(true)
+  q('#mpt-cancelar-desenho').onclick = () => modoDesenho(false)
+  q('#mpt-desfazer').onclick = () => {
+    if (!pontos.length) return
+    pontos.pop()
+    const b = bolinhas.pop()
+    if (b) mapa.removeLayer(b)
+    redesenhar()
+  }
+
+  q('#mpt-fechar-talhao').onclick = async () => {
+    if (pontos.length < 3) { avisar('Um talhão precisa de pelo menos 3 pontos.'); return }
+    const ha = areaHaDoPoligono(pontos)
+    const nome = prompt(`Nome do talhão (${fmtNum(ha)} ha):`, `Talhão ${talhoes.length + 1}`)
+    if (!nome) return
+    const cultura = prompt('Cultura (pode deixar em branco):', '') || null
+    avisar('')
+    const { data, error } = await db.from('tecnico_talhao').insert({
+      cliente_id: cliente.id, nome: nome.trim(), cultura: cultura ? cultura.trim() : null,
+      area_ha: Number(ha.toFixed(4)),
+      poligono: pontos.map(p => [Number(p.lng.toFixed(7)), Number(p.lat.toFixed(7))]),
+      cor: CORES_TALHAO[talhoes.length % CORES_TALHAO.length]
+    }).select('id,nome,cultura,area_ha,poligono,cor').single()
+    if (error) { avisar('Não consegui salvar o talhão: ' + error.message); return }
+    talhoes.push(data)
+    modoDesenho(false)
+    desenharTalhoes()
+  }
+
+  q('#mpt-salvar-local').onclick = async () => {
+    if (!marcador) { avisar('Clique no mapa pra marcar onde fica o cliente.'); return }
+    const btn = q('#mpt-salvar-local')
+    btn.disabled = true; btn.textContent = 'salvando...'
+    const ll = marcador.getLatLng()
+    const { error } = await db.from('tecnico_cliente').update({
+      lat: Number(ll.lat.toFixed(7)), lng: Number(ll.lng.toFixed(7)),
+      zoom: mapa.getZoom(), endereco: cliente.endereco || null
+    }).eq('id', cliente.id)
+    btn.disabled = false; btn.textContent = 'Salvar local do cliente'
+    if (error) { avisar(error.message); return }
+    cliente.lat = ll.lat; cliente.lng = ll.lng
+    avisar('')
+    btn.textContent = '✓ Local salvo'
+    setTimeout(() => { btn.textContent = 'Salvar local do cliente' }, 1800)
+  }
+}
+
 // ----- Formulário: Talhão -----
 function tecFormTalhao (t, cid) {
   const e = t || {}
@@ -25732,6 +26162,83 @@ function tecFormAnalise (a, tid, cid) {
   }
 }
 
+// ----- Preencher formulário por voz (visita / aplicação / ocorrência) -----
+//
+// Mesmo motor de gravação do relato de ligação do CRM Comercial
+// (abrirMicrofone/blobParaBase64/navegadorGrava, já definidos lá em cima
+// no módulo) — só que aqui não fecha ligação nem grava em nenhuma
+// tabela: a função de borda (tecnico-relato-resumir) só transcreve e
+// devolve os campos daquele formulário preenchidos. Quem confere e
+// clica em "salvar" é o técnico, exatamente como já era — a gravação
+// nunca insere nada sozinha. Pedido da Amanda (29/09): "grava dentro
+// do formulário".
+function tecBotaoVoz (caixa, tipo, extra, aoPreencher) {
+  if (!navegadorGrava()) {
+    caixa.innerHTML = `<p class="texto-dim2" style="font-size:11.5px;margin:0 0 10px;">
+      Este navegador não deixa gravar áudio — dá pra preencher escrevendo normalmente.</p>`
+    return
+  }
+  caixa.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px;
+      padding-bottom:10px;border-bottom:1px solid var(--line);">
+      <button type="button" class="btn-secundario mini tv-gravar">🎙️ Preencher por voz</button>
+      <span class="texto-dim2 tv-tempo" style="font-size:12px;"></span>
+      <span class="tv-status" style="font-size:11.5px;"></span>
+    </div>`
+  const btn = caixa.querySelector('.tv-gravar')
+  const relogio = caixa.querySelector('.tv-tempo')
+  const status = caixa.querySelector('.tv-status')
+  let mic = null, contador = null, segundos = 0
+  const pararRelogio = () => { clearInterval(contador); contador = null }
+
+  btn.onclick = async () => {
+    if (mic) {
+      pararRelogio()
+      btn.disabled = true; btn.textContent = 'processando...'
+      btn.classList.remove('gravando-voz')
+      const blob = await mic.parar()
+      const mimeAtual = mic.mime
+      mic = null
+      relogio.textContent = ''
+      if (blob.size < 2000) {
+        status.textContent = 'Não gravou nada. Tenta de novo.'; status.style.color = 'var(--warn-text)'
+        btn.disabled = false; btn.textContent = '🎙️ Preencher por voz'; return
+      }
+      status.textContent = 'transcrevendo...'; status.style.color = ''
+      const b64 = await blobParaBase64(blob)
+      const { data, error } = await db.functions.invoke('tecnico-relato-resumir', {
+        body: { tipo, audio_base64: b64, mime: mimeAtual, extra }
+      })
+      btn.disabled = false; btn.textContent = '🎙️ Falar de novo'
+      if (error || data?.erro) {
+        let msg = data?.erro || error?.message || 'Não consegui processar.'
+        if (error?.context?.json) { try { const c = await error.context.json(); msg = c?.erro || msg } catch {} }
+        status.textContent = msg; status.style.color = 'var(--warn-text)'
+        return
+      }
+      if (data.aviso) { status.textContent = data.aviso; status.style.color = 'var(--warn-text)'; return }
+      status.textContent = '✓ Preenchido — confira antes de salvar'; status.style.color = 'var(--good-text)'
+      aoPreencher(data.sugestao || {}, data.transcricao || '')
+      return
+    }
+
+    try { mic = await abrirMicrofone() } catch (e) {
+      status.textContent = 'O navegador não liberou o microfone.'; status.style.color = 'var(--warn-text)'
+      return
+    }
+    segundos = 0
+    btn.textContent = '⏹ Parar e enviar'
+    btn.classList.add('gravando-voz')
+    status.textContent = ''; status.style.color = ''
+    relogio.textContent = '0:00'
+    contador = setInterval(() => {
+      segundos++
+      relogio.textContent = `${Math.floor(segundos / 60)}:${String(segundos % 60).padStart(2, '0')}`
+      if (segundos >= 180) btn.click()   // teto de 3 minutos
+    }, 1000)
+  }
+}
+
 // ----- Formulário: Aplicação -----
 function tecFormAplicacao (cid) {
   const ts = tecTalhoesDe(cid)
@@ -25740,6 +26247,7 @@ function tecFormAplicacao (cid) {
   fundo.className = 'modal-fundo'
   fundo.innerHTML = `<div class="modal">
     <h3>Registrar aplicação</h3>
+    <div id="ap-voz"></div>
     <div class="form-grade">
       <div class="campo"><label>Talhão</label><select id="ap-talhao">${ts.map(t => `<option value="${t.id}">${esc(t.nome)} · ${tecNHa(t.area_ha)} ha</option>`).join('')}</select></div>
       <div class="campo"><label>Safra</label><input id="ap-safra" value="${esc(tecSafraAtual())}"></div>
@@ -25762,6 +26270,21 @@ function tecFormAplicacao (cid) {
   const voltar = () => { fundo.remove(); tecAbrirFicha(cid) }
   fundo.querySelector('#ap-cancelar').onclick = voltar
   fundo.onclick = ev => { if (ev.target === fundo) voltar() }
+  tecBotaoVoz(fundo.querySelector('#ap-voz'), 'aplicacao', { talhoes: ts.map(t => ({ id: t.id, nome: t.nome })) }, s => {
+    if (s.talhao_id && ts.some(t => t.id === s.talhao_id)) { $('#ap-talhao').value = s.talhao_id; window.tecCalcVolume() }
+    if (s.safra) $('#ap-safra').value = s.safra
+    if (s.cultura) $('#ap-cult').value = s.cultura
+    if (s.data_aplicacao) $('#ap-data').value = s.data_aplicacao
+    if (s.produtos?.length) $('#ap-prod').value = s.produtos.join(', ')
+    if (s.dose_t_ha != null) { $('#ap-dose').value = s.dose_t_ha; window.tecCalcVolume() }
+    if (s.volume_t != null) $('#ap-vol').value = s.volume_t
+    if (s.modo_aplicacao) $('#ap-modo').value = s.modo_aplicacao
+    if (s.tem_testemunha != null) {
+      const r = document.querySelector(`input[name=ap-test][value="${s.tem_testemunha ? '1' : '0'}"]`)
+      if (r) r.checked = true
+    }
+    if (s.descricao_testemunha) $('#ap-descT').value = s.descricao_testemunha
+  })
   window.tecCalcVolume = () => {
     const t = tecTalhao(tecVal('ap-talhao')), dose = tecNum(tecVal('ap-dose'))
     if (t && dose) $('#ap-vol').value = (tecNum(t.area_ha) * dose).toFixed(1)
@@ -25790,6 +26313,7 @@ function tecFormVisita (cid, dataSugerida) {
   fundo.className = 'modal-fundo'
   fundo.innerHTML = `<div class="modal">
     <h3>Registrar visita</h3>
+    <div id="v-voz"></div>
     <div class="form-grade">
       <div class="campo"><label>Data</label><input type="date" id="v-data" value="${dataSugerida || hojeISO()}"></div>
       <div class="campo"><label>Responsável</label><input id="v-resp" value="${esc(PERFIL.nome || '')}"></div>
@@ -25810,6 +26334,16 @@ function tecFormVisita (cid, dataSugerida) {
   const voltar = () => { fundo.remove(); tecAbrirFicha(cid) }
   fundo.querySelector('#v-cancelar').onclick = voltar
   fundo.onclick = ev => { if (ev.target === fundo) voltar() }
+  tecBotaoVoz(fundo.querySelector('#v-voz'), 'visita', null, s => {
+    if (s.data) $('#v-data').value = s.data
+    if (s.estagio_cultura) $('#v-est').value = s.estagio_cultura
+    if (s.dae != null) $('#v-dae').value = s.dae
+    if (s.avaliacao) $('#v-aval').value = s.avaliacao
+    if (s.observacao) $('#v-obs').value = s.observacao
+    if (s.dor_identificada) $('#v-dor').value = s.dor_identificada
+    if (s.proximo_passo) $('#v-prox').value = s.proximo_passo
+    if (s.data_proximo_passo) $('#v-proxd').value = s.data_proximo_passo
+  })
   fundo.querySelector('#v-salvar').onclick = async () => {
     const realizada = tecVal('v-feita') === '1'
     const dataV = tecVal('v-data')
@@ -25896,6 +26430,7 @@ function tecFormOcorrencia (o, cidSugerido) {
   fundo.innerHTML = `<div class="modal">
     <h3>${o ? 'Ocorrência ' + esc(o.codigo || '') : 'Abrir ocorrência'}</h3>
     ${o && tecEstourouSLA(o) ? '<span class="badge-alerta">SLA estourado (15 dias)</span>' : ''}
+    ${!o ? '<div id="o-voz"></div>' : ''}
     <div class="form-grade" style="margin-top:10px;">
       <div class="campo"><label>Cliente</label><select id="o-cli" ${o ? 'disabled' : ''}>${TEC.clientes.map(x => `<option value="${x.id}" ${x.id === cid ? 'selected' : ''}>${esc(x.nome)}</option>`).join('')}</select></div>
       <div class="campo"><label>Tipo</label><select id="o-tipo">${TEC_TIPOS_OCO.map(t => `<option ${e.tipo === t ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
@@ -25916,6 +26451,10 @@ function tecFormOcorrencia (o, cidSugerido) {
   const voltar = () => { fundo.remove(); if (cid) tecAbrirFicha(cid); else tecAbrirSub() }
   fundo.querySelector('#o-cancelar').onclick = voltar
   fundo.onclick = ev => { if (ev.target === fundo) voltar() }
+  if (!o) tecBotaoVoz(fundo.querySelector('#o-voz'), 'ocorrencia', { tipos_ocorrencia: TEC_TIPOS_OCO }, s => {
+    if (s.tipo && TEC_TIPOS_OCO.includes(s.tipo)) $('#o-tipo').value = s.tipo
+    if (s.descricao) $('#o-desc').value = s.descricao
+  })
   if (o) fundo.querySelector('#o-excluir').onclick = async () => {
     if (!confirm('Excluir esta ocorrência?')) return
     await db.from('tecnico_ocorrencia').delete().eq('id', o.id)
