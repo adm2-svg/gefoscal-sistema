@@ -582,3 +582,59 @@ html[data-skin="grey"] {
 @media (max-width: 720px) {
   .combo-lista .combo-item { padding: 10px 12px; }
 }
+
+/* =========================================================
+   CRM COMERCIAL — refinamento visual (pedido da Amanda, 29/09).
+
+   Escopo: TUDO aqui é prefixado com #crm-shell, o container que
+   embrulha as sub-abas do CRM Comercial (Painel, Funil, Progresso,
+   Gestão etc. — ver abrirCrmModulo() no index.html). Fora dessa
+   área, nada muda: nenhum outro módulo do sistema (financeiro,
+   expedição, manutenção, RH...) é afetado, porque nenhum deles
+   renderiza dentro de #crm-shell. Também não muda nenhuma classe
+   global (.panel, .btn, .subabas etc. continuam do jeito que
+   estavam pra todo o resto do app) — só adiciona regras novas e
+   mais específicas, então nada que já funcionava quebra.
+
+   Estilo: serifada de destaque (Fraunces) nos títulos e valores
+   de KPI — que já usam font-family:var(--serif) em várias telas,
+   então isso pega sozinho, sem precisar editar o HTML/JS de cada
+   tela — combinada com a Roboto que o corpo do texto já usa. Abas
+   com mais presença (é a área que mexe com dinheiro) e um pouco
+   mais de respiro entre seção e tabela.
+   ========================================================= */
+#crm-shell {
+  /* redefine o VALOR da variável, não a declaração — por isso
+     funciona mesmo nos títulos que já têm font-family:var(--serif)
+     escrito direto no HTML. Cadeia de fallback escrita por extenso
+     (sem var(--serif) aqui dentro) pra não criar referência circular. */
+  --serif: 'Fraunces', 'Roboto', system-ui, sans-serif;
+}
+
+#crm-shell .cabeca-secao { margin-bottom: 18px; }
+#crm-shell th, #crm-shell td { padding: 12px 14px; }
+
+#crm-shell .subabas {
+  gap: 8px;
+  margin-bottom: 22px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+#crm-shell .subabas button { padding: 8px 18px; font-size: 13.5px; }
+#crm-shell .subabas button.ativo {
+  font-family: 'Fraunces', var(--serif, 'Roboto'), system-ui, sans-serif;
+  font-style: italic;
+  font-weight: 600;
+  background: rgba(var(--gold-rgb), .12);
+  border-color: var(--gold);
+  color: var(--gold);
+  box-shadow: inset 0 -2px 0 var(--gold);
+}
+
+#crm-shell .panel,
+#crm-shell .crm-kpi,
+#crm-shell .resumo-topo .bloco {
+  box-shadow: 0 2px 12px rgba(0, 0, 0, .12);
+  transition: box-shadow .18s ease, border-color .18s ease;
+}
+#crm-shell .panel:hover { border-color: var(--line2); }
