@@ -18693,41 +18693,70 @@ function nivelAlertaLead (l) {
 }
 
 // ----- Progresso (tabela/busca, com filtro por cliente) — individual -----
+//
+// Visual refeito a pedido da Amanda (29/09): mesma busca, mesmos filtros,
+// mesmos ids e o mesmo clique pra abrir o lead — só ficou mais fácil de
+// ler (etapa em pill colorida, faixa de cor por etapa na lateral da linha,
+// filtro dentro de um card, contador de resultado). Nenhuma query, nenhum
+// nome de campo do banco e nenhum comportamento mudou.
+const PILL_ETAPA_PROGRESSO = {
+  NOVO:        { cor: 'var(--dim)',       bg: 'rgba(var(--dim-rgb),.14)' },
+  CONTATO:     { cor: 'var(--dim)',       bg: 'rgba(var(--dim-rgb),.14)' },
+  QUALIFICADO: { cor: 'var(--gold)',      bg: 'rgba(var(--gold-rgb),.16)' },
+  PROPOSTA:    { cor: 'var(--rust)',      bg: 'rgba(var(--rust-rgb),.14)' },
+  NEGOCIACAO:  { cor: 'var(--rust)',      bg: 'rgba(var(--rust-rgb),.22)' },
+  GANHO:       { cor: 'var(--good-text)', bg: 'rgba(var(--good-rgb),.16)' },
+  PERDIDO:     { cor: 'var(--dim2)',      bg: 'rgba(var(--dim-rgb),.08)' }
+}
+
 function renderCrmProgresso (alvo, editavel, gerencia) {
   const hoje = new Date().toISOString().slice(0, 10)
   const de = new Date(Date.now() - 180 * 864e5).toISOString().slice(0, 10)
 
   alvo.innerHTML = `
-    <div class="filtros" style="margin-bottom:14px;">
-      <div class="campo"><label>De</label><input type="date" id="cl-de" value="${de}"></div>
-      <div class="campo"><label>Até</label><input type="date" id="cl-ate" value="${hoje}"></div>
-      <div class="campo"><label>Etapa</label>
-        <select id="cl-etapa"><option value="">Todas</option>${ETAPAS_LEAD.map(e => `<option value="${e}">${ROTULO_ETAPA_LEAD[e]}</option>`).join('')}</select></div>
-      <div class="campo" style="flex:1;min-width:180px;"><label>Buscar cliente</label>
-        <input id="cl-busca" placeholder="nome, cidade, telefone..."></div>
-      <button class="btn" id="cl-buscar">Buscar</button>
-      ${editavel ? `<button class="btn-secundario" id="cl-novo">Novo lead</button>` : ''}
+    <div class="panel" style="padding:16px 18px;margin-bottom:20px;">
+      <div class="filtros" style="margin-bottom:0;">
+        <div class="campo"><label>De</label><input type="date" id="cl-de" value="${de}"></div>
+        <div class="campo"><label>Até</label><input type="date" id="cl-ate" value="${hoje}"></div>
+        <div class="campo"><label>Etapa</label>
+          <select id="cl-etapa"><option value="">Todas</option>${ETAPAS_LEAD.map(e => `<option value="${e}">${ROTULO_ETAPA_LEAD[e]}</option>`).join('')}</select></div>
+        <div class="campo" style="flex:1;min-width:180px;"><label>Buscar cliente</label>
+          <input id="cl-busca" placeholder="nome, cidade, telefone..."></div>
+        <button class="btn" id="cl-buscar">Buscar</button>
+        ${editavel ? `<button class="btn-secundario" id="cl-novo">Novo lead</button>` : ''}
+      </div>
+    </div>
+    <div class="cabeca-secao">
+      <h3 style="font-family:var(--serif);font-size:16px;">Leads</h3>
+      <span class="texto-dim2" id="cl-contagem" style="font-size:12px;"></span>
     </div>
     <div id="cl-conteudo"></div>`
 
   let baseAtual = []
 
   const renderTabela = lista => {
+    const contagem = $('#cl-contagem')
+    if (contagem) contagem.textContent = `${lista.length} lead${lista.length === 1 ? '' : 's'}`
+
     $('#cl-conteudo').innerHTML = `
       <div class="panel" style="padding:0;"><div class="tabela-scroll">
         <table><thead><tr>
           <th>Lead</th><th>Local</th><th>Origem</th><th>Etapa</th>
           <th class="num">Valor estimado</th><th>Cliente vinculado</th><th>Progresso</th>
         </tr></thead><tbody>
-          ${lista.map(l => { const parado = diasDesde(l.atualizado_em); return `<tr style="cursor:pointer;" data-abrir="${l.id}">
-            <td><b>${esc(l.nome)}</b></td>
+          ${lista.map(l => {
+            const parado = diasDesde(l.atualizado_em)
+            const p = PILL_ETAPA_PROGRESSO[l.etapa] || PILL_ETAPA_PROGRESSO.NOVO
+            const emAtraso = parado != null && parado > 7 && !['GANHO', 'PERDIDO'].includes(l.etapa)
+            return `<tr style="cursor:pointer;" data-abrir="${l.id}">
+            <td style="border-left:3px solid ${p.cor};"><b>${esc(l.nome)}</b></td>
             <td class="texto-dim2">${esc([l.municipio, l.uf].filter(Boolean).join(' / ') || '—')}</td>
             <td class="texto-dim2">${esc(l.origem ?? '—')}</td>
-            <td><span class="${corEtapaLead(l.etapa)}">${esc(ROTULO_ETAPA_LEAD[l.etapa] ?? l.etapa)}</span></td>
+            <td><span class="chip" style="border:none;font-weight:600;color:${p.cor};background:${p.bg};">${esc(ROTULO_ETAPA_LEAD[l.etapa] ?? l.etapa)}</span></td>
             <td class="num">${l.valor_estimado ? 'R$ ' + fmtNum(l.valor_estimado) : '—'}</td>
             <td class="texto-dim">${esc(l.cliente?.nome_fantasia || l.cliente?.razao_social || '—')}</td>
-            <td class="texto-dim2" style="font-size:11px;${parado != null && parado > 7 && !['GANHO', 'PERDIDO'].includes(l.etapa) ? 'color:var(--warn-text);' : ''}">
-              ${parado != null ? (parado === 0 ? 'hoje' : `há ${parado}d`) : '—'}</td>
+            <td>${parado == null ? '<span class="texto-dim2" style="font-size:11px;">—</span>'
+              : `<span class="chip" style="border:none;font-size:10.5px;${emAtraso ? 'color:var(--warn-text);background:rgba(var(--warn-rgb),.14);' : 'color:var(--dim2);background:rgba(var(--dim-rgb),.1);'}">${parado === 0 ? 'hoje' : `há ${parado}d`}</span>`}</td>
           </tr>`}).join('') || `<tr><td colspan="7" class="vazio">Nenhum lead no filtro.</td></tr>`}
         </tbody></table>
       </div></div>`
