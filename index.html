@@ -25016,6 +25016,88 @@ const tecOcoDe = id => TEC.ocorrencias.filter(o => o.cliente_id === id)
 const tecDemDe = id => TEC.demandas.filter(d => d.cliente_id === id)
 const tecAnalisesDe = tid => TEC.analises.filter(a => a.talhao_id === tid).sort((a, b) => (b.data || '').localeCompare(a.data || ''))
 const tecAnexosDe = (alvo, alvoId) => TEC.anexos.filter(a => a.alvo === alvo && a.alvo_id === alvoId)
+
+// ----- Fotos e anexos (tecnico_anexo) -----
+//
+// A tabela já existia no banco (alvo/alvo_id genérico — cliente, talhão,
+// ocorrência...), só não tinha tela nenhuma. Pedido da Amanda (30/09):
+// "enviar fotos e etc". Usa o bucket privado "comprovantes" que o
+// sistema já usa pra qualquer anexo (chat, financeiro) — sem bucket
+// novo, sem política de acesso nova. Câmera abre direto no celular
+// (capture="environment"); no computador abre o seletor de arquivo normal.
+async function tecRenderAnexos (idCaixa, alvo, alvoId, editavel) {
+  const caixa = document.getElementById(idCaixa)
+  if (!caixa) return
+  const lista = tecAnexosDe(alvo, alvoId)
+
+  caixa.innerHTML = `
+    <div style="display:flex;flex-wrap:wrap;gap:10px;${lista.length ? 'margin-bottom:10px;' : ''}">
+      ${lista.map(a => {
+        const ehImagem = /\.(jpe?g|png|webp|gif)$/i.test(a.nome || '')
+        return `<div style="position:relative;width:84px;">
+          ${ehImagem
+            ? `<img data-tec-anexo="${esc(a.url)}" title="${esc(a.legenda || a.nome || '')}" style="width:84px;height:84px;
+                object-fit:cover;border-radius:8px;border:1px solid var(--line2);cursor:pointer;background:var(--surface2);">`
+            : `<div data-tec-anexo="${esc(a.url)}" style="width:84px;height:84px;border-radius:8px;border:1px solid var(--line2);
+                background:var(--surface2);display:flex;flex-direction:column;align-items:center;justify-content:center;
+                font-size:10px;text-align:center;padding:4px;cursor:pointer;gap:4px;">📄<span style="word-break:break-all;">${esc((a.nome || 'arquivo').slice(0, 16))}</span></div>`}
+          ${editavel ? `<button type="button" data-apagar-tec-anexo="${a.id}" title="apagar"
+              style="position:absolute;top:-6px;right:-6px;width:20px;height:20px;border-radius:50%;border:none;
+              background:var(--critico-text);color:#fff;font-size:11px;cursor:pointer;line-height:1;padding:0;">✕</button>` : ''}
+        </div>`
+      }).join('') || (editavel ? '' : '<p class="vazio">Nenhum anexo.</p>')}
+    </div>
+    ${editavel ? `<input type="file" id="${idCaixa}-arq" accept="image/*,application/pdf" capture="environment" multiple style="display:none;">
+      <button type="button" class="btn-secundario mini" id="${idCaixa}-add">📷 Anexar foto / arquivo</button>
+      <span class="texto-dim2" id="${idCaixa}-st" style="font-size:11.5px;margin-left:8px;"></span>` : ''}`
+
+  caixa.querySelectorAll('[data-tec-anexo]').forEach(el => {
+    el.onclick = async () => {
+      const { data } = await db.storage.from('comprovantes').createSignedUrl(el.dataset.tecAnexo, 300)
+      if (data?.signedUrl) window.open(data.signedUrl, '_blank', 'noopener')
+    }
+  })
+  caixa.querySelectorAll('img[data-tec-anexo]').forEach(async img => {
+    const { data } = await db.storage.from('comprovantes').createSignedUrl(img.dataset.tecAnexo, 600)
+    if (data?.signedUrl) img.src = data.signedUrl
+  })
+  caixa.querySelectorAll('[data-apagar-tec-anexo]').forEach(b => {
+    b.onclick = async ev => {
+      ev.stopPropagation()
+      if (!confirm('Apagar este anexo?')) return
+      const a = lista.find(x => x.id === b.dataset.apagarTecAnexo)
+      if (a) { try { await db.storage.from('comprovantes').remove([a.url]) } catch (e) { console.warn(e) } }
+      await db.from('tecnico_anexo').delete().eq('id', b.dataset.apagarTecAnexo)
+      const { data: novos } = await db.from('tecnico_anexo').select('*')
+      TEC.anexos = novos || []
+      tecRenderAnexos(idCaixa, alvo, alvoId, editavel)
+    }
+  })
+
+  if (!editavel) return
+  const input = document.getElementById(idCaixa + '-arq')
+  const status = document.getElementById(idCaixa + '-st')
+  document.getElementById(idCaixa + '-add').onclick = () => input.click()
+  input.onchange = async () => {
+    const arquivos = [...input.files]
+    if (!arquivos.length) return
+    status.textContent = 'enviando...'; status.style.color = ''
+    for (const arq of arquivos) {
+      const nomeLimpo = arq.name.replace(/[^\w.\-]/g, '_').slice(-80)
+      const caminho = `tecnico/${alvo}/${alvoId}/${Date.now()}_${nomeLimpo}`
+      const { error: eUp } = await db.storage.from('comprovantes').upload(caminho, arq, { upsert: false })
+      if (eUp) { status.textContent = 'erro ao enviar: ' + eUp.message; status.style.color = 'var(--warn-text)'; continue }
+      const { error: eIns } = await db.from('tecnico_anexo').insert({
+        alvo, alvo_id: alvoId, nome: arq.name, url: caminho, criado_por: PERFIL.pessoaId
+      })
+      if (eIns) { status.textContent = 'erro ao salvar: ' + eIns.message; status.style.color = 'var(--warn-text)' }
+    }
+    input.value = ''
+    const { data: novos } = await db.from('tecnico_anexo').select('*')
+    TEC.anexos = novos || []
+    tecRenderAnexos(idCaixa, alvo, alvoId, editavel)
+  }
+}
 function tecResultadosDe(id) { const ids = tecAplicDe(id).map(a => a.id); return TEC.resultados.filter(r => ids.includes(r.aplicacao_id)) }
 function tecGanho(r) {
   const t = tecNum(r.produtividade_testemunha), o = tecNum(r.produtividade_obtida)
@@ -25505,12 +25587,17 @@ async function tecAbrirFicha (id) {
       ${gerais.length ? gerais.map(d => `<div class="passo" data-abrir-doc="${d.id}" style="cursor:pointer;"><span class="chip">${esc(d.grupo)}</span><span style="flex:1;">${esc(d.titulo)}</span></div>`).join('') : '<p class="vazio">Nenhum material geral.</p>'}
     </div>
 
+    <div class="secao"><div class="cabeca-secao"><h3 style="font-size:14px;">9 · Fotos e anexos</h3></div>
+      <div id="tec-anexos-cliente"></div>
+    </div>
+
     <div class="acoes"><button class="btn-secundario" id="tec-excluir-cli">excluir cliente</button>
       <button class="btn" id="tec-fechar-ficha" style="margin-left:auto;">fechar</button></div>
   </div>`
   document.body.appendChild(fundo)
   fundo.onclick = e => { if (e.target === fundo) fundo.remove() }
   $('#tec-fechar-ficha').onclick = () => fundo.remove()
+  tecRenderAnexos('tec-anexos-cliente', 'cliente', id, podeEditar('crm_tecnico'))
 
   const talhoesArea = fundo.querySelector('#tec-lista-talhoes')
   talhoesArea.innerHTML = ts.length ? ts.map(t => {
@@ -26444,6 +26531,7 @@ function tecFormOcorrencia (o, cidSugerido) {
       <div class="campo"><label>Data de resolução</label><input type="date" id="o-dr" value="${e.data_resolucao || ''}"></div>
     </div>
     <div class="campo"><label>Resolução</label><textarea id="o-res">${esc(e.resolucao || '')}</textarea></div>
+    ${o ? `<div class="campo"><label>Fotos e anexos</label><div id="o-anexos"></div></div>` : ''}
     <div class="acoes">${o ? `<button class="btn-secundario" id="o-excluir">excluir</button>` : ''}
       <button class="btn" id="o-salvar" style="margin-left:auto;">salvar</button><button class="btn-secundario" id="o-cancelar">cancelar</button></div>
   </div>`
@@ -26455,6 +26543,7 @@ function tecFormOcorrencia (o, cidSugerido) {
     if (s.tipo && TEC_TIPOS_OCO.includes(s.tipo)) $('#o-tipo').value = s.tipo
     if (s.descricao) $('#o-desc').value = s.descricao
   })
+  if (o) tecRenderAnexos('o-anexos', 'ocorrencia', o.id, podeEditar('crm_tecnico'))
   if (o) fundo.querySelector('#o-excluir').onclick = async () => {
     if (!confirm('Excluir esta ocorrência?')) return
     await db.from('tecnico_ocorrencia').delete().eq('id', o.id)
