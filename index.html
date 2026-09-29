@@ -6009,7 +6009,7 @@ async function paginaSolicitacoes () {
   SOLIC_CACHE = { setores: setores || [], pessoas: pessoasComEmail, deptos: deptos || [], vinculos: vinculos || [], prestadores: prestadores || [] }
   SOLIC_CACHE.cargos = (cargos || []).map(c => c.nome)
 
-  const abas = [['painel', 'Painel'], ['minhas', 'Minhas'], ['nova', 'Nova solicitação'], ['meu-setor', 'Meu setor'], ['devolutiva', 'Devolutiva'], ['aguardando', 'Aguardando outros'], ['todas', 'Todas']]
+  const abas = [['painel', 'Painel'], ['minhas', 'Minhas'], ['nova', 'Nova solicitação'], ['meu-setor', 'Meu setor'], ['aguardando', 'Aguardando outros'], ['todas', 'Todas']]
   area.innerHTML = `
     <div class="subabas">
       ${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}
@@ -6035,7 +6035,6 @@ function abrirSolicitacoes (sub) {
   if (sub === 'minhas') solicLista(alvo, { minhas: true })
   if (sub === 'nova') solicNova(alvo)
   if (sub === 'meu-setor') solicLista(alvo, { meuSetor: true })
-  if (sub === 'devolutiva') solicDevolvidas(alvo)
   if (sub === 'aguardando') solicAguardandoOutros(alvo)
   if (sub === 'todas') solicLista(alvo, { meuSetor: false })
 }
@@ -6380,52 +6379,6 @@ async function solicLista (alvo, { meuSetor, minhas } = {}) {
   buscar()
 }
 
-// ----- Devolutiva -----
-// Solicitações que voltaram pra mim depois que alguém já fez a parte
-// dela (devolveu) — a tarefa continua em aberto comigo pra eu fechar,
-// prosseguir ou encaminhar pra outro setor, agora com o histórico de
-// tudo que já foi feito antes visível ali dentro.
-async function solicDevolvidas (alvo) {
-  const { data: repasses } = await db.from('solicitacao_repasse').select('solicitacao_id')
-  const idsComRepasse = [...new Set((repasses || []).map(r => r.solicitacao_id))]
-  if (!idsComRepasse.length) { alvo.innerHTML = `<p class="vazio">Nenhuma devolutiva registrada ainda.</p>`; return }
-
-  const { data, error } = await db.from('solicitacao_interna').select(`
-    id, codigo, titulo, status, data_solicitacao, urgencia, progresso_pct,
-    setor:setor_destino_id(nome), solicitante:solicitante_id(nome)
-  `).in('id', idsComRepasse).eq('responsavel_id', PERFIL.pessoaId)
-    .not('status', 'in', '(CONCLUIDA,CANCELADA)').order('data_solicitacao', { ascending: false })
-
-  if (faltaMigracao(error)) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
-  const lista = data || []
-
-  alvo.innerHTML = `
-    <p class="texto-dim2" style="font-size:12.5px;margin:0 0 14px;">
-      ${lista.length} solicitaç${lista.length === 1 ? 'ão' : 'ões'} devolvida${lista.length === 1 ? '' : 's'} pra você —
-      quem tratou já fez a parte dele e pontuou normalmente. Agora é decidir: fechar, prosseguir ou encaminhar.</p>
-    <div class="panel" style="padding:0;"><div class="tabela-scroll">
-      <table><thead><tr><th>Código</th><th>Quando</th><th>Setor de origem</th><th>Título</th>
-        <th>Urgência</th><th>Progresso</th><th>Status</th></tr></thead><tbody>
-        ${lista.map(s => `<tr style="cursor:pointer;" data-abrir="${s.id}">
-          <td><b>${esc(s.codigo)}</b></td>
-          <td class="texto-dim">${fmtQuando(s.data_solicitacao) ?? '—'}</td>
-          <td class="texto-dim2">${esc(s.setor?.nome ?? '—')}</td>
-          <td>${esc(s.titulo)}</td>
-          <td><span class="${corUrgenciaSolicitacao(s.urgencia)}">${esc(ROTULO_URGENCIA_SOLICITACAO[s.urgencia])}</span></td>
-          <td class="texto-dim2" style="font-size:11px;">${s.progresso_pct ?? 0}%</td>
-          <td><span class="${corStatusSolicitacao(s.status)}">${esc(ROTULO_STATUS_SOLICITACAO[s.status])}</span></td>
-        </tr>`).join('') || `<tr><td colspan="7" class="vazio">Nenhuma devolutiva esperando você agora.</td></tr>`}
-      </tbody></table>
-    </div></div>`
-
-  alvo.querySelectorAll('[data-abrir]').forEach(tr => {
-    tr.onclick = () => {
-      const s = lista.find(x => x.id === tr.dataset.abrir)
-      if (s) detalheSolicitacao(s, () => solicDevolvidas(alvo))
-    }
-  })
-}
-
 // ----- Detalhe / responder -----
 // Modal de detalhe: sempre busca a linha fresca no banco pela id (não
 // confia no objeto parcial que veio da lista que abriu), porque agora tem
@@ -6470,9 +6423,6 @@ async function detalheSolicitacao (sParcial, aoFechar) {
   const editavel = podeAtualizarSolicitacao(s)
   const pts = pontuacaoAgilidadeSolicitacao(s)
   const pausadaAgora = estaPausadaSolicitacao(s)
-  const souResponsavel = s.responsavel_id && s.responsavel_id === PERFIL.pessoaId
-  const podeDevolver = editavel && souResponsavel && s.solicitante_id && s.solicitante_id !== PERFIL.pessoaId
-    && !['CONCLUIDA', 'CANCELADA'].includes(s.status)
   let progressoAtual = s.progresso_pct ?? 0
 
   fundo.innerHTML = `<div class="modal">
@@ -6545,13 +6495,6 @@ async function detalheSolicitacao (sParcial, aoFechar) {
       <div class="campo" style="margin-bottom:8px;"><label style="font-size:11px;">Motivo da transferência *</label>
         <input id="ds-transf-motivo" placeholder="por que está transferindo?"></div>
       <button class="btn-secundario mini" id="ds-transferir" type="button">Transferir</button>
-    </div>` : ''}
-
-    ${podeDevolver ? `<div class="campo" style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px;">
-      <label>↩️ Devolutiva</label>
-      <p class="texto-dim2" style="font-size:11px;margin:2px 0 8px;">
-        Já fez sua parte? Devolve pra ${esc(s.solicitante?.nome ?? 'quem abriu')} — pontua sua agilidade normalmente, como uma conclusão, e a solicitação continua aberta com ela pra prosseguir ou fechar.</p>
-      <button class="btn-secundario mini" id="ds-devolver" type="button">↩️ Devolver pra ${esc(s.solicitante?.nome ?? 'quem abriu')}</button>
     </div>` : ''}
 
     <div class="campo" style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px;">
@@ -6826,41 +6769,6 @@ async function detalheSolicitacao (sParcial, aoFechar) {
         destinatario_id: novoResponsavelId,
         titulo: 'Solicitação transferida pra você',
         mensagem: `"${s.titulo}" (${s.codigo}) foi transferida por ${PERFIL.nome}. Motivo: ${motivo}`,
-        entidade: 'solicitacao_interna', entidade_id: s.id
-      })
-    }
-    fechar(); aoFechar()
-  }
-
-  // ---- Devolutiva: pontua quem devolveu (igual a uma conclusão normal),
-  // sem fechar a solicitação -- volta pro solicitante original ----
-  const btnDevolver = fundo.querySelector('#ds-devolver')
-  if (btnDevolver) btnDevolver.onclick = async () => {
-    if (!confirm(`Devolver essa solicitação pra ${s.solicitante?.nome ?? 'quem abriu'}? Sua parte pontua normalmente na sua agilidade.`)) return
-    const btn = fundo.querySelector('#ds-devolver'); btn.disabled = true; btn.textContent = 'Devolvendo...'
-    const agora = new Date().toISOString()
-    const inicioLeg = s.assumido_em || s.data_solicitacao
-    const pontuacaoLeg = calcularAgilidade(inicioLeg, prazoSlaSolicitacao(s), Date.now(), tempoPausadoTotalMs(s))
-
-    const { error: e1 } = await db.from('solicitacao_repasse').insert({
-      solicitacao_id: s.id, pessoa_id: s.responsavel_id,
-      assumida_em: inicioLeg, encerrada_em: agora, pontuacao: pontuacaoLeg
-    })
-    const { error: e2 } = await db.from('solicitacao_interna').update({
-      responsavel_id: s.solicitante_id, status: 'EM_ANDAMENTO', assumido_em: agora, progresso_pct: progressoAtual
-    }).eq('id', s.id)
-    btn.disabled = false; btn.textContent = `↩️ Devolver pra ${s.solicitante?.nome ?? 'quem abriu'}`
-    if (e1 || e2) { aviso((e1 || e2).message); return }
-
-    await db.from('solicitacao_interna_evento').insert({
-      solicitacao_id: s.id, tipo: 'DEVOLUCAO', de_pessoa_id: s.responsavel_id, para_pessoa_id: s.solicitante_id,
-      criado_por: PERFIL.pessoaId
-    })
-    if (s.solicitante_id && s.solicitante_id !== PERFIL.pessoaId) {
-      await db.from('notificacao_pessoal').insert({
-        destinatario_id: s.solicitante_id,
-        titulo: 'Devolveram uma solicitação pra você',
-        mensagem: `${PERFIL.nome} fez a parte dele em "${s.titulo}" (${s.codigo}) e devolveu — dá uma olhada pra prosseguir ou fechar.`,
         entidade: 'solicitacao_interna', entidade_id: s.id
       })
     }
