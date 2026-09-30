@@ -55498,12 +55498,19 @@ async function mktStatusApiRede (alvo, rede, editavel) {
 // no painel do Wix (gatilho "formulário enviado" -> ação "enviar requisição
 // HTTP") apontando pra edge function marketing-site-lead-webhook. Aqui é só
 // leitura + marcar como visto.
+const GA4_DIMENSAO_ROTULO = {
+  pais: 'País', regiao: 'Região', cidade: 'Cidade',
+  dispositivo: 'Dispositivo', canal: 'Canal de origem', pagina: 'Página'
+}
+
 async function mktSite (alvo, editavel) {
   alvo.innerHTML = `<p class="texto-dim2">carregando dados do site...</p>`
-  const [{ data, error }, { data: dias, error: erroTrafego }] = await Promise.all([
+  const desde30d = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)
+  const [{ data, error }, { data: dias, error: erroTrafego }, { data: ga4Bruto, error: erroGa4 }] = await Promise.all([
     db.from('marketing_site_lead').select('*').order('recebido_em', { ascending: false }).limit(300),
     db.from('marketing_site_analytics_diaria').select('data,sessoes,visitantes_unicos,cliques_contato,formularios_enviados,sincronizado_em')
-      .order('data', { ascending: false }).limit(30)
+      .order('data', { ascending: false }).limit(30),
+    db.from('marketing_site_ga4_diario').select('dimensao,valor,sessoes,usuarios').gte('data', desde30d)
   ])
   if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
   const leads = data || []
@@ -55512,6 +55519,28 @@ async function mktSite (alvo, editavel) {
   const trafego30d = dias || []
   const soma = campo => trafego30d.reduce((t, d) => t + (d[campo] || 0), 0)
   const ultimaSync = trafego30d[0]?.sincronizado_em
+
+  // Agrupa o detalhe do GA4 (uma linha por dia+dimensão+valor) somando os
+  // últimos 30 dias, pra virar "top valores" por dimensão -- é o
+  // "destrinchar" (região, cidade, dispositivo, canal, página) que o total
+  // do Wix Analytics sozinho não dá.
+  const ga4PorDimensao = {}
+  for (const linha of (ga4Bruto || [])) {
+    const grupo = ga4PorDimensao[linha.dimensao] || (ga4PorDimensao[linha.dimensao] = {})
+    const item = grupo[linha.valor] || (grupo[linha.valor] = { valor: linha.valor, sessoes: 0, usuarios: 0 })
+    item.sessoes += linha.sessoes || 0
+    item.usuarios += linha.usuarios || 0
+  }
+  const ga4DimensoesComDado = Object.keys(GA4_DIMENSAO_ROTULO).filter(d => ga4PorDimensao[d] && Object.keys(ga4PorDimensao[d]).length)
+  const ga4TabInicial = ga4DimensoesComDado.includes('regiao') ? 'regiao' : ga4DimensoesComDado[0]
+
+  const renderTabelaGa4 = dimensao => {
+    const itens = Object.values(ga4PorDimensao[dimensao] || {}).sort((a, b) => b.sessoes - a.sessoes).slice(0, 15)
+    if (!itens.length) return `<p class="texto-dim2" style="font-size:12.5px;">Sem dado ainda pra essa quebra.</p>`
+    return `<table><thead><tr><th>${esc(GA4_DIMENSAO_ROTULO[dimensao])}</th><th>Sessões</th><th>Usuários</th></tr></thead><tbody>
+      ${itens.map(i => `<tr><td>${esc(i.valor)}</td><td>${fmtNum(i.sessoes, 0)}</td><td>${fmtNum(i.usuarios, 0)}</td></tr>`).join('')}
+    </tbody></table>`
+  }
 
   alvo.innerHTML = `
     <div class="resumo-topo" style="margin-bottom:16px;">
@@ -55535,6 +55564,21 @@ async function mktSite (alvo, editavel) {
       Dados oficiais do Wix Analytics, sincronizados uma vez por dia.
       ${ultimaSync ? `Última sincronização: ${new Date(ultimaSync).toLocaleString('pt-BR')}.` : ''}
     </p>`}
+
+    <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 10px;">Destrinchar o tráfego — últimos 30 dias</h3>
+    ${!ga4DimensoesComDado.length ? `<p class="texto-dim2" style="font-size:12.5px;margin:0 0 16px;">
+      ${erroGa4 ? esc(erroGa4.message) : 'Ainda não tem dado detalhado do Google Analytics (o site foi conectado há pouco — os primeiros dados aparecem a partir de amanhã).'}</p>` : `
+    <div class="panel" style="padding:12px 14px 16px;margin-bottom:16px;">
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">
+        ${ga4DimensoesComDado.map(d => `<button type="button" class="botao-aba-ga4${d === ga4TabInicial ? ' ativo' : ''}"
+          data-ga4-aba="${d}" style="padding:5px 12px;border-radius:999px;border:1px solid var(--borda);
+          background:${d === ga4TabInicial ? 'var(--acento)' : 'transparent'};color:${d === ga4TabInicial ? '#fff' : 'inherit'};
+          font-size:12.5px;cursor:pointer;">${esc(GA4_DIMENSAO_ROTULO[d])}</button>`).join('')}
+      </div>
+      <div class="tabela-scroll" data-ga4-corpo>${renderTabelaGa4(ga4TabInicial)}</div>
+      <p class="texto-dim2" style="margin:10px 0 0;font-size:11px;">Clica numa das abas acima pra ver a quebra por
+        essa dimensão. Dados oficiais do Google Analytics (GA4), sincronizados uma vez por dia.</p>
+    </div>`}
     <div class="panel" style="padding:0;"><div class="tabela-scroll">
       <table><thead><tr><th></th><th>Nome</th><th>Telefone</th><th>E-mail</th><th>Mensagem</th><th>Formulário</th><th>Recebido</th></tr></thead><tbody>
         ${leads.map(l => `<tr style="${l.lido ? '' : 'font-weight:600;'}">
@@ -55548,6 +55592,20 @@ async function mktSite (alvo, editavel) {
         </tr>`).join('') || `<tr><td colspan="7" class="vazio">Nenhum contato recebido do site ainda.</td></tr>`}
       </tbody></table>
     </div></div>`
+
+  alvo.querySelectorAll('[data-ga4-aba]').forEach(btn => {
+    btn.onclick = () => {
+      const dimensao = btn.dataset.ga4Aba
+      alvo.querySelectorAll('[data-ga4-aba]').forEach(b => {
+        const ativo = b === btn
+        b.classList.toggle('ativo', ativo)
+        b.style.background = ativo ? 'var(--acento)' : 'transparent'
+        b.style.color = ativo ? '#fff' : 'inherit'
+      })
+      const corpo = alvo.querySelector('[data-ga4-corpo]')
+      if (corpo) corpo.innerHTML = renderTabelaGa4(dimensao)
+    }
+  })
 
   if (!editavel) return
   alvo.querySelectorAll('[data-lido-site]').forEach(cb => {
