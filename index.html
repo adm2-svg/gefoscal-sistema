@@ -55257,7 +55257,7 @@ async function paginaMarketing () {
   const editavel = podeEditar('marketing')
   $('#subtitulo-pagina').textContent = 'Redes sociais, conteúdo e mercado'
   const area = areaLivre()
-  const abas = [['visao', 'Painel'], ['quadro', 'Quadro'], ['calendario', 'Calendário'], ['redes', 'Redes Sociais'], ['mercado', 'Mercado'], ['docs', 'Docs'], ['aniversariantes', 'Aniversariantes'], ['estoque', 'Estoque Marketing']]
+  const abas = [['visao', 'Painel'], ['quadro', 'Quadro'], ['calendario', 'Calendário'], ['redes', 'Redes Sociais'], ['site', 'Site'], ['mercado', 'Mercado'], ['docs', 'Docs'], ['aniversariantes', 'Aniversariantes'], ['estoque', 'Estoque Marketing']]
   area.innerHTML = `
     <div class="subabas">${abas.map((a, i) => `<button data-sub="${a[0]}" class="${i === 0 ? 'ativo' : ''}">${a[1]}</button>`).join('')}</div>
     <div id="sub-marketing"></div>`
@@ -55275,6 +55275,7 @@ function abrirMarketing (sub, editavel) {
   alvo.innerHTML = `<p class="texto-dim2">carregando...</p>`
   if (sub === 'visao') mktVisaoGeral(alvo, editavel)
   if (sub === 'redes') mktRedesSociais(alvo, editavel)
+  if (sub === 'site') mktSite(alvo, editavel)
   if (sub === 'mercado') mktMercado(alvo)
   if (sub === 'docs') mktDocs(alvo, editavel)
   if (sub === 'quadro') mktQuadro(alvo, editavel)
@@ -55489,6 +55490,73 @@ async function mktStatusApiRede (alvo, rede, editavel) {
     }
     mktRedesSociais($('#sub-marketing'), editavel)
   }
+}
+
+// ----- Site (Wix) -----
+// Contatos que chegam pelo formulário do site institucional. O Wix não tem
+// API pra "puxar" formulário; quem alimenta essa tabela é um Automation lá
+// no painel do Wix (gatilho "formulário enviado" -> ação "enviar requisição
+// HTTP") apontando pra edge function marketing-site-lead-webhook. Aqui é só
+// leitura + marcar como visto.
+async function mktSite (alvo, editavel) {
+  alvo.innerHTML = `<p class="texto-dim2">carregando dados do site...</p>`
+  const [{ data, error }, { data: dias, error: erroTrafego }] = await Promise.all([
+    db.from('marketing_site_lead').select('*').order('recebido_em', { ascending: false }).limit(300),
+    db.from('marketing_site_analytics_diaria').select('data,sessoes,visitantes_unicos,cliques_contato,formularios_enviados,sincronizado_em')
+      .order('data', { ascending: false }).limit(30)
+  ])
+  if (error) { alvo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  const leads = data || []
+  const naoVistos = leads.filter(l => !l.lido).length
+
+  const trafego30d = dias || []
+  const soma = campo => trafego30d.reduce((t, d) => t + (d[campo] || 0), 0)
+  const ultimaSync = trafego30d[0]?.sincronizado_em
+
+  alvo.innerHTML = `
+    <div class="resumo-topo" style="margin-bottom:16px;">
+      <div class="bloco"><div class="rot">Contatos recebidos</div><div class="val">${leads.length}</div></div>
+      <div class="bloco ${naoVistos ? 'alerta' : ''}"><div class="rot">Não vistos</div><div class="val">${naoVistos}</div></div>
+    </div>
+    <p class="texto-dim2" style="margin:0 0 12px;font-size:12px;">
+      Contatos enviados pelo formulário do site institucional (Wix).
+    </p>
+
+    <h3 style="font-family:var(--serif);font-size:15px;margin:0 0 10px;">Tráfego do site — últimos 30 dias</h3>
+    ${erroTrafego || !trafego30d.length ? `<p class="texto-dim2" style="font-size:12.5px;margin:0 0 16px;">
+      Ainda não tem dado de tráfego sincronizado do Wix.</p>` : `
+    <div class="kpis" style="margin-bottom:6px;">
+      ${kpi('Sessões', fmtNum(soma('sessoes'), 0))}
+      ${kpi('Visitantes únicos', fmtNum(soma('visitantes_unicos'), 0))}
+      ${kpi('Cliques pra contato', fmtNum(soma('cliques_contato'), 0))}
+      ${kpi('Formulários enviados', fmtNum(soma('formularios_enviados'), 0))}
+    </div>
+    <p class="texto-dim2" style="margin:0 0 16px;font-size:11px;">
+      Dados oficiais do Wix Analytics, sincronizados uma vez por dia.
+      ${ultimaSync ? `Última sincronização: ${new Date(ultimaSync).toLocaleString('pt-BR')}.` : ''}
+    </p>`}
+    <div class="panel" style="padding:0;"><div class="tabela-scroll">
+      <table><thead><tr><th></th><th>Nome</th><th>Telefone</th><th>E-mail</th><th>Mensagem</th><th>Formulário</th><th>Recebido</th></tr></thead><tbody>
+        ${leads.map(l => `<tr style="${l.lido ? '' : 'font-weight:600;'}">
+          <td><input type="checkbox" data-lido-site="${l.id}" ${l.lido ? 'checked' : ''} ${editavel ? '' : 'disabled'} title="marcar como visto"></td>
+          <td>${esc(l.nome ?? '—')}</td>
+          <td>${l.telefone ? `<a href="https://wa.me/${esc(l.telefone.replace(/\D/g, ''))}" target="_blank" rel="noopener">${esc(l.telefone)}</a>` : '—'}</td>
+          <td>${esc(l.email ?? '—')}</td>
+          <td style="max-width:320px;white-space:normal;">${esc(l.mensagem ?? '—')}</td>
+          <td class="texto-dim2">${esc(l.formulario ?? '—')}</td>
+          <td class="texto-dim2" title="${esc(new Date(l.recebido_em).toLocaleString('pt-BR'))}">${formatarHoraRelativa(l.recebido_em)}</td>
+        </tr>`).join('') || `<tr><td colspan="7" class="vazio">Nenhum contato recebido do site ainda.</td></tr>`}
+      </tbody></table>
+    </div></div>`
+
+  if (!editavel) return
+  alvo.querySelectorAll('[data-lido-site]').forEach(cb => {
+    cb.onchange = async () => {
+      const { error: erroUpd } = await db.from('marketing_site_lead')
+        .update({ lido: cb.checked }).eq('id', cb.dataset.lidoSite)
+      if (erroUpd) { alert('Não consegui marcar: ' + erroUpd.message); cb.checked = !cb.checked }
+    }
+  })
 }
 
 // ----- Mercado -----
