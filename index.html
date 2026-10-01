@@ -653,6 +653,26 @@ tbody tr:hover { background: var(--hover-bg); }
 .card-tarefa .alerta-dot.ok { background:var(--good-text); box-shadow:0 0 0 3px rgba(var(--good-rgb),.18); }
 .card-tarefa .alerta-dot.atencao { background:var(--warn-text); box-shadow:0 0 0 3px rgba(var(--warn-rgb),.18); }
 .card-tarefa .alerta-dot.atrasado { background:var(--critico-text); box-shadow:0 0 0 3px rgba(var(--critico-rgb),.18); }
+
+/* ---- Cards de talhão (mapa do cliente, CRM Técnico) — pedido da Amanda
+   em 30/09 pra ficar com a cara de um mapa de talhões "de verdade", em
+   vez da lista de texto corrido que tinha antes. Reaproveita .chip pro
+   selo de hectare, e o mesmo visual de borda/hover do .card-tarefa. */
+.talhao-card { display:flex; align-items:center; gap:10px; background:var(--card);
+  border:1px solid var(--line); border-radius:8px; padding:9px 11px; margin-bottom:7px; }
+.talhao-card:hover { border-color:var(--line2); }
+.talhao-card .swatch { width:13px; height:13px; border-radius:4px; flex:none;
+  box-shadow:0 0 0 2px rgba(0,0,0,.08) inset; }
+.talhao-card .info { flex:1; min-width:0; }
+.talhao-card .nome { font-size:13px; font-weight:600; }
+.talhao-card .meta { font-size:11.5px; color:var(--dim2); margin-top:1px; }
+.talhao-card .chip { flex:none; }
+.talhao-card .acoes-talhao { display:flex; gap:4px; flex:none; }
+.talhao-card .acoes-talhao button { width:26px; height:26px; border-radius:6px; padding:0;
+  border:1px solid var(--line2); background:var(--surface2); color:var(--dim);
+  cursor:pointer; font-size:12.5px; display:flex; align-items:center; justify-content:center; }
+.talhao-card .acoes-talhao button:hover { border-color:var(--rust); color:var(--rust); }
+.talhao-card .acoes-talhao button.apagar:hover { border-color:var(--critico-text); color:var(--critico-text); }
 .painel-funil-kpis { margin-bottom:18px; }
 .painel-funil-secao-titulo { font-family:var(--serif); font-size:15px; margin:22px 0 12px; display:flex; align-items:center; justify-content:space-between; gap:10px; }
 
@@ -25945,10 +25965,12 @@ async function abrirMapaTecnico (cliente, editavel, aoFechar) {
       <button type="button" class="btn-secundario mini oculto" id="mpt-cancelar-desenho">Cancelar desenho</button>
       <span class="texto-dim2" style="font-size:11.5px;" id="mpt-medindo"></span>
     </div>` : ''}
-    <div class="cabeca-secao" style="margin-bottom:4px;">
-      <h3 style="font-family:var(--serif);font-size:14px;">Talhões</h3>
-      <span class="texto-dim2" style="font-size:11.5px;" id="mpt-soma"></span>
+    <div class="cabeca-secao" style="margin-bottom:8px;">
+      <h3 style="font-family:var(--serif);font-size:14px;">🗺️ Talhões</h3>
+      <span class="chip oculto" id="mpt-soma"></span>
     </div>
+    <input id="mpt-filtro-talhao" class="oculto" placeholder="localizar talhão pelo nome ou cultura"
+      style="width:100%;margin-bottom:8px;font-size:12.5px;">
     <div id="mpt-talhoes" style="margin-bottom:10px;"></div>
     <div class="recado oculto" id="mpt-erro"></div>
     <div class="acoes" style="margin-top:6px;">
@@ -26047,34 +26069,35 @@ async function abrirMapaTecnico (cliente, editavel, aoFechar) {
 
   // ---------- talhões já salvos ----------
   const camadas = {}
-  const desenharTalhoes = () => {
-    Object.values(camadas).forEach(c => mapa.removeLayer(c))
-    talhoes.forEach(t => {
-      const pts = (t.poligono || []).map(p => [p[1], p[0]])   // GeoJSON é [lng,lat]
-      if (pts.length < 3) return
-      const poly = L.polygon(pts, { color: t.cor || '#c8a11a', weight: 2, fillOpacity: 0.28 })
-      poly.bindTooltip(`${t.nome}${t.cultura ? ' · ' + t.cultura : ''} — ${fmtNum(t.area_ha)} ha`,
-        { sticky: true })
-      poly.addTo(mapa)
-      camadas[t.id] = poly
-    })
 
-    const soma = talhoes.reduce((s, t) => s + Number(t.area_ha || 0), 0)
-    q('#mpt-soma').textContent = talhoes.length
-      ? `${talhoes.length} talhão(ões) · ${fmtNum(soma)} ha desenhados`
-      : ''
-    q('#mpt-talhoes').innerHTML = talhoes.length ? talhoes.map(t => `
-      <div class="passo" style="align-items:center;gap:8px;">
-        <span style="width:12px;height:12px;border-radius:3px;flex:none;
-          background:${esc(t.cor || '#c8a11a')};"></span>
-        <span style="flex:1;min-width:0;"><b>${esc(t.nome)}</b>${t.cultura ? ' · ' + esc(t.cultura) : ''}
-          <span class="texto-dim2"> — ${fmtNum(t.area_ha)} ha</span></span>
-        <button type="button" class="btn-secundario mini" data-ir-talhao="${esc(t.id)}"
-          style="padding:2px 8px;">ver</button>
-        ${editavel ? `<button type="button" class="btn-secundario mini" data-apagar-talhao="${esc(t.id)}"
-          style="padding:2px 8px;">✕</button>` : ''}
+  // Lista em cards (visual pedido pela Amanda em 30/09, inspirado num
+  // anúncio que ela viu — sem clonar, só reaproveitando a ideia: selo de
+  // cor + nome + hectare em chip + ações em botão-ícone, em vez da linha
+  // de texto corrido que tinha antes). Separado do redesenho do mapa
+  // porque o filtro por nome só mexe na lista, não precisa redesenhar
+  // os polígonos.
+  const renderizarListaTalhoes = () => {
+    const filtro = semAcento((q('#mpt-filtro-talhao')?.value || '').trim())
+    const visiveis = filtro
+      ? talhoes.filter(t => semAcento(t.nome).includes(filtro) || semAcento(t.cultura || '').includes(filtro))
+      : talhoes
+
+    q('#mpt-talhoes').innerHTML = !talhoes.length
+      ? `<p class="texto-dim2" style="font-size:12px;">Nenhum talhão desenhado ainda.</p>`
+      : !visiveis.length
+        ? `<p class="texto-dim2" style="font-size:12px;">Nenhum talhão bate com "${esc(q('#mpt-filtro-talhao').value.trim())}".</p>`
+        : visiveis.map(t => `
+      <div class="talhao-card">
+        <span class="swatch" style="background:${esc(t.cor || '#c8a11a')};"></span>
+        <div class="info">
+          <div class="nome">${esc(t.nome)}${t.cultura ? ` <span class="texto-dim2" style="font-weight:400;">· ${esc(t.cultura)}</span>` : ''}</div>
+        </div>
+        <span class="chip">${fmtNum(t.area_ha)} ha</span>
+        <div class="acoes-talhao">
+          <button type="button" data-ir-talhao="${esc(t.id)}" title="ver no mapa">🔎</button>
+          ${editavel ? `<button type="button" class="apagar" data-apagar-talhao="${esc(t.id)}" title="apagar">🗑️</button>` : ''}
+        </div>
       </div>`).join('')
-      : `<p class="texto-dim2" style="font-size:12px;">Nenhum talhão desenhado ainda.</p>`
 
     q('#mpt-talhoes').querySelectorAll('[data-ir-talhao]').forEach(b => {
       b.onclick = () => {
@@ -26093,6 +26116,28 @@ async function abrirMapaTecnico (cliente, editavel, aoFechar) {
         desenharTalhoes()
       }
     })
+  }
+  q('#mpt-filtro-talhao').addEventListener('input', renderizarListaTalhoes)
+
+  const desenharTalhoes = () => {
+    Object.values(camadas).forEach(c => mapa.removeLayer(c))
+    talhoes.forEach(t => {
+      const pts = (t.poligono || []).map(p => [p[1], p[0]])   // GeoJSON é [lng,lat]
+      if (pts.length < 3) return
+      const poly = L.polygon(pts, { color: t.cor || '#c8a11a', weight: 2, fillOpacity: 0.28 })
+      poly.bindTooltip(`${t.nome}${t.cultura ? ' · ' + t.cultura : ''} — ${fmtNum(t.area_ha)} ha`,
+        { sticky: true })
+      poly.addTo(mapa)
+      camadas[t.id] = poly
+    })
+
+    const soma = talhoes.reduce((s, t) => s + Number(t.area_ha || 0), 0)
+    q('#mpt-soma').classList.toggle('oculto', !talhoes.length)
+    q('#mpt-soma').textContent = talhoes.length
+      ? `${talhoes.length} talhão${talhoes.length > 1 ? 'ões' : ''} · ${fmtNum(soma)} ha`
+      : ''
+    q('#mpt-filtro-talhao').classList.toggle('oculto', talhoes.length < 4)
+    renderizarListaTalhoes()
   }
   desenharTalhoes()
   if (talhoes.length && cliente.lat == null) {
@@ -47710,6 +47755,7 @@ async function desempPerfisDisc (alvo) {
         border:1px solid var(--line);border-radius:999px;background:var(--panel);color:var(--txt);">
       <div id="disc-chips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
       <span style="flex:1;"></span>
+      <button class="btn-secundario mini" id="disc-convite-externo">🔗 Convite p/ novo colaborador</button>
       <button class="btn-secundario mini" id="disc-novo">+ Perfil manual</button>
     </div>
 
@@ -47727,6 +47773,146 @@ async function desempPerfisDisc (alvo) {
   ligarPainelConvocacao()
   $('#disc-busca').oninput = e => { DISC_CACHE.filtro = e.target.value.trim().toLowerCase(); renderGradeDisc() }
   $('#disc-novo').onclick = () => formPerfilDisc(null, () => desempPerfisDisc(alvo))
+  $('#disc-convite-externo').onclick = () => abrirConviteDiscExterno()
+}
+
+// ---------------------------------------------------------------
+// Convite externo de DISC — pra alguém que ainda NÃO tem cadastro
+// (candidato/novo contratado). Mesmo padrão visual de
+// abrirLiberacaoCertificado: gera um link com token+validade, mostra
+// pra copiar, e lista os convites já gerados com a situação de cada um.
+// Quem cria/cancela é sempre quem está logado (RLS exige
+// criado_por = pessoa_atual()); quem preenche o link é o próprio
+// convidado, sem sessão nenhuma — por isso pessoa/vaga/candidato só
+// nascem do lado do banco (rh_disc_convite_iniciar), nunca daqui.
+// ---------------------------------------------------------------
+const ROTULO_STATUS_CONVITE_DISC = { ABERTO: 'esperando resposta', CONCLUIDO: 'DISC respondido', CANCELADO: 'cancelado' }
+const COR_STATUS_CONVITE_DISC = { ABERTO: '#a67c00', CONCLUIDO: '#2c6e3f', CANCELADO: '#8a8a8a' }
+
+function statusConviteDiscAtual (c) {
+  if (c.status === 'CANCELADO') return 'CANCELADO'
+  if (c.status === 'CONCLUIDO') return 'CONCLUIDO'
+  if (new Date(c.expira_em).getTime() < Date.now()) return 'CANCELADO'
+  return 'ABERTO'
+}
+
+function abrirConviteDiscExterno () {
+  const fundo = document.createElement('div')
+  fundo.className = 'modal-fundo'
+  fundo.innerHTML = `<div class="modal" style="max-width:560px;">
+    <div class="cabeca-secao" style="margin-bottom:10px;">
+      <h3 style="font-family:var(--serif);font-size:16px;">Convite de DISC sem login</h3>
+    </div>
+    <p class="texto-dim2" style="font-size:12.5px;line-height:1.55;margin:0 0 14px;">
+      Gera um link pra alguém que ainda não tem cadastro no sistema. A pessoa abre, escreve o
+      próprio nome e cargo, e responde o questionário. Isso já cria o cadastro dela, abre uma vaga
+      em Recrutamento e Seleção marcando essa pessoa como selecionada (só pra ter o registro, mesmo
+      quando a vaga não existia antes), e o laudo cai em Perfis DISC.
+    </p>
+    <div id="cd-campos">
+      <div class="campo"><label>Recado (opcional, só pra você lembrar o motivo)</label>
+        <input id="cd-recado" placeholder="Ex.: vaga de motorista, indicação do Fulano"></div>
+      <div class="campo"><label>Link expira em</label>
+        <select id="cd-validade">
+          <option value="3">3 dias</option>
+          <option value="7" selected>7 dias</option>
+          <option value="15">15 dias</option>
+        </select></div>
+    </div>
+    <div class="acoes" id="cd-acoes">
+      <button class="btn" id="cd-gerar">Gerar link</button>
+      <button class="btn-secundario" id="cd-cancelar">Fechar</button>
+    </div>
+    <div class="recado oculto" id="cd-recado-erro"></div>
+    <div id="cd-resultado" style="margin-top:14px;"></div>
+    <div id="cd-lista" style="margin-top:18px;"></div>
+  </div>`
+  document.body.appendChild(fundo)
+  const q = sel => fundo.querySelector(sel)
+  const fechar = () => fundo.remove()
+  q('#cd-cancelar').onclick = fechar
+  fundo.onclick = e => { if (e.target === fundo) fechar() }
+  const aviso = t => {
+    const el = q('#cd-recado-erro'); el.textContent = t; el.classList.remove('oculto')
+    el.style.borderColor = 'var(--warn-text)'; el.style.color = 'var(--warn-text)'
+  }
+
+  q('#cd-gerar').onclick = async () => {
+    const dias = Number(q('#cd-validade').value)
+    const expiraEm = new Date(Date.now() + dias * 86400 * 1000).toISOString()
+    const recado = q('#cd-recado').value.trim() || null
+    const btn = q('#cd-gerar'); btn.disabled = true; btn.textContent = 'gerando...'
+    const { data: salvo, error } = await db.from('rh_disc_convite')
+      .insert({ recado, expira_em: expiraEm, criado_por: PERFIL.pessoaId })
+      .select('id,token').single()
+    btn.disabled = false; btn.textContent = 'Gerar link'
+    if (error) { aviso(error.message); return }
+
+    const link = `${DISC_CONVITE_URL}?token=${salvo.token}`
+    q('#cd-resultado').innerHTML = `
+      <div class="texto-dim2" style="font-size:12.5px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;">
+        Link gerado — válido até ${esc(fmtQuando(expiraEm))}:</div>
+      <div style="display:flex;gap:8px;margin-top:8px;">
+        <input id="cd-link" readonly value="${esc(link)}" style="flex:1;font-size:11.5px;">
+        <button class="btn-secundario mini" id="cd-copiar">copiar</button>
+      </div>`
+    q('#cd-copiar').onclick = () => {
+      navigator.clipboard.writeText(link).then(() => { q('#cd-copiar').textContent = 'copiado!' })
+    }
+    carregarListaConvitesDisc(q('#cd-lista'))
+  }
+
+  carregarListaConvitesDisc(q('#cd-lista'))
+}
+
+async function carregarListaConvitesDisc (corpo) {
+  corpo.innerHTML = `<p class="texto-dim2" style="font-size:12px;">carregando os convites já gerados...</p>`
+  const { data, error } = await db.from('rh_disc_convite')
+    .select('id,token,status,recado,criado_em,expira_em,nome_informado,cargo_informado,candidato_id,vaga_id')
+    .order('criado_em', { ascending: false }).limit(50)
+  if (error) { corpo.innerHTML = `<p class="vazio">${esc(error.message)}</p>`; return }
+  const lista = data || []
+  corpo.innerHTML = `
+    <div class="rot" style="margin-bottom:8px;">Convites já gerados</div>
+    <div style="display:grid;gap:8px;max-height:260px;overflow-y:auto;">
+      ${lista.map(c => {
+        const st = statusConviteDiscAtual(c)
+        return `<div class="panel" style="padding:10px 12px;border-left:4px solid ${COR_STATUS_CONVITE_DISC[st]};">
+          <div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;">
+            <div style="flex:1;min-width:150px;">
+              <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;">
+                <b style="font-size:13px;">${esc(c.nome_informado || 'Ainda sem nome')}</b>
+                <span class="chip" style="font-size:10.5px;">${esc(ROTULO_STATUS_CONVITE_DISC[st] || st)}</span>
+              </div>
+              ${c.cargo_informado ? `<div class="texto-dim2" style="font-size:11.5px;margin-top:3px;">${esc(c.cargo_informado)}</div>` : ''}
+              ${c.recado ? `<div class="texto-dim2" style="font-size:11px;margin-top:3px;"><i>${esc(c.recado)}</i></div>` : ''}
+              <div class="texto-dim2" style="font-size:11px;margin-top:5px;">
+                gerado em ${fmtData((c.criado_em || '').slice(0, 10))} · expira ${fmtQuando(c.expira_em)}
+              </div>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+              ${st === 'ABERTO' ? `<button class="btn-secundario mini" data-copiar-conv="${esc(c.token)}">copiar link</button>
+                <button class="lnk-crud" data-cancelar-conv="${c.id}" title="cancelar">🗑</button>` : ''}
+            </div>
+          </div>
+        </div>`
+      }).join('') || `<p class="vazio">Nenhum convite gerado ainda.</p>`}
+    </div>`
+
+  corpo.querySelectorAll('[data-copiar-conv]').forEach(b => {
+    b.onclick = () => {
+      const link = `${DISC_CONVITE_URL}?token=${b.dataset.copiarConv}`
+      navigator.clipboard.writeText(link).then(() => { b.textContent = 'copiado!' })
+    }
+  })
+  corpo.querySelectorAll('[data-cancelar-conv]').forEach(b => {
+    b.onclick = async () => {
+      if (!confirm('Cancelar este convite? Quem já tiver o link não vai mais conseguir usá-lo.')) return
+      const { error } = await db.from('rh_disc_convite').update({ status: 'CANCELADO' }).eq('id', b.dataset.cancelarConv)
+      if (error) { alert(error.message); return }
+      carregarListaConvitesDisc(corpo)
+    }
+  })
 }
 
 function renderChipsDisc () {
@@ -51218,6 +51404,14 @@ function abrirFormVaga (vaga, setores, area) {
 // só anexa cada documento da lista, direto pelo link (sem login).
 // ---------------------------------------------------------------
 const DOCUMENTOS_COLETA_URL = 'https://gefoscal-relatorio-render.vercel.app/documentos.html'
+
+// Convite de DISC sem login, pra quem ainda nem tem cadastro: a pessoa
+// digita nome+cargo e responde o questionário — isso já cria o cadastro
+// de pessoa, a vaga e a candidatura marcada como selecionada em
+// Recrutamento e Seleção, mesmo que a vaga não existisse antes (só pra
+// ter o registro), e o laudo cai em Perfis DISC. Mesmo padrão de link
+// self-expiring do Certificados Digitais e dos Documentos de admissão.
+const DISC_CONVITE_URL = 'https://gefoscal-relatorio-render.vercel.app/disc-convite.html'
 
 // Levantamento padrão -- só o ponto de partida: o DP/Jurídico ajusta a
 // lista (adiciona, remove, renomeia) na hora de gerar cada link.
@@ -55572,7 +55766,7 @@ async function mktSite (alvo, editavel) {
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">
         ${ga4DimensoesComDado.map(d => `<button type="button" class="botao-aba-ga4${d === ga4TabInicial ? ' ativo' : ''}"
           data-ga4-aba="${d}" style="padding:5px 12px;border-radius:999px;border:1px solid var(--borda);
-          background:${d === ga4TabInicial ? 'var(--acento)' : 'transparent'};color:${d === ga4TabInicial ? '#fff' : 'inherit'};
+          background:${d === ga4TabInicial ? 'var(--rust)' : 'transparent'};color:${d === ga4TabInicial ? '#fff' : 'inherit'};
           font-size:12.5px;cursor:pointer;">${esc(GA4_DIMENSAO_ROTULO[d])}</button>`).join('')}
       </div>
       <div class="tabela-scroll" data-ga4-corpo>${renderTabelaGa4(ga4TabInicial)}</div>
@@ -55599,7 +55793,7 @@ async function mktSite (alvo, editavel) {
       alvo.querySelectorAll('[data-ga4-aba]').forEach(b => {
         const ativo = b === btn
         b.classList.toggle('ativo', ativo)
-        b.style.background = ativo ? 'var(--acento)' : 'transparent'
+        b.style.background = ativo ? 'var(--rust)' : 'transparent'
         b.style.color = ativo ? '#fff' : 'inherit'
       })
       const corpo = alvo.querySelector('[data-ga4-corpo]')
