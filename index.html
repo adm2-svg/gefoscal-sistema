@@ -9989,7 +9989,14 @@ function barrasMes (serie) {
 async function painelExpedicao (area) {
   if (!PERFIL.pessoaId || !podeEditar('expedicao')) return
 
-  const [{ data: pedidos }, { data: carregRecentes }] = await Promise.all([
+  const hoje = hojeISO()
+  // "Expedido hoje" precisa de TODO o carregamento de hoje, não só dos
+  // últimos 8 criados (carregRecentes, que é só pro feed "Últimas
+  // expedições lançadas" mais abaixo) — com o limite de 8, um dia com
+  // mais carregamentos que isso subestimava o total. Consulta própria,
+  // sem limit, e já excluindo CANCELADO (mesmo bug que a Amanda achou
+  // nesse card: cancelar uma ordem de hoje não tirava ela da soma).
+  const [{ data: pedidos }, { data: carregRecentes }, { data: carregHojeLista }] = await Promise.all([
     db.from('pedido').select(`
       id, numero, quantidade_t, cliente:cliente_id(razao_social), produto:produto_id(nome,unidade),
       carregamento(quantidade_t,status)
@@ -9997,7 +10004,8 @@ async function painelExpedicao (area) {
     db.from('carregamento').select(`
       id, quantidade_t, data_carregamento, criado_em, motorista,
       pedido:pedido_id(numero), cliente:cliente_id(razao_social)
-    `).neq('status', 'CANCELADO').order('criado_em', { ascending: false }).limit(8)
+    `).neq('status', 'CANCELADO').order('criado_em', { ascending: false }).limit(8),
+    db.from('carregamento').select('quantidade_t').eq('data_carregamento', hoje).neq('status', 'CANCELADO')
   ])
 
   const comSaldo = (pedidos || []).map(p => {
@@ -10006,8 +10014,7 @@ async function painelExpedicao (area) {
   }).filter(p => p.saldo > 0.01).sort((a, b) => b.saldo - a.saldo)
 
   const totalSaldo = comSaldo.reduce((s, p) => s + p.saldo, 0)
-  const hoje = hojeISO()
-  const expedidoHoje = (carregRecentes || []).filter(c => c.data_carregamento === hoje).reduce((s, c) => s + Number(c.quantidade_t || 0), 0)
+  const expedidoHoje = (carregHojeLista || []).reduce((s, c) => s + Number(c.quantidade_t || 0), 0)
 
   const bloco = document.createElement('div')
   bloco.className = 'panel'
