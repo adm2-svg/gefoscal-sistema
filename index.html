@@ -8814,6 +8814,76 @@ let ASSIST_HISTORICO = []
 let ASSIST_ABERTO = false
 let ASSIST_RECONHECIMENTO = null
 
+// Arrastar a bolha e o painel dos widgets flutuantes (Assistente, Chat
+// Interno) pra qualquer lugar da tela. Pedido da Amanda: às vezes a
+// bolha ou o painel aberto cobre algo que ela precisa ver, e não tinha
+// como tirar do caminho. `alca` é quem recebe o gesto (a própria bolha,
+// ou o cabeçalho do painel — nunca o painel inteiro, que tem botão e
+// campo de texto dentro); `elMover` é quem muda de posição (normalmente
+// o mesmo elemento, exceto no painel, onde a alça é só o cabeçalho mas
+// quem se move é o painel inteiro). Pointer Events cobre mouse e dedo
+// com o mesmo código. A posição fica em localStorage por elemento, pra
+// não voltar pro canto original toda vez que o sistema é aberto de novo.
+function tornarArrastavel (alca, elMover, chave) {
+  const LIMITE = 6 // px: abaixo disso ainda conta como clique, não arrasto
+  let ini = null, moveu = false
+
+  const limitar = (left, top) => {
+    const maxX = Math.max(4, window.innerWidth - elMover.offsetWidth - 4)
+    const maxY = Math.max(4, window.innerHeight - elMover.offsetHeight - 4)
+    return { left: Math.max(4, Math.min(left, maxX)), top: Math.max(4, Math.min(top, maxY)) }
+  }
+  const posicionar = (left, top) => {
+    const p = limitar(left, top)
+    elMover.style.left = p.left + 'px'
+    elMover.style.top = p.top + 'px'
+    elMover.style.right = 'auto'
+    elMover.style.bottom = 'auto'
+  }
+  const salvar = () => {
+    try { localStorage.setItem(chave, JSON.stringify(elMover.getBoundingClientRect())) } catch {}
+  }
+
+  alca.classList.add('widget-arrastavel')
+  alca.addEventListener('pointerdown', e => {
+    if (e.button) return // só o botão principal do mouse (toque não tem e.button)
+    const r = elMover.getBoundingClientRect()
+    ini = { x: e.clientX, y: e.clientY, left: r.left, top: r.top }
+    moveu = false
+  })
+  alca.addEventListener('pointermove', e => {
+    if (!ini) return
+    const dx = e.clientX - ini.x, dy = e.clientY - ini.y
+    if (!moveu && Math.hypot(dx, dy) < LIMITE) return
+    if (!moveu) { moveu = true; document.body.style.userSelect = 'none'; alca.setPointerCapture?.(e.pointerId) }
+    posicionar(ini.left + dx, ini.top + dy)
+  })
+  const soltar = () => {
+    if (moveu) {
+      salvar()
+      // o clique que o navegador dispara junto com o soltar não deve
+      // abrir/fechar o painel — só conta como arrasto mesmo
+      alca.dataset.arrastouAgora = '1'
+      setTimeout(() => { delete alca.dataset.arrastouAgora }, 0)
+    }
+    document.body.style.userSelect = ''
+    ini = null; moveu = false
+  }
+  alca.addEventListener('pointerup', soltar)
+  alca.addEventListener('pointercancel', soltar)
+
+  // Não deixa sair da tela quando a janela muda de tamanho.
+  window.addEventListener('resize', () => {
+    const r = elMover.getBoundingClientRect()
+    if (r.left || r.top) posicionar(r.left, r.top)
+  })
+
+  try {
+    const salvo = JSON.parse(localStorage.getItem(chave) || 'null')
+    if (salvo) posicionar(salvo.left, salvo.top)
+  } catch {}
+}
+
 function estilosWidgetsUmaVez () {
   if ($('#widgets-estilos')) return
   const s = document.createElement('style')
@@ -8822,6 +8892,8 @@ function estilosWidgetsUmaVez () {
     .widget-bolha { transition:transform .18s ease, box-shadow .18s ease; }
     .widget-bolha:hover { transform:translateY(-3px) scale(1.03); }
     .widget-bolha:active { transform:translateY(-1px) scale(.98); }
+    .widget-arrastavel { cursor:grab; touch-action:none; }
+    .widget-arrastavel:active { cursor:grabbing; }
     .widget-fechar:hover { background:rgba(255,255,255,.28) !important; }
     .widget-contato:hover { background:var(--hover-bg); }
     .widget-enviar:hover { filter:brightness(1.08); transform:translateY(-1px); }
@@ -8866,7 +8938,7 @@ function montarWidgetAssistente () {
     border-radius:18px; box-shadow:0 20px 50px rgba(0,0,0,.5); display:none; flex-direction:column; overflow:hidden;
     opacity:0; transform:translateY(14px) scale(.97); transition:opacity .18s ease, transform .18s ease;`
   painel.innerHTML = `
-    <div style="background:linear-gradient(135deg,var(--gold),rgba(var(--gold-rgb),.65)); color:#3a2e08; padding:16px 18px; display:flex; justify-content:space-between; align-items:center; flex:none;">
+    <div id="assist-cabeca" style="background:linear-gradient(135deg,var(--gold),rgba(var(--gold-rgb),.65)); color:#3a2e08; padding:16px 18px; display:flex; justify-content:space-between; align-items:center; flex:none;">
       <div style="display:flex;align-items:center;gap:10px;">
         <div style="width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.35);display:flex;align-items:center;justify-content:center;font-size:17px;">✨</div>
         <div><b style="font-size:14.5px;font-family:var(--serif);">Assistente do Sistema</b>
@@ -8883,6 +8955,9 @@ function montarWidgetAssistente () {
         background:var(--gold,#d8a857);color:#3a2e08;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;">➤</button>
     </div>`
   document.body.appendChild(painel)
+
+  tornarArrastavel(bolha, bolha, 'gf-assist-bolha-pos')
+  tornarArrastavel(painel.querySelector('#assist-cabeca'), painel, 'gf-assist-painel-pos')
 
   const chat = () => $('#as-chat')
   const renderMensagem = (autor, texto, chaveIr, subIr) => {
@@ -8947,7 +9022,7 @@ function montarWidgetAssistente () {
       setTimeout(() => { painel.style.display = 'none' }, 180)
     }
   }
-  bolha.onclick = abrirFechar
+  bolha.onclick = () => { if (bolha.dataset.arrastouAgora) return; abrirFechar() }
   $('#assist-fechar').onclick = abrirFechar
 
   // ---- áudio: reconhecimento de voz do navegador, transcreve pro campo ----
@@ -9109,7 +9184,7 @@ function montarWidgetChatInterno () {
     border-radius:18px; box-shadow:0 20px 50px rgba(0,0,0,.5); display:none; flex-direction:column; overflow:hidden;
     opacity:0; transform:translateY(14px) scale(.97); transition:opacity .18s ease, transform .18s ease;`
   painel.innerHTML = `
-    <div style="background:linear-gradient(135deg,var(--rust),rgba(var(--rust-rgb),.65)); color:#fff; padding:14px 18px; display:flex; justify-content:space-between; align-items:center; flex:none;">
+    <div id="chat-cabeca" style="background:linear-gradient(135deg,var(--rust),rgba(var(--rust-rgb),.65)); color:#fff; padding:14px 18px; display:flex; justify-content:space-between; align-items:center; flex:none;">
       <div id="chat-cab-info" style="display:flex;align-items:center;gap:10px;min-width:0;">
         <div style="width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.25);display:flex;align-items:center;justify-content:center;font-size:16px;flex:none;">💬</div>
         <div style="min-width:0;"><b style="font-size:14.5px;font-family:var(--serif);">Chat interno</b>
@@ -9142,6 +9217,9 @@ function montarWidgetChatInterno () {
     </div>`
   document.body.appendChild(painel)
 
+  tornarArrastavel(bolha, bolha, 'gf-chat-bolha-pos')
+  tornarArrastavel(painel.querySelector('#chat-cabeca'), painel, 'gf-chat-painel-pos')
+
   const abrirFechar = () => {
     CHAT_ABERTO = !CHAT_ABERTO
     if (CHAT_ABERTO) {
@@ -9153,7 +9231,7 @@ function montarWidgetChatInterno () {
       setTimeout(() => { painel.style.display = 'none' }, 180)
     }
   }
-  bolha.onclick = abrirFechar
+  bolha.onclick = () => { if (bolha.dataset.arrastouAgora) return; abrirFechar() }
   $('#chat-fechar').onclick = abrirFechar
   $('#chat-enviar').onclick = enviarMensagemChat
   $('#chat-texto').onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); enviarMensagemChat() } }
@@ -22121,7 +22199,7 @@ async function crmOriginacao (alvo, editavel, gerencia) {
       btnFicha.disabled = true
       const { data: l } = await db.from('lead').select(selLead).eq('id', id).single()
       btnFicha.disabled = false
-      if (l) formLead(l, editavel, gerencia, recarregar)
+      if (l) formLead(l, editavel, gerencia, recarregar, { semSugestaoCliente: true })
     }
 
     // O prompt() de antes não deixava escolher a abordagem — deduzia do
@@ -22186,7 +22264,7 @@ async function crmOriginacao (alvo, editavel, gerencia) {
   // lead novo entra em NOVO / a_contatar, que é exatamente o que a fila
   // da originação lê — então ele aparece aqui assim que salvar
   const btnNovo = alvo.querySelector('#org-novo')
-  if (btnNovo) btnNovo.onclick = () => formLead(null, editavel, gerencia, recarregar)
+  if (btnNovo) btnNovo.onclick = () => formLead(null, editavel, gerencia, recarregar, { semSugestaoCliente: true })
 
   if (ORIG_VISTA === 'relatorio') relatorioOriginacao(alvo.querySelector('#org-lista'))
 
@@ -22194,7 +22272,7 @@ async function crmOriginacao (alvo, editavel, gerencia) {
     estilosQuadroUmaVez()
     ligarQuadroOriginacao(editavel, recarregar, async id => {
       const { data: l } = await db.from('lead').select(selLead).eq('id', id).single()
-      if (l) formLead(l, editavel, gerencia, recarregar)
+      if (l) formLead(l, editavel, gerencia, recarregar, { semSugestaoCliente: true })
     })
   }
 
@@ -22897,7 +22975,14 @@ async function crmRecontatos (alvo, editavel) {
   })
 }
 
-function formLead (l, editavel, gerencia, aoFechar) {
+function formLead (l, editavel, gerencia, aoFechar, opcoes) {
+  // Na Originação a Bianca está sempre cadastrando gente nova: o dropdown
+  // nativo do datalist, com a lista inteira de clientes já cadastrados,
+  // só fica no caminho enquanto ela digita um nome que nunca existiu.
+  // Nos outros lugares (funil, calendário, lista de clientes) o achado
+  // automático de cliente repetido continua valendo — então quem chama
+  // formLead passa opcoes.semSugestaoCliente:true só a partir da Originação.
+  const semSugestaoCliente = !!opcoes?.semSugestaoCliente
   const podeReatribuir = editavel && gerencia // trocar o vendedor é ação de quem gerencia
   const podeExcluir = editavel && gerencia && l
   const fundo = document.createElement('div')
@@ -22913,9 +22998,9 @@ function formLead (l, editavel, gerencia, aoFechar) {
       <b>Inativo nesta safra.</b> <span id="ld-inativo-txt">carregando o motivo…</span></div>` : ''}
     <div class="form-grade">
       <div class="campo"><label>Nome / razão social *</label>
-        <input id="ld-nome" list="ld-clientes-lista" autocomplete="off"
+        <input id="ld-nome" ${semSugestaoCliente ? '' : 'list="ld-clientes-lista"'} autocomplete="off"
           value="${esc(l?.nome ?? '')}" ${editavel ? '' : 'disabled'}>
-        <datalist id="ld-clientes-lista"></datalist>
+        ${semSugestaoCliente ? '' : '<datalist id="ld-clientes-lista"></datalist>'}
         <div id="ld-cliente-achado" style="font-size:11.5px;color:var(--dim);line-height:1.6;margin-top:5px;"></div></div>
       <div class="campo"><label>Vendedor</label>
         <select id="ld-vendedor" ${podeReatribuir ? '' : 'disabled'}><option value="">—</option>
@@ -23080,6 +23165,7 @@ function formLead (l, editavel, gerencia, aoFechar) {
   // permissão de ler clientes, simplesmente não aparece nada.
   let clienteDoLead = null
   ;(async () => {
+    if (semSugestaoCliente) return
     const inpNome = fundo.querySelector('#ld-nome')
     const alvoAchado = fundo.querySelector('#ld-cliente-achado')
     if (!inpNome || !alvoAchado) return
@@ -23171,7 +23257,7 @@ function formLead (l, editavel, gerencia, aoFechar) {
   if (l) montarBloqueioLgpd(fundo.querySelector('#ld-lgpd'), 'lead', l, () => {
     aoFechar()
     fechar()
-    formLead(l, editavel, gerencia, aoFechar)
+    formLead(l, editavel, gerencia, aoFechar, opcoes)
   })
   if (l && l.origem === 'whatsapp_sdr' && l.telefone) carregarHistoricoSdrNoLead(fundo, l)
   if (l) carregarCoachDisc(fundo, l)
